@@ -28,3 +28,4 @@
 | [0017](./0017-markdown-tables-editor-config.zh-CN.md) | Markdown 表格与外部编辑器 | 已接受 |
 | [0018](./0018-performance-gate.zh-CN.md) | 性能门 | 已接受 |
 | [0019](./0019-hotkey-deeplink.zh-CN.md) | 全局热键与深链接到 pane | 已接受 |
+| [0020](./0020-markdown-images-gutter.zh-CN.md) | Markdown 图片、脚注与编辑态行号栏 | 已接受 |

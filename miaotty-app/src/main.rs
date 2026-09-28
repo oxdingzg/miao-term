@@ -59,6 +59,7 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(move |cc| {
             install_fonts(&cc.egui_ctx);
+            egui_extras::install_image_loaders(&cc.egui_ctx);
             if let Some(rs) = cc.wgpu_render_state.as_ref() {
                 rs.renderer
                     .write()
@@ -1869,6 +1870,120 @@ fn is_rule(line: &str) -> bool {
         && matches!(t.chars().next(), Some('-' | '*' | '_'))
 }
 
+/// If a line is exactly `![alt](url)`, return `(alt, url)`.
+fn parse_image(line: &str) -> Option<(&str, &str)> {
+    let rest = line.strip_prefix("![")?;
+    let (alt, rest) = rest.split_once("](")?;
+    let url = rest.strip_suffix(')')?;
+    Some((alt, url))
+}
+
+/// Resolve a local image reference to a `file://` URI, or `None` for remote
+/// URLs / unknown extensions. Relative paths resolve against `base` (the
+/// document's directory).
+fn image_uri(url: &str, base: Option<&std::path::Path>) -> Option<String> {
+    if url.starts_with("http://") || url.starts_with("https://") {
+        return None;
+    }
+    let path = std::path::Path::new(url);
+    let abs = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        base?.join(path)
+    };
+    let ext = abs.extension()?.to_str()?.to_ascii_lowercase();
+    matches!(
+        ext.as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp"
+    )
+    .then(|| format!("file://{}", abs.display()))
+}
+
+/// Pull `[^id]: text` footnote definitions out of the flow.
+fn take_footnotes<'a>(lines: &[&'a str]) -> (Vec<&'a str>, Vec<(String, String)>) {
+    let mut body = Vec::new();
+    let mut defs = Vec::new();
+    for line in lines {
+        let t = line.trim_start();
+        if let Some(rest) = t.strip_prefix("[^") {
+            if let Some((id, text)) = rest.split_once("]: ") {
+                defs.push((id.trim().to_string(), text.trim().to_string()));
+                continue;
+            }
+        }
+        body.push(*line);
+    }
+    (body, defs)
+}
+
+/// Rewrite inline footnote references `[^id]` to a plain `[id]` marker.
+fn footnote_refs(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(i) = rest.find("[^") {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 2..];
+        match after.find(']') {
+            Some(j) => {
+                out.push('[');
+                out.push_str(&after[..j]);
+                out.push(']');
+                rest = &after[j + 1..];
+            }
+            None => {
+                out.push_str(&rest[i..]);
+                return out;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Line numbers for a sequence of layout rows (increments after a newline row).
+fn gutter_numbers(ends_with_newline: &[bool]) -> Vec<usize> {
+    let mut numbers = Vec::with_capacity(ends_with_newline.len());
+    let mut line = 1;
+    for ends in ends_with_newline {
+        numbers.push(line);
+        if *ends {
+            line += 1;
+        }
+    }
+    numbers
+}
+
+/// Paint the editing gutter numbers beside a `TextEdit`.
+fn paint_gutter(
+    ui: &egui::Ui,
+    gutter: egui::Rect,
+    output: &egui::text_edit::TextEditOutput,
+    color: egui::Color32,
+) {
+    let clip = output.text_clip_rect;
+    let painter = ui.painter();
+    let font = egui::FontId::monospace(11.0);
+    let flags: Vec<bool> = output
+        .galley
+        .rows
+        .iter()
+        .map(|r| r.ends_with_newline)
+        .collect();
+    let numbers = gutter_numbers(&flags);
+    for (row, number) in output.galley.rows.iter().zip(numbers) {
+        let y = output.galley_pos.y + row.rect.top();
+        if y + row.rect.height() >= clip.top() && y <= clip.bottom() {
+            painter.text(
+                egui::pos2(gutter.right() - 3.0, y),
+                egui::Align2::RIGHT_TOP,
+                number.to_string(),
+                font.clone(),
+                color,
+            );
+        }
+    }
+}
+
 /// Split a line into text and `[text](url)` link segments.
 fn link_segments(line: &str) -> Vec<(String, Option<String>)> {
     let mut out = Vec::new();
@@ -1902,9 +2017,10 @@ fn link_segments(line: &str) -> Vec<(String, Option<String>)> {
     out
 }
 
-fn markdown_ui(ui: &mut egui::Ui, text: &str, fg: egui::Color32) {
+fn markdown_ui(ui: &mut egui::Ui, text: &str, fg: egui::Color32, base: Option<&std::path::Path>) {
     let muted = egui::Color32::from_gray(150);
-    let lines: Vec<&str> = text.lines().collect();
+    let all: Vec<&str> = text.lines().collect();
+    let (lines, footnotes) = take_footnotes(&all);
     let mut grid = 0usize;
     let mut i = 0;
     let mut in_code = false;
@@ -1919,6 +2035,25 @@ fn markdown_ui(ui: &mut egui::Ui, text: &str, fg: egui::Color32) {
         }
         if in_code {
             ui.label(egui::RichText::new(line).monospace().color(fg));
+            i += 1;
+            continue;
+        }
+        if let Some((alt, url)) = parse_image(line.trim()) {
+            match image_uri(url, base) {
+                Some(uri) => {
+                    ui.add(
+                        egui::Image::new(uri)
+                            .max_width(ui.available_width())
+                            .max_height(400.0),
+                    );
+                }
+                None => {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(egui::RichText::new(format!("[{alt}]")).color(muted));
+                        ui.hyperlink_to(url, url);
+                    });
+                }
+            }
             i += 1;
             continue;
         }
@@ -1947,13 +2082,16 @@ fn markdown_ui(ui: &mut egui::Ui, text: &str, fg: egui::Color32) {
             };
             ui.add_space(if level <= 2 { 6.0 } else { 3.0 });
             ui.label(
-                egui::RichText::new(strip_inline(rest))
+                egui::RichText::new(strip_inline(&footnote_refs(rest)))
                     .size(size)
                     .strong()
                     .color(fg),
             );
         } else if let Some(rest) = bullet(line) {
-            ui.label(egui::RichText::new(format!("\u{2022} {}", strip_inline(rest))).color(fg));
+            ui.label(
+                egui::RichText::new(format!("\u{2022} {}", strip_inline(&footnote_refs(rest))))
+                    .color(fg),
+            );
         } else if let Some(rest) = trimmed.strip_prefix('>') {
             ui.label(
                 egui::RichText::new(strip_inline(rest.trim_start()))
@@ -1963,7 +2101,8 @@ fn markdown_ui(ui: &mut egui::Ui, text: &str, fg: egui::Color32) {
         } else if line.trim().is_empty() {
             ui.add_space(4.0);
         } else {
-            let segments = link_segments(line);
+            let line = footnote_refs(line);
+            let segments = link_segments(&line);
             if segments.iter().any(|(_, url)| url.is_some()) {
                 ui.horizontal_wrapped(|ui| {
                     for (text, url) in &segments {
@@ -1978,10 +2117,22 @@ fn markdown_ui(ui: &mut egui::Ui, text: &str, fg: egui::Color32) {
                     }
                 });
             } else {
-                ui.label(egui::RichText::new(strip_inline(line)).color(fg));
+                ui.label(egui::RichText::new(strip_inline(&line)).color(fg));
             }
         }
         i += 1;
+    }
+    if !footnotes.is_empty() {
+        ui.add_space(6.0);
+        ui.separator();
+        ui.label(egui::RichText::new("Footnotes").strong().color(fg));
+        for (id, text) in &footnotes {
+            ui.label(
+                egui::RichText::new(format!("[{id}] {text}"))
+                    .small()
+                    .color(muted),
+            );
+        }
     }
 }
 
@@ -3084,6 +3235,11 @@ impl MiaottyApp {
 
     fn editor_window(&mut self, ctx: &egui::Context) {
         let fg = self.theme.fg;
+        let muted = egui::Color32::from_gray(120);
+        let base = self
+            .editor
+            .as_ref()
+            .and_then(|e| e.path.parent().map(|p| p.to_path_buf()));
         let l_close = self.t("Close");
         let l_save = self.t("Save");
         let l_reload = self.t("Reload");
@@ -3163,16 +3319,25 @@ impl MiaottyApp {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         if editor.readonly && is_md && !editor.raw {
-                            markdown_ui(ui, &editor.text, fg);
+                            markdown_ui(ui, &editor.text, fg, base.as_deref());
                         } else if editor.readonly {
                             source_ui(ui, &editor.text, editor.target, &mut editor.jumped, fg);
                         } else {
-                            ui.add(
-                                egui::TextEdit::multiline(&mut editor.text)
+                            // Editable: a line-number gutter beside the editor.
+                            let digits = editor.text.lines().count().to_string().len().max(2);
+                            let gutter_w = 10.0 + digits as f32 * 7.5;
+                            ui.horizontal_top(|ui| {
+                                let height = ui.available_height().max(20.0);
+                                let (gutter, _) = ui.allocate_exact_size(
+                                    egui::vec2(gutter_w, height),
+                                    egui::Sense::hover(),
+                                );
+                                let output = egui::TextEdit::multiline(&mut editor.text)
                                     .code_editor()
                                     .desired_width(f32::INFINITY)
-                                    .interactive(!editor.readonly),
-                            );
+                                    .show(ui);
+                                paint_gutter(ui, gutter, &output, muted);
+                            });
                         }
                     });
             });
@@ -4789,6 +4954,30 @@ mod session_tests {
         let back: TabSession = serde_json::from_str(&json).unwrap();
         assert_eq!(back.prefix.as_deref(), Some("[w]"));
         assert_eq!(back.group.as_deref(), Some("g"));
+    }
+
+    #[test]
+    fn markdown_images_and_footnotes() {
+        assert_eq!(parse_image("![alt](img.png)"), Some(("alt", "img.png")));
+        assert!(parse_image("text ![a](b)").is_none());
+        assert!(image_uri("img.png", Some(std::path::Path::new("/doc")))
+            .unwrap()
+            .starts_with("file:///doc/"));
+        assert!(image_uri("https://x/y.png", None).is_none());
+        assert!(image_uri("script.rs", Some(std::path::Path::new("/doc"))).is_none());
+
+        let lines = ["a", "[^1]: note one", "b [^1]"];
+        let (body, defs) = take_footnotes(&lines);
+        assert_eq!(body, vec!["a", "b [^1]"]);
+        assert_eq!(defs, vec![("1".to_string(), "note one".to_string())]);
+        assert_eq!(footnote_refs("see [^1] and [^x]"), "see [1] and [x]");
+    }
+
+    #[test]
+    fn gutter_numbering() {
+        assert_eq!(gutter_numbers(&[true, true, false]), vec![1, 2, 3]);
+        assert_eq!(gutter_numbers(&[false, true]), vec![1, 1]);
+        assert!(gutter_numbers(&[]).is_empty());
     }
 
     #[test]
