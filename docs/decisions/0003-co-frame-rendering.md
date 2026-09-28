@@ -1,0 +1,28 @@
+# ADR 0003 — Terminal + egui co-frame rendering
+
+> 简体中文: [`0003-co-frame-rendering.zh-CN.md`](0003-co-frame-rendering.zh-CN.md)
+
+Status: accepted.
+
+## Context
+
+We want egui for chrome (panels, settings) and a custom GPU renderer for the
+terminal grid, in one window without fighting over the swapchain.
+
+## Decision
+
+- **egui drives the frame** (eframe + wgpu). The terminal is drawn in the same
+  `wgpu::RenderPass` via an **`egui_wgpu` `PaintCallback`**.
+- The glyph pipeline lives in `term-render` (wgpu + glyphon) and is stored in
+  egui's `callback_resources`; it shares egui's `Device`/`Queue`/`Surface`
+  (same `wgpu` version — currently 23).
+- Backgrounds, selection and cursor are drawn by the egui painter *underneath*;
+  the callback draws the glyphs on top.
+
+## Consequences
+
+- One pass, one device; no second surface or swapchain.
+- `wgpu` must stay pinned to egui-wgpu's version (a mismatch would defeat device
+  sharing) — hence `glyphon` is pinned to a wgpu-23-compatible release (0.7).
+- The grid is re-shaped only when dirty (row-run cache keyed off a per-tab
+  dirty flag), so idle frames do no text work.

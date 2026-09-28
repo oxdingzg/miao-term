@@ -124,6 +124,9 @@ struct Tab {
     term: Terminal,
     title: String,
     pane_id: String,
+    /// Cached row runs for the GPU renderer; rebuilt only when `dirty`.
+    rows: Arc<Vec<Vec<miao_term_render::Span>>>,
+    dirty: bool,
 }
 
 fn gen_pane_id() -> String {
@@ -204,6 +207,8 @@ impl MiaottyApp {
                 term,
                 title,
                 pane_id,
+                rows: Arc::new(Vec::new()),
+                dirty: true,
             });
             self.active = self.tabs.len() - 1;
             self.selection = None;
@@ -272,7 +277,13 @@ impl MiaottyApp {
         let panes = self
             .tabs
             .iter()
-            .map(|t| serde_json::json!({ "id": t.pane_id, "title": t.title }))
+            .map(|t| {
+                let mut value = serde_json::json!({ "id": t.pane_id, "title": t.title });
+                if let Some(cwd) = t.term.cwd() {
+                    value["cwd"] = serde_json::json!(cwd);
+                }
+                value
+            })
             .collect();
         self.state.set_panes(panes);
     }
@@ -284,6 +295,7 @@ impl eframe::App for MiaottyApp {
         let mut changed = false;
         for tab in &mut self.tabs {
             if tab.term.process_pending() {
+                tab.dirty = true;
                 changed = true;
             }
         }
@@ -612,15 +624,22 @@ impl MiaottyApp {
                     }
                     d
                 });
+                let mut scroll_changed = false;
                 if scroll_keys > 0 {
                     self.scroll = (self.scroll + scroll_keys as usize).min(200_000);
+                    scroll_changed = true;
                 } else if scroll_keys < 0 {
                     self.scroll = self.scroll.saturating_sub((-scroll_keys) as usize);
+                    scroll_changed = true;
                 }
 
                 {
                     let tab = &mut self.tabs[idx];
+                    let before = tab.term.size();
                     tab.term.resize(rows, cols);
+                    if tab.term.size() != before {
+                        tab.dirty = true;
+                    }
 
                     // ---- scrolling ----
                     let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
@@ -630,6 +649,10 @@ impl MiaottyApp {
                         } else {
                             self.scroll = self.scroll.saturating_sub(3);
                         }
+                        tab.dirty = true;
+                    }
+                    if scroll_changed {
+                        tab.dirty = true;
                     }
                     tab.term.screen_mut().set_scrollback(self.scroll);
 
@@ -722,7 +745,11 @@ impl MiaottyApp {
                         &self.theme,
                         draw_cursor,
                     );
-                    let rows = build_rows(screen, &self.theme);
+                    if tab.dirty {
+                        tab.rows = Arc::new(build_rows(screen, &self.theme));
+                        tab.dirty = false;
+                    }
+                    let rows = Arc::clone(&tab.rows);
                     let scale = ctx.pixels_per_point();
                     let fg = self.theme.fg;
                     ui.painter().add(egui::Shape::Callback(
@@ -891,7 +918,7 @@ fn build_rows(screen: &vt100::Screen, theme: &Theme) -> Vec<Vec<miao_term_render
 
 /// egui→wgpu paint callback that draws the terminal glyphs via `term-render`.
 struct TermCallback {
-    rows: Vec<Vec<miao_term_render::Span>>,
+    rows: Arc<Vec<Vec<miao_term_render::Span>>>,
     left: f32,
     top: f32,
     scale: f32,
@@ -920,7 +947,7 @@ impl egui_wgpu::CallbackTrait for TermCallback {
                 self.left,
                 self.top,
                 self.default_color,
-                &self.rows,
+                self.rows.as_slice(),
             );
         }
         Vec::new()

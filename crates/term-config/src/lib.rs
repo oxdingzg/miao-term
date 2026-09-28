@@ -84,6 +84,13 @@ impl Default for Config {
     }
 }
 
+fn ghostty_config_path() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    Some(base.join("ghostty").join("config"))
+}
+
 impl Config {
     /// Config file path: `$XDG_CONFIG_HOME/miaotty/config.toml` or `~/.config/miaotty/config.toml`.
     pub fn path() -> Option<PathBuf> {
@@ -93,15 +100,67 @@ impl Config {
         Some(base.join("miaotty").join("config.toml"))
     }
 
-    /// Load from the default path; falls back to defaults on any error.
+    /// Load from the default path. If there is no miaotty config, fall back to
+    /// importing a ghostty config, then to defaults.
     pub fn load() -> Self {
-        let Some(path) = Self::path() else {
-            return Self::default();
-        };
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            return Self::default();
-        };
-        Self::from_toml(&text).unwrap_or_default()
+        if let Some(path) = Self::path() {
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                if let Some(cfg) = Self::from_toml(&text) {
+                    return cfg;
+                }
+            }
+        }
+        if let Some(ghostty) = ghostty_config_path() {
+            if let Ok(text) = std::fs::read_to_string(ghostty) {
+                return Self::from_ghostty_text(&text);
+            }
+        }
+        Self::default()
+    }
+
+    /// Import the subset of a ghostty `config` file we understand
+    /// (`background`, `foreground`, `font-size`, `palette = N=#hex`).
+    pub fn from_ghostty_text(text: &str) -> Self {
+        let mut cfg = Self::default();
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            let key = key.trim();
+            let value = value.trim();
+            match key {
+                "background" => {
+                    if let Some(c) = Rgb::parse(value) {
+                        cfg.theme.background = c;
+                    }
+                }
+                "foreground" => {
+                    if let Some(c) = Rgb::parse(value) {
+                        cfg.theme.foreground = c;
+                    }
+                }
+                "font-size" => {
+                    if let Ok(size) = value.parse::<f32>() {
+                        cfg.font_size = size.clamp(6.0, 40.0);
+                    }
+                }
+                "palette" => {
+                    if let Some((idx, hex)) = value.split_once('=') {
+                        if let (Ok(i), Some(c)) = (idx.trim().parse::<usize>(), Rgb::parse(hex)) {
+                            if i < 16 {
+                                cfg.theme.palette[i] = c;
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        cfg
     }
 
     pub fn from_toml(text: &str) -> Option<Self> {
@@ -148,6 +207,17 @@ mod tests {
         let cfg = Config::default();
         assert_eq!(cfg.theme.background, Rgb(0x2e, 0x34, 0x40));
         assert_eq!(cfg.font_size, 14.0);
+    }
+
+    #[test]
+    fn imports_ghostty() {
+        let cfg = Config::from_ghostty_text(
+            "# comment\nbackground = #212733\nforeground = #e5e5e5\nfont-size = 16\npalette = 4=#6d95b4\n",
+        );
+        assert_eq!(cfg.theme.background, Rgb(0x21, 0x27, 0x33));
+        assert_eq!(cfg.theme.foreground, Rgb(0xe5, 0xe5, 0xe5));
+        assert_eq!(cfg.font_size, 16.0);
+        assert_eq!(cfg.theme.palette[4], Rgb(0x6d, 0x95, 0xb4));
     }
 
     #[test]
