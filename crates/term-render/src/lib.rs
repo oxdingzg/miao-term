@@ -159,10 +159,11 @@ impl TermRenderer {
             );
         }
 
-        // glyphon positions in *physical* pixels, but `left`/`top`/`line_height`
-        // arrive as logical points. Scale them here (glyphon already scales the
-        // per-glyph advances by `scale`), otherwise text is offset and clipped
-        // on HiDPI displays.
+        // `left`/`top`/`line_height` are logical points relative to the target
+        // viewport's origin; glyphon positions in *physical* pixels and already
+        // scales per-glyph advances by `scale`, so only these need scaling.
+        // `pixels` must be the viewport's pixel size (egui-wgpu sets the render
+        // viewport to the callback's rect), not the whole surface.
         let left_px = left * scale;
         let top_px = top * scale;
         let line_px = line_height * scale;

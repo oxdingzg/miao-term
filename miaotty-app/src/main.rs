@@ -4942,8 +4942,7 @@ impl MiaottyApp {
                     pane_id: pane_id.clone(),
                     prepare: need_prepare,
                     rows,
-                    left: rect.left(),
-                    top: rect.top(),
+                    size: [rect.width(), rect.height()],
                     scale,
                     font_size: self.font_size,
                     line_height: ch,
@@ -5144,8 +5143,8 @@ struct TermCallback {
     /// Re-shape glyphs this frame (the pane's rows changed).
     prepare: bool,
     rows: Arc<Vec<Vec<miao_term_render::Span>>>,
-    left: f32,
-    top: f32,
+    /// Pane grid size in logical points (the callback's viewport).
+    size: [f32; 2],
     scale: f32,
     font_size: f32,
     line_height: f32,
@@ -5158,7 +5157,7 @@ impl egui_wgpu::CallbackTrait for TermCallback {
         &self,
         device: &egui_wgpu::wgpu::Device,
         queue: &egui_wgpu::wgpu::Queue,
-        screen: &egui_wgpu::ScreenDescriptor,
+        _screen: &egui_wgpu::ScreenDescriptor,
         _encoder: &mut egui_wgpu::wgpu::CommandEncoder,
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<egui_wgpu::wgpu::CommandBuffer> {
@@ -5169,15 +5168,22 @@ impl egui_wgpu::CallbackTrait for TermCallback {
                 .entry(self.pane_id.clone())
                 .or_insert_with(|| miao_term_render::TermRenderer::new(device, queue, format));
             if self.prepare {
+                // egui-wgpu sets the render viewport to this callback's rect, so
+                // glyphon must be told that viewport's pixel size and draw with
+                // viewport-relative coordinates (origin 0,0) — not the full
+                // surface with absolute coordinates.
                 renderer.prepare(
                     device,
                     queue,
-                    (screen.size_in_pixels[0], screen.size_in_pixels[1]),
+                    (
+                        (self.size[0] * self.scale) as u32,
+                        (self.size[1] * self.scale) as u32,
+                    ),
                     self.scale,
                     self.font_size,
                     self.line_height,
-                    self.left,
-                    self.top,
+                    0.0,
+                    0.0,
                     self.default_color,
                     self.family.as_deref(),
                     self.rows.as_slice(),
