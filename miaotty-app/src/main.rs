@@ -15,6 +15,15 @@ use miao_term_core::vt100;
 use miao_term_core::Terminal;
 
 fn main() -> eframe::Result<()> {
+    // Start the MTP control plane and export the socket so shells (and the
+    // existing `miaotty-cli`) inherit it.
+    let socket = miao_term_mtp::default_socket();
+    std::env::set_var("MIAOTTY_SOCKET", &socket);
+    match miao_term_mtp::serve(&socket, miao_term_mtp::ServerState::new()) {
+        Ok(()) => eprintln!("miaotty: MTP host listening on {}", socket.display()),
+        Err(e) => eprintln!("miaotty: failed to start MTP host: {e}"),
+    }
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1000.0, 660.0])

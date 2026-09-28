@@ -50,6 +50,10 @@ impl Terminal {
         })?;
 
         let mut cmd = CommandBuilder::new(shell.unwrap_or_else(default_shell));
+        // Inherit the current environment (PATH, MIAOTTY_SOCKET, …), then override.
+        for (k, v) in std::env::vars() {
+            cmd.env(k, v);
+        }
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
         if let Ok(cwd) = std::env::current_dir() {
