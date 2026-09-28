@@ -25,7 +25,12 @@ impl Rgb {
 }
 
 fn default_font_size() -> f32 {
-    14.0
+    13.0
+}
+
+/// Default terminal font, bundled with the app (see `assets/fonts/`).
+fn default_font_family() -> Option<String> {
+    Some("JetBrains Mono".to_string())
 }
 
 /// Theme colors.
@@ -240,7 +245,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             font_size: default_font_size(),
-            font_family: None,
+            font_family: default_font_family(),
             line_height: 1.25,
             cursor_style: CursorStyle::Block,
             background_opacity: 1.0,
@@ -591,7 +596,8 @@ mod tests {
     fn defaults_to_nord() {
         let cfg = Config::default();
         assert_eq!(cfg.theme.background, Rgb(0x2e, 0x34, 0x40));
-        assert_eq!(cfg.font_size, 14.0);
+        assert_eq!(cfg.font_size, 13.0);
+        assert_eq!(cfg.font_family.as_deref(), Some("JetBrains Mono"));
     }
 
     #[test]

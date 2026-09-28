@@ -3777,6 +3777,14 @@ impl MiaottyApp {
         }
     }
 
+    /// The window backdrop: the theme background darkened, so the terminal
+    /// "container" card (drawn in `bg()`) reads as a raised surface.
+    fn window_bg(&self) -> egui::Color32 {
+        let c = self.bg();
+        let dark = |v: u8| ((v as f32) * 0.82).round() as u8;
+        egui::Color32::from_rgba_unmultiplied(dark(c.r()), dark(c.g()), dark(c.b()), self.alpha)
+    }
+
     /// Evaluate the view rule engine for a pane (ADR 0007).
     fn view_for(&self, pane: &Pane) -> Option<miao_term_config::view::Resolved> {
         let agent = self
@@ -4520,7 +4528,7 @@ impl MiaottyApp {
 
     fn terminal_panel(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
-            .frame(egui::Frame::default().fill(self.bg()))
+            .frame(egui::Frame::default().fill(self.window_bg()))
             .show(ctx, |ui| {
                 let rect = ui.available_rect_before_wrap();
                 // Cell size comes from the renderer's own font so glyphs line up.
@@ -4659,6 +4667,21 @@ impl MiaottyApp {
         cw: f32,
         ch: f32,
     ) {
+        // Otty-style container: a rounded card inset from the pane edges, with
+        // the terminal grid drawn on padding inside the card.
+        let outer = rect;
+        let card = outer.shrink(6.0);
+        let rect = card.shrink2(egui::vec2(12.0, 8.0));
+        {
+            let painter = ui.painter_at(outer);
+            painter.rect_filled(card, egui::Rounding::same(10.0), self.bg());
+            painter.rect_stroke(
+                card,
+                egui::Rounding::same(10.0),
+                egui::Stroke::new(1.0_f32, self.theme.palette[8]),
+            );
+        }
+
         let cols = ((rect.width() / cw).floor() as i64).clamp(1, 1000) as u16;
         let rows = ((rect.height() / ch).floor() as i64).clamp(1, 1000) as u16;
         let pane_id = self.tabs[ti].panes[pi].pane_id.clone();
@@ -4674,7 +4697,7 @@ impl MiaottyApp {
         }
 
         let response = ui.interact(
-            rect,
+            card,
             ui.id().with(("pane", ti, pi)),
             egui::Sense::click_and_drag(),
         );

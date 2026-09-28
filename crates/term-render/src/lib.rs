@@ -48,6 +48,20 @@ const CJK_FONTS: &[&str] = &[
     "C:/Windows/Fonts/simhei.ttf",
 ];
 
+/// Fonts bundled with the app (embedded at compile time; see `assets/fonts/`).
+const BUNDLED_FONTS: &[&[u8]] = &[
+    include_bytes!("../../../assets/fonts/JetBrainsMono.ttf"),
+    include_bytes!("../../../assets/fonts/JetBrainsMono-Italic.ttf"),
+    include_bytes!("../../../assets/fonts/SymbolsNerdFontMono-Regular.ttf"),
+];
+
+/// Load the default monospace font plus the Nerd Font symbol fallback.
+fn load_bundled(font_system: &mut FontSystem) {
+    for bytes in BUNDLED_FONTS {
+        font_system.db_mut().load_font_data(bytes.to_vec());
+    }
+}
+
 /// Load a system CJK font into the font database so CJK glyphs render.
 fn load_system_cjk(font_system: &mut FontSystem) {
     for path in CJK_FONTS {
@@ -66,6 +80,7 @@ impl TermRenderer {
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         let viewport = Viewport::new(device, &cache);
         let mut font_system = FontSystem::new();
+        load_bundled(&mut font_system);
         load_system_cjk(&mut font_system);
         Self {
             font_system,
@@ -134,17 +149,26 @@ impl TermRenderer {
                     (span.text.clone(), attrs)
                 })
                 .collect();
+            // `Shaping::Advanced` is required for font fallback: `Basic` renders
+            // any glyph missing from the primary font (CJK, symbols) as tofu.
             buffer.set_rich_text(
                 &mut self.font_system,
                 owned.iter().map(|(text, attrs)| (text.as_str(), *attrs)),
                 Attrs::new().family(fam),
-                Shaping::Basic,
+                Shaping::Advanced,
             );
         }
 
+        // glyphon positions in *physical* pixels, but `left`/`top`/`line_height`
+        // arrive as logical points. Scale them here (glyphon already scales the
+        // per-glyph advances by `scale`), otherwise text is offset and clipped
+        // on HiDPI displays.
+        let left_px = left * scale;
+        let top_px = top * scale;
+        let line_px = line_height * scale;
         let bounds = TextBounds {
-            left: (left * scale) as i32,
-            top: (top * scale) as i32,
+            left: left_px as i32,
+            top: top_px as i32,
             right: pixels.0 as i32,
             bottom: pixels.1 as i32,
         };
@@ -155,8 +179,8 @@ impl TermRenderer {
             .enumerate()
             .map(|(i, buffer)| TextArea {
                 buffer,
-                left,
-                top: top + i as f32 * line_height,
+                left: left_px,
+                top: top_px + i as f32 * line_px,
                 scale,
                 bounds,
                 default_color: Color::rgb(default_color.0, default_color.1, default_color.2),
@@ -201,6 +225,7 @@ impl Default for MetricsProbe {
 impl MetricsProbe {
     pub fn new() -> Self {
         let mut font_system = FontSystem::new();
+        load_bundled(&mut font_system);
         load_system_cjk(&mut font_system);
         let buffer = Buffer::new(&mut font_system, Metrics::new(14.0, 18.0));
         Self {
