@@ -26,13 +26,13 @@ allow_names='me|you|user|someone|yourname|example'
 
 generic=0
 scan_generic() {
-    # macOS/Linux home paths, e.g. /Users/alice/… or /home/alice/…
+    # macOS/Linux home paths, e.g. /Users/<you>/… or /home/<you>/…
     if printf '%s\n' "$files" \
         | xargs -r grep -nIE "/(Users|home)/[A-Za-z0-9_.-]+/" -- 2>/dev/null \
         | grep -vE "/(Users|home)/($allow_names)/" ; then
         generic=1
     fi
-    # Windows home paths, e.g. C:\Users\alice
+    # Windows home paths, e.g. C:\Users\<you>
     if printf '%s\n' "$files" \
         | xargs -r grep -nIE '[Cc]:\\Users\\[A-Za-z0-9_.-]+' -- 2>/dev/null \
         | grep -vE "[Cc]:\\\\Users\\\\($allow_names)" ; then
