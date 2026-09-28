@@ -69,9 +69,11 @@ ssh runs in a non-interactive session, so:
   characters, so put the command in a `.cmd` and pass that path.
 - The GUI cannot be seen and **IME cannot be exercised** from such a session —
   that needs an interactive desktop (RDP, or a task in the logged-on session).
-- Known issue to watch: `conpty_resize_updates_screen_and_pty` was still running
-  after 60 s (and the process later disappeared) on this project's Windows box;
-  the echo test passes. Worth investigating with its author.
+- `conpty_resize_updates_screen_and_pty` used to appear to hang (a full run took
+  ~4 minutes); the cause was teardown, not the test — `ClosePseudoConsole` blocks
+  while the shell is alive. Fixed in ADR 0027: the engine kills the tree, drains
+  and closes off-thread, and the test exits its shell. Both ConPTY tests now
+  finish in ~1 s on real hardware.
 
 ## CI
 

@@ -20,7 +20,7 @@ const MAX_OSC: usize = 8 * 1024;
 /// A running terminal: a child shell on a PTY plus the parsed screen state.
 pub struct Terminal {
     screen: ATerm,
-    master: Box<dyn MasterPty + Send>,
+    master: Option<Box<dyn MasterPty + Send>>,
     writer: Box<dyn Write + Send>,
     #[allow(dead_code)]
     child: Box<dyn Child + Send + Sync>,
@@ -34,6 +34,38 @@ pub struct Terminal {
     /// Pending bytes scanned for a ConPTY cursor-position query (DSR, `ESC[6n`),
     /// which must be answered or the Windows shell stalls before it runs anything.
     dsr_buf: Vec<u8>,
+}
+
+/// Closing the PTY can block: on Windows `ClosePseudoConsole` waits for the
+/// client process to exit, so a running shell would stall teardown for minutes
+/// (closing a tab or quitting the app). Kill and reap the child *before* the
+/// master is dropped.
+impl Drop for Terminal {
+    fn drop(&mut self) {
+        // Teardown must not block: closing a ConPTY (`ClosePseudoConsole`) waits
+        // for the client process to exit, which can stall for minutes on Windows
+        // when a shell was running — and closing a tab or quitting the app must
+        // never hang. Kill the tree, reap, drain, then close off-thread.
+        #[cfg(windows)]
+        if let Some(pid) = self.child.process_id() {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            let _ = std::process::Command::new("taskkill")
+                .args(["/T", "/F", "/PID", &pid.to_string()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .creation_flags(CREATE_NO_WINDOW)
+                .status();
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        // Drain output the shell already produced (bounded).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
+        while std::time::Instant::now() < deadline && self.rx.try_recv().is_ok() {}
+        if let Some(master) = self.master.take() {
+            std::thread::spawn(move || drop(master));
+        }
+    }
 }
 
 fn default_shell() -> String {
@@ -109,7 +141,7 @@ impl Terminal {
 
         Ok(Self {
             screen: ATerm::new(cols, rows, scrollback),
-            master: pair.master,
+            master: Some(pair.master),
             writer,
             child,
             rx,
@@ -159,11 +191,13 @@ impl Terminal {
         self.rows = rows;
         self.cols = cols;
         self.screen.resize(cols, rows);
-        let _ = self.master.resize(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
+        let _ = self.master.as_ref().map(|m| {
+            m.resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
         });
     }
 

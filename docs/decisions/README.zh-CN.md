@@ -35,3 +35,4 @@
 | [0024](./0024-mtp-view-edit.zh-CN.md) | MTP view/edit 与 file read/write | 已接受 |
 | [0025](./0025-self-install.zh-CN.md) | 安装并重启（自我替换） | 已接受 |
 | [0026](./0026-wayland-shortcut.zh-CN.md) | 原生 Wayland/X11 全局快捷键（门户） | 已接受 |
+| [0027](./0027-conpty-teardown.zh-CN.md) | ConPTY 的收尾不得阻塞 | 已接受 |

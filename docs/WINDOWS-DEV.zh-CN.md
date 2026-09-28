@@ -64,8 +64,9 @@ ssh 运行在非交互会话,故:
   可在 ssh 断开后存活;直接 `Start-Process` 可能在会话结束时被杀。`/tr` 上限 261 字符,
   故把命令写进 `.cmd` 再传其路径。
 - 看不到 GUI,也**无法验证 IME** —— 那需要交互式桌面(RDP,或在已登录会话中运行任务)。
-- 需留意的问题:本项目的 Windows 机器上 `conpty_resize_updates_screen_and_pty` 运行 60 秒后
-  仍在跑(随后进程消失);echo 测试通过。值得与其作者一起排查。
+- `conpty_resize_updates_screen_and_pty` 过去看似挂起(整轮约 4 分钟);根因是收尾而非测试 ——
+  shell 存活时 `ClosePseudoConsole` 会阻塞。已在 ADR 0027 修复:引擎杀掉进程树、排空并在分离线程
+  中关闭,测试自身也会退出 shell。现在两个 ConPTY 测试在真机上约 1 秒完成。
 
 ## CI
 

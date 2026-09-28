@@ -53,6 +53,9 @@ fn conpty_resize_updates_screen_and_pty() {
 
     term.process_pending();
     term.resize(40, 120);
+    // Let the shell exit: on Windows `ClosePseudoConsole` blocks until the
+    // client exits, so dropping a live shell would stall for minutes.
+    term.write(b"exit\r\n");
 
     assert_eq!(
         term.size(),
