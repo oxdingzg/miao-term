@@ -489,6 +489,40 @@ struct MiaottyApp {
     alpha: u8,
     rules: miao_term_config::view::RuleSet,
     view_edit: Option<usize>,
+    palette: Option<Palette>,
+    palette_focus: bool,
+}
+
+/// A command-palette action (Open Quickly, ADR 0008).
+#[derive(Clone)]
+enum PaletteAction {
+    SwitchTab(usize),
+    Run(Verb),
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Verb {
+    NewTab,
+    SplitRight,
+    SplitDown,
+    CloseTab,
+    ToggleDetails,
+    Find,
+    Settings,
+    NextTab,
+    PrevTab,
+}
+
+struct PaletteEntry {
+    kind: &'static str,
+    label: String,
+    icon: Option<miao_term_config::view::Icon>,
+    action: PaletteAction,
+}
+
+struct Palette {
+    query: String,
+    selected: usize,
 }
 
 impl MiaottyApp {
@@ -522,6 +556,8 @@ impl MiaottyApp {
             alpha: (opacity * 255.0).round() as u8,
             rules: miao_term_config::view::RuleSet::load(),
             view_edit: None,
+            palette: None,
+            palette_focus: false,
         };
         if let Some(session) = Session::load() {
             app.restore(session);
@@ -900,6 +936,192 @@ impl eframe::App for MiaottyApp {
         if self.show_settings {
             self.settings_window(ctx);
         }
+        if self.palette.is_some() {
+            self.palette_ui(ctx);
+        }
+    }
+}
+
+impl MiaottyApp {
+    /// Entries for Open Quickly: tabs, agents and commands. Ranked by
+    /// [`palette_score`].
+    fn palette_entries(&self) -> Vec<PaletteEntry> {
+        let mut out = Vec::new();
+        for (i, tab) in self.tabs.iter().enumerate() {
+            let view = tab.focused().and_then(|p| self.view_for(p));
+            out.push(PaletteEntry {
+                kind: "tab",
+                label: self.tab_title(tab),
+                icon: view.as_ref().and_then(|v| v.icon.clone()),
+                action: PaletteAction::SwitchTab(i),
+            });
+            if let Some(agent) = tab
+                .focused()
+                .and_then(|p| self.state.agent_for(&p.pane_id))
+                .and_then(|a| a.get("agent").and_then(|v| v.as_str()).map(str::to_string))
+            {
+                out.push(PaletteEntry {
+                    kind: "agent",
+                    label: agent,
+                    icon: view.and_then(|v| v.icon),
+                    action: PaletteAction::SwitchTab(i),
+                });
+            }
+        }
+        for (label, verb) in [
+            ("New Tab", Verb::NewTab),
+            ("Split Right", Verb::SplitRight),
+            ("Split Down", Verb::SplitDown),
+            ("Close Tab", Verb::CloseTab),
+            ("Toggle Details", Verb::ToggleDetails),
+            ("Find", Verb::Find),
+            ("Settings", Verb::Settings),
+            ("Next Tab", Verb::NextTab),
+            ("Previous Tab", Verb::PrevTab),
+        ] {
+            out.push(PaletteEntry {
+                kind: "command",
+                label: label.to_string(),
+                icon: None,
+                action: PaletteAction::Run(verb),
+            });
+        }
+        out
+    }
+
+    fn run_palette(&mut self, action: PaletteAction) {
+        match action {
+            PaletteAction::SwitchTab(i) => {
+                if i < self.tabs.len() {
+                    self.active = i;
+                    self.selection = None;
+                    self.scroll = 0;
+                }
+            }
+            PaletteAction::Run(verb) => match verb {
+                Verb::NewTab => self.new_tab(),
+                Verb::SplitRight => self.split_active(SplitDir::Right),
+                Verb::SplitDown => self.split_active(SplitDir::Down),
+                Verb::CloseTab => self.close_active(),
+                Verb::ToggleDetails => self.show_details = !self.show_details,
+                Verb::Find => self.find_open = true,
+                Verb::Settings => {
+                    self.show_settings = true;
+                    self.settings_family = self.font_family.clone().unwrap_or_default();
+                }
+                Verb::NextTab => self.focus_cycle(true),
+                Verb::PrevTab => self.focus_cycle(false),
+            },
+        }
+    }
+
+    fn palette_ui(&mut self, ctx: &egui::Context) {
+        let Some(mut pal) = self.palette.take() else {
+            return;
+        };
+        let entries = self.palette_entries();
+        let fg = self.theme.fg;
+        let muted = egui::Color32::from_gray(120);
+
+        let query = pal.query.to_lowercase();
+        let mut filtered: Vec<(usize, usize)> = entries
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| palette_score(&e.label, e.kind, &query).map(|s| (s, i)))
+            .collect();
+        filtered.sort_by_key(|(s, i)| (*s, *i));
+        if pal.selected >= filtered.len() {
+            pal.selected = filtered.len().saturating_sub(1);
+        }
+
+        let (mut nav, mut accept, mut cancel) = (0i32, false, false);
+        ctx.input(|i| {
+            for ev in &i.events {
+                if let egui::Event::Key {
+                    key,
+                    pressed: true,
+                    ..
+                } = ev
+                {
+                    match key {
+                        egui::Key::ArrowDown => nav += 1,
+                        egui::Key::ArrowUp => nav -= 1,
+                        egui::Key::Enter => accept = true,
+                        egui::Key::Escape => cancel = true,
+                        _ => {}
+                    }
+                }
+            }
+        });
+        if cancel {
+            self.palette = None;
+            return;
+        }
+        if nav != 0 && !filtered.is_empty() {
+            pal.selected =
+                (pal.selected as i32 + nav).rem_euclid(filtered.len() as i32) as usize;
+        }
+        let accept_index = accept.then_some(pal.selected);
+
+        let mut clicked: Option<usize> = None;
+        egui::Window::new("quickopen")
+            .title_bar(false)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_TOP, egui::Vec2::new(0.0, 90.0))
+            .default_width(560.0)
+            .show(ctx, |ui| {
+                let edit = ui.add(
+                    egui::TextEdit::singleline(&mut pal.query)
+                        .hint_text("Open quickly\u{2026}")
+                        .desired_width(f32::INFINITY),
+                );
+                if self.palette_focus {
+                    edit.request_focus();
+                    self.palette_focus = false;
+                }
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .max_height(300.0)
+                    .show(ui, |ui| {
+                        for (rank, (_, idx)) in filtered.iter().enumerate() {
+                            let entry = &entries[*idx];
+                            ui.horizontal(|ui| {
+                                if let Some(icon) = &entry.icon {
+                                    let (rect, _) = ui.allocate_exact_size(
+                                        egui::Vec2::splat(14.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    icons::draw_view(ui.painter(), rect, icon, fg);
+                                }
+                                let text = egui::RichText::new(&entry.label).color(fg);
+                                let resp = ui.selectable_label(rank == pal.selected, text);
+                                if resp.hovered() {
+                                    pal.selected = rank;
+                                }
+                                if resp.clicked() {
+                                    clicked = Some(rank);
+                                }
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.label(egui::RichText::new(entry.kind).small().color(muted));
+                                    },
+                                );
+                            });
+                        }
+                    });
+            });
+
+        if let Some(rank) = accept_index.or(clicked) {
+            if let Some((_, idx)) = filtered.get(rank) {
+                let action = entries[*idx].action.clone();
+                self.run_palette(action);
+                self.palette = None;
+                return;
+            }
+        }
+        self.palette = Some(pal);
     }
 }
 
@@ -938,6 +1160,25 @@ fn opt_text(ui: &mut egui::Ui, opt: &mut Option<String>) -> bool {
         *opt = (!trimmed.is_empty()).then(|| trimmed.to_string());
     }
     changed
+}
+
+/// Rank an entry against a lowercased query: substring hits rank by position,
+/// subsequence hits after all substring hits, and an empty query matches all.
+fn palette_score(label: &str, kind: &str, query: &str) -> Option<usize> {
+    if query.is_empty() {
+        return Some(0);
+    }
+    let hay = format!("{label} {kind}").to_lowercase();
+    if let Some(pos) = hay.find(query) {
+        return Some(pos);
+    }
+    let mut chars = hay.chars();
+    for c in query.chars() {
+        if !chars.any(|h| h == c) {
+            return None;
+        }
+    }
+    Some(1000)
 }
 
 fn match_summary(rule: &miao_term_config::view::Rule) -> String {
@@ -1753,6 +1994,9 @@ impl MiaottyApp {
 
                 // Window-level shortcuts (⌘ on macOS).
                 ctx.input(|i| {
+                    if self.palette.is_some() {
+                        return;
+                    }
                     for ev in &i.events {
                         if let egui::Event::Key {
                             key,
@@ -1788,6 +2032,13 @@ impl MiaottyApp {
                                         self.show_settings = true;
                                         self.settings_family =
                                             self.font_family.clone().unwrap_or_default();
+                                    }
+                                    (egui::Key::K, _, _) => {
+                                        self.palette = Some(Palette {
+                                            query: String::new(),
+                                            selected: 0,
+                                        });
+                                        self.palette_focus = true;
                                     }
                                     _ => {}
                                 }
@@ -1977,11 +2228,13 @@ impl MiaottyApp {
             };
             let mut out = Vec::new();
             let has_selection = self.selection.is_some();
-            ctx.input(|i| {
-                for ev in &i.events {
-                    encode_input(ev, app_cursor, bracketed, kitty, has_selection, &mut out);
-                }
-            });
+            if self.palette.is_none() {
+                ctx.input(|i| {
+                    for ev in &i.events {
+                        encode_input(ev, app_cursor, bracketed, kitty, has_selection, &mut out);
+                    }
+                });
+            }
             if !out.is_empty() {
                 self.tabs[ti].panes[pi].term.write(&out);
                 ctx.request_repaint();
@@ -2543,5 +2796,23 @@ fn encode_input(
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod palette_tests {
+    use super::palette_score;
+
+    #[test]
+    fn scores_substring_then_subsequence() {
+        assert_eq!(palette_score("New Tab", "command", ""), Some(0));
+        assert_eq!(palette_score("New Tab", "command", "new"), Some(0));
+        assert!(palette_score("New Tab", "command", "nt").is_some());
+        assert!(palette_score("New Tab", "command", "xyz").is_none());
+    }
+
+    #[test]
+    fn earlier_substring_position_ranks_first() {
+        assert!(palette_score("New Tab", "command", "new") < palette_score("Renew", "tab", "new"));
     }
 }
