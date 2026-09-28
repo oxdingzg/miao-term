@@ -26,6 +26,24 @@ fn workload() -> Vec<u8> {
     data
 }
 
+/// Record a measured metric for the CI baseline comparison (ADR 0028).
+fn record_metric(key: &str, value: f64) {
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/perf-measured.json");
+    let mut map: std::collections::BTreeMap<String, f64> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default();
+    map.insert(key.to_string(), value);
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&map).unwrap_or_default(),
+    );
+}
+
 /// Compare a measured metric against the committed baseline and fail on a
 /// regression beyond `regression_pct` (ADR 0023).
 fn baseline_gate(key: &str, measured: f64, higher_is_better: bool) {
@@ -80,6 +98,7 @@ fn vt_parse_throughput() {
         "VT parse throughput {mbps:.1} MB/s below the 25 MB/s budget"
     );
     baseline_gate("vt_parse_mbps", mbps / scale(), true);
+    record_metric("vt_parse_mbps", mbps / scale());
 }
 
 #[test]
@@ -106,4 +125,5 @@ fn screen_snapshot_budget() {
         "screen snapshot {per_ms:.4} ms exceeds the 2 ms budget"
     );
     baseline_gate("screen_snapshot_30_rows_ms", per_ms / scale(), false);
+    record_metric("screen_snapshot_30_rows_ms", per_ms / scale());
 }

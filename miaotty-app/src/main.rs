@@ -5617,6 +5617,34 @@ mod session_tests {
 mod perf_tests {
     use super::*;
 
+    /// Record a measured metric for the CI baseline comparison (ADR 0028).
+    fn record_metric(key: &str, value: f64) {
+        // Walk up to the workspace root (the dir holding Cargo.lock) so both
+        // crates write the same file.
+        let mut dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let path = loop {
+            if dir.join("Cargo.lock").is_file() {
+                break dir.join("target/perf-measured.json");
+            }
+            match dir.parent() {
+                Some(p) => dir = p.to_path_buf(),
+                None => break dir.join("target/perf-measured.json"),
+            }
+        };
+        let mut map: std::collections::BTreeMap<String, f64> = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default();
+        map.insert(key.to_string(), value);
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&map).unwrap_or_default(),
+        );
+    }
+
     fn scale() -> f64 {
         std::env::var("MIAOTTY_PERF_SCALE")
             .ok()
@@ -5680,6 +5708,7 @@ mod perf_tests {
             "row build {per_ms:.3} ms exceeds the 4 ms/frame budget"
         );
         baseline_gate("build_rows_frame_ms", per_ms / scale(), false);
+        record_metric("build_rows_frame_ms", per_ms / scale());
     }
 
     #[test]
@@ -5705,6 +5734,7 @@ mod perf_tests {
             "palette ranking {per_ms:.3} ms exceeds the 100 ms budget"
         );
         baseline_gate("palette_rank_10k_ms", per_ms / scale(), false);
+        record_metric("palette_rank_10k_ms", per_ms / scale());
     }
 }
 

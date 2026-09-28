@@ -6,3 +6,6 @@
 
 # Packaging output
 /dist/
+
+# CI perf baseline cache dir
+.perf/

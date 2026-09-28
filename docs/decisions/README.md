@@ -35,3 +35,4 @@ Docs are English by default; keep a Simplified Chinese version in sync
 | [0025](./0025-self-install.md) | Install and relaunch (self-replacement) | accepted |
 | [0026](./0026-wayland-shortcut.md) | Native Wayland/X11 global shortcut (portal) | accepted |
 | [0027](./0027-conpty-teardown.md) | ConPTY teardown must not block | accepted |
+| [0028](./0028-ci-perf-baseline.md) | CI-side performance baseline | accepted |

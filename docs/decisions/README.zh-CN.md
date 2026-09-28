@@ -36,3 +36,4 @@
 | [0025](./0025-self-install.zh-CN.md) | 安装并重启（自我替换） | 已接受 |
 | [0026](./0026-wayland-shortcut.zh-CN.md) | 原生 Wayland/X11 全局快捷键（门户） | 已接受 |
 | [0027](./0027-conpty-teardown.zh-CN.md) | ConPTY 的收尾不得阻塞 | 已接受 |
+| [0028](./0028-ci-perf-baseline.zh-CN.md) | CI 侧性能基线 | 已接受 |

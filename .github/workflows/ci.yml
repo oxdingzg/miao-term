@@ -20,11 +20,28 @@ jobs:
 
   perf:
     runs-on: ubuntu-latest
+    env:
+      # Looser than the local 25% so shared-runner noise does not flake.
+      PERF_REGRESSION_PCT: "40"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      # Performance gate (ADR 0018): release-mode budgets, generous headroom.
+      # Performance gate (ADR 0018/0028): release-mode budgets plus a baseline
+      # comparison against this runner's own previous measurements.
+      - uses: actions/cache@v4
+        with:
+          path: .perf
+          key: perf-baseline-${{ runner.os }}-${{ github.sha }}
+          restore-keys: perf-baseline-${{ runner.os }}-
       - run: cargo test --release -p miao-term-core -p miaotty-app -- --ignored
+      - name: Compare against the CI baseline
+        run: python3 scripts/check-perf-baseline.py
+      - name: Update the baseline (main only)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          mkdir -p .perf
+          cp target/perf-measured.json .perf/baseline.json
+          cat .perf/baseline.json
 
   privacy:
     runs-on: ubuntu-latest
