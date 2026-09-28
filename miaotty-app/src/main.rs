@@ -9,6 +9,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use serde::{Deserialize, Serialize};
+
 use eframe::egui;
 use eframe::egui_wgpu;
 use unicode_width::UnicodeWidthChar;
@@ -351,6 +353,87 @@ struct Tab {
     title: String,
 }
 
+// ---- session persistence ----
+
+#[derive(Serialize, Deserialize)]
+struct Session {
+    tabs: Vec<TabSession>,
+    active: usize,
+}
+
+#[derive(Serialize, Deserialize)]
+struct TabSession {
+    title: String,
+    panes: Vec<PaneSession>,
+    layout: LayoutNode,
+    active: usize,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+struct PaneSession {
+    cwd: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+enum LayoutNode {
+    Leaf(usize),
+    Split {
+        down: bool,
+        ratio: f32,
+        a: Box<LayoutNode>,
+        b: Box<LayoutNode>,
+    },
+}
+
+fn session_path() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))?;
+    Some(base.join("miaotty").join("session.json"))
+}
+
+impl Session {
+    fn load() -> Option<Self> {
+        let path = session_path()?;
+        let data = std::fs::read_to_string(path).ok()?;
+        serde_json::from_str(&data).ok()
+    }
+
+    fn save(&self) {
+        let Some(path) = session_path() else { return };
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Ok(data) = serde_json::to_string(self) {
+            let _ = std::fs::write(path, data);
+        }
+    }
+}
+
+fn layout_to_node(layout: &Layout, index_of: &dyn Fn(&str) -> usize) -> LayoutNode {
+    match layout {
+        Layout::Leaf(id) => LayoutNode::Leaf(index_of(id)),
+        Layout::Split { dir, ratio, a, b } => LayoutNode::Split {
+            down: *dir == SplitDir::Down,
+            ratio: *ratio,
+            a: Box::new(layout_to_node(a, index_of)),
+            b: Box::new(layout_to_node(b, index_of)),
+        },
+    }
+}
+
+fn node_to_layout(node: &LayoutNode, ids: &[String]) -> Layout {
+    match node {
+        LayoutNode::Leaf(i) => Layout::Leaf(ids.get(*i).cloned().unwrap_or_default()),
+        LayoutNode::Split { down, ratio, a, b } => Layout::Split {
+            dir: if *down { SplitDir::Down } else { SplitDir::Right },
+            ratio: *ratio,
+            a: Box::new(node_to_layout(a, ids)),
+            b: Box::new(node_to_layout(b, ids)),
+        },
+    }
+}
+
 impl Tab {
     fn focused(&self) -> Option<&Pane> {
         self.panes.iter().find(|p| p.pane_id == self.active)
@@ -395,6 +478,8 @@ struct MiaottyApp {
     font_family: Option<String>,
     show_settings: bool,
     settings_family: String,
+    line_height_ratio: f32,
+    cursor_style: miao_term_config::CursorStyle,
 }
 
 impl MiaottyApp {
@@ -421,9 +506,86 @@ impl MiaottyApp {
             font_family: cfg.font_family.clone(),
             show_settings: false,
             settings_family: cfg.font_family.clone().unwrap_or_default(),
+            line_height_ratio: cfg.line_height,
+            cursor_style: cfg.cursor_style,
         };
-        app.push_tab("shell".to_owned(), 100, 30, None);
+        if let Some(session) = Session::load() {
+            app.restore(session);
+        }
+        if app.tabs.is_empty() {
+            app.push_tab("shell".to_owned(), 100, 30, None);
+        }
         app
+    }
+
+    fn snapshot(&self) -> Session {
+        let tabs = self
+            .tabs
+            .iter()
+            .map(|tab| {
+                let index_of =
+                    |id: &str| tab.panes.iter().position(|p| p.pane_id == id).unwrap_or(0);
+                TabSession {
+                    title: tab.title.clone(),
+                    panes: tab
+                        .panes
+                        .iter()
+                        .map(|p| PaneSession {
+                            cwd: p.term.cwd().map(str::to_string),
+                        })
+                        .collect(),
+                    layout: layout_to_node(&tab.layout, &index_of),
+                    active: index_of(&tab.active),
+                }
+            })
+            .collect();
+        Session {
+            tabs,
+            active: self.active,
+        }
+    }
+
+    fn restore(&mut self, session: Session) {
+        self.tabs.clear();
+        for ts in session.tabs {
+            let mut panes = Vec::new();
+            let mut ids = Vec::new();
+            let mut ok = true;
+            for ps in &ts.panes {
+                let pane_id = gen_pane_id();
+                let cwd = ps.cwd.clone().map(PathBuf::from);
+                match Self::spawn_terminal(100, 30, &pane_id, cwd) {
+                    Some(term) => {
+                        panes.push(Pane {
+                            term,
+                            rows: Arc::new(Vec::new()),
+                            dirty: true,
+                            pane_id: pane_id.clone(),
+                        });
+                        ids.push(pane_id);
+                    }
+                    None => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if !ok || panes.is_empty() {
+                continue;
+            }
+            let layout = node_to_layout(&ts.layout, &ids);
+            let active = ids.get(ts.active).cloned().unwrap_or_else(|| ids[0].clone());
+            self.tabs.push(Tab {
+                panes,
+                layout,
+                active,
+                title: ts.title,
+            });
+        }
+        if !self.tabs.is_empty() {
+            self.active = session.active.min(self.tabs.len() - 1);
+            self.publish_panes();
+        }
     }
 
     fn spawn_terminal(
@@ -726,6 +888,12 @@ impl eframe::App for MiaottyApp {
     }
 }
 
+impl Drop for MiaottyApp {
+    fn drop(&mut self) {
+        self.snapshot().save();
+    }
+}
+
 fn agent_color(state: &str) -> egui::Color32 {
     match state {
         "processing" => egui::Color32::from_rgb(0x81, 0xa1, 0xc1),
@@ -989,6 +1157,13 @@ impl MiaottyApp {
         if let Some(family) = &self.font_family {
             out.push_str(&format!("font-family = {family:?}\n"));
         }
+        out.push_str(&format!("line-height = {}\n", self.line_height_ratio));
+        let cursor = match self.cursor_style {
+            miao_term_config::CursorStyle::Block => "block",
+            miao_term_config::CursorStyle::Bar => "bar",
+            miao_term_config::CursorStyle::Underline => "underline",
+        };
+        out.push_str(&format!("cursor-style = {cursor:?}\n"));
         out.push_str("\n[colors]\n");
         out.push_str(&format!(
             "background = \"#{:02x}{:02x}{:02x}\"\n",
@@ -1044,6 +1219,25 @@ impl MiaottyApp {
                         let trimmed = self.settings_family.trim();
                         self.font_family = (!trimmed.is_empty()).then(|| trimmed.to_string());
                         self.mark_all_dirty();
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Line height");
+                    if ui
+                        .add(egui::Slider::new(&mut self.line_height_ratio, 0.9..=2.0))
+                        .changed()
+                    {
+                        self.mark_all_dirty();
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Cursor");
+                    use miao_term_config::CursorStyle::*;
+                    for (label, style) in [("block", Block), ("bar", Bar), ("underline", Underline)] {
+                        if ui.button(label).clicked() {
+                            self.cursor_style = style;
+                            self.mark_all_dirty();
+                        }
                     }
                 });
                 ui.horizontal(|ui| {
@@ -1165,7 +1359,7 @@ impl MiaottyApp {
             .show(ctx, |ui| {
                 let rect = ui.available_rect_before_wrap();
                 // Cell size comes from the renderer's own font so glyphs line up.
-                let line_height = (self.font_size * 1.25).round();
+                let line_height = (self.font_size * self.line_height_ratio).round();
                 let (cw, ch) = self
                     .metrics
                     .cell(self.font_size, line_height, self.font_family.as_deref());
@@ -1453,6 +1647,7 @@ impl MiaottyApp {
                 rect,
                 if focused { self.selection } else { None },
                 &self.theme,
+                self.cursor_style,
                 draw_cursor,
             );
             if focused && !self.find_query.is_empty() {
@@ -1472,7 +1667,9 @@ impl MiaottyApp {
                     }
                 }
             }
-            let cursor_cell = if draw_cursor {
+            let cursor_cell = if draw_cursor
+                && self.cursor_style == miao_term_config::CursorStyle::Block
+            {
                 Some(screen.cursor_position())
             } else {
                 None
@@ -1552,6 +1749,7 @@ fn draw_screen(
     rect: egui::Rect,
     selection: Option<Selection>,
     theme: &Theme,
+    cursor_style: miao_term_config::CursorStyle,
     draw_cursor: bool,
 ) {
     let painter = ui.painter_at(rect);
@@ -1608,7 +1806,22 @@ fn draw_screen(
                 egui::pos2(ox + ccol as f32 * cw, oy + crow as f32 * ch),
                 egui::vec2(cw * width, ch),
             );
-            painter.rect_filled(cur_rect, egui::Rounding::ZERO, theme.fg);
+            match cursor_style {
+                miao_term_config::CursorStyle::Block => {
+                    painter.rect_filled(cur_rect, egui::Rounding::ZERO, theme.fg);
+                }
+                miao_term_config::CursorStyle::Bar => {
+                    let bar = egui::Rect::from_min_size(cur_rect.min, egui::vec2(2.0, ch));
+                    painter.rect_filled(bar, egui::Rounding::ZERO, theme.fg);
+                }
+                miao_term_config::CursorStyle::Underline => {
+                    let line = egui::Rect::from_min_max(
+                        egui::pos2(cur_rect.left(), cur_rect.bottom() - 2.0),
+                        cur_rect.max,
+                    );
+                    painter.rect_filled(line, egui::Rounding::ZERO, theme.fg);
+                }
+            }
         }
     }
 

@@ -25,7 +25,10 @@ PROFILE=debug scripts/package-macos.sh
 在 macOS/Linux/Windows 构建 `miaotty` + `miaotty-cli`,并把 `miaotty.app` zip / Linux tar / Windows zip
 挂到 GitHub Release。
 
-macOS 为 ad-hoc 签名;公证需要 Developer ID 证书,尚未接入。三平台均为免安装产物。
+macOS 默认 ad-hoc 签名;若仓库配了 `APPLE_CERT_P12`+`APPLE_CERT_PASSWORD`+`APPLE_ID`+
+`APPLE_TEAM_ID`+`APPLE_APP_PASSWORD` 这些 secrets,则改为 Developer ID 签名 + 公证 + staple。
+Linux 额外产出 `.deb`(用 `cargo-deb`,元数据在 `miaotty-app/Cargo.toml`);Windows 为 zip
+(MSI 走 `dist-workspace.toml` 的 cargo-dist 脚手架,后续可选)。
 
 ## 跨平台安装包
 

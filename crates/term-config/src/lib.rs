@@ -61,12 +61,35 @@ struct RawColors {
     palette: Option<Vec<String>>,
 }
 
+/// How the text cursor is drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CursorStyle {
+    Block,
+    Bar,
+    Underline,
+}
+
+impl CursorStyle {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_ascii_lowercase().as_str() {
+            "block" => Self::Block,
+            "bar" | "beam" => Self::Bar,
+            "underline" => Self::Underline,
+            _ => return None,
+        })
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct RawConfig {
     #[serde(rename = "font-size")]
     font_size: Option<f32>,
     #[serde(rename = "font-family")]
     font_family: Option<String>,
+    #[serde(rename = "line-height")]
+    line_height: Option<f32>,
+    #[serde(rename = "cursor-style")]
+    cursor_style: Option<String>,
     theme: Option<String>,
     colors: Option<RawColors>,
 }
@@ -133,6 +156,9 @@ pub fn theme_by_name(name: &str) -> Option<Theme> {
 pub struct Config {
     pub font_size: f32,
     pub font_family: Option<String>,
+    /// Line height as a multiple of the font size.
+    pub line_height: f32,
+    pub cursor_style: CursorStyle,
     pub theme: Theme,
 }
 
@@ -141,6 +167,8 @@ impl Default for Config {
         Self {
             font_size: default_font_size(),
             font_family: None,
+            line_height: 1.25,
+            cursor_style: CursorStyle::Block,
             theme: Theme::default(),
         }
     }
@@ -327,6 +355,16 @@ impl Config {
                         cfg.theme = theme;
                     }
                 }
+                "line-height" => {
+                    if let Ok(ratio) = value.parse::<f32>() {
+                        cfg.line_height = ratio.clamp(0.8, 3.0);
+                    }
+                }
+                "cursor-style" => {
+                    if let Some(style) = CursorStyle::parse(value) {
+                        cfg.cursor_style = style;
+                    }
+                }
                 "palette" => {
                     if let Some((idx, hex)) = value.split_once('=') {
                         if let (Ok(i), Some(c)) = (idx.trim().parse::<usize>(), Rgb::parse(hex)) {
@@ -353,6 +391,12 @@ impl Config {
             if !family.is_empty() {
                 cfg.font_family = Some(family.to_string());
             }
+        }
+        if let Some(lh) = raw.line_height {
+            cfg.line_height = lh.clamp(0.8, 3.0);
+        }
+        if let Some(style) = raw.cursor_style.as_deref().and_then(CursorStyle::parse) {
+            cfg.cursor_style = style;
         }
         if let Some(name) = raw.theme {
             if let Some(theme) = theme_by_name(&name) {

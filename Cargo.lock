@@ -2011,6 +2011,7 @@ dependencies = [
  "miao-term-mtp",
  "miao-term-render",
  "miao-term-widget",
+ "serde",
  "serde_json",
  "unicode-width 0.2.2",
 ]

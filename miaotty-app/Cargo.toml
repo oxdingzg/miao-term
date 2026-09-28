@@ -11,6 +11,19 @@ repository.workspace = true
 name = "miaotty"
 path = "src/main.rs"
 
+[package.metadata.deb]
+name = "miaotty"
+maintainer = "miaotty"
+copyright = "MIT OR Apache-2.0"
+license-file = ["../LICENSE", "0"]
+section = "utils"
+priority = "optional"
+depends = "$auto"
+assets = [
+    ["target/release/miaotty", "usr/bin/miaotty", "755"],
+    ["target/release/miaotty-cli", "usr/bin/miaotty-cli", "755"],
+]
+
 [dependencies]
 miao-term-core = { path = "../crates/term-core" }
 miao-term-render = { path = "../crates/term-render" }
@@ -20,3 +33,4 @@ miao-term-mtp = { path = "../crates/term-mtp" }
 eframe = { version = "0.30.0", features = ["wgpu"] }
 unicode-width = "0.2.2"
 serde_json = "1.0.151"
+serde = { version = "1.0.229", features = ["derive"] }

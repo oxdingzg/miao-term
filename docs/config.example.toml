@@ -3,6 +3,8 @@
 
 font-size = 14
 # font-family = "JetBrains Mono"   # any installed family; default follows the system monospace
+# line-height = 1.25               # multiple of the font size
+# cursor-style = "block"           # block | bar | underline
 
 # Built-in named theme: nord | dracula | gruvbox | solarized | tokyo-night.
 # theme = "dracula"   # overridden by explicit [colors] below

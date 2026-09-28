@@ -27,8 +27,12 @@ Pushing a `v*` tag runs [`.github/workflows/release.yml`](../.github/workflows/r
 it builds `miaotty` + `miaotty-cli` on macOS/Linux/Windows and attaches a
 `miaotty.app` zip / Linux tarball / Windows zip to a GitHub Release.
 
-macOS builds are ad-hoc signed; notarization requires a Developer ID certificate
-and is not wired up yet. All platforms ship as-is (no installer).
+macOS builds are ad-hoc signed by default; if the repo has `APPLE_CERT_P12` +
+`APPLE_CERT_PASSWORD` + `APPLE_ID` + `APPLE_TEAM_ID` + `APPLE_APP_PASSWORD`
+secrets, the workflow signs with a Developer ID, notarizes and staples instead.
+Linux also builds a `.deb` (via `cargo-deb`, metadata in `miaotty-app/Cargo.toml`);
+Windows ships a zip (MSI via the `dist-workspace.toml` cargo-dist scaffold is a
+later option).
 
 ## Cross-platform installers
 
