@@ -15,6 +15,8 @@ use eframe::egui;
 use eframe::egui_wgpu;
 use unicode_width::UnicodeWidthChar;
 
+mod icons;
+
 use miao_term_core::aterm::{ATerm, Color, NamedColor};
 use miao_term_core::Terminal;
 
@@ -486,6 +488,7 @@ struct MiaottyApp {
     opacity: f32,
     alpha: u8,
     rules: miao_term_config::view::RuleSet,
+    view_edit: Option<usize>,
 }
 
 impl MiaottyApp {
@@ -518,6 +521,7 @@ impl MiaottyApp {
             opacity,
             alpha: (opacity * 255.0).round() as u8,
             rules: miao_term_config::view::RuleSet::load(),
+            view_edit: None,
         };
         if let Some(session) = Session::load() {
             app.restore(session);
@@ -922,6 +926,74 @@ fn section(text: &str) -> egui::RichText {
         .color(egui::Color32::from_gray(150))
 }
 
+/// Edit an optional string; an empty field clears it. Returns whether it
+/// changed.
+fn opt_text(ui: &mut egui::Ui, opt: &mut Option<String>) -> bool {
+    let mut text = opt.clone().unwrap_or_default();
+    let changed = ui
+        .add(egui::TextEdit::singleline(&mut text).desired_width(150.0))
+        .changed();
+    if changed {
+        let trimmed = text.trim();
+        *opt = (!trimmed.is_empty()).then(|| trimmed.to_string());
+    }
+    changed
+}
+
+fn match_summary(rule: &miao_term_config::view::Rule) -> String {
+    let m = &rule.r#match;
+    let mut parts = Vec::new();
+    if let Some(p) = &m.path {
+        parts.push(format!("path:{p}"));
+    }
+    if let Some(p) = &m.command {
+        parts.push(format!("cmd:{p}"));
+    }
+    if let Some(p) = &m.agent {
+        parts.push(format!("agent:{p}"));
+    }
+    if let Some(p) = &m.host {
+        parts.push(format!("host:{p}"));
+    }
+    if let Some(p) = &m.file {
+        parts.push(format!("file:{p}"));
+    }
+    if parts.is_empty() {
+        parts.push("any".to_string());
+    }
+    parts.join(" ")
+}
+
+/// A sample context for the rule preview, seeded from the rule's match.
+fn preview_context(m: &miao_term_config::view::Match) -> miao_term_config::view::Context {
+    let cwd = m
+        .path
+        .as_deref()
+        .map(sample_path)
+        .unwrap_or_else(|| "/Users/me/project".to_string());
+    miao_term_config::view::Context {
+        cwd: Some(cwd),
+        command: m.command.clone().or_else(|| Some("cargo build".to_string())),
+        agent: m.agent.clone().or_else(|| Some("claude".to_string())),
+        host: m.host.clone(),
+        file: m.file.clone(),
+        user: Some("me".to_string()),
+        shell: Some("/bin/zsh".to_string()),
+        branch: Some("main".to_string()),
+        osc_title: Some("zsh".to_string()),
+        index: Some(0),
+    }
+}
+
+fn sample_path(pattern: &str) -> String {
+    let base = pattern.split('*').next().unwrap_or(pattern).trim_end_matches('/');
+    if base.is_empty() {
+        "/tmp/demo".to_string()
+    } else {
+        format!("{base}/demo")
+    }
+}
+
 fn reveal_in_finder(path: &str) {
     #[cfg(target_os = "macos")]
     {
@@ -941,11 +1013,16 @@ fn reveal_in_finder(path: &str) {
 
 impl MiaottyApp {
     fn sidebar(&mut self, ctx: &egui::Context) {
-        let rows: Vec<(String, Option<egui::Color32>)> = self
+        let rows: Vec<(
+            String,
+            Option<egui::Color32>,
+            Option<miao_term_config::view::Icon>,
+        )> = self
             .tabs
             .iter()
             .map(|tab| {
                 let title = self.tab_title(tab);
+                let view = tab.focused().and_then(|p| self.view_for(p));
                 let color = tab
                     .focused()
                     .and_then(|p| self.state.agent_for(&p.pane_id))
@@ -958,7 +1035,7 @@ impl MiaottyApp {
                         _ => egui::Color32::GRAY,
                     })
                 });
-                (title, color)
+                (title, color, view.and_then(|v| v.icon))
             })
             .collect();
         let active = self.active;
@@ -994,8 +1071,13 @@ impl MiaottyApp {
                     });
                 });
                 ui.separator();
-                for (i, (title, color)) in rows.iter().enumerate() {
+                for (i, (title, color, icon)) in rows.iter().enumerate() {
                     ui.horizontal(|ui| {
+                        if let Some(icon) = icon {
+                            let (rect, _) = ui
+                                .allocate_exact_size(egui::Vec2::splat(13.0), egui::Sense::hover());
+                            icons::draw_view(ui.painter(), rect, icon, fg);
+                        }
                         match color {
                             Some(c) => {
                                 ui.colored_label(*c, "\u{25cf}");
@@ -1254,6 +1336,174 @@ impl MiaottyApp {
         }
     }
 
+    /// The View-rule editor: rule list with priority, a per-rule form and a
+    /// live preview (ADR 0007).
+    fn view_rules_ui(&mut self, ui: &mut egui::Ui) {
+        let muted = egui::Color32::from_gray(120);
+        ui.label(section("VIEW RULES"));
+        ui.label(
+            egui::RichText::new("~/.config/miaotty/views.json")
+                .small()
+                .color(muted),
+        );
+
+        let snapshot: Vec<(usize, String, String)> = self
+            .rules
+            .rules
+            .iter()
+            .enumerate()
+            .map(|(i, rule)| {
+                let label = rule.name.clone().unwrap_or_else(|| format!("rule {i}"));
+                (i, label, match_summary(rule))
+            })
+            .collect();
+
+        let mut move_up = None;
+        let mut move_down = None;
+        let mut remove = None;
+        for (i, label, summary) in snapshot {
+            ui.horizontal(|ui| {
+                if ui
+                    .selectable_label(self.view_edit == Some(i), format!("{label}  {summary}"))
+                    .clicked()
+                {
+                    self.view_edit = Some(i);
+                }
+                if ui.small_button("\u{2191}").clicked() {
+                    move_up = Some(i);
+                }
+                if ui.small_button("\u{2193}").clicked() {
+                    move_down = Some(i);
+                }
+                if ui.small_button("\u{2715}").clicked() {
+                    remove = Some(i);
+                }
+            });
+        }
+        if let Some(i) = move_up {
+            self.rules.move_up(i);
+            if self.view_edit == Some(i) {
+                self.view_edit = Some(i - 1);
+            }
+        }
+        if let Some(i) = move_down {
+            self.rules.move_down(i);
+            if self.view_edit == Some(i) {
+                self.view_edit = Some(i + 1);
+            }
+        }
+        if let Some(i) = remove {
+            self.rules.rules.remove(i);
+            self.view_edit = None;
+        }
+
+        ui.horizontal(|ui| {
+            if ui.button("+ Rule").clicked() {
+                self.rules.rules.push(miao_term_config::view::Rule {
+                    title: Some("{folder}".to_string()),
+                    ..Default::default()
+                });
+                self.view_edit = Some(self.rules.rules.len() - 1);
+            }
+            if ui.button("Save views.json").clicked() {
+                match self.rules.save() {
+                    Ok(()) => eprintln!("miaotty: wrote views.json"),
+                    Err(e) => eprintln!("miaotty: failed to write views.json: {e}"),
+                }
+            }
+        });
+
+        if let Some(i) = self.view_edit {
+            if i < self.rules.rules.len() {
+                ui.separator();
+                self.rule_editor(ui, i);
+            }
+        }
+    }
+
+    fn rule_editor(&mut self, ui: &mut egui::Ui, i: usize) {
+        let fg = self.theme.fg;
+        let muted = egui::Color32::from_gray(120);
+        let sel_bg = ui.style().visuals.selection.bg_fill;
+        let rule = &mut self.rules.rules[i];
+
+        ui.horizontal(|ui| {
+            ui.label("Name");
+            opt_text(ui, &mut rule.name);
+        });
+        ui.label(egui::RichText::new("match").small().color(muted));
+        for (label, field) in [
+            ("path", &mut rule.r#match.path),
+            ("command", &mut rule.r#match.command),
+            ("agent", &mut rule.r#match.agent),
+            ("host", &mut rule.r#match.host),
+            ("file", &mut rule.r#match.file),
+        ] {
+            ui.horizontal(|ui| {
+                ui.label(label);
+                opt_text(ui, field);
+            });
+        }
+        ui.horizontal(|ui| {
+            ui.label("alias");
+            opt_text(ui, &mut rule.alias);
+        });
+        ui.horizontal(|ui| {
+            ui.label("title");
+            opt_text(ui, &mut rule.title);
+        });
+        ui.horizontal(|ui| {
+            ui.label("badge");
+            opt_text(ui, &mut rule.badge);
+        });
+        ui.horizontal(|ui| {
+            ui.label("icon");
+            if ui.small_button("clear").clicked() {
+                rule.icon = None;
+            }
+            let icon = rule.icon.get_or_insert_with(Default::default);
+            ui.label("name");
+            opt_text(ui, &mut icon.name);
+            ui.label("emoji");
+            opt_text(ui, &mut icon.emoji);
+            ui.label("color");
+            opt_text(ui, &mut icon.color);
+        });
+        ui.horizontal_wrapped(|ui| {
+            for name in icons::names() {
+                let selected =
+                    rule.icon.as_ref().and_then(|i| i.name.as_deref()) == Some(name);
+                let (rect, resp) =
+                    ui.allocate_exact_size(egui::Vec2::splat(22.0), egui::Sense::click());
+                let painter = ui.painter();
+                if selected {
+                    painter.rect_filled(rect, 3.0, sel_bg);
+                } else if resp.hovered() {
+                    painter.rect_filled(rect, 3.0, egui::Color32::from_gray(60));
+                }
+                icons::draw(painter, rect.shrink(3.0), name, fg);
+                if resp.clicked() {
+                    rule.icon.get_or_insert_with(Default::default).name = Some(name.to_string());
+                }
+            }
+        });
+
+        ui.separator();
+        let ctx = preview_context(&rule.r#match);
+        let mut single = miao_term_config::view::RuleSet::default();
+        single.rules.push(rule.clone());
+        if let Some(view) = single.evaluate(&ctx) {
+            ui.horizontal(|ui| {
+                if let Some(icon) = &view.icon {
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::Vec2::splat(16.0), egui::Sense::hover());
+                    icons::draw_view(ui.painter(), rect, icon, fg);
+                }
+                ui.label(egui::RichText::new(&view.title).monospace().color(fg));
+            });
+        }
+    }
+
     fn settings_window(&mut self, ctx: &egui::Context) {
         let mut open = true;
         egui::Window::new("Settings")
@@ -1321,6 +1571,8 @@ impl MiaottyApp {
                     }
                 });
                 ui.separator();
+                self.view_rules_ui(ui);
+                ui.separator();
                 if ui.button("Save to config.toml").clicked() {
                     self.save_config();
                 }
@@ -1334,16 +1586,21 @@ impl MiaottyApp {
         let fg = self.theme.fg;
         let active = self.active;
         let sel_bg = ctx.style().visuals.selection.bg_fill;
-        let titles: Vec<(String, Option<egui::Color32>)> = self
+        let titles: Vec<(
+            String,
+            Option<egui::Color32>,
+            Option<miao_term_config::view::Icon>,
+        )> = self
             .tabs
             .iter()
             .map(|tab| {
                 let focused = tab.focused();
                 let title = self.tab_title(tab);
+                let view = focused.and_then(|p| self.view_for(p));
                 let color = focused
                     .and_then(|p| self.state.agent_for(&p.pane_id))
                     .and_then(|a| a.get("state").and_then(|v| v.as_str()).map(agent_color));
-                (title, color)
+                (title, color, view.and_then(|v| v.icon))
             })
             .collect();
 
@@ -1362,7 +1619,12 @@ impl MiaottyApp {
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    for (i, (title, color)) in titles.into_iter().enumerate() {
+                    for (i, (title, color, icon)) in titles.into_iter().enumerate() {
+                        if let Some(icon) = &icon {
+                            let (rect, _) = ui
+                                .allocate_exact_size(egui::Vec2::splat(13.0), egui::Sense::hover());
+                            icons::draw_view(ui.painter(), rect, icon, fg);
+                        }
                         if let Some(c) = color {
                             ui.colored_label(c, "\u{25cf}");
                         }
