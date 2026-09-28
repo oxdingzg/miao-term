@@ -122,7 +122,14 @@ pub fn snippet(agent: &Agent, path: &Path) -> String {
 
 /// Tools that can bind a system-wide hotkey to `miaotty --quick`, for
 /// platforms (Linux) where the app has no built-in global grab.
-pub const HOTKEY_TOOLS: &[&str] = &["skhd", "hammerspoon", "autohotkey", "gnome"];
+pub const HOTKEY_TOOLS: &[&str] = &[
+    "skhd",
+    "hammerspoon",
+    "autohotkey",
+    "gnome",
+    "sway",
+    "hyprland",
+];
 
 /// A ready-to-paste binding for the given tool.
 pub fn hotkey_snippet(tool: &str) -> String {
@@ -136,6 +143,12 @@ pub fn hotkey_snippet(tool: &str) -> String {
         "gnome" => "# GNOME: Settings → Keyboard → Custom Shortcuts\n\
                     # Name: Quick Terminal    Command: miaotty --quick"
             .to_string(),
+        // Wayland compositors: bind the app's own intent, no global grab needed.
+        "sway" => "# ~/.config/sway/config\nbindsym $mod+Shift+t exec miaotty --quick".to_string(),
+        "hyprland" => {
+            "# ~/.config/hypr/hyprland.conf\nbind = SUPER SHIFT, T, exec, miaotty --quick"
+                .to_string()
+        }
         _ => String::new(),
     }
 }

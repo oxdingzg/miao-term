@@ -1997,11 +1997,19 @@ fn image_uri(url: &str, base: Option<&std::path::Path>) -> Option<String> {
         base?.join(path)
     };
     let ext = abs.extension()?.to_str()?.to_ascii_lowercase();
-    matches!(
+    if !matches!(
         ext.as_str(),
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp"
-    )
-    .then(|| format!("file://{}", abs.display()))
+    ) {
+        return None;
+    }
+    // Normalize to a file URL: forward slashes, and a leading slash before a
+    // Windows drive so `C:\dir\x.png` becomes `file:///C:/dir/x.png`.
+    let mut path = abs.display().to_string().replace('\\', "/");
+    if !path.starts_with('/') {
+        path.insert(0, '/');
+    }
+    Some(format!("file://{path}"))
 }
 
 /// Pull `[^id]: text` footnote definitions out of the flow.
@@ -5286,9 +5294,10 @@ mod session_tests {
     fn markdown_images_and_footnotes() {
         assert_eq!(parse_image("![alt](img.png)"), Some(("alt", "img.png")));
         assert!(parse_image("text ![a](b)").is_none());
-        assert!(image_uri("img.png", Some(std::path::Path::new("/doc")))
-            .unwrap()
-            .starts_with("file:///doc/"));
+        let uri = image_uri("img.png", Some(std::path::Path::new("/doc"))).unwrap();
+        assert!(uri.starts_with("file:///"), "{uri}");
+        assert!(uri.ends_with("img.png"), "{uri}");
+        assert!(!uri.contains('\\'), "{uri}");
         assert!(image_uri("https://x/y.png", None).is_none());
         assert!(image_uri("script.rs", Some(std::path::Path::new("/doc"))).is_none());
 

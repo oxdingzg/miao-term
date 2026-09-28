@@ -32,6 +32,15 @@ directory and exits. The running instance drains it and applies it: `Focus`
 switches to the pane's tab and focuses it; `Run` opens a tab; `Quick` toggles
 the Quick Terminal. A palette verb *Copy Pane ID* yields the id to target.
 
+## Addendum (Wayland)
+
+A native Wayland global shortcut would need the `GlobalShortcuts` xdg-desktop-portal
+(via `ashpd`), which drags in an async/D-Bus stack for a path we cannot verify
+locally. Instead the Settings row offers **sway** and **hyprland** bindings
+alongside skhd/Hammerspoon/AutoHotkey/GNOME, all of which call `miaotty --quick` —
+so Wayland users get the Quick Terminal through their compositor's own bind
+mechanism, which is how they bind everything else anyway.
+
 ## Consequences
 
 - One path handles argv, URL schemes and forwarded requests, so behavior is
