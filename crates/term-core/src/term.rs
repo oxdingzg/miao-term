@@ -134,6 +134,10 @@ impl Terminal {
         self.parser.screen()
     }
 
+    pub fn screen_mut(&mut self) -> &mut vt100::Screen {
+        self.parser.screen_mut()
+    }
+
     pub fn size(&self) -> (u16, u16) {
         (self.rows, self.cols)
     }

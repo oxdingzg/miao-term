@@ -1793,6 +1793,7 @@ dependencies = [
  "miao-term-mtp",
  "miao-term-render",
  "miao-term-widget",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
