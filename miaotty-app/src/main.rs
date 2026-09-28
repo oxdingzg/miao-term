@@ -225,6 +225,79 @@ fn layout_rects(layout: &Layout, rect: egui::Rect, out: &mut Vec<(String, egui::
     }
 }
 
+/// A draggable divider between two panes.
+struct SplitHandle {
+    path: Vec<bool>,
+    rect: egui::Rect,
+    divider: egui::Rect,
+    dir: SplitDir,
+}
+
+fn collect_splits(
+    layout: &Layout,
+    rect: egui::Rect,
+    path: &mut Vec<bool>,
+    out: &mut Vec<SplitHandle>,
+) {
+    if let Layout::Split { dir, ratio, a, b } = layout {
+        let r = ratio.clamp(0.1, 0.9);
+        match dir {
+            SplitDir::Right => {
+                let x = rect.left() + rect.width() * r;
+                out.push(SplitHandle {
+                    path: path.clone(),
+                    rect,
+                    divider: egui::Rect::from_min_max(
+                        egui::pos2(x - 3.0, rect.top()),
+                        egui::pos2(x + 3.0, rect.bottom()),
+                    ),
+                    dir: SplitDir::Right,
+                });
+                path.push(false);
+                collect_splits(a, egui::Rect::from_min_max(rect.min, egui::pos2(x, rect.max.y)), path, out);
+                path.pop();
+                path.push(true);
+                collect_splits(b, egui::Rect::from_min_max(egui::pos2(x, rect.top()), rect.max), path, out);
+                path.pop();
+            }
+            SplitDir::Down => {
+                let y = rect.top() + rect.height() * r;
+                out.push(SplitHandle {
+                    path: path.clone(),
+                    rect,
+                    divider: egui::Rect::from_min_max(
+                        egui::pos2(rect.left(), y - 3.0),
+                        egui::pos2(rect.right(), y + 3.0),
+                    ),
+                    dir: SplitDir::Down,
+                });
+                path.push(false);
+                collect_splits(a, egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, y)), path, out);
+                path.pop();
+                path.push(true);
+                collect_splits(b, egui::Rect::from_min_max(egui::pos2(rect.left(), y), rect.max), path, out);
+                path.pop();
+            }
+        }
+    }
+}
+
+fn set_ratio(layout: &mut Layout, path: &[bool], ratio: f32) {
+    let Some((&first, rest)) = path.split_first() else {
+        if let Layout::Split { ratio: r, .. } = layout {
+            *r = ratio;
+        }
+        return;
+    };
+    if let Layout::Split { a, b, .. } = layout {
+        if first {
+            set_ratio(b, rest, ratio);
+        } else {
+            set_ratio(a, rest, ratio);
+        }
+    }
+}
+
 fn split_leaf(layout: &mut Layout, target: &str, new_id: &str, dir: SplitDir) -> bool {
     match layout {
         Layout::Leaf(id) if id == target => {
@@ -312,6 +385,7 @@ struct MiaottyApp {
     last_title: Option<String>,
     find_open: bool,
     find_query: String,
+    split_drag: Option<Vec<bool>>,
 }
 
 impl MiaottyApp {
@@ -334,6 +408,7 @@ impl MiaottyApp {
             last_title: None,
             find_open: false,
             find_query: String::new(),
+            split_drag: None,
         };
         app.push_tab("shell".to_owned(), 100, 30, None);
         app
@@ -950,8 +1025,52 @@ impl MiaottyApp {
                     }
                 });
 
-                // Pane rectangles for the active tab (from the split tree).
+                // Draggable split dividers.
                 let ti = self.active;
+                let mut handles = Vec::new();
+                {
+                    let mut path = Vec::new();
+                    collect_splits(&self.tabs[ti].layout, rect, &mut path, &mut handles);
+                }
+                if !handles.is_empty() {
+                    let (pos, down, pressed) = ctx.input(|i| {
+                        (
+                            i.pointer.interact_pos(),
+                            i.pointer.primary_down(),
+                            i.pointer.primary_pressed(),
+                        )
+                    });
+                    if pressed {
+                        if let Some(p) = pos {
+                            if let Some(h) = handles.iter().find(|h| h.divider.expand(2.0).contains(p))
+                            {
+                                self.split_drag = Some(h.path.clone());
+                            }
+                        }
+                    }
+                    if !down {
+                        self.split_drag = None;
+                    }
+                    if let (Some(p), Some(path)) = (pos, self.split_drag.clone()) {
+                        if let Some(h) = handles.iter().find(|h| h.path == path) {
+                            let ratio = match h.dir {
+                                SplitDir::Right => (p.x - h.rect.left()) / h.rect.width().max(1.0),
+                                SplitDir::Down => (p.y - h.rect.top()) / h.rect.height().max(1.0),
+                            };
+                            set_ratio(&mut self.tabs[ti].layout, &path, ratio.clamp(0.1, 0.9));
+                        }
+                    }
+                    if let Some(p) = pos {
+                        if let Some(h) = handles.iter().find(|h| h.divider.expand(2.0).contains(p)) {
+                            ctx.set_cursor_icon(match h.dir {
+                                SplitDir::Right => egui::CursorIcon::ResizeHorizontal,
+                                SplitDir::Down => egui::CursorIcon::ResizeVertical,
+                            });
+                        }
+                    }
+                }
+
+                // Pane rectangles for the active tab (from the split tree).
                 let mut rects: Vec<(String, egui::Rect)> = Vec::new();
                 layout_rects(&self.tabs[ti].layout, rect, &mut rects);
                 for (id, pane_rect) in rects {

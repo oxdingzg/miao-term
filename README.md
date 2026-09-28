@@ -17,7 +17,8 @@ the `miaotty` application built on top of it.
 - Tabs with a left sidebar (`+`, click to switch, middle-click to close,
   right-click for Rename / Duplicate / Close / Close Others).
 - Splits: a recursive split tree (any number of panes), `⌘D` (right) /
-  `⇧⌘D` (down), click to focus, `⌘W` closes the focused pane.
+  `⇧⌘D` (down), click to focus, drag the divider to resize, `⌘W` closes the
+  focused pane.
 - Right details panel: Info (working directory + Copy Path / Reveal in Finder),
   Agent state, Outline (per-pane command history).
 - Selection (drag + double-click word), copy/paste, scrollback (wheel + Shift+PgUp/PgDn).
