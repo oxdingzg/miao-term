@@ -1,0 +1,91 @@
+# Releasing
+
+How the release pipeline works, what to configure, and how the update chain fits
+together. English default; keep [`RELEASE.zh-CN.md`](RELEASE.zh-CN.md) in sync.
+
+## Trigger
+
+Push a tag:
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) builds on
+macOS, Linux and Windows, packages each platform, optionally signs, uploads the
+artifacts, builds an **update manifest**, and creates a GitHub Release.
+
+## Artifacts
+
+| Platform | Artifact | Notes |
+|----------|----------|-------|
+| macOS | `miaotty-macos-arm64.zip` (a `.app`) | ad-hoc signed; notarized when the Apple secrets are set |
+| Linux | `miaotty-linux-x86_64.tar.gz`, `miaotty-linux-x86_64.AppImage`, `dist/*.deb` | AppImage is best-effort (`continue-on-error`) |
+| Windows | `miaotty-windows-x86_64.zip`, `miaotty-<ver>-x86_64.msi` | MSI is best-effort (`continue-on-error`) |
+
+Every artifact gets a `.sig` next to it when signing is configured.
+
+## Secrets (all optional)
+
+| Secret | Purpose |
+|--------|---------|
+| `APPLE_CERT_P12`, `APPLE_CERT_PASSWORD`, `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD` | codesign + notarize + staple the macOS build |
+| `WINDOWS_CERT_PFX` (base64), `WINDOWS_CERT_PASSWORD` | `signtool` the MSI |
+| `MINISIGN_SECRET_KEY` | sign every artifact with `minisign` (passwordless key) |
+
+Without them the pipeline still produces usable (unsigned) artifacts and prints
+what it skipped.
+
+### Generating the minisign key
+
+```sh
+minisign -G -W -p minisign.pub -s minisign.key     # -W: no password, for CI
+gh secret set MINISIGN_SECRET_KEY < minisign.key   # raw contents of the secret key
+```
+
+Publish the **public** key (`minisign.pub`) with the release notes / in the repo,
+and tell users to put its single line into their config:
+
+```toml
+update-pubkey = "RWQ…"
+```
+
+## Update manifest
+
+The release job writes `latest.json` and attaches it to the release:
+
+```json
+{
+  "version": "0.1.0",
+  "artifacts": {
+    "macos-aarch64": {
+      "url": "https://github.com/oxdingzg/miao-term/releases/download/v0.1.0/miaotty-macos-arm64.zip",
+      "sha256": "…",
+      "signature": "https://github.com/oxdingzg/miao-term/releases/download/v0.1.0/miaotty-macos-arm64.zip.sig"
+    },
+    "linux-x86_64": { "url": "…AppImage", "sha256": "…" },
+    "windows-x86_64": { "url": "…msi", "sha256": "…" }
+  }
+}
+```
+
+Point the app at it:
+
+```toml
+update-check-url = "https://github.com/oxdingzg/miao-term/releases/latest/download/latest.json"
+```
+
+Then *Settings → Check for Updates* reports the version, *Download Update* fetches
+the artifact for the running platform, verifies its SHA-256 (and the minisign
+signature when `update-pubkey` is set), and on macOS *Install and Relaunch*
+swaps the bundle with a rollback helper (ADR 0025).
+
+Platform keys match the app's `platform_key()`: `macos-aarch64`,
+`macos-x86_64`, `linux-x86_64` (+ `linux-x86_64-deb`), `windows-x86_64`.
+
+## Still open
+
+- AppImage and MSI are best-effort and not yet verified on a real install.
+- Self-replace is macOS-only; Windows/Linux hand off to the downloaded file.
+- The macOS zip name is arch-specific today (`arm64`); an Intel build would need
+  `macos-x86_64` and a matching pattern.

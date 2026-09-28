@@ -126,6 +126,28 @@ jobs:
           & $signtool sign /f cert.pfx /p $env:WINDOWS_CERT_PASSWORD /fd SHA256 `
             /tr http://timestamp.digicert.com /td SHA256 $msi
 
+      - name: Sign artifacts (minisign, optional)
+        if: env.MINISIGN_SECRET_KEY != ''
+        shell: bash
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          case "${{ runner.os }}" in
+            Linux)  sudo apt-get update -qq && sudo apt-get install -y -qq minisign ;;
+            macOS)  brew install minisign ;;
+            Windows) choco install -y minisign ;;
+          esac
+          key="$RUNNER_TEMP/minisign.key"
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key"
+          shopt -s nullglob
+          for f in miaotty-*.zip miaotty-*.tar.gz miaotty-*.AppImage dist/*.deb target/wix/*.msi; do
+            [ -f "$f" ] || continue
+            minisign -S -W -s "$key" -m "$f" -x "$f.sig"
+            echo "signed $f"
+          done
+          rm -f "$key"
+
       - uses: actions/upload-artifact@v4
         with:
           name: miaotty-${{ matrix.os }}
@@ -133,8 +155,11 @@ jobs:
             miaotty-*.zip
             miaotty-*.tar.gz
             miaotty-*.AppImage
+            miaotty-*.sig
             dist/*.deb
+            dist/*.deb.sig
             target/wix/*.msi
+            target/wix/*.msi.sig
 
   release:
     needs: build
@@ -145,6 +170,51 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+      - name: Build the update manifest
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, re
+          tag = os.environ["GITHUB_REF_NAME"]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          base = f"https://github.com/{repo}/releases/download/{tag}"
+          version = tag.lstrip("v")
+
+          def sha256(path):
+              h = hashlib.sha256()
+              with open(path, "rb") as fh:
+                  for chunk in iter(lambda: fh.read(1 << 20), b""):
+                      h.update(chunk)
+              return h.hexdigest()
+
+          # Map artifact filename patterns to the platform keys the app asks for.
+          patterns = [
+              ("macos-aarch64", r"miaotty-macos.*\.zip$"),
+              ("macos-x86_64", r"miaotty-macos-x86_64.*\.zip$"),
+              ("linux-x86_64", r"miaotty-linux.*\.(tar\.gz|AppImage)$"),
+              ("linux-x86_64-deb", r"miaotty_.*_amd64\.deb$"),
+              ("windows-x86_64", r"(miaotty-windows.*\.zip|miaotty-.*\.msi)$"),
+          ]
+          artifacts = {}
+          for path in sorted(pathlib.Path("artifacts").iterdir()):
+              name = path.name
+              if name.endswith(".sig") or not path.is_file():
+                  continue
+              for key, rx in patterns:
+                  if re.search(rx, name):
+                      entry = {
+                          "url": f"{base}/{name}",
+                          "sha256": sha256(path),
+                      }
+                      sig = path.with_suffix(path.suffix + ".sig")
+                      if sig.exists():
+                          entry["signature"] = f"{base}/{sig.name}"
+                      artifacts.setdefault(key, entry)
+          manifest = {"version": version, "artifacts": artifacts}
+          pathlib.Path("artifacts/latest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+          print(json.dumps(manifest, indent=2))
+          PY
+
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
