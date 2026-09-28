@@ -71,40 +71,41 @@ fn install_fonts(ctx: &egui::Context) {
     }
 }
 
-/// Nord palette (matches miaotty's default look).
-const NORD: [egui::Color32; 16] = [
-    egui::Color32::from_rgb(0x3b, 0x42, 0x52),
-    egui::Color32::from_rgb(0xbf, 0x61, 0x6a),
-    egui::Color32::from_rgb(0xa3, 0xbe, 0x8c),
-    egui::Color32::from_rgb(0xeb, 0xcb, 0x8b),
-    egui::Color32::from_rgb(0x81, 0xa1, 0xc1),
-    egui::Color32::from_rgb(0xb4, 0x8e, 0xad),
-    egui::Color32::from_rgb(0x88, 0xc0, 0xd0),
-    egui::Color32::from_rgb(0xe5, 0xe9, 0xf0),
-    egui::Color32::from_rgb(0x4c, 0x56, 0x6a),
-    egui::Color32::from_rgb(0xbf, 0x61, 0x6a),
-    egui::Color32::from_rgb(0xa3, 0xbe, 0x8c),
-    egui::Color32::from_rgb(0xeb, 0xcb, 0x8b),
-    egui::Color32::from_rgb(0x81, 0xa1, 0xc1),
-    egui::Color32::from_rgb(0xb4, 0x8e, 0xad),
-    egui::Color32::from_rgb(0x8f, 0xbc, 0xbb),
-    egui::Color32::from_rgb(0xec, 0xef, 0xf4),
-];
+/// Active theme colors (from `term-config`).
+#[derive(Clone)]
+struct Theme {
+    bg: egui::Color32,
+    fg: egui::Color32,
+    palette: [egui::Color32; 16],
+}
 
-const BG: egui::Color32 = egui::Color32::from_rgb(0x2e, 0x34, 0x40);
-const FG: egui::Color32 = egui::Color32::from_rgb(0xd8, 0xde, 0xe9);
+impl Theme {
+    fn from_config(theme: &miao_term_config::Theme) -> Self {
+        let c = |r: miao_term_config::Rgb| egui::Color32::from_rgb(r.0, r.1, r.2);
+        let mut palette = [egui::Color32::BLACK; 16];
+        for (i, p) in theme.palette.iter().enumerate() {
+            palette[i] = c(*p);
+        }
+        Self {
+            bg: c(theme.background),
+            fg: c(theme.foreground),
+            palette,
+        }
+    }
+}
+
 const SELECTION: egui::Color32 = egui::Color32::from_rgba_premultiplied(0x81, 0xa1, 0xc1, 0x55);
 
-fn map_color(color: vt100::Color, foreground: bool) -> egui::Color32 {
+fn map_color(color: vt100::Color, foreground: bool, theme: &Theme) -> egui::Color32 {
     match color {
         vt100::Color::Default => {
             if foreground {
-                FG
+                theme.fg
             } else {
-                BG
+                theme.bg
             }
         }
-        vt100::Color::Idx(i) => NORD[(i as usize) & 0x0f],
+        vt100::Color::Idx(i) => theme.palette[(i as usize) & 0x0f],
         vt100::Color::Rgb(r, g, b) => egui::Color32::from_rgb(r, g, b),
     }
 }
@@ -142,20 +143,23 @@ struct MiaottyApp {
     last_blink: Instant,
     show_details: bool,
     state: Arc<miao_term_mtp::ServerState>,
+    theme: Theme,
 }
 
 impl MiaottyApp {
     fn new(state: Arc<miao_term_mtp::ServerState>) -> Self {
+        let cfg = miao_term_config::Config::load();
         let mut app = Self {
             tabs: Vec::new(),
             active: 0,
-            font_size: 14.0,
+            font_size: cfg.font_size,
             selection: None,
             scroll: 0,
             cursor_on: true,
             last_blink: Instant::now(),
             show_details: true,
             state,
+            theme: Theme::from_config(&cfg.theme),
         };
         app.push_tab("shell".to_owned(), 100, 30);
         app
@@ -307,6 +311,7 @@ impl MiaottyApp {
             })
             .collect();
         let active = self.active;
+        let fg = self.theme.fg;
         let can_close = self.tabs.len() > 1;
         let mut switch_to: Option<usize> = None;
         let mut close: Option<usize> = None;
@@ -316,7 +321,7 @@ impl MiaottyApp {
         egui::SidePanel::left("tabs")
             .resizable(true)
             .default_width(190.0)
-            .frame(egui::Frame::default().fill(BG).inner_margin(egui::Margin::same(6.0)))
+            .frame(egui::Frame::default().fill(self.theme.bg).inner_margin(egui::Margin::same(6.0)))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(section("TABS"));
@@ -340,7 +345,7 @@ impl MiaottyApp {
                                 ui.label("  ");
                             }
                         }
-                        let label = egui::RichText::new(title).size(13.0).color(FG);
+                        let label = egui::RichText::new(title).size(13.0).color(fg);
                         let resp = ui.selectable_label(i == active, label);
                         if resp.clicked() {
                             switch_to = Some(i);
@@ -374,17 +379,22 @@ impl MiaottyApp {
         let history = self.state.history_for(&pane_id);
         let agent = self.state.agent_for(&pane_id);
         let muted = egui::Color32::from_gray(120);
+        let fg = self.theme.fg;
         egui::SidePanel::right("details")
             .resizable(true)
             .default_width(300.0)
-            .frame(egui::Frame::default().fill(BG).inner_margin(egui::Margin::same(10.0)))
+            .frame(
+                egui::Frame::default()
+                    .fill(self.theme.bg)
+                    .inner_margin(egui::Margin::same(10.0)),
+            )
             .show(ctx, |ui| {
                 ui.label(section("INFO"));
                 ui.add_space(6.0);
-                ui.label(egui::RichText::new("Working Directory").strong().color(FG));
+                ui.label(egui::RichText::new("Working Directory").strong().color(fg));
                 match &cwd {
                     Some(p) => {
-                        ui.label(egui::RichText::new(p).monospace().color(FG));
+                        ui.label(egui::RichText::new(p).monospace().color(fg));
                     }
                     None => {
                         ui.label(egui::RichText::new("\u{2014}").color(muted));
@@ -406,7 +416,7 @@ impl MiaottyApp {
                     ui.label(section("AGENT"));
                     let st = a.get("state").and_then(|v| v.as_str()).unwrap_or("?");
                     let name = a.get("agent").and_then(|v| v.as_str()).unwrap_or("agent");
-                    ui.label(egui::RichText::new(format!("{name} \u{00b7} {st}")).color(FG));
+                    ui.label(egui::RichText::new(format!("{name} \u{00b7} {st}")).color(fg));
                 }
 
                 ui.add_space(10.0);
@@ -428,7 +438,7 @@ impl MiaottyApp {
                                     .get("command")
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("");
-                                ui.label(egui::RichText::new(cmd).monospace().color(FG));
+                                ui.label(egui::RichText::new(cmd).monospace().color(fg));
                                 ui.add_space(2.0);
                             }
                         });
@@ -438,7 +448,7 @@ impl MiaottyApp {
 
     fn terminal_panel(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
-            .frame(egui::Frame::default().fill(BG))
+            .frame(egui::Frame::default().fill(self.theme.bg))
             .show(ctx, |ui| {
                 let rect = ui.available_rect_before_wrap();
                 let font = egui::FontId::monospace(self.font_size);
@@ -607,6 +617,7 @@ impl MiaottyApp {
                         ch,
                         rect,
                         self.selection,
+                        &self.theme,
                         self.scroll == 0 && self.cursor_on && !screen.hide_cursor(),
                     );
                 }
@@ -666,6 +677,7 @@ fn draw_screen(
     ch: f32,
     rect: egui::Rect,
     selection: Option<Selection>,
+    theme: &Theme,
     draw_cursor: bool,
 ) {
     let painter = ui.painter_at(rect);
@@ -707,8 +719,8 @@ fn draw_screen(
                 egui::vec2(cw, ch),
             );
 
-            let bg = map_color(cell.bgcolor(), false);
-            if bg != BG {
+            let bg = map_color(cell.bgcolor(), false, theme);
+            if bg != theme.bg {
                 painter.rect_filled(cell_rect, egui::Rounding::ZERO, bg);
             }
 
@@ -716,9 +728,9 @@ fn draw_screen(
             let width = UnicodeWidthStr::width(contents).max(if contents.is_empty() { 0 } else { 1 });
             if !contents.is_empty() && contents != " " {
                 let fg = if cell.inverse() {
-                    BG
+                    theme.bg
                 } else {
-                    map_color(cell.fgcolor(), true)
+                    map_color(cell.fgcolor(), true, theme)
                 };
                 let span = egui::Rect::from_min_size(cell_rect.min, egui::vec2(cw * width as f32, ch));
                 painter.text(span.left_top(), egui::Align2::LEFT_TOP, contents, font.clone(), fg);
@@ -736,11 +748,17 @@ fn draw_screen(
                 egui::pos2(ox + ccol as f32 * cw, oy + crow as f32 * ch),
                 egui::vec2(cw, ch),
             );
-            painter.rect_filled(cur_rect, egui::Rounding::ZERO, FG);
+            painter.rect_filled(cur_rect, egui::Rounding::ZERO, theme.fg);
             if let Some(cell) = screen.cell(crow, ccol) {
                 let c = cell.contents();
                 if !c.is_empty() && c != " " {
-                    painter.text(cur_rect.left_top(), egui::Align2::LEFT_TOP, c, font.clone(), BG);
+                    painter.text(
+                        cur_rect.left_top(),
+                        egui::Align2::LEFT_TOP,
+                        c,
+                        font.clone(),
+                        theme.bg,
+                    );
                 }
             }
         }
