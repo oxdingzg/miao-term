@@ -1,14 +1,25 @@
-//! Experimental `alacritty_terminal` backend (architecture target, ADR 0001).
-//!
-//! Runs in parallel with the `vt100` backend for now; the app still uses
-//! `vt100`. This exists to de-risk the eventual swap: the same operations the
-//! app needs (cells, cursor, modes) are exercised here with tests.
+//! `alacritty_terminal` backend (ADR 0001) — the screen model behind
+//! [`crate::Terminal`]. Exposes the cells/colors/cursor/modes/scrollback the
+//! app needs, plus tests.
 
 use alacritty_terminal::event::VoidListener;
-use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line};
+use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::Processor;
+
+pub use alacritty_terminal::vte::ansi::{Color, NamedColor};
+
+/// A snapshot of a grid cell (owned, so the caller doesn't borrow the term).
+#[derive(Clone)]
+pub struct CellView {
+    pub ch: char,
+    pub fg: Color,
+    pub bg: Color,
+    pub inverse: bool,
+    pub bold: bool,
+}
 
 struct Dims {
     cols: usize,
@@ -77,6 +88,72 @@ impl ATerm {
     pub fn cursor(&self) -> (u16, u16) {
         let point = self.term.grid().cursor.point;
         (point.line.0.max(0) as u16, point.column.0 as u16)
+    }
+
+    pub fn cursor_position(&self) -> (u16, u16) {
+        self.cursor()
+    }
+
+    /// True when the cursor should not be drawn.
+    pub fn hide_cursor(&self) -> bool {
+        !self.term.mode().contains(TermMode::SHOW_CURSOR)
+    }
+
+    pub fn cell(&self, row: u16, col: u16) -> Option<CellView> {
+        if row as usize >= self.rows || col as usize >= self.cols {
+            return None;
+        }
+        let cell = &self.term.grid()[Line(row as i32)][Column(col as usize)];
+        Some(CellView {
+            ch: cell.c,
+            fg: cell.fg,
+            bg: cell.bg,
+            inverse: cell.flags.contains(Flags::INVERSE),
+            bold: cell.flags.contains(Flags::BOLD),
+        })
+    }
+
+    /// Text between two cells (inclusive), right-trimmed per line.
+    pub fn contents_between(&self, r1: u16, c1: u16, r2: u16, c2: u16) -> String {
+        let mut out = String::new();
+        for row in r1..=r2 {
+            let (start, end) = if row == r1 {
+                (c1, self.cols as u16)
+            } else if row == r2 {
+                (0, c2)
+            } else {
+                (0, self.cols as u16)
+            };
+            let mut line = String::new();
+            for col in start..end.max(start) {
+                if let Some(cell) = self.cell(row, col) {
+                    line.push(cell.ch);
+                }
+            }
+            out.push_str(line.trim_end());
+            if row != r2 {
+                out.push('\n');
+            }
+        }
+        out
+    }
+
+    /// Scroll the viewport `n` lines back from the bottom.
+    pub fn set_scrollback(&mut self, n: usize) {
+        let current = self.term.grid().display_offset() as i32;
+        self.term.scroll_display(Scroll::Delta(n as i32 - current));
+    }
+
+    pub fn resize(&mut self, cols: u16, rows: u16) {
+        if cols as usize == self.cols && rows as usize == self.rows {
+            return;
+        }
+        self.cols = cols as usize;
+        self.rows = rows as usize;
+        self.term.resize(Dims {
+            cols: self.cols,
+            rows: self.rows,
+        });
     }
 
     pub fn application_cursor(&self) -> bool {

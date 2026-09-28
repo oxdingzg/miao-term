@@ -1,14 +1,15 @@
-//! Minimal terminal: PTY + VT parser/screen + a reader thread.
+//! Terminal: PTY + VT parser/screen + a reader thread.
 //!
-//! R0 bootstrap: uses `vt100` for the screen model so we get a usable,
-//! cross-platform terminal quickly. `term-core` hides this behind its own API,
-//! so R1 can swap the backend to `alacritty_terminal` without touching the app.
+//! The screen model is `alacritty_terminal` (see [`crate::aterm`], ADR 0001),
+//! hidden behind this type so the app never depends on the parser crate.
 
 use std::io::{Read, Write};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
+
+use crate::aterm::ATerm;
 
 type Fallible<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -18,7 +19,7 @@ const MAX_OSC: usize = 8 * 1024;
 
 /// A running terminal: a child shell on a PTY plus the parsed screen state.
 pub struct Terminal {
-    parser: vt100::Parser,
+    screen: ATerm,
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     #[allow(dead_code)]
@@ -104,7 +105,7 @@ impl Terminal {
         });
 
         Ok(Self {
-            parser: vt100::Parser::new(rows, cols, scrollback),
+            screen: ATerm::new(cols, rows, scrollback),
             master: pair.master,
             writer,
             child,
@@ -125,7 +126,7 @@ impl Terminal {
             match self.rx.try_recv() {
                 Ok(bytes) => {
                     self.scan_osc(&bytes);
-                    self.parser.process(&bytes);
+                    self.screen.process(&bytes);
                     changed = true;
                 }
                 Err(TryRecvError::Empty) => break,
@@ -152,7 +153,7 @@ impl Terminal {
         }
         self.rows = rows;
         self.cols = cols;
-        self.parser.screen_mut().set_size(rows, cols);
+        self.screen.resize(cols, rows);
         let _ = self.master.resize(PtySize {
             rows,
             cols,
@@ -161,12 +162,12 @@ impl Terminal {
         });
     }
 
-    pub fn screen(&self) -> &vt100::Screen {
-        self.parser.screen()
+    pub fn screen(&self) -> &ATerm {
+        &self.screen
     }
 
-    pub fn screen_mut(&mut self) -> &mut vt100::Screen {
-        self.parser.screen_mut()
+    pub fn screen_mut(&mut self) -> &mut ATerm {
+        &mut self.screen
     }
 
     pub fn size(&self) -> (u16, u16) {

@@ -20,6 +20,10 @@ Ghostty(Zig + 平台 UI)。自研 VT 内核昂贵且不是差异点;差异在渲
 - **仅作参考**(不作为地基):Rio 的 `rio-vt`/`sugarloaf`、WezTerm 的 `termwiz`、`libghostty`
   (迭代频繁 / 不稳定 / 无 Windows)。
 
+## 更新
+
+引导阶段屏幕模型用 `vt100`;Phase 2 起 app 运行在 `alacritty_terminal` 上(经 `term-core::aterm`),`vt100` 已移除。
+
 ## 后果
 
 - 快速到"可用且快"的终端;全程 Apache/MIT(可被嵌入)。

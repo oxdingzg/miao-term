@@ -20,6 +20,11 @@ expensive and not the differentiator; rendering and app features are the work.
 - **Reference only**: Rio's `rio-vt` / `sugarloaf`, WezTerm's `termwiz`, and
   `libghostty` are *not* used as the base (churn / instability / no Windows).
 
+## Update
+
+The bootstrap used `vt100` for the screen model; as of Phase 2 the app runs on
+`alacritty_terminal` (via `term-core::aterm`) and `vt100` has been removed.
+
 ## Consequences
 
 - Fast path to a usable, fast terminal; Apache/MIT throughout (embeddable).

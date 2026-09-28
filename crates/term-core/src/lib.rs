@@ -17,9 +17,8 @@ mod term;
 
 pub use term::Terminal;
 
-/// Re-exported so the app can reach the screen model without naming the parser
-/// crate directly (R1 swaps the backend behind this).
-pub use vt100;
+/// The screen model the app renders, backed by `alacritty_terminal` (ADR 0001).
+pub use aterm::ATerm;
 
 /// Engine crate version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

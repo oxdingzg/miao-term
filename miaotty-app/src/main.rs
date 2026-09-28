@@ -11,9 +11,9 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 use eframe::egui_wgpu;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::UnicodeWidthChar;
 
-use miao_term_core::vt100;
+use miao_term_core::aterm::{ATerm, Color, NamedColor};
 use miao_term_core::Terminal;
 
 fn main() -> eframe::Result<()> {
@@ -109,7 +109,7 @@ const SELECTION: egui::Color32 = egui::Color32::from_rgba_premultiplied(0x81, 0x
 const FIND: egui::Color32 = egui::Color32::from_rgba_premultiplied(0xeb, 0xcb, 0x8b, 0x77);
 
 /// Case-insensitive matches of `query_lower` per row, as `(row, start_col, end_col)`.
-fn find_matches(screen: &vt100::Screen, query_lower: &str) -> Vec<(u16, u16, u16)> {
+fn find_matches(screen: &ATerm, query_lower: &str) -> Vec<(u16, u16, u16)> {
     let mut out = Vec::new();
     if query_lower.is_empty() {
         return out;
@@ -119,8 +119,8 @@ fn find_matches(screen: &vt100::Screen, query_lower: &str) -> Vec<(u16, u16, u16
         let mut line = String::new();
         for col in 0..cols {
             match screen.cell(row, col) {
-                Some(cell) if !cell.contents().is_empty() => line.push_str(cell.contents()),
-                _ => line.push(' '),
+                Some(cell) => line.push(cell.ch),
+                None => line.push(' '),
             }
         }
         let lower = line.to_lowercase();
@@ -139,17 +139,42 @@ fn find_matches(screen: &vt100::Screen, query_lower: &str) -> Vec<(u16, u16, u16
     out
 }
 
-fn map_color(color: vt100::Color, foreground: bool, theme: &Theme) -> egui::Color32 {
+fn indexed_palette(named: NamedColor) -> Option<usize> {
+    use NamedColor::*;
+    Some(match named {
+        Black => 0,
+        Red => 1,
+        Green => 2,
+        Yellow => 3,
+        Blue => 4,
+        Magenta => 5,
+        Cyan => 6,
+        White => 7,
+        BrightBlack => 8,
+        BrightRed => 9,
+        BrightGreen => 10,
+        BrightYellow => 11,
+        BrightBlue => 12,
+        BrightMagenta => 13,
+        BrightCyan => 14,
+        BrightWhite => 15,
+        _ => return None,
+    })
+}
+
+fn map_color(color: &Color, foreground: bool, theme: &Theme) -> egui::Color32 {
     match color {
-        vt100::Color::Default => {
-            if foreground {
+        Color::Named(named) => {
+            if let Some(i) = indexed_palette(*named) {
+                theme.palette[i]
+            } else if foreground {
                 theme.fg
             } else {
                 theme.bg
             }
         }
-        vt100::Color::Idx(i) => theme.palette[(i as usize) & 0x0f],
-        vt100::Color::Rgb(r, g, b) => egui::Color32::from_rgb(r, g, b),
+        Color::Indexed(i) => theme.palette[(*i as usize) & 0x0f],
+        Color::Spec(rgb) => egui::Color32::from_rgb(rgb.r, rgb.g, rgb.b),
     }
 }
 
@@ -1164,17 +1189,11 @@ impl MiaottyApp {
     }
 }
 
-fn word_selection(screen: &vt100::Screen, row: u16, col: u16, cols: u16) -> Selection {
+fn word_selection(screen: &ATerm, row: u16, col: u16, cols: u16) -> Selection {
     let is_word = |c: u16| -> bool {
         screen
             .cell(row, c)
-            .map(|cell| {
-                let s = cell.contents();
-                s.chars()
-                    .next()
-                    .map(|ch| ch.is_alphanumeric() || "_-./~".contains(ch))
-                    .unwrap_or(false)
-            })
+            .map(|cell| cell.ch.is_alphanumeric() || "_-./~".contains(cell.ch))
             .unwrap_or(false)
     };
     if !is_word(col) {
@@ -1210,7 +1229,7 @@ fn ordered(sel: Selection) -> (u16, u16, u16, u16) {
 #[allow(clippy::too_many_arguments)]
 fn draw_screen(
     ui: &egui::Ui,
-    screen: &vt100::Screen,
+    screen: &ATerm,
     cw: f32,
     ch: f32,
     rect: egui::Rect,
@@ -1248,7 +1267,7 @@ fn draw_screen(
             let Some(cell) = screen.cell(row, col) else {
                 continue;
             };
-            let bg = map_color(cell.bgcolor(), false, theme);
+            let bg = map_color(&cell.bg, false, theme);
             if bg != theme.bg {
                 let cell_rect = egui::Rect::from_min_size(
                     egui::pos2(ox + col as f32 * cw, oy + row as f32 * ch),
@@ -1274,7 +1293,7 @@ fn draw_screen(
 
 /// Build per-row, per-color runs from the screen for the GPU renderer.
 fn build_rows(
-    screen: &vt100::Screen,
+    screen: &ATerm,
     theme: &Theme,
     cursor: Option<(u16, u16)>,
 ) -> Vec<Vec<miao_term_render::Span>> {
@@ -1288,23 +1307,24 @@ fn build_rows(
                 col += 1;
                 continue;
             };
-            let contents = cell.contents();
-            let width = UnicodeWidthStr::width(contents).max(usize::from(!contents.is_empty())) as u16;
-            let text = if contents.is_empty() { " " } else { contents };
+            let ch = cell.ch;
+            let width = ch.width().unwrap_or(0).max(1) as u16;
+            let mut buf = [0u8; 4];
+            let text = ch.encode_utf8(&mut buf).to_string();
             // The cell under a block cursor is drawn in the background color so
             // it reads as inverted against the cursor block.
-            let color = if cell.inverse() || cursor == Some((row, col)) {
+            let color = if cell.inverse || cursor == Some((row, col)) {
                 let c = theme.bg;
                 (c.r(), c.g(), c.b())
             } else {
-                let c = map_color(cell.fgcolor(), true, theme);
+                let c = map_color(&cell.fg, true, theme);
                 (c.r(), c.g(), c.b())
             };
             match spans.last_mut() {
-                Some(last) if last.color == color => last.text.push_str(text),
+                Some(last) if last.color == color => last.text.push_str(&text),
                 _ => spans.push(miao_term_render::Span::new(text, color)),
             }
-            col += width.max(1);
+            col += width;
         }
         out.push(spans);
     }

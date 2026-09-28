@@ -12,7 +12,8 @@ the `miaotty` application built on top of it.
 
 ## What works today
 
-- Window, shell on a PTY, VT parsing, grid rendering, keyboard input, resize.
+- Window, shell on a PTY, VT parsing (`alacritty_terminal`), GPU grid rendering,
+  keyboard input, resize.
 - Tabs with a left sidebar (`+`, click to switch, middle-click to close,
   right-click for Rename / Duplicate / Close / Close Others).
 - Splits: a recursive split tree (any number of panes), `⌘D` (right) /

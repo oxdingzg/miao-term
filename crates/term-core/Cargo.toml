@@ -10,4 +10,3 @@ repository.workspace = true
 [dependencies]
 alacritty_terminal = "0.25.0"
 portable-pty = "0.9.0"
-vt100 = "0.16.2"

@@ -10,7 +10,7 @@
 
 ## 目前能做什么
 
-- 窗口、PTY 上跑 shell、VT 解析、网格渲染、键盘输入、resize。
+- 窗口、PTY 上跑 shell、VT 解析(`alacritty_terminal`)、GPU 网格渲染、键盘输入、resize。
 - 多标签 + 左侧边栏(`+` 新建、点击切换、中键关闭、右键 重命名/复制/关闭/关闭其他)。
 - 分屏:递归分屏树(任意数量 pane),`⌘D`(右侧)/`⇧⌘D`(下方),点击切换焦点,`⌘W` 关闭当前 pane。
 - 右侧 details 面板:Info(工作目录 + 复制路径 / 在访达中显示)、Agent 状态、Outline(每 pane 命令历史)。
