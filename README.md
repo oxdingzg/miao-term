@@ -4,7 +4,10 @@ A cross-platform (macOS / Linux / Windows) terminal **engine** written in Rust, 
 the `miaotty` application built on top of it.
 
 > Status: **scaffold**. Nothing usable yet — this is the R0 skeleton
-> (`term-core` → `term-render` → `term-widget`). See `docs/` for the design.
+> (`term-core` → `term-render` → `term-widget`).
+>
+> Design: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · decisions:
+> [`docs/decisions/`](docs/decisions/).
 
 ## Layout
 
