@@ -15,7 +15,8 @@ the `miaotty` application built on top of it.
 - Window, shell on a PTY, VT parsing, grid rendering, keyboard input, resize.
 - Tabs with a left sidebar (`+`, click to switch, middle-click to close,
   right-click for Rename / Duplicate / Close / Close Others).
-- Splits: two panes per tab, `⌘D` (right) / `⇧⌘D` (down), click to focus.
+- Splits: a recursive split tree (any number of panes), `⌘D` (right) /
+  `⇧⌘D` (down), click to focus, `⌘W` closes the focused pane.
 - Right details panel: Info (working directory + Copy Path / Reveal in Finder),
   Agent state, Outline (per-pane command history).
 - Selection (drag + double-click word), copy/paste, scrollback (wheel + Shift+PgUp/PgDn).
@@ -28,11 +29,12 @@ the `miaotty` application built on top of it.
 - **GPU glyph rendering**: the terminal grid is drawn by `term-render` (wgpu +
   glyphon) through an egui `PaintCallback`, sharing egui's device/queue/surface.
 
-Config import: ghostty's `config` is picked up automatically when there is no
-miaotty config; alacritty import is pending.
+Config import: ghostty `config` and alacritty `alacritty.toml` are picked up
+automatically when there is no miaotty config.
 
-Not yet: recursive splits, Windows named-pipe transport, packaging, and further
-renderer hardening (damage uploads, cursor block inversion).
+Not yet: Windows named-pipe transport + ConPTY testing, packaging
+(MSI/AppImage/notarize), and further renderer hardening (damage uploads, atlas
+trim).
 
 ## Run
 

@@ -135,17 +135,88 @@ struct Pane {
     dirty: bool,
 }
 
+/// Binary split tree inside a tab (leaves are pane ids).
+enum Layout {
+    Leaf(String),
+    Split {
+        dir: SplitDir,
+        ratio: f32,
+        a: Box<Layout>,
+        b: Box<Layout>,
+    },
+}
+
+fn layout_rects(layout: &Layout, rect: egui::Rect, out: &mut Vec<(String, egui::Rect)>) {
+    match layout {
+        Layout::Leaf(id) => out.push((id.clone(), rect)),
+        Layout::Split { dir, ratio, a, b } => {
+            let r = ratio.clamp(0.1, 0.9);
+            match dir {
+                SplitDir::Right => {
+                    let w = rect.width() * r;
+                    layout_rects(a, egui::Rect::from_min_max(rect.min, egui::pos2(rect.left() + w, rect.max.y)), out);
+                    layout_rects(b, egui::Rect::from_min_max(egui::pos2(rect.left() + w, rect.top()), rect.max), out);
+                }
+                SplitDir::Down => {
+                    let h = rect.height() * r;
+                    layout_rects(a, egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.top() + h)), out);
+                    layout_rects(b, egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + h), rect.max), out);
+                }
+            }
+        }
+    }
+}
+
+fn split_leaf(layout: &mut Layout, target: &str, new_id: &str, dir: SplitDir) -> bool {
+    match layout {
+        Layout::Leaf(id) if id == target => {
+            let old = id.clone();
+            *layout = Layout::Split {
+                dir,
+                ratio: 0.5,
+                a: Box::new(Layout::Leaf(old)),
+                b: Box::new(Layout::Leaf(new_id.to_string())),
+            };
+            true
+        }
+        Layout::Leaf(_) => false,
+        Layout::Split { a, b, .. } => {
+            split_leaf(a, target, new_id, dir) || split_leaf(b, target, new_id, dir)
+        }
+    }
+}
+
+/// Remove a leaf, collapsing its parent; `None` if the tree was just that leaf.
+fn remove_leaf(layout: Layout, target: &str) -> Option<Layout> {
+    match layout {
+        Layout::Leaf(id) => (id != target).then_some(Layout::Leaf(id)),
+        Layout::Split { dir, ratio, a, b } => {
+            match (remove_leaf(*a, target), remove_leaf(*b, target)) {
+                (Some(a), Some(b)) => Some(Layout::Split {
+                    dir,
+                    ratio,
+                    a: Box::new(a),
+                    b: Box::new(b),
+                }),
+                (Some(a), None) => Some(a),
+                (None, Some(b)) => Some(b),
+                (None, None) => None,
+            }
+        }
+    }
+}
+
 struct Tab {
     panes: Vec<Pane>,
-    split: Option<SplitDir>,
-    /// Focused pane within the tab.
-    active: usize,
+    layout: Layout,
+    /// Focused pane id within the tab.
+    active: String,
     title: String,
 }
 
 impl Tab {
-    fn focused(&self) -> &Pane {
-        &self.panes[self.active.min(self.panes.len() - 1)]
+    fn focused(&self) -> Option<&Pane> {
+        self.panes.iter().find(|p| p.pane_id == self.active)
     }
 }
 
@@ -226,12 +297,12 @@ impl MiaottyApp {
             self.tabs.push(Tab {
                 panes: vec![Pane {
                     term,
-                    pane_id,
                     rows: Arc::new(Vec::new()),
                     dirty: true,
+                    pane_id: pane_id.clone(),
                 }],
-                split: None,
-                active: 0,
+                layout: Layout::Leaf(pane_id.clone()),
+                active: pane_id,
                 title,
             });
             self.active = self.tabs.len() - 1;
@@ -242,38 +313,43 @@ impl MiaottyApp {
     }
 
     fn new_tab(&mut self) {
-        let (rows, cols) = self.tabs[self.active].focused().term.size();
-        let cwd = self.tabs[self.active].focused().term.cwd().map(PathBuf::from);
+        let tab = &self.tabs[self.active];
+        let (rows, cols) = tab.focused().map(|p| p.term.size()).unwrap_or((30, 100));
+        let cwd = tab.focused().and_then(|p| p.term.cwd().map(PathBuf::from));
         let n = self.tabs.len() + 1;
         self.push_tab(format!("shell {n}"), cols, rows, cwd);
     }
 
     fn duplicate_tab(&mut self, i: usize) {
-        let (rows, cols) = self.tabs[i].focused().term.size();
-        let cwd = self.tabs[i].focused().term.cwd().map(PathBuf::from);
+        let (rows, cols) = self.tabs[i].focused().map(|p| p.term.size()).unwrap_or((30, 100));
+        let cwd = self.tabs[i].focused().and_then(|p| p.term.cwd().map(PathBuf::from));
         let title = self.tabs[i].title.clone();
         self.push_tab(title, cols, rows, cwd);
     }
 
-    /// Split the active tab into a second pane and focus it.
+    /// Split the focused pane in the active tab and focus the new pane.
     fn split_active(&mut self, dir: SplitDir) {
         let tab = &mut self.tabs[self.active];
-        if tab.panes.len() >= 2 {
-            tab.split = Some(dir);
+        if tab.panes.len() >= 8 {
             return;
         }
-        let (rows, cols) = tab.panes[0].term.size();
-        let cwd = tab.panes[0].term.cwd().map(PathBuf::from);
+        let Some((rows, cols, cwd)) = tab.focused().map(|p| {
+            let (r, c) = p.term.size();
+            (r, c, p.term.cwd().map(PathBuf::from))
+        }) else {
+            return;
+        };
         let pane_id = gen_pane_id();
         if let Some(term) = Self::spawn_terminal(cols, rows, &pane_id, cwd) {
+            let target = tab.active.clone();
             tab.panes.push(Pane {
                 term,
-                pane_id,
                 rows: Arc::new(Vec::new()),
                 dirty: true,
+                pane_id: pane_id.clone(),
             });
-            tab.split = Some(dir);
-            tab.active = 1;
+            split_leaf(&mut tab.layout, &target, &pane_id, dir);
+            tab.active = pane_id;
             self.selection = None;
             self.scroll = 0;
             self.publish_panes();
@@ -294,11 +370,13 @@ impl MiaottyApp {
         {
             let tab = &mut self.tabs[self.active];
             if tab.panes.len() > 1 {
-                tab.panes.remove(tab.active);
-                tab.active = tab.active.min(tab.panes.len() - 1);
-                if tab.panes.len() < 2 {
-                    tab.split = None;
+                let active = tab.active.clone();
+                tab.panes.retain(|p| p.pane_id != active);
+                let layout = std::mem::replace(&mut tab.layout, Layout::Leaf(String::new()));
+                if let Some(new_layout) = remove_leaf(layout, &active) {
+                    tab.layout = new_layout;
                 }
+                tab.active = tab.panes[0].pane_id.clone();
                 self.selection = None;
                 self.scroll = 0;
                 self.publish_panes();
@@ -395,6 +473,13 @@ impl eframe::App for MiaottyApp {
             if self.last_blink.elapsed() >= Duration::from_millis(530) {
                 self.cursor_on = !self.cursor_on;
                 self.last_blink = Instant::now();
+                // The block cursor inverts a cell, so the row cache must rebuild.
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    let id = tab.active.clone();
+                    if let Some(pane) = tab.panes.iter_mut().find(|p| p.pane_id == id) {
+                        pane.dirty = true;
+                    }
+                }
                 ctx.request_repaint();
             }
             ctx.request_repaint_after(Duration::from_millis(530));
@@ -443,13 +528,15 @@ impl MiaottyApp {
             .map(|tab| {
                 let title = tab
                     .focused()
-                    .term
-                    .cwd()
+                    .and_then(|p| p.term.cwd())
                     .and_then(|p| std::path::Path::new(p).file_name())
                     .map(|s| s.to_string_lossy().to_string())
                     .filter(|s| !s.is_empty())
                     .unwrap_or_else(|| tab.title.clone());
-                let color = self.state.agent_for(&tab.focused().pane_id).and_then(|a| {
+                let color = tab
+                    .focused()
+                    .and_then(|p| self.state.agent_for(&p.pane_id))
+                    .and_then(|a| {
                     a.get("state").and_then(|v| v.as_str()).map(|s| match s {
                         "processing" => egui::Color32::from_rgb(0x81, 0xa1, 0xc1),
                         "idle" => egui::Color32::from_rgb(0xa3, 0xbe, 0x8c),
@@ -561,8 +648,13 @@ impl MiaottyApp {
     }
 
     fn details_panel(&mut self, ctx: &egui::Context) {
-        let cwd = self.tabs[self.active].focused().term.cwd().map(str::to_string);
-        let pane_id = self.tabs[self.active].focused().pane_id.clone();
+        let cwd = self.tabs[self.active]
+            .focused()
+            .and_then(|p| p.term.cwd().map(str::to_string));
+        let pane_id = self.tabs[self.active]
+            .focused()
+            .map(|p| p.pane_id.clone())
+            .unwrap_or_default();
         let history = self.state.history_for(&pane_id);
         let agent = self.state.agent_for(&pane_id);
         let muted = egui::Color32::from_gray(120);
@@ -680,45 +772,14 @@ impl MiaottyApp {
                     }
                 });
 
-                // Pane rectangles for the active tab.
+                // Pane rectangles for the active tab (from the split tree).
                 let ti = self.active;
-                let count = self.tabs[ti].panes.len();
-                let rects: Vec<egui::Rect> = if count <= 1 {
-                    vec![rect]
-                } else {
-                    match self.tabs[ti].split {
-                        Some(SplitDir::Down) => {
-                            let half = rect.height() * 0.5;
-                            vec![
-                                egui::Rect::from_min_max(
-                                    rect.min,
-                                    egui::pos2(rect.max.x, rect.top() + half),
-                                ),
-                                egui::Rect::from_min_max(
-                                    egui::pos2(rect.left(), rect.top() + half),
-                                    rect.max,
-                                ),
-                            ]
-                        }
-                        _ => {
-                            let half = rect.width() * 0.5;
-                            vec![
-                                egui::Rect::from_min_max(
-                                    rect.min,
-                                    egui::pos2(rect.left() + half, rect.max.y),
-                                ),
-                                egui::Rect::from_min_max(
-                                    egui::pos2(rect.left() + half, rect.top()),
-                                    rect.max,
-                                ),
-                            ]
-                        }
+                let mut rects: Vec<(String, egui::Rect)> = Vec::new();
+                layout_rects(&self.tabs[ti].layout, rect, &mut rects);
+                for (id, pane_rect) in rects {
+                    if let Some(pi) = self.tabs[ti].panes.iter().position(|p| p.pane_id == id) {
+                        self.draw_pane(ui, ctx, ti, pi, pane_rect, cw, ch);
                     }
-                };
-
-                for pi in 0..count {
-                    let pane_rect = rects.get(pi).copied().unwrap_or(rect);
-                    self.draw_pane(ui, ctx, ti, pi, pane_rect, cw, ch);
                 }
             });
     }
@@ -737,7 +798,8 @@ impl MiaottyApp {
     ) {
         let cols = ((rect.width() / cw).floor() as i64).clamp(1, 1000) as u16;
         let rows = ((rect.height() / ch).floor() as i64).clamp(1, 1000) as u16;
-        let focused = self.tabs[ti].active == pi;
+        let pane_id = self.tabs[ti].panes[pi].pane_id.clone();
+        let focused = self.tabs[ti].active == pane_id;
 
         {
             let pane = &mut self.tabs[ti].panes[pi];
@@ -754,7 +816,7 @@ impl MiaottyApp {
             egui::Sense::click_and_drag(),
         );
         if response.clicked() && !focused {
-            self.tabs[ti].active = pi;
+            self.tabs[ti].active = pane_id.clone();
             self.selection = None;
             self.scroll = 0;
         }
@@ -898,8 +960,13 @@ impl MiaottyApp {
                 &self.theme,
                 draw_cursor,
             );
+            let cursor_cell = if draw_cursor {
+                Some(screen.cursor_position())
+            } else {
+                None
+            };
             if pane.dirty {
-                pane.rows = Arc::new(build_rows(screen, &self.theme));
+                pane.rows = Arc::new(build_rows(screen, &self.theme, cursor_cell));
                 pane.dirty = false;
             }
         }
@@ -1018,7 +1085,7 @@ fn draw_screen(
         }
     }
 
-    // Cursor outline (glyphs are drawn on top by the GPU callback).
+    // Block cursor (the glyph on top is drawn in the bg color by `build_rows`).
     if draw_cursor {
         let (crow, ccol) = screen.cursor_position();
         if crow < rows && ccol < cols {
@@ -1026,17 +1093,17 @@ fn draw_screen(
                 egui::pos2(ox + ccol as f32 * cw, oy + crow as f32 * ch),
                 egui::vec2(cw, ch),
             );
-            painter.rect_stroke(
-                cur_rect,
-                egui::Rounding::ZERO,
-                egui::Stroke::new(1.5_f32, theme.fg),
-            );
+            painter.rect_filled(cur_rect, egui::Rounding::ZERO, theme.fg);
         }
     }
 }
 
 /// Build per-row, per-color runs from the screen for the GPU renderer.
-fn build_rows(screen: &vt100::Screen, theme: &Theme) -> Vec<Vec<miao_term_render::Span>> {
+fn build_rows(
+    screen: &vt100::Screen,
+    theme: &Theme,
+    cursor: Option<(u16, u16)>,
+) -> Vec<Vec<miao_term_render::Span>> {
     let (rows, cols) = screen.size();
     let mut out = Vec::with_capacity(rows as usize);
     for row in 0..rows {
@@ -1050,7 +1117,9 @@ fn build_rows(screen: &vt100::Screen, theme: &Theme) -> Vec<Vec<miao_term_render
             let contents = cell.contents();
             let width = UnicodeWidthStr::width(contents).max(usize::from(!contents.is_empty())) as u16;
             let text = if contents.is_empty() { " " } else { contents };
-            let color = if cell.inverse() {
+            // The cell under a block cursor is drawn in the background color so
+            // it reads as inverted against the cursor block.
+            let color = if cell.inverse() || cursor == Some((row, col)) {
                 let c = theme.bg;
                 (c.r(), c.g(), c.b())
             } else {

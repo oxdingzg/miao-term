@@ -84,6 +84,49 @@ impl Default for Config {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct AlacrittyFont {
+    size: Option<f32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AlacrittyPrimary {
+    background: Option<String>,
+    foreground: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AlacrittyPalette {
+    black: Option<String>,
+    red: Option<String>,
+    green: Option<String>,
+    yellow: Option<String>,
+    blue: Option<String>,
+    magenta: Option<String>,
+    cyan: Option<String>,
+    white: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AlacrittyColors {
+    primary: Option<AlacrittyPrimary>,
+    normal: Option<AlacrittyPalette>,
+    bright: Option<AlacrittyPalette>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AlacrittyConfig {
+    font: Option<AlacrittyFont>,
+    colors: Option<AlacrittyColors>,
+}
+
+fn alacritty_config_path() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    Some(base.join("alacritty").join("alacritty.toml"))
+}
+
 fn ghostty_config_path() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
@@ -115,7 +158,58 @@ impl Config {
                 return Self::from_ghostty_text(&text);
             }
         }
+        if let Some(alacritty) = alacritty_config_path() {
+            if let Ok(text) = std::fs::read_to_string(alacritty) {
+                if let Some(cfg) = Self::from_alacritty_text(&text) {
+                    return cfg;
+                }
+            }
+        }
         Self::default()
+    }
+
+    /// Import the subset of an alacritty TOML config we understand
+    /// (`font.size`, `colors.primary`, `colors.normal`/`bright`).
+    pub fn from_alacritty_text(text: &str) -> Option<Self> {
+        let raw: AlacrittyConfig = toml::from_str(text).ok()?;
+        let mut cfg = Self::default();
+        if let Some(size) = raw.font.and_then(|f| f.size) {
+            cfg.font_size = size.clamp(6.0, 40.0);
+        }
+        if let Some(colors) = raw.colors {
+            if let Some(primary) = colors.primary {
+                if let Some(c) = primary.background.as_deref().and_then(Rgb::parse) {
+                    cfg.theme.background = c;
+                }
+                if let Some(c) = primary.foreground.as_deref().and_then(Rgb::parse) {
+                    cfg.theme.foreground = c;
+                }
+            }
+            let apply = |palette: AlacrittyPalette, base: usize, cfg: &mut Config| {
+                let slots = [
+                    palette.black,
+                    palette.red,
+                    palette.green,
+                    palette.yellow,
+                    palette.blue,
+                    palette.magenta,
+                    palette.cyan,
+                    palette.white,
+                ];
+                for (i, slot) in slots.into_iter().enumerate() {
+                    if let Some(c) = slot.as_deref().and_then(Rgb::parse) {
+                        cfg.theme.palette[base + i] = c;
+                    }
+                }
+            };
+            if let Some(normal) = colors.normal {
+                apply(normal, 0, &mut cfg);
+            }
+            if let Some(bright) = colors.bright {
+                apply(bright, 8, &mut cfg);
+            }
+        }
+        Some(cfg)
     }
 
     /// Import the subset of a ghostty `config` file we understand
@@ -207,6 +301,29 @@ mod tests {
         let cfg = Config::default();
         assert_eq!(cfg.theme.background, Rgb(0x2e, 0x34, 0x40));
         assert_eq!(cfg.font_size, 14.0);
+    }
+
+    #[test]
+    fn imports_alacritty() {
+        let cfg = Config::from_alacritty_text(
+            r##"
+            [font]
+            size = 15
+            [colors.primary]
+            background = "#000000"
+            foreground = "#cccccc"
+            [colors.normal]
+            red = "#ff0000"
+            [colors.bright]
+            red = "#ff5555"
+            "##,
+        )
+        .unwrap();
+        assert_eq!(cfg.font_size, 15.0);
+        assert_eq!(cfg.theme.background, Rgb(0, 0, 0));
+        assert_eq!(cfg.theme.foreground, Rgb(0xcc, 0xcc, 0xcc));
+        assert_eq!(cfg.theme.palette[1], Rgb(0xff, 0, 0));
+        assert_eq!(cfg.theme.palette[9], Rgb(0xff, 0x55, 0x55));
     }
 
     #[test]

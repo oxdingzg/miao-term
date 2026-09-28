@@ -34,6 +34,7 @@ pub struct TermRenderer {
     renderer: TextRenderer,
     viewport: Viewport,
     buffers: Vec<Buffer>,
+    frames: u64,
 }
 
 /// Candidate system CJK fonts (macOS / Linux / Windows).
@@ -78,6 +79,7 @@ impl TermRenderer {
             renderer,
             viewport,
             buffers: Vec::new(),
+            frames: 0,
         }
     }
 
@@ -103,6 +105,12 @@ impl TermRenderer {
                 height: pixels.1.max(1),
             },
         );
+
+        // Periodically repack the glyph atlas to reclaim space from old glyphs.
+        self.frames = self.frames.wrapping_add(1);
+        if self.frames % 300 == 0 {
+            self.atlas.trim();
+        }
 
         let metrics = Metrics::new(font_size, line_height);
         while self.buffers.len() < rows.len() {

@@ -5,6 +5,7 @@
 //! `miaotty-cli`, plugins and agent hooks keep working unchanged.
 
 use std::collections::BTreeMap;
+#[cfg(unix)]
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -13,6 +14,7 @@ use std::path::{Path, PathBuf};
 const MAX_LINE: usize = 1 << 20;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
+#[cfg(unix)]
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -281,6 +283,16 @@ fn dispatch(state: &ServerState, req: Request) -> Response {
 /// Read one request line, bounded to [`MAX_LINE`]. Returns `Ok(false)` at EOF
 /// or when a client sends an oversized line, in which case the connection is
 /// dropped so a single client cannot make us allocate unbounded memory.
+/// Transport on non-Unix platforms (Windows named pipe) is not implemented yet.
+#[cfg(not(unix))]
+pub fn serve(_path: &Path, _state: Arc<ServerState>) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "MTP transport is not implemented on this platform yet",
+    ))
+}
+
+#[cfg(unix)]
 fn read_request(reader: &mut impl BufRead, buf: &mut Vec<u8>) -> std::io::Result<bool> {
     buf.clear();
     let n = reader
@@ -296,6 +308,7 @@ fn read_request(reader: &mut impl BufRead, buf: &mut Vec<u8>) -> std::io::Result
     Ok(true)
 }
 
+#[cfg(unix)]
 fn write_response(writer: &mut impl Write, response: &Response) -> bool {
     match serde_json::to_string(response) {
         Ok(mut encoded) => {
@@ -306,6 +319,7 @@ fn write_response(writer: &mut impl Write, response: &Response) -> bool {
     }
 }
 
+#[cfg(unix)]
 fn handle(stream: std::os::unix::net::UnixStream, state: Arc<ServerState>) {
     let mut reader = match stream.try_clone() {
         Ok(s) => BufReader::new(s),
@@ -339,6 +353,7 @@ fn handle(stream: std::os::unix::net::UnixStream, state: Arc<ServerState>) {
 }
 
 /// Bind `path` and serve connections on a background thread.
+#[cfg(unix)]
 pub fn serve(path: &Path, state: Arc<ServerState>) -> std::io::Result<()> {
     let _ = std::fs::remove_file(path);
     if let Some(dir) = path.parent() {
