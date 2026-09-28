@@ -25,3 +25,4 @@ Docs are English by default; keep a Simplified Chinese version in sync
 | [0015](./0015-editor-polish.md) | Editor polish: line jumps, source view, external open | accepted |
 | [0016](./0016-integration-automation.md) | Agent integration automation and single instance | accepted |
 | [0017](./0017-markdown-tables-editor-config.md) | Markdown tables and the external editor | accepted |
+| [0018](./0018-performance-gate.md) | Performance gate | accepted |

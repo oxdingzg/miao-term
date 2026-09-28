@@ -17,3 +17,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo check --workspace --all-targets
       - run: cargo test --workspace
+
+  perf:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Performance gate (ADR 0018): release-mode budgets, generous headroom.
+      - run: cargo test --release -p miao-term-core -p miaotty-app -- --ignored

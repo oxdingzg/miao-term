@@ -1465,13 +1465,7 @@ impl MiaottyApp {
         let fg = self.theme.fg;
         let muted = egui::Color32::from_gray(120);
 
-        let query = pal.query.to_lowercase();
-        let mut filtered: Vec<(usize, usize)> = entries
-            .iter()
-            .enumerate()
-            .filter_map(|(i, e)| palette_score(&e.label, &e.kind, &query).map(|s| (s, i)))
-            .collect();
-        filtered.sort_by_key(|(s, i)| (*s, *i));
+        let filtered = rank_entries(&entries, &pal.query);
         if pal.selected >= filtered.len() {
             pal.selected = filtered.len().saturating_sub(1);
         }
@@ -1623,6 +1617,19 @@ fn resume_command(agent_state: &serde_json::Value, agent: &str) -> Option<String
         "miao" => format!("miao --resume {id}"),
         other => format!("{other} --resume {id}"),
     })
+}
+
+/// Rank palette entries for a query, returning `(rank, entry index)` sorted
+/// best-first. Ties keep list order, so recent files stay ahead.
+fn rank_entries(entries: &[PaletteEntry], query: &str) -> Vec<(usize, usize)> {
+    let query = query.to_lowercase();
+    let mut filtered: Vec<(usize, usize)> = entries
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| palette_score(&e.label, &e.kind, &query).map(|s| (s, i)))
+        .collect();
+    filtered.sort_by_key(|(s, i)| (*s, *i));
+    filtered
 }
 
 /// Rank an entry against a lowercased query: substring hits rank by position,
@@ -4746,6 +4753,67 @@ mod session_tests {
     #[test]
     fn sanitize_recipe_names() {
         assert_eq!(sanitize_name("my work/1"), "my work_1");
+    }
+}
+
+/// Performance gate for the hot app paths (ADR 0018). Run with
+/// `cargo test -p miaotty-app --release -- --ignored`.
+#[cfg(test)]
+mod perf_tests {
+    use super::*;
+
+    fn scale() -> f64 {
+        std::env::var("MIAOTTY_PERF_SCALE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1.0)
+    }
+
+    #[test]
+    #[ignore = "perf gate; run `cargo test --release -- --ignored`"]
+    fn build_rows_frame_budget() {
+        let mut screen = ATerm::new(100, 30, 10_000);
+        for _ in 0..40 {
+            screen.process(b"\x1b[31mred\x1b[0m \x1b[32mgreen\x1b[0m text 1234567890\r\n");
+        }
+        let theme = Theme::from_config(&miao_term_config::Theme::default());
+        let cursor = Some(screen.cursor());
+        std::hint::black_box(build_rows(&screen, &theme, cursor));
+        let n = 300;
+        let start = Instant::now();
+        for _ in 0..n {
+            std::hint::black_box(build_rows(&screen, &theme, cursor));
+        }
+        let per_ms = start.elapsed().as_secs_f64() * 1000.0 / n as f64;
+        println!("build_rows: {per_ms:.3} ms/frame");
+        assert!(
+            per_ms <= 4.0 * scale(),
+            "row build {per_ms:.3} ms exceeds the 4 ms/frame budget"
+        );
+    }
+
+    #[test]
+    #[ignore = "perf gate; run `cargo test --release -- --ignored`"]
+    fn palette_ranking_budget() {
+        let entries: Vec<PaletteEntry> = (0..10_000)
+            .map(|i| PaletteEntry {
+                kind: "file".to_string(),
+                label: format!("file-{i}.rs"),
+                icon: None,
+                action: PaletteAction::SwitchTab(0),
+            })
+            .collect();
+        let n = 20;
+        let start = Instant::now();
+        for _ in 0..n {
+            std::hint::black_box(rank_entries(&entries, "file-9"));
+        }
+        let per_ms = start.elapsed().as_secs_f64() * 1000.0 / n as f64;
+        println!("palette rank over 10k entries: {per_ms:.3} ms");
+        assert!(
+            per_ms <= 100.0 * scale(),
+            "palette ranking {per_ms:.3} ms exceeds the 100 ms budget"
+        );
     }
 }
 

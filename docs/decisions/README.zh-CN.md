@@ -26,3 +26,4 @@
 | [0015](./0015-editor-polish.zh-CN.md) | 编辑器打磨：按行跳转、源码视图、外部打开 | 已接受 |
 | [0016](./0016-integration-automation.zh-CN.md) | Agent 集成自动化与单实例 | 已接受 |
 | [0017](./0017-markdown-tables-editor-config.zh-CN.md) | Markdown 表格与外部编辑器 | 已接受 |
+| [0018](./0018-performance-gate.zh-CN.md) | 性能门 | 已接受 |
