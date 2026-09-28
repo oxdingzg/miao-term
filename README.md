@@ -3,12 +3,33 @@
 A cross-platform (macOS / Linux / Windows) terminal **engine** written in Rust, plus
 the `miaotty` application built on top of it.
 
-> Status: **scaffold**. Nothing usable yet — this is the R0 skeleton
-> (`term-core` → `term-render` → `term-widget`).
+> Status: **usable R0/R1 bootstrap** (macOS verified; Linux/Windows untested).
+> 简体中文: [`README.zh-CN.md`](README.zh-CN.md).
 >
 > Design: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) ([简体中文](docs/ARCHITECTURE.zh-CN.md)) ·
 > decisions: [`docs/decisions/`](docs/decisions/). Docs are English by default with a
 > synced `*.zh-CN.md` Simplified Chinese version.
+
+## What works today
+
+- Window, shell on a PTY, VT parsing, grid rendering, keyboard input, resize.
+- Tabs with a left sidebar (`+`, click to switch, middle-click to close).
+- Right details panel: Info (working directory + Copy Path / Reveal in Finder),
+  Agent state, Outline (per-pane command history).
+- Selection (drag + double-click word), copy/paste, scrollback (wheel + Shift+PgUp/PgDn).
+- Wide/CJK layout and a system CJK font fallback.
+- MTP control plane over a Unix socket: `core.ping/health`, `agent.state.*`,
+  `history.*`, `pane.list`, `pane.send/run` — interoperates with the existing `miaotty-cli`.
+- zsh shell integration (cwd via OSC 7, command history) installed via a `ZDOTDIR` shim.
+
+Not yet: custom wgpu renderer (currently drawn with egui), splits, config/themes,
+Windows named-pipe transport, packaging.
+
+## Run
+
+```sh
+cargo run -p miaotty-app      # or: ./target/debug/miaotty
+```
 
 ## Layout
 

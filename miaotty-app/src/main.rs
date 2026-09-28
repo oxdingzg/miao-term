@@ -657,6 +657,7 @@ fn ordered(sel: Selection) -> (u16, u16, u16, u16) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_screen(
     ui: &egui::Ui,
     screen: &vt100::Screen,
@@ -770,7 +771,8 @@ fn encode_input(
             out.extend_from_slice(t.as_bytes());
         }
         egui::Event::Paste(text) => {
-            let mut body = text.replace('\r', "\r").replace('\n', "\r");
+            // Normalize newlines to CR; shells expect carriage returns for Enter.
+            let body = text.replace('\n', "\r");
             if bracketed {
                 out.extend_from_slice(b"\x1b[200~");
                 out.extend_from_slice(body.as_bytes());
@@ -778,7 +780,6 @@ fn encode_input(
             } else {
                 out.extend_from_slice(body.as_bytes());
             }
-            body.clear();
         }
         egui::Event::Key {
             key,
