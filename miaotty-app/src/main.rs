@@ -115,23 +115,29 @@ fn find_matches(screen: &ATerm, query_lower: &str) -> Vec<(u16, u16, u16)> {
         return out;
     }
     let (rows, cols) = screen.size();
+    let qlen = query_lower.chars().count().max(1);
     for row in 0..rows {
+        // Lowercased row text plus a char-index → grid-column map, so matches on
+        // rows containing wide (CJK) characters highlight the right columns.
         let mut line = String::new();
+        let mut col_of: Vec<u16> = Vec::new();
         for col in 0..cols {
-            match screen.cell(row, col) {
-                Some(cell) => line.push(cell.ch),
-                None => line.push(' '),
+            if let Some(cell) = screen.cell(row, col) {
+                for lc in cell.ch.to_lowercase() {
+                    line.push(lc);
+                    col_of.push(col);
+                }
             }
         }
-        let lower = line.to_lowercase();
-        let qlen = query_lower.chars().count().max(1);
         let mut from = 0;
-        while let Some(pos) = lower[from..].find(query_lower) {
+        while let Some(pos) = line[from..].find(query_lower) {
             let start = from + pos;
             let end = start + qlen;
-            out.push((row, start as u16, end as u16));
+            let start_col = col_of.get(start).copied().unwrap_or(0);
+            let end_col = col_of.get(end).map(|c| c + 1).unwrap_or(cols);
+            out.push((row, start_col, end_col));
             from = end;
-            if from > lower.len() {
+            if from >= line.len() {
                 break;
             }
         }
