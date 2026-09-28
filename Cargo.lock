@@ -2016,6 +2016,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "miaotty-cli"
+version = "0.0.0"
+dependencies = [
+ "miao-term-mtp",
+ "serde_json",
+]
+
+[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"

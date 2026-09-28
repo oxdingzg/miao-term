@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/*", "miaotty-app"]
+members = ["crates/*", "miaotty-app", "miaotty-cli"]
 
 [workspace.package]
 version = "0.0.0"

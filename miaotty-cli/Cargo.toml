@@ -1,0 +1,16 @@
+[package]
+name = "miaotty-cli"
+description = "Control CLI for miaotty (cross-platform MTP client)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "miaotty-cli"
+path = "src/main.rs"
+
+[dependencies]
+miao-term-mtp = { path = "../crates/term-mtp" }
+serde_json = "1"

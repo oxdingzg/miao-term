@@ -60,7 +60,7 @@ pub struct Response {
     pub revision: Option<i64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ErrorInfo {
     pub code: String,
     pub message: String,
@@ -375,8 +375,82 @@ fn handle(stream: LocalSocketStream, state: Arc<ServerState>) {
     }
 }
 
+/// A minimal MTP client (cross-platform via `interprocess`).
+pub mod client {
+    use super::{ErrorInfo, PROTO_VERSION};
+    use std::io::{BufRead, BufReader, Write};
+    use std::path::Path;
+
+    use interprocess::local_socket::{prelude::*, ConnectOptions};
+    #[cfg(unix)]
+    use interprocess::local_socket::GenericFilePath;
+    #[cfg(windows)]
+    use interprocess::local_socket::GenericNamespaced;
+    use interprocess::TryClone;
+    use serde::Deserialize;
+    use serde_json::Value;
+
+    #[derive(Deserialize)]
+    struct Reply {
+        ok: bool,
+        result: Option<Value>,
+        error: Option<ErrorInfo>,
+    }
+
+    pub struct Client {
+        reader: BufReader<LocalSocketStream>,
+        writer: LocalSocketStream,
+        next_id: i64,
+    }
+
+    /// Connect to the host at `path` (Unix socket path; ignored on Windows,
+    /// which uses the fixed `miaotty` named pipe).
+    pub fn connect(path: &Path) -> std::io::Result<Client> {
+        #[cfg(unix)]
+        let name = path.to_fs_name::<GenericFilePath>()?;
+        #[cfg(windows)]
+        let name = "miaotty".to_ns_name::<GenericNamespaced>()?;
+        let stream = ConnectOptions::new().name(name).connect_sync()?;
+        let writer = stream.try_clone()?;
+        Ok(Client {
+            reader: BufReader::new(stream),
+            writer,
+            next_id: 1,
+        })
+    }
+
+    impl Client {
+        /// Send a request and return the result value (or an error).
+        pub fn call(&mut self, ns: &str, method: &str, params: Value) -> std::io::Result<Value> {
+            let id = self.next_id;
+            self.next_id += 1;
+            let req = serde_json::json!({
+                "v": PROTO_VERSION, "id": id, "kind": "req",
+                "ns": ns, "method": method, "params": params,
+            });
+            let mut line = req.to_string();
+            line.push('\n');
+            self.writer.write_all(line.as_bytes())?;
+            self.writer.flush()?;
+
+            let mut buf = String::new();
+            self.reader.read_line(&mut buf)?;
+            let reply: Reply = serde_json::from_str(buf.trim())
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
+            if reply.ok {
+                Ok(reply.result.unwrap_or(Value::Null))
+            } else {
+                let msg = reply
+                    .error
+                    .map(|e| format!("[{}] {}", e.code, e.message))
+                    .unwrap_or_else(|| "error".to_string());
+                Err(std::io::Error::other(msg))
+            }
+        }
+    }
+}
+
 /// Bind `path` and serve connections on a background thread.
-#[cfg(unix)]
 pub fn serve(path: &Path, state: Arc<ServerState>) -> std::io::Result<()> {
     #[cfg(unix)]
     let name = {

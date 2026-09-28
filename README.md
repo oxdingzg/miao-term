@@ -28,6 +28,8 @@ the `miaotty` application built on top of it.
 - MTP control plane over a Unix socket: `core.ping/health`, `agent.state.*`,
   `history.*`, `pane.list`, `pane.send/run`, `pane.focus/close` — interoperates
   with the existing `miaotty-cli`.
+- A cross-platform `miaotty-cli` (`miaotty-cli/`, talks over `interprocess`:
+  Unix socket or Windows named pipe).
 - zsh shell integration (cwd via OSC 7, command history) installed via a `ZDOTDIR` shim.
 - Config at `~/.config/miaotty/config.toml` (font size + colors) — see
   [`docs/config.example.toml`](docs/config.example.toml).
