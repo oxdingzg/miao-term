@@ -228,6 +228,17 @@ impl eframe::App for MiaottyApp {
             ctx.request_repaint();
         }
 
+        // MTP `pane.send` / `pane.run` — inject bytes into the target pane.
+        let writes = self.state.take_writes();
+        if !writes.is_empty() {
+            for (pane_id, data) in writes {
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.pane_id == pane_id) {
+                    tab.term.write(&data);
+                }
+            }
+            ctx.request_repaint();
+        }
+
         // Cursor blink (only when focused; keeps idle CPU low otherwise).
         if ctx.input(|i| i.focused) {
             if self.last_blink.elapsed() >= Duration::from_millis(530) {
@@ -272,54 +283,89 @@ fn reveal_in_finder(path: &str) {
 
 impl MiaottyApp {
     fn sidebar(&mut self, ctx: &egui::Context) {
+        let rows: Vec<(String, Option<egui::Color32>)> = self
+            .tabs
+            .iter()
+            .map(|tab| {
+                let title = tab
+                    .term
+                    .cwd()
+                    .and_then(|p| std::path::Path::new(p).file_name())
+                    .map(|s| s.to_string_lossy().to_string())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| tab.title.clone());
+                let color = self.state.agent_for(&tab.pane_id).and_then(|a| {
+                    a.get("state").and_then(|v| v.as_str()).map(|s| match s {
+                        "processing" => egui::Color32::from_rgb(0x81, 0xa1, 0xc1),
+                        "idle" => egui::Color32::from_rgb(0xa3, 0xbe, 0x8c),
+                        "awaiting" => egui::Color32::from_rgb(0xeb, 0xcb, 0x8b),
+                        "error" => egui::Color32::from_rgb(0xbf, 0x61, 0x6a),
+                        _ => egui::Color32::GRAY,
+                    })
+                });
+                (title, color)
+            })
+            .collect();
+        let active = self.active;
+        let can_close = self.tabs.len() > 1;
+        let mut switch_to: Option<usize> = None;
+        let mut close: Option<usize> = None;
+        let mut add = false;
+        let mut toggle = false;
+
         egui::SidePanel::left("tabs")
             .resizable(true)
             .default_width(190.0)
             .frame(egui::Frame::default().fill(BG).inner_margin(egui::Margin::same(6.0)))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new("TABS")
-                            .size(11.0)
-                            .strong()
-                            .color(egui::Color32::from_gray(150)),
-                    );
+                    ui.label(section("TABS"));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("+").on_hover_text("New Tab").clicked() {
-                            self.new_tab();
+                            add = true;
                         }
-                        if ui
-                            .button("\u{25a4}")
-                            .on_hover_text("Toggle Details")
-                            .clicked()
-                        {
-                            self.show_details = !self.show_details;
+                        if ui.button("\u{25a4}").on_hover_text("Toggle Details").clicked() {
+                            toggle = true;
                         }
                     });
                 });
                 ui.separator();
-
-                let mut switch_to = None;
-                for (i, tab) in self.tabs.iter().enumerate() {
-                    let selected = i == self.active;
-                    let label = egui::RichText::new(&tab.title).size(13.0).color(FG);
-                    let resp = ui.selectable_label(selected, label);
-                    if resp.clicked() {
-                        switch_to = Some(i);
-                    }
-                    if resp.clicked_by(egui::PointerButton::Middle) && self.tabs.len() > 1 {
-                        // middle-click closes
-                        self.active = i;
-                        self.close_active();
-                        break;
-                    }
-                }
-                if let Some(i) = switch_to {
-                    self.active = i;
-                    self.selection = None;
-                    self.scroll = 0;
+                for (i, (title, color)) in rows.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        match color {
+                            Some(c) => {
+                                ui.colored_label(*c, "\u{25cf}");
+                            }
+                            None => {
+                                ui.label("  ");
+                            }
+                        }
+                        let label = egui::RichText::new(title).size(13.0).color(FG);
+                        let resp = ui.selectable_label(i == active, label);
+                        if resp.clicked() {
+                            switch_to = Some(i);
+                        }
+                        if resp.clicked_by(egui::PointerButton::Middle) && can_close {
+                            close = Some(i);
+                        }
+                    });
                 }
             });
+
+        if add {
+            self.new_tab();
+        }
+        if toggle {
+            self.show_details = !self.show_details;
+        }
+        if let Some(i) = close {
+            self.active = i;
+            self.close_active();
+        } else if let Some(i) = switch_to {
+            self.active = i;
+            self.selection = None;
+            self.scroll = 0;
+        }
     }
 
     fn details_panel(&mut self, ctx: &egui::Context) {
@@ -433,6 +479,34 @@ impl MiaottyApp {
                     }
                 });
 
+                // Shift+PageUp/PageDown scroll the viewport (not sent to the shell).
+                let scroll_keys = ctx.input(|i| {
+                    let mut d: i64 = 0;
+                    for ev in &i.events {
+                        if let egui::Event::Key {
+                            key,
+                            pressed: true,
+                            modifiers,
+                            ..
+                        } = ev
+                        {
+                            if modifiers.shift && !modifiers.ctrl && !modifiers.mac_cmd {
+                                match key {
+                                    egui::Key::PageUp => d += rows as i64 - 1,
+                                    egui::Key::PageDown => d -= rows as i64 - 1,
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                    d
+                });
+                if scroll_keys > 0 {
+                    self.scroll = (self.scroll + scroll_keys as usize).min(200_000);
+                } else if scroll_keys < 0 {
+                    self.scroll = self.scroll.saturating_sub((-scroll_keys) as usize);
+                }
+
                 {
                     let tab = &mut self.tabs[idx];
                     tab.term.resize(rows, cols);
@@ -470,6 +544,11 @@ impl MiaottyApp {
                     } else if response.dragged() {
                         if let (Some(p), Some(sel)) = (ptr, self.selection.as_mut()) {
                             sel.end = cell_at(p);
+                        }
+                    } else if response.double_clicked() {
+                        if let Some(p) = ptr {
+                            let (r, c) = cell_at(p);
+                            self.selection = Some(word_selection(tab.term.screen(), r, c, cols));
                         }
                     } else if response.clicked() {
                         self.selection = None;
@@ -532,6 +611,39 @@ impl MiaottyApp {
                     );
                 }
             });
+    }
+}
+
+fn word_selection(screen: &vt100::Screen, row: u16, col: u16, cols: u16) -> Selection {
+    let is_word = |c: u16| -> bool {
+        screen
+            .cell(row, c)
+            .map(|cell| {
+                let s = cell.contents();
+                s.chars()
+                    .next()
+                    .map(|ch| ch.is_alphanumeric() || "_-./~".contains(ch))
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false)
+    };
+    if !is_word(col) {
+        return Selection {
+            start: (row, col),
+            end: (row, col),
+        };
+    }
+    let mut l = col;
+    while l > 0 && is_word(l - 1) {
+        l -= 1;
+    }
+    let mut r = col;
+    while r + 1 < cols && is_word(r + 1) {
+        r += 1;
+    }
+    Selection {
+        start: (row, l),
+        end: (row, r),
     }
 }
 
@@ -674,6 +786,10 @@ fn encode_input(
             modifiers,
             ..
         } => {
+            // Consumed by the viewport scroller.
+            if modifiers.shift && matches!(key, egui::Key::PageUp | egui::Key::PageDown) {
+                return;
+            }
             // Ctrl combos (Unix control bytes). On macOS, Cmd is reserved for copy/paste etc.
             if modifiers.ctrl && !modifiers.mac_cmd {
                 if let Some(b) = ctrl_byte(*key) {

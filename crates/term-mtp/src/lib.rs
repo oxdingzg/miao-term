@@ -106,6 +106,7 @@ pub struct ServerState {
     states: Mutex<BTreeMap<String, Value>>,
     history: Mutex<BTreeMap<String, Vec<Value>>>,
     panes: Mutex<Vec<Value>>,
+    writes: Mutex<Vec<(String, Vec<u8>)>>,
 }
 
 impl ServerState {
@@ -136,6 +137,15 @@ impl ServerState {
     pub fn agent_for(&self, pane_id: &str) -> Option<Value> {
         let k = format!("pane:{pane_id}");
         self.states.lock().unwrap().get(&k).cloned()
+    }
+
+    fn queue_write(&self, pane_id: String, data: Vec<u8>) {
+        self.writes.lock().unwrap().push((pane_id, data));
+    }
+
+    /// Take queued writes for the UI to feed into the panes.
+    pub fn take_writes(&self) -> Vec<(String, Vec<u8>)> {
+        std::mem::take(&mut *self.writes.lock().unwrap())
     }
 }
 
@@ -172,6 +182,20 @@ fn dispatch(state: &ServerState, req: Request) -> Response {
         ("pane", "list") => {
             let panes = state.panes.lock().unwrap().clone();
             Response::ok(id, rev, json!({ "panes": panes }))
+        }
+        ("pane", "send") | ("pane", "run") => {
+            let pane = str_field(&params, "pane_id").unwrap_or_default();
+            let data = str_field(&params, "data").unwrap_or_default();
+            if pane.is_empty() {
+                return Response::err(id, rev, "no_pane", "pane_id is required");
+            }
+            let bytes = if req.method == "run" {
+                format!("{data}\r").into_bytes()
+            } else {
+                data.into_bytes()
+            };
+            state.queue_write(pane, bytes);
+            Response::ok(id, rev, json!({ "ok": true }))
         }
         ("agent", "state.set") => {
             let pane = str_field(&params, "pane_id");
