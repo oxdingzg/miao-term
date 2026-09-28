@@ -33,7 +33,9 @@ secrets, the workflow signs with a Developer ID, notarizes and staples instead.
 Linux also builds a `.deb` (via `cargo-deb`, metadata in `miaotty-app/Cargo.toml`)
 and, best-effort, an AppImage (`appimagetool`). Windows ships a zip and,
 best-effort, an MSI (`cargo-wix` / WiX). The AppImage/MSI steps are
-`continue-on-error` so a failure there does not fail the release.
+`continue-on-error` so a failure there does not fail the release. If
+`WINDOWS_CERT_PFX` + `WINDOWS_CERT_PASSWORD` secrets exist, the MSI is signed
+with `signtool`.
 
 ## Cross-platform installers
 

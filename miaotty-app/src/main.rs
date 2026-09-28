@@ -29,10 +29,12 @@ fn main() -> eframe::Result<()> {
         Err(e) => eprintln!("miaotty: failed to start MTP host: {e}"),
     }
 
+    let cfg = miao_term_config::Config::load();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1000.0, 660.0])
-            .with_title("miaotty"),
+            .with_title("miaotty")
+            .with_transparent(true),
         ..Default::default()
     };
     eframe::run_native(
@@ -49,7 +51,7 @@ fn main() -> eframe::Result<()> {
                         map: std::collections::HashMap::new(),
                     });
             }
-            Ok(Box::new(MiaottyApp::new(state)))
+            Ok(Box::new(MiaottyApp::new(state, cfg)))
         }),
     )
 }
@@ -481,11 +483,13 @@ struct MiaottyApp {
     line_height_ratio: f32,
     cursor_style: miao_term_config::CursorStyle,
     tab_drag: Option<usize>,
+    opacity: f32,
+    alpha: u8,
 }
 
 impl MiaottyApp {
-    fn new(state: Arc<miao_term_mtp::ServerState>) -> Self {
-        let cfg = miao_term_config::Config::load();
+    fn new(state: Arc<miao_term_mtp::ServerState>, cfg: miao_term_config::Config) -> Self {
+        let opacity = cfg.background_opacity.clamp(0.1, 1.0);
         let mut app = Self {
             tabs: Vec::new(),
             active: 0,
@@ -510,6 +514,8 @@ impl MiaottyApp {
             line_height_ratio: cfg.line_height,
             cursor_style: cfg.cursor_style,
             tab_drag: None,
+            opacity,
+            alpha: (opacity * 255.0).round() as u8,
         };
         if let Some(session) = Session::load() {
             app.restore(session);
@@ -974,7 +980,7 @@ impl MiaottyApp {
         egui::SidePanel::left("tabs")
             .resizable(true)
             .default_width(190.0)
-            .frame(egui::Frame::default().fill(self.theme.bg).inner_margin(egui::Margin::same(6.0)))
+            .frame(egui::Frame::default().fill(self.bg()).inner_margin(egui::Margin::same(6.0)))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(section("TABS"));
@@ -1082,7 +1088,7 @@ impl MiaottyApp {
             .default_width(300.0)
             .frame(
                 egui::Frame::default()
-                    .fill(self.theme.bg)
+                    .fill(self.bg())
                     .inner_margin(egui::Margin::same(10.0)),
             )
             .show(ctx, |ui| {
@@ -1143,6 +1149,16 @@ impl MiaottyApp {
             });
     }
 
+    /// The theme background with the configured opacity applied.
+    fn bg(&self) -> egui::Color32 {
+        let c = self.theme.bg;
+        if self.opacity >= 1.0 {
+            c
+        } else {
+            egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), self.alpha)
+        }
+    }
+
     fn mark_all_dirty(&mut self) {
         for tab in &mut self.tabs {
             for pane in &mut tab.panes {
@@ -1166,6 +1182,7 @@ impl MiaottyApp {
             miao_term_config::CursorStyle::Underline => "underline",
         };
         out.push_str(&format!("cursor-style = {cursor:?}\n"));
+        out.push_str(&format!("background-opacity = {}\n", self.opacity));
         out.push_str("\n[colors]\n");
         out.push_str(&format!(
             "background = \"#{:02x}{:02x}{:02x}\"\n",
@@ -1221,6 +1238,15 @@ impl MiaottyApp {
                         let trimmed = self.settings_family.trim();
                         self.font_family = (!trimmed.is_empty()).then(|| trimmed.to_string());
                         self.mark_all_dirty();
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Opacity");
+                    if ui
+                        .add(egui::Slider::new(&mut self.opacity, 0.2..=1.0))
+                        .changed()
+                    {
+                        self.alpha = (self.opacity * 255.0).round() as u8;
                     }
                 });
                 ui.horizontal(|ui| {
@@ -1295,7 +1321,7 @@ impl MiaottyApp {
         egui::TopBottomPanel::top("tabbar")
             .frame(
                 egui::Frame::default()
-                    .fill(self.theme.bg)
+                    .fill(self.bg())
                     .inner_margin(egui::Margin::symmetric(6.0, 3.0)),
             )
             .show(ctx, |ui| {
@@ -1392,7 +1418,7 @@ impl MiaottyApp {
         egui::TopBottomPanel::top("find")
             .frame(
                 egui::Frame::default()
-                    .fill(self.theme.bg)
+                    .fill(self.bg())
                     .inner_margin(egui::Margin::same(4.0)),
             )
             .show(ctx, |ui| {
@@ -1415,7 +1441,7 @@ impl MiaottyApp {
 
     fn terminal_panel(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
-            .frame(egui::Frame::default().fill(self.theme.bg))
+            .frame(egui::Frame::default().fill(self.bg()))
             .show(ctx, |ui| {
                 let rect = ui.available_rect_before_wrap();
                 // Cell size comes from the renderer's own font so glyphs line up.

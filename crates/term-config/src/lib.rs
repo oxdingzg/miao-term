@@ -90,6 +90,8 @@ struct RawConfig {
     line_height: Option<f32>,
     #[serde(rename = "cursor-style")]
     cursor_style: Option<String>,
+    #[serde(rename = "background-opacity")]
+    background_opacity: Option<f32>,
     theme: Option<String>,
     colors: Option<RawColors>,
 }
@@ -159,6 +161,8 @@ pub struct Config {
     /// Line height as a multiple of the font size.
     pub line_height: f32,
     pub cursor_style: CursorStyle,
+    /// Window/terminal background opacity, 0.0–1.0.
+    pub background_opacity: f32,
     pub theme: Theme,
 }
 
@@ -169,6 +173,7 @@ impl Default for Config {
             font_family: None,
             line_height: 1.25,
             cursor_style: CursorStyle::Block,
+            background_opacity: 1.0,
             theme: Theme::default(),
         }
     }
@@ -365,6 +370,11 @@ impl Config {
                         cfg.cursor_style = style;
                     }
                 }
+                "background-opacity" => {
+                    if let Ok(opacity) = value.parse::<f32>() {
+                        cfg.background_opacity = opacity.clamp(0.1, 1.0);
+                    }
+                }
                 "palette" => {
                     if let Some((idx, hex)) = value.split_once('=') {
                         if let (Ok(i), Some(c)) = (idx.trim().parse::<usize>(), Rgb::parse(hex)) {
@@ -397,6 +407,9 @@ impl Config {
         }
         if let Some(style) = raw.cursor_style.as_deref().and_then(CursorStyle::parse) {
             cfg.cursor_style = style;
+        }
+        if let Some(opacity) = raw.background_opacity {
+            cfg.background_opacity = opacity.clamp(0.1, 1.0);
         }
         if let Some(name) = raw.theme {
             if let Some(theme) = theme_by_name(&name) {

@@ -83,8 +83,11 @@ jobs:
           Terminal=false
           EOF
           cp "$AppDir/miaotty.desktop" "$AppDir/usr/share/applications/"
-          (command -v convert >/dev/null && convert -size 256x256 xc:'#2e3440' "$AppDir/miaotty.png") \
-            || printf '' > "$AppDir/miaotty.png"
+          if command -v convert >/dev/null; then
+            convert -size 256x256 xc:'#2e3440' "$AppDir/miaotty.png"
+          else
+            python3 -c "import base64;open('$AppDir/miaotty.png','wb').write(base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='))"
+          fi
           cp "$AppDir/miaotty.png" "$AppDir/usr/share/icons/hicolor/256x256/apps/miaotty.png"
           wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage -O appimagetool
           chmod +x appimagetool
@@ -106,6 +109,22 @@ jobs:
           cargo install cargo-wix --locked
           cargo wix init -p miaotty-app --force
           cargo wix -p miaotty-app --nocapture
+
+      - name: Sign MSI (Windows, optional)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        env:
+          WINDOWS_CERT_PFX: ${{ secrets.WINDOWS_CERT_PFX }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          if (-not $env:WINDOWS_CERT_PFX) { Write-Host 'no cert; skipping MSI signing'; exit 0 }
+          [IO.File]::WriteAllBytes("cert.pfx", [Convert]::FromBase64String($env:WINDOWS_CERT_PFX))
+          $msi = (Get-ChildItem target/wix/*.msi | Select-Object -First 1).FullName
+          $signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" |
+            Sort-Object -Descending | Select-Object -First 1).FullName
+          & $signtool sign /f cert.pfx /p $env:WINDOWS_CERT_PASSWORD /fd SHA256 `
+            /tr http://timestamp.digicert.com /td SHA256 $msi
 
       - uses: actions/upload-artifact@v4
         with:
