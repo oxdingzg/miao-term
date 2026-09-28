@@ -20,3 +20,4 @@ Docs are English by default; keep a Simplified Chinese version in sync
 | [0010](./0010-agent-loop.md) | Agent loop: notifications, sleep guard, prompt queue | accepted |
 | [0011](./0011-tab-groups-tree-recipes.md) | Tab groups, file tree, recipes | accepted |
 | [0012](./0012-jump-markdown-search.md) | Recent files, Markdown preview, content search | accepted |
+| [0013](./0013-system-integration.md) | URL schemes, Quick Terminal, i18n, update check | accepted |

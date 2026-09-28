@@ -21,3 +21,4 @@
 | [0010](./0010-agent-loop.zh-CN.md) | Agent 闭环：通知、防休眠、提示队列 | 已接受 |
 | [0011](./0011-tab-groups-tree-recipes.zh-CN.md) | 标签分组、文件树与 Recipes | 已接受 |
 | [0012](./0012-jump-markdown-search.zh-CN.md) | 最近文件、Markdown 预览、内容搜索 | 已接受 |
+| [0013](./0013-system-integration.zh-CN.md) | URL scheme、快速终端、i18n、更新检查 | 已接受 |

@@ -105,6 +105,9 @@ struct RawConfig {
     #[serde(rename = "prevent-sleep")]
     prevent_sleep: Option<bool>,
     badges: Option<RawBadges>,
+    language: Option<String>,
+    #[serde(rename = "update-check-url")]
+    update_check_url: Option<String>,
     theme: Option<String>,
     colors: Option<RawColors>,
 }
@@ -182,6 +185,10 @@ pub struct Config {
     pub prevent_sleep: bool,
     /// Which agent states show a tab badge.
     pub badges: Badges,
+    /// UI language tag (`en`, `zh`, …); `None` detects from `$LANG`.
+    pub language: Option<String>,
+    /// Optional URL checked for a newer version (see ADR 0013).
+    pub update_check_url: Option<String>,
     pub theme: Theme,
 }
 
@@ -228,6 +235,8 @@ impl Default for Config {
             notifications: true,
             prevent_sleep: true,
             badges: Badges::default(),
+            language: None,
+            update_check_url: None,
             theme: Theme::default(),
         }
     }
@@ -480,6 +489,18 @@ impl Config {
         }
         if let Some(v) = raw.prevent_sleep {
             cfg.prevent_sleep = v;
+        }
+        if let Some(lang) = raw.language {
+            let lang = lang.trim();
+            if !lang.is_empty() {
+                cfg.language = Some(lang.to_string());
+            }
+        }
+        if let Some(url) = raw.update_check_url {
+            let url = url.trim();
+            if !url.is_empty() {
+                cfg.update_check_url = Some(url.to_string());
+            }
         }
         if let Some(b) = raw.badges {
             if let Some(v) = b.processing {

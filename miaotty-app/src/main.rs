@@ -16,6 +16,7 @@ use eframe::egui_wgpu;
 use unicode_width::UnicodeWidthChar;
 
 mod agentloop;
+mod i18n;
 mod icons;
 mod launch;
 mod panels;
@@ -588,6 +589,10 @@ struct MiaottyApp {
     launch: Option<String>,
     quick_pane: Option<String>,
     quick_return: Option<usize>,
+    lang: i18n::Lang,
+    update_config: Option<String>,
+    update_rx: Option<std::sync::mpsc::Receiver<String>>,
+    update_msg: Option<String>,
 }
 
 /// The save/open recipe dialog (U7).
@@ -653,6 +658,7 @@ enum PaletteAction {
 enum Verb {
     Composer,
     QuickTerminal,
+    CheckUpdates,
     SaveRecipe,
     OpenRecipe,
     NewTab,
@@ -736,6 +742,10 @@ impl MiaottyApp {
             launch: None,
             quick_pane: None,
             quick_return: None,
+            lang: i18n::Lang::resolve(cfg.language.as_deref()),
+            update_config: cfg.update_check_url.clone(),
+            update_rx: None,
+            update_msg: None,
         };
         if let Some(session) = Session::load() {
             app.restore(session);
@@ -1108,6 +1118,14 @@ impl eframe::App for MiaottyApp {
             ctx.request_repaint();
         }
 
+        // Poll a pending update check.
+        if let Some(rx) = &self.update_rx {
+            if let Ok(msg) = rx.try_recv() {
+                self.update_msg = Some(msg);
+                self.update_rx = None;
+            }
+        }
+
         // A URL-scheme launch opens a command in a fresh tab (ADR 0013).
         if let Some(cmd) = self.launch.take() {
             self.open_command_tab(&cmd);
@@ -1279,6 +1297,7 @@ impl MiaottyApp {
         for (label, verb) in [
             ("Composer", Verb::Composer),
             ("Quick Terminal", Verb::QuickTerminal),
+            ("Check for Updates", Verb::CheckUpdates),
             ("Save Recipe\u{2026}", Verb::SaveRecipe),
             ("Open Recipe\u{2026}", Verb::OpenRecipe),
             ("New Tab", Verb::NewTab),
@@ -1293,7 +1312,7 @@ impl MiaottyApp {
         ] {
             out.push(PaletteEntry {
                 kind: "command".to_string(),
-                label: label.to_string(),
+                label: self.t(label).to_string(),
                 icon: None,
                 action: PaletteAction::Run(verb),
             });
@@ -1316,6 +1335,7 @@ impl MiaottyApp {
             PaletteAction::Run(verb) => match verb {
                 Verb::Composer => self.open_composer(),
                 Verb::QuickTerminal => self.toggle_quick_terminal(),
+                Verb::CheckUpdates => self.check_updates(),
                 Verb::SaveRecipe => {
                     self.recipe_ui = Some(RecipeDialog {
                         save: true,
@@ -1709,6 +1729,60 @@ fn strip_inline(s: &str) -> String {
         .collect()
 }
 
+/// Run an update check on a thread: fetch `url` with curl, compare the first
+/// token to the running version, and report a human string.
+fn spawn_update_check(url: String) -> std::sync::mpsc::Receiver<String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let local = env!("CARGO_PKG_VERSION");
+        let msg = match std::process::Command::new("curl")
+            .args(["-fsSL", "--max-time", "5", &url])
+            .output()
+        {
+            Ok(out) if out.status.success() => {
+                let remote = String::from_utf8_lossy(&out.stdout)
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .trim_start_matches('v')
+                    .to_string();
+                if remote.is_empty() {
+                    "Update check: empty response".to_string()
+                } else if version_newer(&remote, local) {
+                    format!("Update available: {remote} (you have {local})")
+                } else {
+                    format!("Up to date ({local})")
+                }
+            }
+            _ => "Update check failed".to_string(),
+        };
+        let _ = tx.send(msg);
+    });
+    rx
+}
+
+fn version_newer(remote: &str, local: &str) -> bool {
+    parse_version(remote) > parse_version(local)
+}
+
+fn parse_version(s: &str) -> (u32, u32, u32) {
+    let s = s.trim().trim_start_matches('v');
+    let mut parts = s.split('.').map(|p| {
+        p.trim()
+            .split(|c: char| !c.is_ascii_digit())
+            .next()
+            .unwrap_or("")
+            .parse::<u32>()
+            .unwrap_or(0)
+    });
+    (
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+    )
+}
+
 /// `~/.config/miaotty/recipes` (respecting `XDG_CONFIG_HOME`).
 fn recipes_dir() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
@@ -1841,7 +1915,7 @@ impl MiaottyApp {
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(section("TABS"));
+                    ui.label(section(self.t("TABS")));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("+").on_hover_text("New Tab").clicked() {
                             add = true;
@@ -1943,7 +2017,7 @@ impl MiaottyApp {
                 }
 
                 ui.separator();
-                ui.label(section("FILES"));
+                ui.label(section(self.t("FILES")));
                 match &tree_root {
                     Some(root) => {
                         let mut expanded = std::mem::take(&mut self.tree_expanded);
@@ -2028,13 +2102,13 @@ impl MiaottyApp {
             .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     for (tab, label) in [
-                        (DetailsTab::Info, "Info"),
-                        (DetailsTab::Agent, "Agent"),
-                        (DetailsTab::Outline, "Outline"),
-                        (DetailsTab::Git, "Git"),
-                        (DetailsTab::Files, "Files"),
-                        (DetailsTab::Ports, "Ports"),
-                        (DetailsTab::Queue, "Queue"),
+                        (DetailsTab::Info, self.t("Info")),
+                        (DetailsTab::Agent, self.t("Agent")),
+                        (DetailsTab::Outline, self.t("Outline")),
+                        (DetailsTab::Git, self.t("Git")),
+                        (DetailsTab::Files, self.t("Files")),
+                        (DetailsTab::Ports, self.t("Ports")),
+                        (DetailsTab::Queue, self.t("Queue")),
                     ] {
                         if ui
                             .selectable_label(self.details_tab == tab, label)
@@ -2059,10 +2133,10 @@ impl MiaottyApp {
                         }
                         if let Some(p) = &cwd {
                             ui.horizontal(|ui| {
-                                if ui.button("Copy Path").clicked() {
+                                if ui.button(self.t("Copy Path")).clicked() {
                                     ctx.copy_text(p.clone());
                                 }
-                                if ui.button("Reveal in Finder").clicked() {
+                                if ui.button(self.t("Reveal in Finder")).clicked() {
                                     reveal_in_finder(p);
                                 }
                             });
@@ -2214,7 +2288,7 @@ impl MiaottyApp {
                     }
                     DetailsTab::Queue => {
                         ui.horizontal(|ui| {
-                            if ui.button("Compose").clicked() {
+                            if ui.button(self.t("Compose")).clicked() {
                                 compose = true;
                             }
                             ui.label(
@@ -2395,10 +2469,16 @@ impl MiaottyApp {
                 );
                 ui.horizontal(|ui| {
                     let ready = !composer.text.trim().is_empty();
-                    if ui.add_enabled(ready, egui::Button::new("Send")).clicked() {
+                    if ui
+                        .add_enabled(ready, egui::Button::new(self.t("Send")))
+                        .clicked()
+                    {
                         send = true;
                     }
-                    if ui.add_enabled(ready, egui::Button::new("Queue")).clicked() {
+                    if ui
+                        .add_enabled(ready, egui::Button::new(self.t("Queue it")))
+                        .clicked()
+                    {
                         queue = true;
                     }
                 });
@@ -2420,6 +2500,14 @@ impl MiaottyApp {
     }
 
     fn recipe_window(&mut self, ctx: &egui::Context) {
+        let l_save = self.t("Save");
+        let l_name = self.t("Name");
+        let l_none = self.t("No recipes yet");
+        let title = if self.recipe_ui.as_ref().map(|d| d.save).unwrap_or(false) {
+            self.t("Save Recipe")
+        } else {
+            self.t("Open Recipe")
+        };
         let Some(mut dialog) = self.recipe_ui.take() else {
             return;
         };
@@ -2428,35 +2516,31 @@ impl MiaottyApp {
         let mut close = false;
         let mut saved = false;
         let mut chosen: Option<String> = None;
-        egui::Window::new(if dialog.save {
-            "Save Recipe"
-        } else {
-            "Open Recipe"
-        })
-        .collapsible(false)
-        .resizable(false)
-        .open(&mut open)
-        .show(ctx, |ui| {
-            if dialog.save {
-                ui.horizontal(|ui| {
-                    ui.label("Name");
-                    ui.text_edit_singleline(&mut dialog.name);
-                });
-                let ready = !dialog.name.trim().is_empty();
-                if ui.add_enabled(ready, egui::Button::new("Save")).clicked() {
-                    saved = true;
-                }
-            } else if dialog.list.is_empty() {
-                ui.label(egui::RichText::new("No recipes yet").color(fg));
-            } else {
-                for name in &dialog.list {
-                    if ui.button(name).clicked() {
-                        chosen = Some(name.clone());
-                        close = true;
+        egui::Window::new(title)
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                if dialog.save {
+                    ui.horizontal(|ui| {
+                        ui.label(l_name);
+                        ui.text_edit_singleline(&mut dialog.name);
+                    });
+                    let ready = !dialog.name.trim().is_empty();
+                    if ui.add_enabled(ready, egui::Button::new(l_save)).clicked() {
+                        saved = true;
+                    }
+                } else if dialog.list.is_empty() {
+                    ui.label(egui::RichText::new(l_none).color(fg));
+                } else {
+                    for name in &dialog.list {
+                        if ui.button(name).clicked() {
+                            chosen = Some(name.clone());
+                            close = true;
+                        }
                     }
                 }
-            }
-        });
+            });
         if saved {
             let session = self.snapshot();
             match save_recipe(dialog.name.trim(), &session) {
@@ -2570,6 +2654,13 @@ impl MiaottyApp {
 
     fn editor_window(&mut self, ctx: &egui::Context) {
         let fg = self.theme.fg;
+        let l_close = self.t("Close");
+        let l_save = self.t("Save");
+        let l_reload = self.t("Reload");
+        let l_raw = self.t("Raw");
+        let l_md = self.t("Markdown");
+        let l_preview = self.t("Preview");
+        let l_edit = self.t("Edit");
         let Some(editor) = self.editor.as_mut() else {
             return;
         };
@@ -2603,25 +2694,25 @@ impl MiaottyApp {
                             .color(fg),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Close").clicked() {
+                        if ui.button(l_close).clicked() {
                             close = true;
                         }
                         if ui
-                            .add_enabled(!editor.readonly && dirty, egui::Button::new("Save"))
+                            .add_enabled(!editor.readonly && dirty, egui::Button::new(l_save))
                             .clicked()
                         {
                             save = true;
                         }
-                        if ui.button("Reload").clicked() {
+                        if ui.button(l_reload).clicked() {
                             reload = true;
                         }
                         if is_md {
-                            let label = if editor.raw { "Markdown" } else { "Raw" };
+                            let label = if editor.raw { l_md } else { l_raw };
                             if ui.button(label).clicked() {
                                 editor.raw = !editor.raw;
                             }
                         }
-                        let mode = if editor.readonly { "Preview" } else { "Edit" };
+                        let mode = if editor.readonly { l_preview } else { l_edit };
                         if ui.button(mode).clicked() {
                             editor.readonly = !editor.readonly;
                         }
@@ -2664,6 +2755,22 @@ impl MiaottyApp {
         }
         if !open {
             self.editor = None;
+        }
+    }
+
+    /// Translate a visible string key (ADR 0013).
+    fn t(&self, key: &'static str) -> &'static str {
+        i18n::t(self.lang, key)
+    }
+
+    /// Start (or report) an update check against the configured URL.
+    fn check_updates(&mut self) {
+        match &self.update_config {
+            Some(url) => {
+                self.update_rx = Some(spawn_update_check(url.clone()));
+                self.update_msg = Some("Checking\u{2026}".to_string());
+            }
+            None => self.update_msg = Some(self.t("No update URL configured").to_string()),
         }
     }
 
@@ -2747,6 +2854,12 @@ impl MiaottyApp {
         out.push_str(&format!("background-opacity = {}\n", self.opacity));
         out.push_str(&format!("notifications = {}\n", self.notifications));
         out.push_str(&format!("prevent-sleep = {}\n", self.prevent_sleep));
+        if self.lang == i18n::Lang::Zh {
+            out.push_str("language = \"zh\"\n");
+        }
+        if let Some(url) = &self.update_config {
+            out.push_str(&format!("update-check-url = \"{url}\"\n"));
+        }
         out.push_str("[badges]\n");
         out.push_str(&format!("processing = {}\n", self.badges.processing));
         out.push_str(&format!("idle = {}\n", self.badges.idle));
@@ -2962,7 +3075,7 @@ impl MiaottyApp {
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Font size");
+                    ui.label(self.t("Font size"));
                     if ui
                         .add(egui::Slider::new(&mut self.font_size, 8.0..=32.0))
                         .changed()
@@ -2971,7 +3084,7 @@ impl MiaottyApp {
                     }
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Font family");
+                    ui.label(self.t("Font family"));
                     if ui
                         .add(
                             egui::TextEdit::singleline(&mut self.settings_family)
@@ -2985,7 +3098,7 @@ impl MiaottyApp {
                     }
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Opacity");
+                    ui.label(self.t("Opacity"));
                     if ui
                         .add(egui::Slider::new(&mut self.opacity, 0.2..=1.0))
                         .changed()
@@ -2993,20 +3106,22 @@ impl MiaottyApp {
                         self.alpha = (self.opacity * 255.0).round() as u8;
                     }
                 });
+                let notify_label = self.t("Notify");
+                let awake_label = self.t("Keep awake");
                 ui.horizontal(|ui| {
-                    ui.label("Agents");
-                    ui.checkbox(&mut self.notifications, "Notify");
-                    ui.checkbox(&mut self.prevent_sleep, "Keep awake");
+                    ui.label(self.t("Agents"));
+                    ui.checkbox(&mut self.notifications, notify_label);
+                    ui.checkbox(&mut self.prevent_sleep, awake_label);
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Badges");
+                    ui.label(self.t("Badges"));
                     ui.checkbox(&mut self.badges.processing, "processing");
                     ui.checkbox(&mut self.badges.idle, "idle");
                     ui.checkbox(&mut self.badges.awaiting, "awaiting");
                     ui.checkbox(&mut self.badges.error, "error");
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Sleep guard");
+                    ui.label(self.t("Sleep guard"));
                     ui.label(if self.sleep.awake() {
                         "awake"
                     } else {
@@ -3014,7 +3129,7 @@ impl MiaottyApp {
                     });
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Line height");
+                    ui.label(self.t("Line height"));
                     if ui
                         .add(egui::Slider::new(&mut self.line_height_ratio, 0.9..=2.0))
                         .changed()
@@ -3023,7 +3138,7 @@ impl MiaottyApp {
                     }
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Cursor");
+                    ui.label(self.t("Cursor"));
                     use miao_term_config::CursorStyle::*;
                     for (label, style) in [("block", Block), ("bar", Bar), ("underline", Underline)]
                     {
@@ -3034,7 +3149,7 @@ impl MiaottyApp {
                     }
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Theme");
+                    ui.label(self.t("Theme"));
                     for name in ["nord", "dracula", "gruvbox", "solarized", "tokyo-night"] {
                         if ui.button(name).clicked() {
                             if let Some(theme) = miao_term_config::theme_by_name(name) {
@@ -3047,7 +3162,7 @@ impl MiaottyApp {
                 ui.separator();
                 self.view_rules_ui(ui);
                 ui.separator();
-                if ui.button("Save to config.toml").clicked() {
+                if ui.button(self.t("Save to config.toml")).clicked() {
                     self.save_config();
                 }
             });
@@ -3222,7 +3337,7 @@ impl MiaottyApp {
                         egui::RichText::new(format!("{matches} matches"))
                             .color(egui::Color32::from_gray(150)),
                     );
-                    if ui.button("Close").clicked() {
+                    if ui.button(self.t("Close")).clicked() {
                         open = false;
                     }
                 });
@@ -4147,5 +4262,19 @@ mod session_tests {
     #[test]
     fn sanitize_recipe_names() {
         assert_eq!(sanitize_name("my work/1"), "my work_1");
+    }
+}
+
+#[cfg(test)]
+mod update_tests {
+    use super::*;
+
+    #[test]
+    fn version_comparison() {
+        assert!(version_newer("1.2.0", "1.1.9"));
+        assert!(version_newer("v2.0.0", "1.9.9"));
+        assert!(!version_newer("1.0.0", "1.0.0"));
+        assert!(!version_newer("0.9.9", "1.0.0"));
+        assert_eq!(parse_version("1.2.3-rc1"), (1, 2, 3));
     }
 }
