@@ -1454,6 +1454,48 @@ fn encode_input(
                     return;
                 }
             }
+
+            // Backspace variants: Ctrl+Backspace = ^W (delete word), Alt+Backspace = ESC DEL.
+            if *key == egui::Key::Backspace {
+                if modifiers.ctrl && !modifiers.alt {
+                    out.push(0x17);
+                    return;
+                }
+                if modifiers.alt && !modifiers.ctrl {
+                    out.extend_from_slice(b"\x1b\x7f");
+                    return;
+                }
+            }
+
+            // Modifier-aware navigation (word movement, selection, etc.).
+            if modifiers.shift || modifiers.alt || modifiers.ctrl {
+                let mut n: u8 = 1;
+                if modifiers.shift {
+                    n += 1;
+                }
+                if modifiers.alt {
+                    n += 2;
+                }
+                if modifiers.ctrl {
+                    n += 4;
+                }
+                let seq = match key {
+                    egui::Key::ArrowUp => Some(format!("\x1b[1;{n}A")),
+                    egui::Key::ArrowDown => Some(format!("\x1b[1;{n}B")),
+                    egui::Key::ArrowRight => Some(format!("\x1b[1;{n}C")),
+                    egui::Key::ArrowLeft => Some(format!("\x1b[1;{n}D")),
+                    egui::Key::Home => Some(format!("\x1b[1;{n}H")),
+                    egui::Key::End => Some(format!("\x1b[1;{n}F")),
+                    egui::Key::Delete => Some(format!("\x1b[3;{n}~")),
+                    egui::Key::PageUp => Some(format!("\x1b[5;{n}~")),
+                    egui::Key::PageDown => Some(format!("\x1b[6;{n}~")),
+                    _ => None,
+                };
+                if let Some(seq) = seq {
+                    out.extend_from_slice(seq.as_bytes());
+                    return;
+                }
+            }
             let mut arrow = |c: u8| {
                 if app_cursor {
                     out.extend_from_slice(&[0x1b, b'O', c]);

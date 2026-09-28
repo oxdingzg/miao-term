@@ -40,7 +40,8 @@ Packaging: `scripts/package-macos.sh` builds an ad-hoc-signed `dist/miaotty.app`
 
 Keyboard: `⌘T` new tab, `⌘W` close pane/tab, `⌘D`/`⇧⌘D` split, `⌥⌘→`/`⌥⌘←`
 (or `⌘⇧[`/`⌘⇧]`) cycle panes, `⌥⌘D` toggle details, `⌘F` find,
-`⌘+`/`⌘-`/`⌘0` font size.
+`⌘+`/`⌘-`/`⌘0` font size. Modifier-aware arrows (Ctrl/Alt = word
+movement), Ctrl/Alt+Backspace.
 
 Not yet: Windows named-pipe transport + ConPTY testing, packaging
 (MSI/AppImage/notarize), and further renderer hardening (damage uploads, atlas

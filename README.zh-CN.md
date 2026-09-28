@@ -31,7 +31,8 @@
 `dist-workspace.toml` 是 cargo-dist 脚手架。见 [`docs/INSTALL.zh-CN.md`](docs/INSTALL.zh-CN.md)。
 
 快捷键:`⌘T` 新建标签、`⌘W` 关 pane/标签、`⌘D`/`⇧⌘D` 分屏、`⌥⌘→`/`⌥⌘←`(或 `⌘⇧[`/`⌘⇧]`)轮换 pane、
-`⌥⌘D` 开关 details、`⌘F` 查找、`⌘+`/`⌘-`/`⌘0` 字号。
+`⌥⌘D` 开关 details、`⌘F` 查找、`⌘+`/`⌘-`/`⌘0` 字号。方向键带修饰键(Ctrl/Alt 按词移动)、
+Ctrl/Alt+Backspace。
 
 尚未完成:Windows 命名管道传输 + ConPTY 实测、打包(MSI/AppImage/公证),
 以及渲染器进一步打磨(damage 上传、图集 trim)。
