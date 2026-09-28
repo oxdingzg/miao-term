@@ -31,6 +31,9 @@ pub struct Terminal {
     cwd: Option<String>,
     title: Option<String>,
     osc_buf: Vec<u8>,
+    /// Pending bytes scanned for a ConPTY cursor-position query (DSR, `ESC[6n`),
+    /// which must be answered or the Windows shell stalls before it runs anything.
+    dsr_buf: Vec<u8>,
 }
 
 fn default_shell() -> String {
@@ -116,6 +119,7 @@ impl Terminal {
             cwd: None,
             title: None,
             osc_buf: Vec::new(),
+            dsr_buf: Vec::new(),
         })
     }
 
@@ -127,6 +131,7 @@ impl Terminal {
                 Ok(bytes) => {
                     self.scan_osc(&bytes);
                     self.screen.process(&bytes);
+                    self.answer_dsr(&bytes);
                     changed = true;
                 }
                 Err(TryRecvError::Empty) => break,
@@ -191,6 +196,24 @@ impl Terminal {
     /// The window title reported via OSC 0/2, if any.
     pub fn title(&self) -> Option<&str> {
         self.title.as_deref()
+    }
+
+    /// Answer ConPTY's cursor-position query (DSR `ESC[6n`) with `ESC[<row>;<col>R`.
+    ///
+    /// Windows ConPTY emits this on startup and the console app blocks until the
+    /// terminal replies; without it the Windows shell never produces output.
+    fn answer_dsr(&mut self, bytes: &[u8]) {
+        self.dsr_buf.extend_from_slice(bytes);
+        while let Some(idx) = find_subslice(&self.dsr_buf, b"\x1b[6n") {
+            let (row, col) = self.screen.cursor();
+            let reply = format!("\x1b[{};{}R", row + 1, col + 1);
+            self.dsr_buf.drain(..idx + 4);
+            self.write(reply.as_bytes());
+        }
+        // Keep a short tail in case the sequence is split across chunks.
+        let keep = 3.min(self.dsr_buf.len());
+        let drain = self.dsr_buf.len() - keep;
+        self.dsr_buf.drain(..drain);
     }
 
     /// Scan a chunk for OSC 7 (`ESC ] 7 ; file://host/path BEL|ST`) and update `cwd`.
