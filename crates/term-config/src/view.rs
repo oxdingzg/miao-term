@@ -449,19 +449,22 @@ mod tests {
         )
         .unwrap();
         assert_eq!(set.project_alias("/x/work/other").as_deref(), Some("work"));
-        assert_eq!(set.project_alias("/x/work/miao/src").as_deref(), Some("miao"));
         assert_eq!(
-            set.project_alias("/x/work/miao/.worktrees/feat/x").as_deref(),
+            set.project_alias("/x/work/miao/src").as_deref(),
+            Some("miao")
+        );
+        assert_eq!(
+            set.project_alias("/x/work/miao/.worktrees/feat/x")
+                .as_deref(),
             Some("miao-feat")
         );
     }
 
     #[test]
     fn reorder_changes_priority() {
-        let mut set = RuleSet::from_json(
-            r#"{"rules":[{"name":"a","match":{}},{"name":"b","match":{}}]}"#,
-        )
-        .unwrap();
+        let mut set =
+            RuleSet::from_json(r#"{"rules":[{"name":"a","match":{}},{"name":"b","match":{}}]}"#)
+                .unwrap();
         set.move_up(1);
         assert_eq!(set.rules[0].name.as_deref(), Some("b"));
         set.move_down(0);

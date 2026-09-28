@@ -183,6 +183,11 @@ impl Terminal {
         self.cwd.as_deref()
     }
 
+    /// The child process id, if the platform exposes one.
+    pub fn pid(&self) -> Option<u32> {
+        self.child.process_id()
+    }
+
     /// The window title reported via OSC 0/2, if any.
     pub fn title(&self) -> Option<&str> {
         self.title.as_deref()
@@ -212,7 +217,8 @@ impl Terminal {
             let code = self.osc_buf[after..semi].to_vec();
             match find_terminator(&self.osc_buf[semi + 1..]) {
                 Some((end, term_len)) => {
-                    if let Ok(payload) = std::str::from_utf8(&self.osc_buf[semi + 1..semi + 1 + end])
+                    if let Ok(payload) =
+                        std::str::from_utf8(&self.osc_buf[semi + 1..semi + 1 + end])
                     {
                         match code.as_slice() {
                             b"7" => {
@@ -241,9 +247,7 @@ impl Terminal {
 }
 
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|w| w == needle)
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 /// Returns (payload_len, terminator_len) for BEL or ESC `\`.

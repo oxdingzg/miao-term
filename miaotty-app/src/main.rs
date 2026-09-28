@@ -16,6 +16,7 @@ use eframe::egui_wgpu;
 use unicode_width::UnicodeWidthChar;
 
 mod icons;
+mod panels;
 
 use miao_term_core::aterm::{ATerm, Color, NamedColor};
 use miao_term_core::Terminal;
@@ -72,9 +73,10 @@ fn install_fonts(ctx: &egui::Context) {
     for path in candidates {
         if let Ok(bytes) = std::fs::read(path) {
             let mut fonts = egui::FontDefinitions::default();
-            fonts
-                .font_data
-                .insert("cjk".to_owned(), Arc::new(egui::FontData::from_owned(bytes)));
+            fonts.font_data.insert(
+                "cjk".to_owned(),
+                Arc::new(egui::FontData::from_owned(bytes)),
+            );
             for family in [egui::FontFamily::Monospace, egui::FontFamily::Proportional] {
                 fonts
                     .families
@@ -224,13 +226,29 @@ fn layout_rects(layout: &Layout, rect: egui::Rect, out: &mut Vec<(String, egui::
             match dir {
                 SplitDir::Right => {
                     let w = rect.width() * r;
-                    layout_rects(a, egui::Rect::from_min_max(rect.min, egui::pos2(rect.left() + w, rect.max.y)), out);
-                    layout_rects(b, egui::Rect::from_min_max(egui::pos2(rect.left() + w, rect.top()), rect.max), out);
+                    layout_rects(
+                        a,
+                        egui::Rect::from_min_max(rect.min, egui::pos2(rect.left() + w, rect.max.y)),
+                        out,
+                    );
+                    layout_rects(
+                        b,
+                        egui::Rect::from_min_max(egui::pos2(rect.left() + w, rect.top()), rect.max),
+                        out,
+                    );
                 }
                 SplitDir::Down => {
                     let h = rect.height() * r;
-                    layout_rects(a, egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.top() + h)), out);
-                    layout_rects(b, egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + h), rect.max), out);
+                    layout_rects(
+                        a,
+                        egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.top() + h)),
+                        out,
+                    );
+                    layout_rects(
+                        b,
+                        egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + h), rect.max),
+                        out,
+                    );
                 }
             }
         }
@@ -266,10 +284,20 @@ fn collect_splits(
                     dir: SplitDir::Right,
                 });
                 path.push(false);
-                collect_splits(a, egui::Rect::from_min_max(rect.min, egui::pos2(x, rect.max.y)), path, out);
+                collect_splits(
+                    a,
+                    egui::Rect::from_min_max(rect.min, egui::pos2(x, rect.max.y)),
+                    path,
+                    out,
+                );
                 path.pop();
                 path.push(true);
-                collect_splits(b, egui::Rect::from_min_max(egui::pos2(x, rect.top()), rect.max), path, out);
+                collect_splits(
+                    b,
+                    egui::Rect::from_min_max(egui::pos2(x, rect.top()), rect.max),
+                    path,
+                    out,
+                );
                 path.pop();
             }
             SplitDir::Down => {
@@ -284,10 +312,20 @@ fn collect_splits(
                     dir: SplitDir::Down,
                 });
                 path.push(false);
-                collect_splits(a, egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, y)), path, out);
+                collect_splits(
+                    a,
+                    egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, y)),
+                    path,
+                    out,
+                );
                 path.pop();
                 path.push(true);
-                collect_splits(b, egui::Rect::from_min_max(egui::pos2(rect.left(), y), rect.max), path, out);
+                collect_splits(
+                    b,
+                    egui::Rect::from_min_max(egui::pos2(rect.left(), y), rect.max),
+                    path,
+                    out,
+                );
                 path.pop();
             }
         }
@@ -430,7 +468,11 @@ fn node_to_layout(node: &LayoutNode, ids: &[String]) -> Layout {
     match node {
         LayoutNode::Leaf(i) => Layout::Leaf(ids.get(*i).cloned().unwrap_or_default()),
         LayoutNode::Split { down, ratio, a, b } => Layout::Split {
-            dir: if *down { SplitDir::Down } else { SplitDir::Right },
+            dir: if *down {
+                SplitDir::Down
+            } else {
+                SplitDir::Right
+            },
             ratio: *ratio,
             a: Box::new(node_to_layout(a, ids)),
             b: Box::new(node_to_layout(b, ids)),
@@ -451,7 +493,11 @@ fn gen_pane_id() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
         .unwrap_or(0);
-    format!("{:016x}{:04x}", nanos, COUNTER.fetch_add(1, Ordering::SeqCst))
+    format!(
+        "{:016x}{:04x}",
+        nanos,
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    )
 }
 
 /// A grid selection, in viewport (row, col) coordinates; end may be before start.
@@ -491,6 +537,31 @@ struct MiaottyApp {
     view_edit: Option<usize>,
     palette: Option<Palette>,
     palette_focus: bool,
+    panels: panels::PanelsWorker,
+    panels_last: panels::Request,
+    panels_at: Instant,
+    details_tab: DetailsTab,
+    file_sel: Option<usize>,
+    editor: Option<Editor>,
+}
+
+/// Details panel tab (ADR 0009).
+#[derive(Clone, Copy, PartialEq)]
+enum DetailsTab {
+    Info,
+    Agent,
+    Outline,
+    Git,
+    Files,
+    Ports,
+}
+
+/// An open file in the preview/editor window.
+struct Editor {
+    path: PathBuf,
+    text: String,
+    original: String,
+    readonly: bool,
 }
 
 /// A command-palette action (Open Quickly, ADR 0008).
@@ -498,6 +569,7 @@ struct MiaottyApp {
 enum PaletteAction {
     SwitchTab(usize),
     Run(Verb),
+    OpenFile(PathBuf),
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -558,6 +630,15 @@ impl MiaottyApp {
             view_edit: None,
             palette: None,
             palette_focus: false,
+            panels: panels::PanelsWorker::spawn(),
+            panels_last: panels::Request {
+                cwd: None,
+                pid: None,
+            },
+            panels_at: Instant::now(),
+            details_tab: DetailsTab::Info,
+            file_sel: None,
+            editor: None,
         };
         if let Some(session) = Session::load() {
             app.restore(session);
@@ -624,7 +705,10 @@ impl MiaottyApp {
                 continue;
             }
             let layout = node_to_layout(&ts.layout, &ids);
-            let active = ids.get(ts.active).cloned().unwrap_or_else(|| ids[0].clone());
+            let active = ids
+                .get(ts.active)
+                .cloned()
+                .unwrap_or_else(|| ids[0].clone());
             self.tabs.push(Tab {
                 panes,
                 layout,
@@ -684,8 +768,13 @@ impl MiaottyApp {
     }
 
     fn duplicate_tab(&mut self, i: usize) {
-        let (rows, cols) = self.tabs[i].focused().map(|p| p.term.size()).unwrap_or((30, 100));
-        let cwd = self.tabs[i].focused().and_then(|p| p.term.cwd().map(PathBuf::from));
+        let (rows, cols) = self.tabs[i]
+            .focused()
+            .map(|p| p.term.size())
+            .unwrap_or((30, 100));
+        let cwd = self.tabs[i]
+            .focused()
+            .and_then(|p| p.term.cwd().map(PathBuf::from));
         let title = self.tabs[i].title.clone();
         self.push_tab(title, cols, rows, cwd);
     }
@@ -890,6 +979,20 @@ impl eframe::App for MiaottyApp {
             ctx.request_repaint();
         }
 
+        // Refresh details-panel data for the focused pane (ADR 0009).
+        let (cwd, pid) = self
+            .tabs
+            .get(self.active)
+            .and_then(|t| t.focused())
+            .map(|p| (p.term.cwd().map(str::to_string), p.term.pid()))
+            .unwrap_or((None, None));
+        let req = panels::Request { cwd, pid };
+        if req != self.panels_last || self.panels_at.elapsed() >= Duration::from_millis(2500) {
+            self.panels.request(req.clone());
+            self.panels_last = req;
+            self.panels_at = Instant::now();
+        }
+
         // Window title from the focused pane's OSC 0/2 title.
         let pane = self.tabs.get(self.active).and_then(|t| t.focused());
         let title = pane
@@ -936,6 +1039,9 @@ impl eframe::App for MiaottyApp {
         if self.show_settings {
             self.settings_window(ctx);
         }
+        if self.editor.is_some() {
+            self.editor_window(ctx);
+        }
         if self.palette.is_some() {
             self.palette_ui(ctx);
         }
@@ -965,6 +1071,16 @@ impl MiaottyApp {
                     label: agent,
                     icon: view.and_then(|v| v.icon),
                     action: PaletteAction::SwitchTab(i),
+                });
+            }
+        }
+        for file in &self.panels.snapshot().files {
+            if !file.is_dir {
+                out.push(PaletteEntry {
+                    kind: "file",
+                    label: file.name.clone(),
+                    icon: None,
+                    action: PaletteAction::OpenFile(file.path.clone()),
                 });
             }
         }
@@ -1012,6 +1128,7 @@ impl MiaottyApp {
                 Verb::NextTab => self.focus_cycle(true),
                 Verb::PrevTab => self.focus_cycle(false),
             },
+            PaletteAction::OpenFile(path) => self.open_editor(path),
         }
     }
 
@@ -1038,9 +1155,7 @@ impl MiaottyApp {
         ctx.input(|i| {
             for ev in &i.events {
                 if let egui::Event::Key {
-                    key,
-                    pressed: true,
-                    ..
+                    key, pressed: true, ..
                 } = ev
                 {
                     match key {
@@ -1058,8 +1173,7 @@ impl MiaottyApp {
             return;
         }
         if nav != 0 && !filtered.is_empty() {
-            pal.selected =
-                (pal.selected as i32 + nav).rem_euclid(filtered.len() as i32) as usize;
+            pal.selected = (pal.selected as i32 + nav).rem_euclid(filtered.len() as i32) as usize;
         }
         let accept_index = accept.then_some(pal.selected);
 
@@ -1105,7 +1219,9 @@ impl MiaottyApp {
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
-                                        ui.label(egui::RichText::new(entry.kind).small().color(muted));
+                                        ui.label(
+                                            egui::RichText::new(entry.kind).small().color(muted),
+                                        );
                                     },
                                 );
                             });
@@ -1214,7 +1330,10 @@ fn preview_context(m: &miao_term_config::view::Match) -> miao_term_config::view:
         .unwrap_or_else(|| "/Users/me/project".to_string());
     miao_term_config::view::Context {
         cwd: Some(cwd),
-        command: m.command.clone().or_else(|| Some("cargo build".to_string())),
+        command: m
+            .command
+            .clone()
+            .or_else(|| Some("cargo build".to_string())),
         agent: m.agent.clone().or_else(|| Some("claude".to_string())),
         host: m.host.clone(),
         file: m.file.clone(),
@@ -1227,7 +1346,11 @@ fn preview_context(m: &miao_term_config::view::Match) -> miao_term_config::view:
 }
 
 fn sample_path(pattern: &str) -> String {
-    let base = pattern.split('*').next().unwrap_or(pattern).trim_end_matches('/');
+    let base = pattern
+        .split('*')
+        .next()
+        .unwrap_or(pattern)
+        .trim_end_matches('/');
     if base.is_empty() {
         "/tmp/demo".to_string()
     } else {
@@ -1238,7 +1361,10 @@ fn sample_path(pattern: &str) -> String {
 fn reveal_in_finder(path: &str) {
     #[cfg(target_os = "macos")]
     {
-        let _ = std::process::Command::new("open").arg("-R").arg(path).spawn();
+        let _ = std::process::Command::new("open")
+            .arg("-R")
+            .arg(path)
+            .spawn();
     }
     #[cfg(target_os = "windows")]
     {
@@ -1268,14 +1394,14 @@ impl MiaottyApp {
                     .focused()
                     .and_then(|p| self.state.agent_for(&p.pane_id))
                     .and_then(|a| {
-                    a.get("state").and_then(|v| v.as_str()).map(|s| match s {
-                        "processing" => egui::Color32::from_rgb(0x81, 0xa1, 0xc1),
-                        "idle" => egui::Color32::from_rgb(0xa3, 0xbe, 0x8c),
-                        "awaiting" => egui::Color32::from_rgb(0xeb, 0xcb, 0x8b),
-                        "error" => egui::Color32::from_rgb(0xbf, 0x61, 0x6a),
-                        _ => egui::Color32::GRAY,
-                    })
-                });
+                        a.get("state").and_then(|v| v.as_str()).map(|s| match s {
+                            "processing" => egui::Color32::from_rgb(0x81, 0xa1, 0xc1),
+                            "idle" => egui::Color32::from_rgb(0xa3, 0xbe, 0x8c),
+                            "awaiting" => egui::Color32::from_rgb(0xeb, 0xcb, 0x8b),
+                            "error" => egui::Color32::from_rgb(0xbf, 0x61, 0x6a),
+                            _ => egui::Color32::GRAY,
+                        })
+                    });
                 (title, color, view.and_then(|v| v.icon))
             })
             .collect();
@@ -1295,7 +1421,11 @@ impl MiaottyApp {
         egui::SidePanel::left("tabs")
             .resizable(true)
             .default_width(190.0)
-            .frame(egui::Frame::default().fill(self.bg()).inner_margin(egui::Margin::same(6.0)))
+            .frame(
+                egui::Frame::default()
+                    .fill(self.bg())
+                    .inner_margin(egui::Margin::same(6.0)),
+            )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(section("TABS"));
@@ -1303,7 +1433,11 @@ impl MiaottyApp {
                         if ui.button("+").on_hover_text("New Tab").clicked() {
                             add = true;
                         }
-                        if ui.button("\u{25a4}").on_hover_text("Toggle Details").clicked() {
+                        if ui
+                            .button("\u{25a4}")
+                            .on_hover_text("Toggle Details")
+                            .clicked()
+                        {
                             toggle = true;
                         }
                         if ui.button("\u{2699}").on_hover_text("Settings").clicked() {
@@ -1401,8 +1535,10 @@ impl MiaottyApp {
             .unwrap_or_default();
         let history = self.state.history_for(&pane_id);
         let agent = self.state.agent_for(&pane_id);
+        let snapshot = self.panels.snapshot();
         let muted = egui::Color32::from_gray(120);
         let fg = self.theme.fg;
+        let mut open_file: Option<PathBuf> = None;
         egui::SidePanel::right("details")
             .resizable(true)
             .default_width(300.0)
@@ -1412,61 +1548,289 @@ impl MiaottyApp {
                     .inner_margin(egui::Margin::same(10.0)),
             )
             .show(ctx, |ui| {
-                ui.label(section("INFO"));
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new("Working Directory").strong().color(fg));
-                match &cwd {
-                    Some(p) => {
-                        ui.label(egui::RichText::new(p).monospace().color(fg));
-                    }
-                    None => {
-                        ui.label(egui::RichText::new("\u{2014}").color(muted));
-                    }
-                }
-                if let Some(p) = &cwd {
-                    ui.horizontal(|ui| {
-                        if ui.button("Copy Path").clicked() {
-                            ctx.copy_text(p.clone());
+                ui.horizontal_wrapped(|ui| {
+                    for (tab, label) in [
+                        (DetailsTab::Info, "Info"),
+                        (DetailsTab::Agent, "Agent"),
+                        (DetailsTab::Outline, "Outline"),
+                        (DetailsTab::Git, "Git"),
+                        (DetailsTab::Files, "Files"),
+                        (DetailsTab::Ports, "Ports"),
+                    ] {
+                        if ui
+                            .selectable_label(self.details_tab == tab, label)
+                            .clicked()
+                        {
+                            self.details_tab = tab;
                         }
-                        if ui.button("Reveal in Finder").clicked() {
-                            reveal_in_finder(p);
-                        }
-                    });
-                }
+                    }
+                });
+                ui.separator();
 
-                if let Some(a) = &agent {
-                    ui.add_space(10.0);
-                    ui.label(section("AGENT"));
-                    let st = a.get("state").and_then(|v| v.as_str()).unwrap_or("?");
-                    let name = a.get("agent").and_then(|v| v.as_str()).unwrap_or("agent");
-                    ui.label(egui::RichText::new(format!("{name} \u{00b7} {st}")).color(fg));
-                }
-
-                ui.add_space(10.0);
-                ui.label(section(&format!("OUTLINE ({})", history.len())));
-                ui.add_space(4.0);
-                if history.is_empty() {
-                    ui.label(egui::RichText::new("No commands yet").color(muted));
-                } else {
-                    egui::ScrollArea::vertical()
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            for entry in history.iter().rev() {
-                                if let Some(c) = entry.get("cwd").and_then(|v| v.as_str()) {
-                                    ui.label(
-                                        egui::RichText::new(c).monospace().size(10.0).color(muted),
-                                    );
-                                }
-                                let cmd = entry
-                                    .get("command")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("");
-                                ui.label(egui::RichText::new(cmd).monospace().color(fg));
-                                ui.add_space(2.0);
+                match self.details_tab {
+                    DetailsTab::Info => {
+                        ui.label(egui::RichText::new("Working Directory").strong().color(fg));
+                        match &cwd {
+                            Some(p) => {
+                                ui.label(egui::RichText::new(p).monospace().color(fg));
                             }
-                        });
+                            None => {
+                                ui.label(egui::RichText::new("\u{2014}").color(muted));
+                            }
+                        }
+                        if let Some(p) = &cwd {
+                            ui.horizontal(|ui| {
+                                if ui.button("Copy Path").clicked() {
+                                    ctx.copy_text(p.clone());
+                                }
+                                if ui.button("Reveal in Finder").clicked() {
+                                    reveal_in_finder(p);
+                                }
+                            });
+                        }
+                        if let Some(git) = &snapshot.git {
+                            ui.add_space(8.0);
+                            ui.label(
+                                egui::RichText::new(format!("git \u{00b7} {}", git.branch))
+                                    .color(fg),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("{} changed", git.changes.len()))
+                                    .color(muted),
+                            );
+                        }
+                        if let Some(a) = &agent {
+                            ui.add_space(8.0);
+                            let st = a.get("state").and_then(|v| v.as_str()).unwrap_or("?");
+                            let name = a.get("agent").and_then(|v| v.as_str()).unwrap_or("agent");
+                            ui.label(
+                                egui::RichText::new(format!("{name} \u{00b7} {st}")).color(fg),
+                            );
+                        }
+                    }
+                    DetailsTab::Agent => match &agent {
+                        Some(a) => {
+                            let st = a.get("state").and_then(|v| v.as_str()).unwrap_or("?");
+                            let name = a.get("agent").and_then(|v| v.as_str()).unwrap_or("agent");
+                            ui.label(
+                                egui::RichText::new(format!("{name} \u{00b7} {st}")).color(fg),
+                            );
+                        }
+                        None => {
+                            ui.label(egui::RichText::new("No agent in this pane").color(muted));
+                        }
+                    },
+                    DetailsTab::Outline => {
+                        ui.label(section(&format!("OUTLINE ({})", history.len())));
+                        ui.add_space(4.0);
+                        if history.is_empty() {
+                            ui.label(egui::RichText::new("No commands yet").color(muted));
+                        } else {
+                            egui::ScrollArea::vertical()
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    for entry in history.iter().rev() {
+                                        if let Some(c) = entry.get("cwd").and_then(|v| v.as_str()) {
+                                            ui.label(
+                                                egui::RichText::new(c)
+                                                    .monospace()
+                                                    .size(10.0)
+                                                    .color(muted),
+                                            );
+                                        }
+                                        let cmd = entry
+                                            .get("command")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("");
+                                        ui.label(egui::RichText::new(cmd).monospace().color(fg));
+                                        ui.add_space(2.0);
+                                    }
+                                });
+                        }
+                    }
+                    DetailsTab::Git => match &snapshot.git {
+                        Some(git) => {
+                            ui.label(
+                                egui::RichText::new(format!("branch: {}", git.branch))
+                                    .monospace()
+                                    .color(fg),
+                            );
+                            ui.add_space(4.0);
+                            if git.changes.is_empty() {
+                                ui.label(egui::RichText::new("Clean").color(muted));
+                            } else {
+                                egui::ScrollArea::vertical()
+                                    .auto_shrink([false, false])
+                                    .show(ui, |ui| {
+                                        for (code, path) in &git.changes {
+                                            let text =
+                                                egui::RichText::new(format!("{code:<2} {path}"))
+                                                    .monospace()
+                                                    .size(11.0)
+                                                    .color(fg);
+                                            if ui.selectable_label(false, text).double_clicked() {
+                                                if let Some(cwd) = &cwd {
+                                                    open_file = Some(PathBuf::from(cwd).join(path));
+                                                }
+                                            }
+                                        }
+                                    });
+                            }
+                        }
+                        None => {
+                            ui.label(egui::RichText::new("Not a git repository").color(muted));
+                        }
+                    },
+                    DetailsTab::Files => {
+                        if snapshot.files.is_empty() {
+                            ui.label(egui::RichText::new("Empty").color(muted));
+                        } else {
+                            egui::ScrollArea::vertical()
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    for (i, entry) in snapshot.files.iter().enumerate() {
+                                        let glyph =
+                                            if entry.is_dir { "\u{25b8}" } else { "\u{00b7}" };
+                                        let text =
+                                            egui::RichText::new(format!("{glyph} {}", entry.name))
+                                                .monospace()
+                                                .size(11.0)
+                                                .color(fg);
+                                        let resp =
+                                            ui.selectable_label(self.file_sel == Some(i), text);
+                                        if resp.clicked() {
+                                            self.file_sel = Some(i);
+                                        }
+                                        if resp.double_clicked() && !entry.is_dir {
+                                            open_file = Some(entry.path.clone());
+                                        }
+                                    }
+                                });
+                        }
+                    }
+                    DetailsTab::Ports => {
+                        if snapshot.ports.is_empty() {
+                            ui.label(egui::RichText::new("No listening ports").color(muted));
+                        } else {
+                            for p in &snapshot.ports {
+                                ui.label(
+                                    egui::RichText::new(format!(":{}  {}", p.port, p.process))
+                                        .monospace()
+                                        .size(11.0)
+                                        .color(fg),
+                                );
+                            }
+                        }
+                    }
                 }
             });
+        if let Some(path) = open_file {
+            self.open_editor(path);
+        }
+    }
+
+    /// Open a file in the read-only preview / editor window (ADR 0009).
+    fn open_editor(&mut self, path: PathBuf) {
+        const MAX: u64 = 2 * 1024 * 1024;
+        match std::fs::metadata(&path) {
+            Ok(meta) if meta.len() > MAX => {
+                eprintln!("miaotty: {} is too large to preview", path.display());
+                return;
+            }
+            Err(_) => return,
+            _ => {}
+        }
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(_) => return,
+        };
+        let text = String::from_utf8_lossy(&bytes).to_string();
+        self.editor = Some(Editor {
+            path,
+            original: text.clone(),
+            text,
+            readonly: true,
+        });
+    }
+
+    fn editor_window(&mut self, ctx: &egui::Context) {
+        let fg = self.theme.fg;
+        let Some(editor) = self.editor.as_mut() else {
+            return;
+        };
+        let mut open = true;
+        let title = editor
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| editor.path.display().to_string());
+        let dirty = editor.text != editor.original;
+        let mut save = false;
+        let mut reload = false;
+        let mut close = false;
+        egui::Window::new(format!("\u{25a4} {title}"))
+            .open(&mut open)
+            .default_size([640.0, 480.0])
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(editor.path.display().to_string())
+                            .small()
+                            .color(fg),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Close").clicked() {
+                            close = true;
+                        }
+                        if ui
+                            .add_enabled(!editor.readonly && dirty, egui::Button::new("Save"))
+                            .clicked()
+                        {
+                            save = true;
+                        }
+                        if ui.button("Reload").clicked() {
+                            reload = true;
+                        }
+                        let mode = if editor.readonly { "Preview" } else { "Edit" };
+                        if ui.button(mode).clicked() {
+                            editor.readonly = !editor.readonly;
+                        }
+                    });
+                });
+                ui.separator();
+                egui::ScrollArea::both()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::multiline(&mut editor.text)
+                                .code_editor()
+                                .desired_width(f32::INFINITY)
+                                .interactive(!editor.readonly),
+                        );
+                    });
+            });
+        if reload {
+            if let Some(editor) = self.editor.as_mut() {
+                if let Ok(bytes) = std::fs::read(&editor.path) {
+                    editor.text = String::from_utf8_lossy(&bytes).to_string();
+                    editor.original = editor.text.clone();
+                }
+            }
+        }
+        if save {
+            if let Some(editor) = self.editor.as_mut() {
+                match std::fs::write(&editor.path, editor.text.as_bytes()) {
+                    Ok(()) => editor.original = editor.text.clone(),
+                    Err(e) => eprintln!("miaotty: save failed: {e}"),
+                }
+            }
+        }
+        if close {
+            open = false;
+        }
+        if !open {
+            self.editor = None;
+        }
     }
 
     /// The theme background with the configured opacity applied.
@@ -1562,7 +1926,12 @@ impl MiaottyApp {
         ));
         out.push_str("palette = [\n");
         for c in &self.theme.palette {
-            out.push_str(&format!("  \"#{:02x}{:02x}{:02x}\",\n", c.r(), c.g(), c.b()));
+            out.push_str(&format!(
+                "  \"#{:02x}{:02x}{:02x}\",\n",
+                c.r(),
+                c.g(),
+                c.b()
+            ));
         }
         out.push_str("]\n");
 
@@ -1712,8 +2081,7 @@ impl MiaottyApp {
         });
         ui.horizontal_wrapped(|ui| {
             for name in icons::names() {
-                let selected =
-                    rule.icon.as_ref().and_then(|i| i.name.as_deref()) == Some(name);
+                let selected = rule.icon.as_ref().and_then(|i| i.name.as_deref()) == Some(name);
                 let (rect, resp) =
                     ui.allocate_exact_size(egui::Vec2::splat(22.0), egui::Sense::click());
                 let painter = ui.painter();
@@ -1764,7 +2132,10 @@ impl MiaottyApp {
                 ui.horizontal(|ui| {
                     ui.label("Font family");
                     if ui
-                        .add(egui::TextEdit::singleline(&mut self.settings_family).desired_width(180.0))
+                        .add(
+                            egui::TextEdit::singleline(&mut self.settings_family)
+                                .desired_width(180.0),
+                        )
                         .changed()
                     {
                         let trimmed = self.settings_family.trim();
@@ -1793,7 +2164,8 @@ impl MiaottyApp {
                 ui.horizontal(|ui| {
                     ui.label("Cursor");
                     use miao_term_config::CursorStyle::*;
-                    for (label, style) in [("block", Block), ("bar", Bar), ("underline", Underline)] {
+                    for (label, style) in [("block", Block), ("bar", Bar), ("underline", Underline)]
+                    {
                         if ui.button(label).clicked() {
                             self.cursor_style = style;
                             self.mark_all_dirty();
@@ -1963,7 +2335,8 @@ impl MiaottyApp {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("Find").color(fg));
-                    ui.text_edit_singleline(&mut self.find_query).request_focus();
+                    ui.text_edit_singleline(&mut self.find_query)
+                        .request_focus();
                     ui.label(
                         egui::RichText::new(format!("{matches} matches"))
                             .color(egui::Color32::from_gray(150)),
@@ -1985,9 +2358,9 @@ impl MiaottyApp {
                 let rect = ui.available_rect_before_wrap();
                 // Cell size comes from the renderer's own font so glyphs line up.
                 let line_height = (self.font_size * self.line_height_ratio).round();
-                let (cw, ch) = self
-                    .metrics
-                    .cell(self.font_size, line_height, self.font_family.as_deref());
+                let (cw, ch) =
+                    self.metrics
+                        .cell(self.font_size, line_height, self.font_family.as_deref());
                 if cw <= 0.0 || ch <= 0.0 {
                     return;
                 }
@@ -2064,7 +2437,8 @@ impl MiaottyApp {
                     });
                     if pressed {
                         if let Some(p) = pos {
-                            if let Some(h) = handles.iter().find(|h| h.divider.expand(2.0).contains(p))
+                            if let Some(h) =
+                                handles.iter().find(|h| h.divider.expand(2.0).contains(p))
                             {
                                 self.split_drag = Some(h.path.clone());
                             }
@@ -2083,7 +2457,8 @@ impl MiaottyApp {
                         }
                     }
                     if let Some(p) = pos {
-                        if let Some(h) = handles.iter().find(|h| h.divider.expand(2.0).contains(p)) {
+                        if let Some(h) = handles.iter().find(|h| h.divider.expand(2.0).contains(p))
+                        {
                             ctx.set_cursor_icon(match h.dir {
                                 SplitDir::Right => egui::CursorIcon::ResizeHorizontal,
                                 SplitDir::Down => egui::CursorIcon::ResizeVertical,
@@ -2257,10 +2632,10 @@ impl MiaottyApp {
                     });
                     if copied {
                         let (r1, c1, r2, c2) = ordered(sel);
-                    let text = self.tabs[ti].panes[pi]
-                        .term
-                        .screen()
-                        .contents_between(r1, c1, r2, c2);
+                        let text = self.tabs[ti].panes[pi]
+                            .term
+                            .screen()
+                            .contents_between(r1, c1, r2, c2);
                         if !text.is_empty() {
                             ctx.copy_text(text);
                         }
@@ -2289,9 +2664,7 @@ impl MiaottyApp {
             );
             if focused && !self.find_query.is_empty() {
                 let painter = ui.painter_at(rect);
-                for (frow, start, end) in
-                    find_matches(screen, &self.find_query.to_lowercase())
-                {
+                for (frow, start, end) in find_matches(screen, &self.find_query.to_lowercase()) {
                     for col in start..end.min(cols) {
                         let r = egui::Rect::from_min_size(
                             egui::pos2(
@@ -2304,13 +2677,12 @@ impl MiaottyApp {
                     }
                 }
             }
-            let cursor_cell = if draw_cursor
-                && self.cursor_style == miao_term_config::CursorStyle::Block
-            {
-                Some(screen.cursor_position())
-            } else {
-                None
-            };
+            let cursor_cell =
+                if draw_cursor && self.cursor_style == miao_term_config::CursorStyle::Block {
+                    Some(screen.cursor_position())
+                } else {
+                    None
+                };
             if pane.dirty {
                 pane.rows = Arc::new(build_rows(screen, &self.theme, cursor_cell));
                 pane.dirty = false;
@@ -2470,10 +2842,8 @@ fn draw_screen(
         let thumb = (track * rows as f32 / total).max(16.0);
         let pos = screen.scroll_offset() as f32 / scrollback as f32;
         let y = rect.top() + (track - thumb) * (1.0 - pos);
-        let bar = egui::Rect::from_min_size(
-            egui::pos2(rect.right() - 6.0, y),
-            egui::vec2(4.0, thumb),
-        );
+        let bar =
+            egui::Rect::from_min_size(egui::pos2(rect.right() - 6.0, y), egui::vec2(4.0, thumb));
         painter.rect_filled(bar, egui::Rounding::ZERO, egui::Color32::from_gray(110));
     }
 }
@@ -2591,11 +2961,32 @@ impl egui_wgpu::CallbackTrait for TermCallback {
 fn ctrl_byte(key: egui::Key) -> Option<u8> {
     use egui::Key::*;
     Some(match key {
-        A => 0x01, B => 0x02, C => 0x03, D => 0x04, E => 0x05, F => 0x06,
-        G => 0x07, H => 0x08, I => 0x09, J => 0x0a, K => 0x0b, L => 0x0c,
-        M => 0x0d, N => 0x0e, O => 0x0f, P => 0x10, Q => 0x11, R => 0x12,
-        S => 0x13, T => 0x14, U => 0x15, V => 0x16, W => 0x17, X => 0x18,
-        Y => 0x19, Z => 0x1a,
+        A => 0x01,
+        B => 0x02,
+        C => 0x03,
+        D => 0x04,
+        E => 0x05,
+        F => 0x06,
+        G => 0x07,
+        H => 0x08,
+        I => 0x09,
+        J => 0x0a,
+        K => 0x0b,
+        L => 0x0c,
+        M => 0x0d,
+        N => 0x0e,
+        O => 0x0f,
+        P => 0x10,
+        Q => 0x11,
+        R => 0x12,
+        S => 0x13,
+        T => 0x14,
+        U => 0x15,
+        V => 0x16,
+        W => 0x17,
+        X => 0x18,
+        Y => 0x19,
+        Z => 0x1a,
         _ => return None,
     })
 }
