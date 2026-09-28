@@ -9,6 +9,7 @@ font-size = 14
 # notifications = true             # system notification when an agent needs attention
 # prevent-sleep = true             # keep the machine awake while an agent is processing
 
+# editor = "code --wait"            # command used by "Edit in Tab"
 # language = "zh"                  # UI language ("en" default; also reads $LANG)
 # update-check-url = "https://example.com/miaotty/latest.txt"  # first line = version
 

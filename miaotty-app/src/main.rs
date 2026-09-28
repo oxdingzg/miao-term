@@ -652,6 +652,7 @@ struct MiaottyApp {
     quick_return: Option<usize>,
     ssh_ui: Option<SshDialog>,
     integration_msg: Option<String>,
+    external_editor: Option<String>,
     lang: i18n::Lang,
     update_config: Option<String>,
     update_rx: Option<std::sync::mpsc::Receiver<String>>,
@@ -817,6 +818,7 @@ impl MiaottyApp {
             quick_return: None,
             ssh_ui: None,
             integration_msg: None,
+            external_editor: cfg.editor.clone(),
             lang: i18n::Lang::resolve(cfg.language.as_deref()),
             update_config: cfg.update_check_url.clone(),
             update_rx: None,
@@ -1861,16 +1863,35 @@ fn link_segments(line: &str) -> Vec<(String, Option<String>)> {
 
 fn markdown_ui(ui: &mut egui::Ui, text: &str, fg: egui::Color32) {
     let muted = egui::Color32::from_gray(150);
+    let lines: Vec<&str> = text.lines().collect();
+    let mut grid = 0usize;
+    let mut i = 0;
     let mut in_code = false;
-    for line in text.lines() {
+    while i < lines.len() {
+        let line = lines[i];
         let trimmed = line.trim_start();
         if trimmed.starts_with("```") {
             in_code = !in_code;
             ui.label(egui::RichText::new(line).monospace().color(muted));
+            i += 1;
             continue;
         }
         if in_code {
             ui.label(egui::RichText::new(line).monospace().color(fg));
+            i += 1;
+            continue;
+        }
+        if line.contains('|') && i + 1 < lines.len() && is_table_sep(lines[i + 1]) {
+            let header = split_row(line);
+            let aligns = table_align(lines[i + 1]);
+            i += 2;
+            let mut rows = Vec::new();
+            while i < lines.len() && lines[i].contains('|') && !lines[i].trim().is_empty() {
+                rows.push(split_row(lines[i]));
+                i += 1;
+            }
+            render_table(ui, grid, &header, &rows, &aligns, fg);
+            grid += 1;
             continue;
         }
         if is_rule(line) {
@@ -1918,6 +1939,90 @@ fn markdown_ui(ui: &mut egui::Ui, text: &str, fg: egui::Color32) {
             } else {
                 ui.label(egui::RichText::new(strip_inline(line)).color(fg));
             }
+        }
+        i += 1;
+    }
+}
+
+/// Whether a line is a Markdown table separator (`---|:--:|---`).
+fn is_table_sep(line: &str) -> bool {
+    let t = line.trim();
+    t.contains('-') && t.chars().all(|c| matches!(c, '|' | '-' | ':' | ' '))
+}
+
+/// Split a table row on `|`, trimming the outer pipes and whitespace.
+fn split_row(line: &str) -> Vec<String> {
+    line.trim()
+        .trim_matches('|')
+        .split('|')
+        .map(|c| c.trim().to_string())
+        .collect()
+}
+
+/// Per-column alignment from a separator row.
+fn table_align(sep: &str) -> Vec<egui::Align> {
+    split_row(sep)
+        .iter()
+        .map(|c| {
+            let left = c.starts_with(':');
+            let right = c.ends_with(':');
+            match (left, right) {
+                (true, true) => egui::Align::Center,
+                (false, true) => egui::Align::RIGHT,
+                _ => egui::Align::LEFT,
+            }
+        })
+        .collect()
+}
+
+fn render_table(
+    ui: &mut egui::Ui,
+    index: usize,
+    header: &[String],
+    rows: &[Vec<String>],
+    aligns: &[egui::Align],
+    fg: egui::Color32,
+) {
+    let align_of = |c: usize| aligns.get(c).copied().unwrap_or(egui::Align::LEFT);
+    egui::Grid::new(format!("mdtable{index}"))
+        .striped(true)
+        .spacing([14.0, 3.0])
+        .show(ui, |ui| {
+            for (c, cell) in header.iter().enumerate() {
+                align_cell(
+                    ui,
+                    egui::RichText::new(strip_inline(cell)).strong().color(fg),
+                    align_of(c),
+                );
+            }
+            ui.end_row();
+            for row in rows {
+                for (c, cell) in row.iter().enumerate() {
+                    align_cell(
+                        ui,
+                        egui::RichText::new(strip_inline(cell)).color(fg),
+                        align_of(c),
+                    );
+                }
+                ui.end_row();
+            }
+        });
+}
+
+fn align_cell(ui: &mut egui::Ui, text: egui::RichText, align: egui::Align) {
+    match align {
+        egui::Align::RIGHT => {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(text);
+            });
+        }
+        egui::Align::Center => {
+            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                ui.label(text);
+            });
+        }
+        _ => {
+            ui.label(text);
         }
     }
 }
@@ -3028,9 +3133,14 @@ impl MiaottyApp {
             }
         }
         if edit_tab {
+            let editor_cmd = self
+                .external_editor
+                .clone()
+                .unwrap_or_else(|| "${EDITOR:-vi}".to_string());
             let cmd = self.editor.as_ref().map(|e| {
                 format!(
-                    "${{EDITOR:-vi}} {}",
+                    "{} {}",
+                    editor_cmd,
                     ssh::shell_quote(&e.path.display().to_string())
                 )
             });
@@ -4590,6 +4700,21 @@ mod session_tests {
         let back: TabSession = serde_json::from_str(&json).unwrap();
         assert_eq!(back.prefix.as_deref(), Some("[w]"));
         assert_eq!(back.group.as_deref(), Some("g"));
+    }
+
+    #[test]
+    fn markdown_tables() {
+        assert!(is_table_sep("| --- | :--: |"));
+        assert!(is_table_sep("|---|"));
+        assert!(!is_table_sep("| a | b |"));
+        assert_eq!(
+            split_row("| a | b |"),
+            vec!["a".to_string(), "b".to_string()]
+        );
+        assert_eq!(
+            table_align("|:--|--:|:-:|"),
+            vec![egui::Align::LEFT, egui::Align::RIGHT, egui::Align::Center]
+        );
     }
 
     #[test]
