@@ -105,6 +105,38 @@ impl Theme {
 }
 
 const SELECTION: egui::Color32 = egui::Color32::from_rgba_premultiplied(0x81, 0xa1, 0xc1, 0x55);
+const FIND: egui::Color32 = egui::Color32::from_rgba_premultiplied(0xeb, 0xcb, 0x8b, 0x77);
+
+/// Case-insensitive matches of `query_lower` per row, as `(row, start_col, end_col)`.
+fn find_matches(screen: &vt100::Screen, query_lower: &str) -> Vec<(u16, u16, u16)> {
+    let mut out = Vec::new();
+    if query_lower.is_empty() {
+        return out;
+    }
+    let (rows, cols) = screen.size();
+    for row in 0..rows {
+        let mut line = String::new();
+        for col in 0..cols {
+            match screen.cell(row, col) {
+                Some(cell) if !cell.contents().is_empty() => line.push_str(cell.contents()),
+                _ => line.push(' '),
+            }
+        }
+        let lower = line.to_lowercase();
+        let qlen = query_lower.chars().count().max(1);
+        let mut from = 0;
+        while let Some(pos) = lower[from..].find(query_lower) {
+            let start = from + pos;
+            let end = start + qlen;
+            out.push((row, start as u16, end as u16));
+            from = end;
+            if from > lower.len() {
+                break;
+            }
+        }
+    }
+    out
+}
 
 fn map_color(color: vt100::Color, foreground: bool, theme: &Theme) -> egui::Color32 {
     match color {
@@ -252,6 +284,8 @@ struct MiaottyApp {
     renaming: Option<usize>,
     rename_buf: String,
     last_title: Option<String>,
+    find_open: bool,
+    find_query: String,
 }
 
 impl MiaottyApp {
@@ -272,6 +306,8 @@ impl MiaottyApp {
             renaming: None,
             rename_buf: String::new(),
             last_title: None,
+            find_open: false,
+            find_query: String::new(),
         };
         app.push_tab("shell".to_owned(), 100, 30, None);
         app
@@ -559,6 +595,9 @@ impl eframe::App for MiaottyApp {
             ctx.request_repaint_after(Duration::from_millis(530));
         }
 
+        if self.find_open {
+            self.find_bar(ctx);
+        }
         self.sidebar(ctx);
         if self.show_details {
             self.details_panel(ctx);
@@ -799,6 +838,40 @@ impl MiaottyApp {
             });
     }
 
+    fn find_bar(&mut self, ctx: &egui::Context) {
+        let query = self.find_query.to_lowercase();
+        let matches = self
+            .tabs
+            .get(self.active)
+            .and_then(|t| t.focused())
+            .map(|p| find_matches(p.term.screen(), &query).len())
+            .unwrap_or(0);
+        let fg = self.theme.fg;
+        let mut open = true;
+        egui::TopBottomPanel::top("find")
+            .frame(
+                egui::Frame::default()
+                    .fill(self.theme.bg)
+                    .inner_margin(egui::Margin::same(4.0)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Find").color(fg));
+                    ui.text_edit_singleline(&mut self.find_query).request_focus();
+                    ui.label(
+                        egui::RichText::new(format!("{matches} matches"))
+                            .color(egui::Color32::from_gray(150)),
+                    );
+                    if ui.button("Close").clicked() {
+                        open = false;
+                    }
+                });
+            });
+        if !open {
+            self.find_open = false;
+        }
+    }
+
     fn terminal_panel(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
             .frame(egui::Frame::default().fill(self.theme.bg))
@@ -836,6 +909,7 @@ impl MiaottyApp {
                                     (egui::Key::ArrowLeft, _, true) => self.focus_cycle(false),
                                     (egui::Key::CloseBracket, _, _) => self.focus_cycle(true),
                                     (egui::Key::OpenBracket, _, _) => self.focus_cycle(false),
+                                    (egui::Key::F, _, _) => self.find_open = !self.find_open,
                                     (egui::Key::Plus, _, _) | (egui::Key::Equals, _, _) => {
                                         self.font_size += 1.0
                                     }
@@ -1038,6 +1112,23 @@ impl MiaottyApp {
                 &self.theme,
                 draw_cursor,
             );
+            if focused && !self.find_query.is_empty() {
+                let painter = ui.painter_at(rect);
+                for (frow, start, end) in
+                    find_matches(screen, &self.find_query.to_lowercase())
+                {
+                    for col in start..end.min(cols) {
+                        let r = egui::Rect::from_min_size(
+                            egui::pos2(
+                                rect.left() + col as f32 * cw,
+                                rect.top() + frow as f32 * ch,
+                            ),
+                            egui::vec2(cw, ch),
+                        );
+                        painter.rect_filled(r, egui::Rounding::ZERO, FIND);
+                    }
+                }
+            }
             let cursor_cell = if draw_cursor {
                 Some(screen.cursor_position())
             } else {

@@ -15,6 +15,7 @@
 - 分屏:递归分屏树(任意数量 pane),`⌘D`(右侧)/`⇧⌘D`(下方),点击切换焦点,`⌘W` 关闭当前 pane。
 - 右侧 details 面板:Info(工作目录 + 复制路径 / 在访达中显示)、Agent 状态、Outline(每 pane 命令历史)。
 - 选区(拖拽 + 双击选词)、复制粘贴、回滚(滚轮 + Shift+PgUp/PgDn)。
+- 查找(`⌘F`,匹配高亮 + 计数)。
 - 宽字符/中日韩排版 + 系统 CJK 字体回退。
 - Unix socket 上的 MTP 控制面:`core.ping/health`、`agent.state.*`、`history.*`、`pane.list`、
   `pane.send/run`、`pane.focus/close` —— 与现有 `miaotty-cli` 互通。
@@ -30,7 +31,7 @@
 `dist-workspace.toml` 是 cargo-dist 脚手架。见 [`docs/INSTALL.zh-CN.md`](docs/INSTALL.zh-CN.md)。
 
 快捷键:`⌘T` 新建标签、`⌘W` 关 pane/标签、`⌘D`/`⇧⌘D` 分屏、`⌥⌘→`/`⌥⌘←`(或 `⌘⇧[`/`⌘⇧]`)轮换 pane、
-`⌥⌘D` 开关 details、`⌘+`/`⌘-`/`⌘0` 字号。
+`⌥⌘D` 开关 details、`⌘F` 查找、`⌘+`/`⌘-`/`⌘0` 字号。
 
 尚未完成:Windows 命名管道传输 + ConPTY 实测、打包(MSI/AppImage/公证),
 以及渲染器进一步打磨(damage 上传、图集 trim)。

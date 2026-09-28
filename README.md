@@ -20,6 +20,7 @@ the `miaotty` application built on top of it.
 - Right details panel: Info (working directory + Copy Path / Reveal in Finder),
   Agent state, Outline (per-pane command history).
 - Selection (drag + double-click word), copy/paste, scrollback (wheel + Shift+PgUp/PgDn).
+- Find (`⌘F`) with match highlighting and a count.
 - Wide/CJK layout and a system CJK font fallback.
 - MTP control plane over a Unix socket: `core.ping/health`, `agent.state.*`,
   `history.*`, `pane.list`, `pane.send/run`, `pane.focus/close` — interoperates
@@ -37,7 +38,8 @@ Packaging: `scripts/package-macos.sh` builds an ad-hoc-signed `dist/miaotty.app`
 `dist-workspace.toml` is a cargo-dist scaffold. See [`docs/INSTALL.md`](docs/INSTALL.md).
 
 Keyboard: `⌘T` new tab, `⌘W` close pane/tab, `⌘D`/`⇧⌘D` split, `⌥⌘→`/`⌥⌘←`
-(or `⌘⇧[`/`⌘⇧]`) cycle panes, `⌥⌘D` toggle details, `⌘+`/`⌘-`/`⌘0` font size.
+(or `⌘⇧[`/`⌘⇧]`) cycle panes, `⌥⌘D` toggle details, `⌘F` find,
+`⌘+`/`⌘-`/`⌘0` font size.
 
 Not yet: Windows named-pipe transport + ConPTY testing, packaging
 (MSI/AppImage/notarize), and further renderer hardening (damage uploads, atlas
