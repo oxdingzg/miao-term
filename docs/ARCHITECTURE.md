@@ -1,72 +1,81 @@
-# miao-term 架构规格
+# miao-term Architecture
 
-> 跨平台(macOS / Linux / Windows)终端**引擎** + `miaotty` 应用的整体架构。
-> 本文是**实现前的定稿设计**;所有"锁定"条目即为决策,变更须走 `docs/decisions/` 的 ADR。
+> A cross-platform (macOS / Linux / Windows) terminal **engine** plus the `miaotty`
+> application built on it.
+> This is the pre-implementation design. **Locked** items are decisions; changing
+> one requires an ADR under `docs/decisions/`.
+> 简体中文版: [`ARCHITECTURE.zh-CN.md`](ARCHITECTURE.zh-CN.md).
 
-## 0. 范围与一句话
+## 0. Scope, in one sentence
 
-一句话:**`portable-pty` + `alacritty_terminal` + `vte` 做内核,`winit` + `wgpu` 做窗口与绘制,终端网格自绘、周边 UI 用 egui;引擎(`miao-term-*`)与应用(`miaotty-app`)分离,控制面(MTP)与引擎解耦。**
+**`portable-pty` + `alacritty_terminal` + `vte` as the core, `winit` + `wgpu` for the
+window and drawing, the terminal grid self-drawn and the surrounding UI in egui; the
+engine (`miao-term-*`) is separate from the app (`miaotty-app`), and the control plane
+(MTP) is decoupled from the engine.**
 
-## 1. 目标 · 非目标 · 约束
+## 1. Goals · Non-goals · Constraints
 
-**目标**
-- 三平台同一套代码,含 **Windows(ConPTY)**。
-- 热路径性能对齐 Alacritty 量级:输入延迟 P95 ≤ 16ms(目标 ≤ 8ms)、首帧 ≤ 100ms、滚动不丢帧、空闲 CPU ≈ 0。
-- 引擎可被第三方嵌入(`examples/` 证明);`miaotty-app` 是第一个消费者。
-- 复用现有控制面:`mtp` 类型、`miaotty-cli`、插件、agent/shell hooks。
+**Goals**
+- One codebase on three platforms, **including Windows (ConPTY)**.
+- Hot-path performance at Alacritty's level: input latency P95 ≤ 16 ms (target ≤ 8 ms),
+  first frame ≤ 100 ms, no dropped frames while scrolling, idle CPU ≈ 0.
+- The engine is embeddable (`examples/` proves it); `miaotty-app` is its first consumer.
+- Reuse the existing control plane: `mtp` types, `miaotty-cli`, plugins, agent/shell hooks.
 
-**非目标(现阶段)**
-- 复刻 Ghostty 的渲染精细度与配置生态;macOS 专属集成(AppleScript/Sparkle)。
-- 插件市场/"框架"级扩展;SSH/远程访问;跨机同步。
+**Non-goals (for now)**
+- Matching Ghostty's rendering polish or config ecosystem; macOS-only integrations
+  (AppleScript/Sparkle).
+- A plugin marketplace / "framework"-level extension system; SSH/remote access; cross-device sync.
 
-**约束**
-- 依赖只用宽松许可(Apache-2.0/MIT/BSD/ISC);**引擎内禁止 GPL/AGPL**(如 Pebrel 只能读、不能抄)。
-- 每增加一个外部 crate 都要过性能与许可审查。
-- Rust stable,MSRV 见 `rust-toolchain.toml`。
+**Constraints**
+- Permissive licenses only (Apache-2.0/MIT/BSD/ISC); **no GPL/AGPL inside the engine**
+  (e.g. Pebrel is read-only reference, never copied).
+- Every new external crate passes a performance and license review.
+- Rust stable; MSRV in `rust-toolchain.toml`.
 
-## 2. 锁定决策(摘要)
+## 2. Locked decisions (summary)
 
-| # | 决策 | 理由 |
-|---|------|------|
-| D1 | 内核用 `alacritty_terminal` + `vte` + `portable-pty` | 最成熟、跨平台(含 ConPTY)、Otty 同款、许可宽松 |
-| D2 | 渲染自绘于 `wgpu`(字形用 `glyphon`/`cosmic-text`/`swash`) | 性能可控;跨 Metal/Vulkan/DX12 |
-| D3 | 周边 UI(面板/设置)用 `egui`,与终端**共用同一帧** | 开发速度 + 终端走自绘,两全 |
-| D4 | **自研 tab/split 模型**(非 OS 原生标签) | 跨平台一致;对齐 Otty;可控 |
-| D5 | 并发用 **Alacritty 同款的锁纪律**(`FairMutex<Term>` + `EventListener`) | 已验证,避免自造快照协议 |
-| D6 | 平台差异只出现在 `core::pty` / `widget::platform` / `mtp::transport` | 收敛复杂度 |
-| D7 | 控制面 `term-mtp` 与引擎解耦(Unix socket / Windows named pipe) | 引擎崩不拖垮 CLI;复用现有协议 |
-| D8 | 先做 app、后抽库;扩展点分阶段 | 由真实需求驱动 API |
-| D9 | 引擎 crate 双许可 `MIT OR Apache-2.0` | 便于被嵌 |
+| # | Decision | Rationale |
+|---|----------|-----------|
+| D1 | Core uses `alacritty_terminal` + `vte` + `portable-pty` | Most mature, cross-platform (incl. ConPTY), same as Otty, permissive |
+| D2 | Self-drawn rendering on `wgpu` (glyphs via `glyphon`/`cosmic-text`/`swash`) | Controllable performance; Metal/Vulkan/DX12 |
+| D3 | Surrounding UI (panels/settings) uses `egui`, **co-rendered in one frame** with the terminal | Dev speed + a fast self-drawn terminal |
+| D4 | **Own tab/split model** (not OS-native tabs) | Cross-platform consistency; matches Otty; controllable |
+| D5 | Concurrency per **Alacritty's lock discipline** (`FairMutex<Term>` + `EventListener`) | Proven; avoids inventing a snapshot protocol |
+| D6 | Platform differences only in `core::pty` / `widget::platform` / `mtp::transport` | Contain complexity |
+| D7 | `term-mtp` decoupled from the engine (Unix socket / Windows named pipe) | A crash in one doesn't take down the other; reuse the protocol |
+| D8 | Build the app first, extract the library later; phase the extension points | Real needs drive the API |
+| D9 | Engine crates dual-licensed `MIT OR Apache-2.0` | Easy to embed |
 
-## 3. 依赖分层(DAG)与规则
+## 3. Layering (DAG) and rules
 
 ```
-            term-config      term-mtp          (独立,无引擎依赖)
+            term-config      term-mtp          (independent, no engine deps)
                  │               │
    term-core ──► term-render ──► term-widget
         ▲                                ▲
-        └──────────── miaotty-app ───────┘   (依赖全部)
+        └──────────── miaotty-app ───────┘   (depends on all)
 ```
 
-**规则(CI 强制)**
-- 依赖只能"由外向内":`widget → render → core`;`core` 不反向依赖任何引擎内其它 crate。
-- `core` 不依赖 `wgpu`/`winit`/`egui`(**可无 GPU 编译**);`render` 不依赖 `winit`。
-- `config`/`mtp` 不依赖渲染与窗口。
-- 应用层依赖引擎;引擎**绝不**依赖应用层。
-- 用 `cargo-deny` 查许可/漏洞,`cargo-machete` 查未用依赖。
+**Rules (enforced in CI)**
+- Dependencies point inward only: `widget → render → core`; `core` depends on no other engine crate.
+- `core` must not depend on `wgpu`/`winit`/`egui` (**it must build without a GPU**); `render` must not depend on `winit`.
+- `config`/`mtp` must not depend on rendering or windowing.
+- The app depends on the engine; the engine **never** depends on the app.
+- `cargo-deny` for licenses/advisories; `cargo-machete` for unused deps.
 
-## 4. crate / 模块职责矩阵
+## 4. Crate / module responsibilities
 
-| crate | 职责(做什么) | 明确不做 |
-|-------|--------------|----------|
-| `term-core` | PTY、vte 解析、网格/回滚/光标/模式、选区/查找、OSC/CSI 语义、键鼠→字节编码、事件(`EventSink`) | 不碰 GPU/窗口/配置/业务 |
-| `term-render` | 字形加载/shaping/图集、网格实例化、绘制 pass、damage 增量 | 不管事件循环/输入 |
-| `term-widget` | winit 事件循环、wgpu surface、输入/IME/剪贴板/拖放、egui 组合、`Host` 回调 | 不含 tab/面板业务 |
-| `term-config` | 配置模型、主题、ghostty/alacritty 导入 | 不依赖 UI |
-| `term-mtp` | 协议信封、传输、server/client、agent/history 注册表、事件订阅 | 不依赖引擎 |
-| `miaotty-app` | 窗口/tab/split、左 Tabs、右 Details、徽章、设置、系统集成、hook 安装 | 不重复实现终端内核 |
+| Crate | Does | Does not |
+|-------|------|----------|
+| `term-core` | PTY, vte parsing, grid/scrollback/cursor/modes, selection/search, OSC/CSI semantics, key/mouse→bytes encoding, events (`EventSink`) | No GPU/window/config/business logic |
+| `term-render` | Font load/shaping/atlas, grid instancing, draw passes, damage increments | No event loop/input |
+| `term-widget` | winit event loop, wgpu surface, input/IME/clipboard/drag-drop, egui composition, `Host` callbacks | No tab/panel business |
+| `term-config` | Config model, themes, ghostty/alacritty import | No UI |
+| `term-mtp` | Protocol envelope, transport, server/client, agent/history registries, subscriptions | No engine dependency |
+| `miaotty-app` | Windows/tabs/splits, left Tabs, right Details, badges, settings, OS integration, hook install | No terminal core duplication |
 
-## 5. 核心类型与 trait(Rust 草图)
+## 5. Core types and traits (Rust sketch)
 
 ```rust
 // ---- term-core ----
@@ -77,15 +86,15 @@ pub enum TermEvent {
     Title(String), Cwd(PathBuf), Bell, Progress(Progress),
     ClipboardStore(String), ClipboardLoad(u8),
     PromptStart, CommandStart, CommandDone(i32),     // OSC 133
-    PtyWrite(Vec<u8>), PtyExit(i32, Option<i32>),    // 需由宿主写回 PTY / 关闭
-    Wakeup,                                          // 有新输出 → 需要重绘
+    PtyWrite(Vec<u8>), PtyExit(i32, Option<i32>),
+    Wakeup,                                          // new output → needs redraw
 }
 pub trait EventSink: Send + 'static { fn send(&self, e: TermEvent); }
 
 pub trait Pty: Send {
     fn write(&self, bytes: &[u8]) -> io::Result<()>;
     fn resize(&self, cols: u16, rows: u16) -> io::Result<()>;
-    fn reader(&self) -> io::Result<Box<dyn Read + Send>>;  // 读线程持有
+    fn reader(&self) -> io::Result<Box<dyn Read + Send>>;  // owned by the reader thread
 }
 
 pub trait InputEncoder { fn encode(&self, ev: &InputEvent) -> Vec<u8>; }
@@ -93,8 +102,8 @@ pub trait InputEncoder { fn encode(&self, ev: &InputEvent) -> Vec<u8>; }
 // ---- term-render ----
 pub struct GlyphAtlas { /* R8 texture + LRU */ }
 pub trait Renderer {
-    fn update(&mut self, term: &Term, damage: Damage);          // 组实例(短锁)
-    fn render(&mut self, frame: &mut wgpu::RenderPass);         // 提交 GPU
+    fn update(&mut self, term: &Term, damage: Damage);   // build instances (short lock)
+    fn render(&mut self, frame: &mut wgpu::RenderPass);  // submit to GPU
 }
 
 // ---- term-widget ----
@@ -107,152 +116,171 @@ pub trait Host: Send + Sync {
 }
 ```
 
-## 6. 线程模型与锁纪律
+## 6. Threading model and lock discipline
 
-采用 Alacritty 验证过的模型(`FairMutex<Term>` + `EventListener`),不自定义快照协议。
+Use Alacritty's proven model (`FairMutex<Term>` + `EventListener`); do not invent a snapshot protocol.
 
 ```
-┌─ PTY 读线程 ───────────────────────────┐     ┌─ 主线程(winit 事件循环) ─────────────┐
+┌─ PTY reader thread ────────────────────┐     ┌─ main thread (winit loop) ────────────┐
 │ loop read():                           │     │ winit event:                          │
 │   lock(term) { vte.process(chunk) }    │     │   Keyboard/IME → core::input → pty    │
-│   标 Damage; sink.send(Wakeup)         │     │   RedrawRequested:                    │
-│   （锁仅覆盖解析,不含 I/O 与 GPU）      │     │     lock(term){ renderer.update }     │
+│   mark Damage; sink.send(Wakeup)       │     │   RedrawRequested:                    │
+│   (lock covers parsing only)           │     │     lock(term){ renderer.update }     │
 └────────────────────────────────────────┘     │     renderer.render(frame); present   │
                                                └───────────────────────────────────────┘
 ```
 
-**不变量**
-1. `Term` 的锁**只**覆盖"解析一段字节"或"构建渲染实例",**绝不**跨越 `read()`/`write()`/GPU submit。
-2. PTY 读线程**独占** reader;写走独立句柄(`Pty::write`),避免读写互相阻塞(Windows ConPTY 尤其)。
-3. 空闲时无轮询;只有 `Wakeup`/输入/定时器(光标眨眼)才请求重绘。
-4. resize:主线程算 `cols/rows` → `Pty::resize`;`Term` 同步 resize。
-5. 退出码以 **OSC 133;D** 为准(ConPTY/包装进程下进程码不可信)。
+**Invariants**
+1. The `Term` lock covers **only** "parse one chunk" or "build render instances" — it never
+   spans `read()`/`write()`/GPU submit.
+2. The PTY reader thread **owns** the reader; writes use a separate handle (`Pty::write`) so
+   reads and writes don't block each other (especially ConPTY).
+3. No polling when idle; redraw is requested only by `Wakeup` / input / the cursor-blink timer.
+4. Resize: the main thread computes `cols/rows` → `Pty::resize`; `Term` resizes in sync.
+5. Exit status comes from **OSC 133;D**, not the process exit code (unreliable under ConPTY/wrappers).
 
-## 7. 数据流
+## 7. Data flow
 
-- **输出**:PTY → 读线程 → `vte` → `Term`(+OSC→`TermEvent`)→ `Wakeup` → 主线程渲染。
-- **输入**:winit 键/鼠/IME → `core::input` 编码 → `Pty::write`;选区/粘贴走 bracketed paste 模式。
-- **控制**:`term-mtp` server 独立线程;进程内 UI 直连注册表,外部 CLI/插件走 socket/pipe。
-- **元数据**:cwd(OSC 7)、标题、agent 状态、命令历史 → 事件/注册表 → 面板订阅。
+- **Output**: PTY → reader thread → `vte` → `Term` (+OSC → `TermEvent`) → `Wakeup` → main-thread render.
+- **Input**: winit key/mouse/IME → `core::input` encode → `Pty::write`; selection/paste honor bracketed-paste mode.
+- **Control**: the `term-mtp` server runs on its own thread; in-process UI talks to the registries directly,
+  external CLI/plugins go over the socket/pipe.
+- **Metadata**: cwd (OSC 7), title, agent state, command history → events/registries → panel subscriptions.
 
-## 8. 渲染架构(term-render)
+## 8. Rendering (term-render)
 
-1. **字形**:`cosmic-text` 解析/回退,`swash` 光栅化 → **R8 图集**(shelf packing,LRU;键 `(glyph_id, style, px, subpixel)`).
-2. **实例化**:每个 Cell → quads(bg / glyph / underline / strike / cursor / selection);实例缓冲按脏行增量更新。
-3. **Pass**:`bg`(纯色/主题)→ `glyph`(图集采样)→ `cursor/decoration`;透明度/背景图后置。
-4. **Present**:优先 `Mailbox`(低延迟),掉帧回退 `Fifo`;光标杆眨眼用定时器。
-5. **与 egui 组合**:egui 驱动整帧,终端通过 `egui-wgpu` 的 **`PaintCallback`** 在自己的矩形内绘制(独立 pipeline,复用同一 `wgpu::Device/Queue/Surface`)。
-6. **优化顺序**:全量重建 → 脏行 → 图集命中 → 去 per-frame 分配;用 `tracy`/`puffin` 标注热点。
+1. **Glyphs**: `cosmic-text` resolve/fallback, `swash` rasterize → **R8 atlas** (shelf packing, LRU;
+   key `(glyph_id, style, px, subpixel)`).
+2. **Instancing**: each cell → quads (bg / glyph / underline / strike / cursor / selection); instance
+   buffers update by dirty lines only.
+3. **Passes**: `bg` (theme color) → `glyph` (atlas sample) → `cursor/decoration`; opacity/background image later.
+4. **Present**: prefer `Mailbox` (low latency), fall back to `Fifo` on frame drops; cursor blink via a timer.
+5. **Composition with egui**: egui drives the frame; the terminal draws its own rect via an
+   `egui-wgpu` **`PaintCallback`** (separate pipeline, shared `wgpu::Device/Queue/Surface`).
+6. **Optimization order**: full rebuild → dirty lines → atlas hits → zero per-frame allocation;
+   annotate hot spots with `tracy`/`puffin`.
 
-## 9. 终端模型(term-core)
+## 9. Terminal model (term-core)
 
-- 网格:Cell{char + 组合 + fg/bg/attrs + underline 样式};回滚环形缓冲;reflow(宽窗口)。
-- 模式:应用光标键、bracketed paste、鼠标上报、alternate screen、kitty keyboard(CSI u)、焦点上报。
-- 语义:标题、超链接(OSC 8)、cwd(OSC 7)、进度(OSC 9;4)、shell 集成标记(OSC 133 A/B/C/D)。
-- 选区/查找:行/块选区、词边界(CJK/grapheme 用 `unicode-width` + grapheme 边界)、搜索高亮。
-- 图形协议(kitty graphics / sixel / iTerm2)列为 R1+ 增量,不在 R0。
+- Grid: `Cell { char + combining + fg/bg/attrs + underline style }`; ring scrollback; reflow.
+- Modes: application cursor keys, bracketed paste, mouse reporting, alternate screen, kitty keyboard
+  (CSI u), focus reporting.
+- Semantics: title, hyperlinks (OSC 8), cwd (OSC 7), progress (OSC 9;4), shell-integration markers
+  (OSC 133 A/B/C/D).
+- Selection/search: line/block, word boundaries (CJK/grapheme via `unicode-width` + grapheme
+  boundaries), search highlight.
+- Graphics protocols (kitty graphics / sixel / iTerm2) are R1+ increments, not R0.
 
-## 10. 平台抽象层
+## 10. Platform abstraction layer
 
-| 关注点 | 抽象 | macOS/Linux | Windows |
-|--------|------|-------------|---------|
+| Concern | Abstraction | macOS/Linux | Windows |
+|---------|-------------|-------------|---------|
 | PTY | `trait Pty` | `forkpty` | **ConPTY** |
-| 传输 | `mtp::transport` | Unix socket | `\\.\pipe\miaotty` |
-| 剪贴板 | `trait Clipboard` | NSPasteboard / X11-Wayland | Win32 clipboard |
-| 字体 | `term-render::font` | CoreText / fontconfig | DirectWrite(`font-kit`) |
-| IME | `widget::input` | 原生 | **TSF**(风险最高,见 §19) |
+| Transport | `mtp::transport` | Unix socket | `\\.\pipe\miaotty` |
+| Clipboard | `trait Clipboard` | NSPasteboard / X11-Wayland | Win32 clipboard |
+| Fonts | `term-render::font` | CoreText / fontconfig | DirectWrite (`font-kit`) |
+| IME | `widget::input` | native | **TSF** (highest risk, see §19) |
 
-`#[cfg(...)]` **只允许**出现在上表对应模块内;其余代码保持平台无关。
+`#[cfg(...)]` is **only** allowed in the modules above; all other code stays platform-neutral.
 
-## 11. 配置 / 主题
+## 11. Config / themes
 
-- `term-config`:自有 TOML;键名对齐 ghostty/alacritty 以便导入。
-- 默认观感对齐 Otty(Nord 背景 `#2e3440`、字号 14),可覆盖。
-- 主题:内置常用主题 + 自定义调色板;后续支持背景图/透明度。
+- `term-config`: its own TOML; keys aligned with ghostty/alacritty for import.
+- Default look matches Otty (Nord background `#2e3440`, font size 14), overridable.
+- Themes: common built-ins + custom palettes; background image/opacity later.
 
-## 12. 控制面(MTP)
+## 12. Control plane (MTP)
 
-- `term-mtp` 实现 server;传输:Unix socket(`$TMPDIR/miaotty.sock`)/ Windows named pipe。
-- 复用现有 `mtp` 报文与 `miaotty-cli`;**进程内 UI 直连注册表**,外部走 socket/pipe。
-- 方法面:`core.ping/health`、`agent.state.*`、`history.*`、`pane.list`;事件:`agent.state`、`history.changed`、`cwd.changed`。
-- 传输实现候选 `interprocess`(待评估许可/维护),否则自写薄封装。
+- `term-mtp` implements the server; transport is Unix socket (`$TMPDIR/miaotty.sock`) / Windows named pipe.
+- Reuse the existing `mtp` messages and `miaotty-cli`; **in-process UI talks to the registries directly**,
+  external callers go over the socket/pipe.
+- Methods: `core.ping/health`, `agent.state.*`, `history.*`, `pane.list`; events: `agent.state`,
+  `history.changed`, `cwd.changed`.
+- Transport implementation candidate: `interprocess` (pending license/maintenance review), else a thin wrapper.
 
-## 13. 应用层(miaotty-app)
+## 13. Application layer (miaotty-app)
 
-- 模型:`Window → Tab[] → SplitTree<Surface>`;surface = 一个终端实例(core+render 视图)。
-- 窗口:一个 OS 窗口承载一个 tab 集;分屏是 tab 内的树(自研,非 OS 标签)。
-- 面板(egui):**左 Tabs 侧栏**(标题/⌘N/前缀/标记/分隔线/右键菜单)、**右 Details**(Info/Outline/Git/Files)、徽章、设置、命令面板。
-- 视觉对齐 Otty:面板与终端同背景、无分隔线、hover 高亮。
-- 系统集成:hook 安装、URL 打开、通知、防休眠(平台分支)。
+- Model: `Window → Tab[] → SplitTree<Surface>`; a surface is one terminal instance (core + render view).
+- Window: one OS window holds a set of tabs; splits are a tree inside a tab (ours, not OS tabs).
+- Panels (egui): **left Tabs sidebar** (title/⌘N/prefix/mark/dividers/context menu), **right Details**
+  (Info/Outline/Git/Files), badges, settings, command palette.
+- Visual parity with Otty: panels share the terminal background, no divider line, hover highlight.
+- OS integration: hook install, URL open, notifications, sleep inhibition (per-platform).
 
-## 14. 扩展点(分阶段,别提前)
+## 14. Extension points (phased; don't front-load)
 
-- **现在**:`Host` trait + `EventSink`(够用)。
-- **R4+**:MTP `provider.*`(Details 自定义组件,kind=tui/web)。
-- **以后(真有人要)**:渲染器/面板插件、主题包 —— 才考虑"框架"化。
+- **Now**: the `Host` trait + `EventSink` (enough).
+- **R4+**: MTP `provider.*` (custom Details components, kind=tui/web).
+- **Later (only if demanded)**: renderer/panel plugins, theme packs — only then consider "framework"-izing.
 
-## 15. 错误处理与安全
+## 15. Errors and security
 
-- 库用 `thiserror`、应用用 `anyhow`;**热路径不 panic**;可恢复错误转为事件/日志。
-- 安全:粘贴确认、OSC 注入面、URL scheme 白名单、剪贴板策略、可选 secure input。
-- 崩溃:捕获并写日志(panic hook),尽量保 PTY/子进程清理。
+- Libraries use `thiserror`, the app uses `anyhow`; **no panics on the hot path**; recoverable errors
+  become events/logs.
+- Security: paste confirmation, OSC injection surface, URL-scheme allowlist, clipboard policy,
+  optional secure input.
+- Crashes: install a panic hook that logs and best-effort cleans up PTY/child processes.
 
-## 16. 测试 / CI / 性能门
+## 16. Testing / CI / performance gates
 
-- **一致性**:`vttest`/`esctest` 子集 + golden grid 断言;解析器 fuzz(`cargo-fuzz`)。
-- **集成**:真起 shell,喂字节序列,断言网格/事件。
-- **性能门(三平台,Windows 单列)**:输入延迟 P95 ≤ 16ms、首帧 ≤ 100ms、`cat` 大文件不丢帧、空闲 CPU ≈ 0(用 `criterion` + 自建延迟 harness,结果入库防回归)。
-- **CI**:mac/linux/windows 三矩阵 `check`/`test`/`deny`/`fmt`/`clippy`。
+- **Conformance**: a subset of `vttest`/`esctest` + golden grid assertions; parser fuzzing (`cargo-fuzz`).
+- **Integration**: spawn a real shell, feed byte sequences, assert grid/events.
+- **Performance gates (three platforms; Windows separate)**: input latency P95 ≤ 16 ms, first frame ≤ 100 ms,
+  no dropped frames on a large `cat`, idle CPU ≈ 0 (`criterion` + a latency harness, results stored to catch regressions).
+- **CI**: mac/linux/windows matrix running `check`/`test`/`deny`/`fmt`/`clippy`.
 
-## 17. 打包 / 发布 / 版本
+## 17. Packaging / release / versioning
 
-- 引擎 crate `MIT OR Apache-2.0`,先内部用,API 稳定后发布 crates.io。
-- 应用:macOS `.app`+notarize;Linux(AppImage/Flatpak/.deb);Windows MSI(`cargo-dist`/`cargo-wix`)+ 代码签名(Azure Artifact Signing 或自签)。
-- `wgpu` DX12 需随包 `dxcompiler.dll` 或静态 `static-dxc`。
+- Engine crates `MIT OR Apache-2.0`, internal first, published to crates.io once the API is stable.
+- App: macOS `.app` + notarize; Linux (AppImage/Flatpak/.deb); Windows MSI (`cargo-dist`/`cargo-wix`) + signing
+  (Azure Artifact Signing or self-signed).
+- `wgpu` DX12 needs a bundled `dxcompiler.dll` or static `static-dxc`.
 
-## 18. 里程碑
+## 18. Milestones
 
-R0 最小闭环(pty→vt→grid→render→input,量延迟) → **R0.5 IME 专项** → R1 可用终端 → R2 三平台+打包 → R3 `term-mtp` → R4 面板 → R5 打磨/签名。每阶段退出须过对应性能门。
+R0 minimal loop (pty→vt→grid→render→input, measure latency) → **R0.5 IME** → R1 usable terminal →
+R2 three platforms + packaging → R3 `term-mtp` → R4 panels → R5 polish/signing. Each exit must pass its performance gate.
 
-## 19. 风险
+## 19. Risks
 
-| 风险 | 缓解 |
-|------|------|
-| 自绘渲染达不到 Alacritty 级 | glyphon 起步→damage/vsync/图集优化;参考 Alacritty/Rio |
-| **IME/CJK(Windows 最险)** | R0.5 专项;winit `Ime` + `set_ime_cursor_area`;字宽/grapheme 测试集 |
-| ConPTY 性能/退出码 | 读写并发 + OSC 133;D + 独立基准 |
-| egui 与自绘共帧的兼容/性能 | `PaintCallback` 方式;必要时退化为手动 viewport |
-| 早期过度抽象 | 引擎先"够用";扩展点分阶段 |
-| 上游 `alacritty_terminal` API 变动 | pin 版本;封装 `term-core` 适配层 |
+| Risk | Mitigation |
+|------|------------|
+| Self-drawn rendering not reaching Alacritty level | Start with glyphon → damage/vsync/atlas optimization; reference Alacritty/Rio |
+| **IME/CJK (riskiest on Windows)** | R0.5 focus; winit `Ime` + `set_ime_cursor_area`; width/grapheme test set |
+| ConPTY performance / exit codes | Concurrent read+write + OSC 133;D + separate baseline |
+| egui co-frame compatibility/perf | `PaintCallback` approach; fall back to manual viewport if needed |
+| Over-abstraction too early | Engine "good enough" first; phase the extension points |
+| `alacritty_terminal` API churn | Pin versions; wrap with a `term-core` adapter layer |
 
-## 20. 性能影响分析(相对 Ghostty / Alacritty)
+## 20. Performance impact analysis (vs Ghostty / Alacritty)
 
-**结论:选型本身没有根本性性能损失**(内核就是 Alacritty 那套,渲染 GPU 化)。风险集中在四处:
-① egui 立即模式若不加门控会每帧空转;② 自绘渲染器初期不如 Ghostty 多年打磨的 Metal compute;
-③ wgpu 抽象 + macOS present 模式;④ Windows ConPTY 的平台成本(任何方案都有)。
+**Conclusion: the choices themselves have no structural performance loss** (the core is Alacritty's,
+rendering is GPU). Risks are: ① egui immediate-mode idling every frame if ungated; ② a first self-drawn
+renderer is less polished than Ghostty's years-tuned Metal compute; ③ wgpu abstraction + macOS present
+modes; ④ Windows ConPTY platform cost (inherent to any approach).
 
-| 维度 | 对比基线 | 影响 | 缓解 |
-|------|----------|------|------|
-| 输入延迟 | Alacritty 同档 | 无本质损失 | 事件驱动(无轮询)+ 优先 Mailbox/Immediate;R0 硬门控 |
-| 输出吞吐 | Alacritty 同档 | **锁竞争**是主要风险 | 分段解析、短临界区;必要时渲染读快照 |
-| 渲染 | vs Ghostty Metal | 初期弱(图集/pass 不极致) | glyphon 起步 → 自绘 damage/持久实例缓冲 → 必要时 compute |
-| **egui 共帧** | 新增开销 | 立即模式可能每帧重建 UI | **仅 chrome 脏/需要时跑 egui**;终端由 damage 驱动重绘;禁用持续 repaint |
-| wgpu 抽象 | vs 直接 Metal | 极小(同一 Metal 后端) | 保留专用路径可能;实测对比 |
-| present/vsync | macOS 模式受限 | 若被迫 Fifo 会增延迟 | 实测 Mailbox/Immediate,动态选择 |
-| 字体/首帧 | — | 加载 + shaping 拖慢首帧 | 并行初始化 + 磁盘缓存 |
-| 内存 | parity | 图集/实例缓冲 | LRU 图集、复用缓冲、按图集脏区上传 |
-| 空闲 CPU | parity(≈0) | 眨眼/动画导致非零 | **仅焦点时眨眼**;无定时轮询 |
-| Windows | ConPTY 平台成本 | 固有变慢(ConHost+VT 重编码) | 读写并发;Windows 单列基线 |
-| macOS 观感 | 丢子像素/emoji/模糊 | **观感**损失,非性能 | 后置专项 |
+| Dimension | Baseline | Impact | Mitigation |
+|-----------|----------|--------|------------|
+| Input latency | Alacritty class | No structural loss | Event-driven (no polling) + prefer Mailbox/Immediate; R0 gate |
+| Throughput | Alacritty class | **Lock contention** is the main risk | Chunked parsing, short critical sections; snapshot for render if needed |
+| Rendering | vs Ghostty Metal | Weaker at first | glyphon start → damage/persistent instance buffers → compute if needed |
+| **egui co-frame** | new overhead | Immediate mode may rebuild UI every frame | **Run egui only when chrome is dirty**; terminal redraw driven by damage; no continuous repaint |
+| wgpu abstraction | vs direct Metal | Tiny (same Metal backend) | Keep a specialized path possible; benchmark head-to-head |
+| present/vsync | macOS mode limits | Forced Fifo increases latency | Measure Mailbox/Immediate; choose dynamically |
+| Fonts/first frame | — | Load + shaping slow the first frame | Parallel init + on-disk cache |
+| Memory | parity | Atlas/instance buffers | LRU atlas, buffer reuse, dirty-region atlas uploads |
+| Idle CPU | parity (≈0) | Blink/animation makes it nonzero | **Blink only when focused**; no timed polling |
+| Windows | ConPTY cost | Inherently slower (ConHost + VT re-encode) | Concurrent I/O; a Windows-specific baseline |
+| macOS polish | loses subpixel/emoji/blur | **Visual** loss, not performance | Dedicated later |
 
-**红线**:R0 未过"输入延迟 P95 ≤ 16ms / 大文件不丢帧 / 空闲 CPU≈0"三项,不进入后续里程碑;
-egui 每帧空转、present 模式、图集上传是三大重点实测项。
+**Red line**: R0 must pass input latency P95 ≤ 16 ms / no dropped frames on large output / idle CPU ≈ 0
+before later milestones. egui idling, present mode, and atlas uploads are the three key things to measure.
 
-## 21. 待补 ADR(`docs/decisions/`)
+## 21. ADRs to write (`docs/decisions/`)
 
-- 0001 技术栈选型(本文 §2 固化)
-- 0002 并发与锁纪律
-- 0003 渲染/egui 共帧方案
-- 0004 自研 tab/split(非 OS 原生)
-- 0005 MTP 传输(Unix socket / named pipe)
-- 0006 许可与依赖策略
+- 0001 Stack selection (frozen here in §2)
+- 0002 Concurrency and lock discipline
+- 0003 Terminal + egui co-frame rendering
+- 0004 Own tab/split model (not OS-native)
+- 0005 MTP transport (Unix socket / Windows named pipe)
+- 0006 License and dependency policy

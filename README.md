@@ -6,8 +6,9 @@ the `miaotty` application built on top of it.
 > Status: **scaffold**. Nothing usable yet — this is the R0 skeleton
 > (`term-core` → `term-render` → `term-widget`).
 >
-> Design: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · decisions:
-> [`docs/decisions/`](docs/decisions/).
+> Design: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) ([简体中文](docs/ARCHITECTURE.zh-CN.md)) ·
+> decisions: [`docs/decisions/`](docs/decisions/). Docs are English by default with a
+> synced `*.zh-CN.md` Simplified Chinese version.
 
 ## Layout
 

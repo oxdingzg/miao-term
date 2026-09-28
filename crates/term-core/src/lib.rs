@@ -11,5 +11,13 @@
 //! - `input` key/mouse → PTY bytes (incl. kitty keyboard / CSI u, bracketed paste)
 //! - `event` [`EventSink`] for OSC-driven notifications to the host
 
+mod term;
+
+pub use term::Terminal;
+
+/// Re-exported so the app can reach the screen model without naming the parser
+/// crate directly (R1 swaps the backend behind this).
+pub use vt100;
+
 /// Engine crate version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

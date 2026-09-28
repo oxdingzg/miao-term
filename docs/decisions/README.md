@@ -3,6 +3,9 @@
 Short, append-only decisions (context → decision → consequences). Supersede
 rather than rewrite. The overall design lives in [`../ARCHITECTURE.md`](../ARCHITECTURE.md).
 
+Docs are English by default; keep a Simplified Chinese version in sync
+(`*.zh-CN.md`).
+
 | ADR | Title | Status |
 |-----|-------|--------|
 | [0001](./0001-stack.md) | Stack selection (pty/vt/render/window/UI) | accepted |
