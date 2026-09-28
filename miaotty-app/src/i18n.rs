@@ -93,6 +93,8 @@ fn zh(key: &'static str) -> &'static str {
         "Edit" => "编辑",
         "Raw" => "原文",
         "Markdown" => "Markdown",
+        "Open Externally" => "外部打开",
+        "Edit in Tab" => "在标签中编辑",
         "Name" => "名称",
         "No recipes yet" => "暂无配方",
         "No listening ports" => "无监听端口",

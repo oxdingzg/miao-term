@@ -641,6 +641,10 @@ struct Editor {
     readonly: bool,
     /// Show raw text even for Markdown (preview is the default when read-only).
     raw: bool,
+    /// A line to highlight and scroll to on open (1-based).
+    target: Option<usize>,
+    /// Whether the initial scroll to `target` has happened.
+    jumped: bool,
 }
 
 /// One rendered tab in the top tab bar: label, agent color, view icon,
@@ -658,7 +662,7 @@ type TabBarRow = (
 enum PaletteAction {
     SwitchTab(usize),
     Run(Verb),
-    OpenFile(PathBuf),
+    OpenFile(PathBuf, Option<usize>),
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -1277,7 +1281,7 @@ impl MiaottyApp {
                     kind: "file".to_string(),
                     label: file.name.clone(),
                     icon: None,
-                    action: PaletteAction::OpenFile(file.path.clone()),
+                    action: PaletteAction::OpenFile(file.path.clone(), None),
                 });
             }
         }
@@ -1291,7 +1295,7 @@ impl MiaottyApp {
                 kind: format!("{name}:{}", hit.line),
                 label: hit.text.clone(),
                 icon: None,
-                action: PaletteAction::OpenFile(hit.path.clone()),
+                action: PaletteAction::OpenFile(hit.path.clone(), Some(hit.line as usize)),
             });
         }
         for path in &self.recent_files {
@@ -1303,7 +1307,7 @@ impl MiaottyApp {
                 kind: "recent".to_string(),
                 label: name,
                 icon: None,
-                action: PaletteAction::OpenFile(path.clone()),
+                action: PaletteAction::OpenFile(path.clone(), None),
             });
         }
         for (label, verb) in [
@@ -1381,7 +1385,7 @@ impl MiaottyApp {
                 Verb::NextTab => self.focus_cycle(true),
                 Verb::PrevTab => self.focus_cycle(false),
             },
-            PaletteAction::OpenFile(path) => self.open_editor(path),
+            PaletteAction::OpenFile(path, line) => self.open_editor_at(path, line),
         }
     }
 
@@ -1682,6 +1686,113 @@ fn file_tree(
 
 /// Render a small, dependency-free subset of Markdown: ATX headings, fenced
 /// code, bullet lists, block quotes. Inline emphasis markers are stripped.
+/// Open a path with the OS default application.
+fn open_path_externally(path: &std::path::Path) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg(path).spawn();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(path).spawn();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("cmd")
+            .args(["/C", "start", ""])
+            .arg(path)
+            .spawn();
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        let _ = path;
+    }
+}
+
+/// A read-only, line-numbered source view that highlights `target`.
+fn source_ui(
+    ui: &mut egui::Ui,
+    text: &str,
+    target: Option<usize>,
+    jumped: &mut bool,
+    fg: egui::Color32,
+) {
+    let muted = egui::Color32::from_gray(120);
+    let width = text.lines().count().to_string().len().max(2);
+    let highlight = egui::Color32::from_rgb(0x3b, 0x42, 0x52);
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            for (i, line) in text.lines().enumerate() {
+                let n = i + 1;
+                let is_target = target == Some(n);
+                let mut frame = egui::Frame::none().inner_margin(egui::Margin::symmetric(2.0, 0.0));
+                if is_target {
+                    frame = frame.fill(highlight);
+                }
+                let row = frame
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!("{n:>width$}"))
+                                    .monospace()
+                                    .size(11.0)
+                                    .color(muted),
+                            );
+                            let body = if line.is_empty() { " " } else { line };
+                            ui.label(egui::RichText::new(body).monospace().size(12.0).color(fg));
+                        });
+                    })
+                    .response;
+                if is_target && !*jumped {
+                    ui.scroll_to_rect(row.rect, Some(egui::Align::Center));
+                    *jumped = true;
+                }
+            }
+        });
+}
+
+/// Whether a line is a Markdown horizontal rule (`---`, `***`, `___`).
+fn is_rule(line: &str) -> bool {
+    let t = line.trim();
+    t.len() >= 3
+        && t.chars().all(|c| c == t.chars().next().unwrap())
+        && matches!(t.chars().next(), Some('-' | '*' | '_'))
+}
+
+/// Split a line into text and `[text](url)` link segments.
+fn link_segments(line: &str) -> Vec<(String, Option<String>)> {
+    let mut out = Vec::new();
+    let mut rest = line;
+    while let Some(open) = rest.find('[') {
+        if open > 0 {
+            out.push((rest[..open].to_string(), None));
+        }
+        let Some(close) = rest[open..].find(']') else {
+            out.push((rest[open..].to_string(), None));
+            return out;
+        };
+        let label_end = open + close;
+        let after = &rest[label_end + 1..];
+        if let Some(inner) = after.strip_prefix('(') {
+            if let Some(end) = inner.find(')') {
+                out.push((
+                    rest[open + 1..label_end].to_string(),
+                    Some(inner[..end].to_string()),
+                ));
+                rest = &inner[end + 1..];
+                continue;
+            }
+        }
+        out.push((rest[open..=label_end].to_string(), None));
+        rest = &rest[label_end + 1..];
+    }
+    if !rest.is_empty() {
+        out.push((rest.to_string(), None));
+    }
+    out
+}
+
 fn markdown_ui(ui: &mut egui::Ui, text: &str, fg: egui::Color32) {
     let muted = egui::Color32::from_gray(150);
     let mut in_code = false;
@@ -1696,7 +1807,10 @@ fn markdown_ui(ui: &mut egui::Ui, text: &str, fg: egui::Color32) {
             ui.label(egui::RichText::new(line).monospace().color(fg));
             continue;
         }
-        if let Some((level, rest)) = heading(line) {
+        if is_rule(line) {
+            ui.add_space(3.0);
+            ui.separator();
+        } else if let Some((level, rest)) = heading(line) {
             let size = match level {
                 1 => 22.0,
                 2 => 18.0,
@@ -1721,7 +1835,23 @@ fn markdown_ui(ui: &mut egui::Ui, text: &str, fg: egui::Color32) {
         } else if line.trim().is_empty() {
             ui.add_space(4.0);
         } else {
-            ui.label(egui::RichText::new(strip_inline(line)).color(fg));
+            let segments = link_segments(line);
+            if segments.iter().any(|(_, url)| url.is_some()) {
+                ui.horizontal_wrapped(|ui| {
+                    for (text, url) in &segments {
+                        match url {
+                            Some(url) => {
+                                ui.hyperlink_to(strip_inline(text), url);
+                            }
+                            None => {
+                                ui.label(egui::RichText::new(strip_inline(text)).color(fg));
+                            }
+                        }
+                    }
+                });
+            } else {
+                ui.label(egui::RichText::new(strip_inline(line)).color(fg));
+            }
         }
     }
 }
@@ -2684,6 +2814,10 @@ impl MiaottyApp {
 
     /// Open a file in the read-only preview / editor window (ADR 0009).
     fn open_editor(&mut self, path: PathBuf) {
+        self.open_editor_at(path, None);
+    }
+
+    fn open_editor_at(&mut self, path: PathBuf, line: Option<usize>) {
         const MAX: u64 = 2 * 1024 * 1024;
         match std::fs::metadata(&path) {
             Ok(meta) if meta.len() > MAX => {
@@ -2707,6 +2841,8 @@ impl MiaottyApp {
             text,
             readonly: true,
             raw: false,
+            target: line,
+            jumped: false,
         });
     }
 
@@ -2719,6 +2855,8 @@ impl MiaottyApp {
         let l_md = self.t("Markdown");
         let l_preview = self.t("Preview");
         let l_edit = self.t("Edit");
+        let l_open_ext = self.t("Open Externally");
+        let l_edit_tab = self.t("Edit in Tab");
         let Some(editor) = self.editor.as_mut() else {
             return;
         };
@@ -2741,6 +2879,8 @@ impl MiaottyApp {
         let mut save = false;
         let mut reload = false;
         let mut close = false;
+        let mut open_ext = false;
+        let mut edit_tab = false;
         egui::Window::new(format!("\u{25a4} {title}"))
             .open(&mut open)
             .default_size([640.0, 480.0])
@@ -2764,6 +2904,12 @@ impl MiaottyApp {
                         if ui.button(l_reload).clicked() {
                             reload = true;
                         }
+                        if ui.button(l_open_ext).clicked() {
+                            open_ext = true;
+                        }
+                        if ui.button(l_edit_tab).clicked() {
+                            edit_tab = true;
+                        }
                         if is_md {
                             let label = if editor.raw { l_md } else { l_raw };
                             if ui.button(label).clicked() {
@@ -2782,6 +2928,8 @@ impl MiaottyApp {
                     .show(ui, |ui| {
                         if editor.readonly && is_md && !editor.raw {
                             markdown_ui(ui, &editor.text, fg);
+                        } else if editor.readonly {
+                            source_ui(ui, &editor.text, editor.target, &mut editor.jumped, fg);
                         } else {
                             ui.add(
                                 egui::TextEdit::multiline(&mut editor.text)
@@ -2806,6 +2954,22 @@ impl MiaottyApp {
                     Ok(()) => editor.original = editor.text.clone(),
                     Err(e) => eprintln!("miaotty: save failed: {e}"),
                 }
+            }
+        }
+        if open_ext {
+            if let Some(editor) = self.editor.as_ref() {
+                open_path_externally(&editor.path);
+            }
+        }
+        if edit_tab {
+            let cmd = self.editor.as_ref().map(|e| {
+                format!(
+                    "${{EDITOR:-vi}} {}",
+                    ssh::shell_quote(&e.path.display().to_string())
+                )
+            });
+            if let Some(cmd) = cmd {
+                self.open_command_tab(&cmd);
             }
         }
         if close {
@@ -4305,6 +4469,22 @@ mod session_tests {
         let back: TabSession = serde_json::from_str(&json).unwrap();
         assert_eq!(back.prefix.as_deref(), Some("[w]"));
         assert_eq!(back.group.as_deref(), Some("g"));
+    }
+
+    #[test]
+    fn markdown_links_and_rules() {
+        assert!(is_rule("---"));
+        assert!(is_rule(" *** "));
+        assert!(!is_rule("--"));
+        assert_eq!(
+            link_segments("see [docs](https://x) now"),
+            vec![
+                ("see ".to_string(), None),
+                ("docs".to_string(), Some("https://x".to_string())),
+                (" now".to_string(), None),
+            ]
+        );
+        assert_eq!(link_segments("plain"), vec![("plain".to_string(), None)]);
     }
 
     #[test]
