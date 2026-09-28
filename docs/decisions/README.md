@@ -31,3 +31,4 @@ Docs are English by default; keep a Simplified Chinese version in sync
 | [0021](./0021-remote-view-edit.md) | Remote view/edit over ssh | accepted |
 | [0022](./0022-update-download.md) | In-app update download and verification | accepted |
 | [0023](./0023-perf-regression-gate.md) | Performance regression gate (shared baseline) | accepted |
+| [0024](./0024-mtp-view-edit.md) | MTP view/edit and file read/write | accepted |

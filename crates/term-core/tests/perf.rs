@@ -26,7 +26,6 @@ fn workload() -> Vec<u8> {
     data
 }
 
-
 /// Compare a measured metric against the committed baseline and fail on a
 /// regression beyond `regression_pct` (ADR 0023).
 fn baseline_gate(key: &str, measured: f64, higher_is_better: bool) {

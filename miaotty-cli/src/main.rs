@@ -18,7 +18,7 @@ fn usage() -> ! {
     eprintln!(
         "usage: miaotty-cli [--socket PATH] <command>\n\
          commands: ping | health | pane list|run|send|focus|close | \
-         state <agent> --state S | state list | history add|list"
+         state <agent> --state S | state list | history add|list |\n     view|edit <path> | file read|write --path P [--data D]"
     );
     std::process::exit(2);
 }
@@ -69,6 +69,18 @@ fn main() {
             } else {
                 let data = flag(&args, "--data").unwrap_or("");
                 client.call("pane", m, json!({ "pane_id": pane, "data": data }))
+            }
+        }
+        ("view", Some(path)) | ("edit", Some(path)) => {
+            client.call("app", cmd, json!({ "path": path }))
+        }
+        ("file", Some(m @ ("read" | "write"))) => {
+            let path = flag(&args, "--path").unwrap_or("");
+            if m == "read" {
+                client.call("file", "read", json!({ "path": path }))
+            } else {
+                let data = flag(&args, "--data").unwrap_or("");
+                client.call("file", "write", json!({ "path": path, "data": data }))
             }
         }
         ("state", Some("list")) => client.call("agent", "state.list", json!({})),

@@ -59,11 +59,7 @@ fn load_system_cjk(font_system: &mut FontSystem) {
 }
 
 impl TermRenderer {
-    pub fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        format: wgpu::TextureFormat,
-    ) -> Self {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
         let cache = Cache::new(device);
         let mut atlas = TextAtlas::new(device, queue, &cache, format);
         let renderer =
@@ -130,9 +126,11 @@ impl TermRenderer {
             let owned: Vec<(String, Attrs)> = row
                 .iter()
                 .map(|span| {
-                    let attrs = Attrs::new()
-                        .family(fam)
-                        .color(Color::rgb(span.color.0, span.color.1, span.color.2));
+                    let attrs = Attrs::new().family(fam).color(Color::rgb(
+                        span.color.0,
+                        span.color.1,
+                        span.color.2,
+                    ));
                     (span.text.clone(), attrs)
                 })
                 .collect();
@@ -218,8 +216,7 @@ impl MetricsProbe {
             Some(name) => Family::Name(name),
             None => Family::Monospace,
         };
-        self.buffer
-            .set_metrics(&mut self.font_system, metrics);
+        self.buffer.set_metrics(&mut self.font_system, metrics);
         self.buffer.set_size(&mut self.font_system, None, None);
         self.buffer.set_text(
             &mut self.font_system,
@@ -227,8 +224,7 @@ impl MetricsProbe {
             Attrs::new().family(fam),
             Shaping::Basic,
         );
-        self.buffer
-            .shape_until_scroll(&mut self.font_system, false);
+        self.buffer.shape_until_scroll(&mut self.font_system, false);
         let mut width = font_size * 0.6;
         for run in self.buffer.layout_runs() {
             if run.line_w > 0.0 {

@@ -40,7 +40,10 @@ fn conpty_spawns_shell_and_echoes() {
     // Make the shell exit so the PTY closes and nothing is left running.
     term.write(b"exit\r\n");
 
-    assert!(text.contains("CONPTY_OK"), "expected echo output; screen was:\n{text}");
+    assert!(
+        text.contains("CONPTY_OK"),
+        "expected echo output; screen was:\n{text}"
+    );
 }
 
 #[test]
@@ -51,6 +54,14 @@ fn conpty_resize_updates_screen_and_pty() {
     term.process_pending();
     term.resize(40, 120);
 
-    assert_eq!(term.size(), (40, 120), "Terminal::size should reflect the resize");
-    assert_eq!(term.screen().size(), (40, 120), "screen model should be resized");
+    assert_eq!(
+        term.size(),
+        (40, 120),
+        "Terminal::size should reflect the resize"
+    );
+    assert_eq!(
+        term.screen().size(),
+        (40, 120),
+        "screen model should be resized"
+    );
 }

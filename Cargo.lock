@@ -2047,6 +2047,7 @@ version = "0.0.0"
 dependencies = [
  "alacritty_terminal",
  "portable-pty",
+ "serde_json",
 ]
 
 [[package]]

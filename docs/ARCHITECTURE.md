@@ -195,7 +195,8 @@ Use Alacritty's proven model (`FairMutex<Term>` + `EventListener`); do not inven
 - `term-mtp` implements the server; transport is Unix socket (`$TMPDIR/miaotty.sock`) / Windows named pipe.
 - Reuse the existing `mtp` messages and `miaotty-cli`; **in-process UI talks to the registries directly**,
   external callers go over the socket/pipe.
-- Methods: `core.ping/health`, `agent.state.*`, `history.*`, `pane.list`; events: `agent.state`,
+- Methods: `core.ping/health`, `agent.state.*`, `history.*`, `pane.list`, `app.view/edit`
+  (open a file in the reader/editor), `file.read/write` (bounded 2 MB); events: `agent.state`,
   `history.changed`, `cwd.changed`.
 - Transport implementation candidate: `interprocess` (pending license/maintenance review), else a thin wrapper.
 

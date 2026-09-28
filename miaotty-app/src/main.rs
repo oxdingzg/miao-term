@@ -1220,6 +1220,15 @@ impl eframe::App for MiaottyApp {
                             }
                         }
                     }
+                    miao_term_mtp::Command::View(path) => {
+                        self.open_editor(PathBuf::from(path));
+                    }
+                    miao_term_mtp::Command::Edit(path) => {
+                        self.open_editor(PathBuf::from(path));
+                        if let Some(editor) = self.editor.as_mut() {
+                            editor.readonly = false;
+                        }
+                    }
                     miao_term_mtp::Command::Close(id) => {
                         if let Some(ti) = self
                             .tabs

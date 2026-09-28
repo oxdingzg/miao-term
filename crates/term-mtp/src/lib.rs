@@ -8,11 +8,11 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
-use interprocess::local_socket::{prelude::*, ListenerOptions};
 #[cfg(unix)]
 use interprocess::local_socket::GenericFilePath;
 #[cfg(windows)]
 use interprocess::local_socket::GenericNamespaced;
+use interprocess::local_socket::{prelude::*, ListenerOptions};
 use interprocess::TryClone;
 
 /// Maximum size of a single newline-delimited request. Lines longer than this
@@ -27,8 +27,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 pub const PROTO_VERSION: i64 = 1;
+/// Largest file the control plane will read or write in one request.
+pub const MAX_FILE_BYTES: usize = 2 * 1024 * 1024;
+
 pub const HOST_CAPS: &[&str] = &[
     "core.basic",
+    "app.view.write",
+    "file.read",
+    "file.write",
     "agent.state.read",
     "agent.state.write",
     "history.read",
@@ -143,6 +149,10 @@ pub struct ServerState {
 pub enum Command {
     Focus(String),
     Close(String),
+    /// Open a file in the reader.
+    View(String),
+    /// Open a file in the editor.
+    Edit(String),
 }
 
 impl ServerState {
@@ -166,7 +176,12 @@ impl ServerState {
     /// Command history for a pane, oldest → newest.
     pub fn history_for(&self, pane_id: &str) -> Vec<Value> {
         let k = format!("pane:{pane_id}");
-        self.history.lock().unwrap().get(&k).cloned().unwrap_or_default()
+        self.history
+            .lock()
+            .unwrap()
+            .get(&k)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Agent state entry for a pane, if any.
@@ -255,6 +270,52 @@ fn dispatch(state: &ServerState, req: Request) -> Response {
             state.queue_command(command);
             Response::ok(id, rev, json!({ "ok": true }))
         }
+        ("app", "view") | ("app", "edit") => {
+            let path = str_field(&params, "path").unwrap_or_default();
+            if path.is_empty() {
+                return Response::err(id, rev, "no_path", "path is required");
+            }
+            let command = if req.method == "view" {
+                Command::View(path)
+            } else {
+                Command::Edit(path)
+            };
+            state.queue_command(command);
+            Response::ok(id, rev, json!({ "ok": true }))
+        }
+        ("file", "read") => {
+            let path = str_field(&params, "path").unwrap_or_default();
+            if path.is_empty() {
+                return Response::err(id, rev, "no_path", "path is required");
+            }
+            match std::fs::read(&path) {
+                Ok(bytes) => {
+                    let truncated = bytes.len() > MAX_FILE_BYTES;
+                    let slice = &bytes[..bytes.len().min(MAX_FILE_BYTES)];
+                    Response::ok(
+                        id,
+                        rev,
+                        json!({
+                            "data": String::from_utf8_lossy(slice),
+                            "bytes": bytes.len(),
+                            "truncated": truncated,
+                        }),
+                    )
+                }
+                Err(e) => Response::err(id, rev, "io_error", e.to_string()),
+            }
+        }
+        ("file", "write") => {
+            let path = str_field(&params, "path").unwrap_or_default();
+            let data = str_field(&params, "data").unwrap_or_default();
+            if path.is_empty() {
+                return Response::err(id, rev, "no_path", "path is required");
+            }
+            match std::fs::write(&path, data.as_bytes()) {
+                Ok(()) => Response::ok(id, rev, json!({ "ok": true, "bytes": data.len() })),
+                Err(e) => Response::err(id, rev, "io_error", e.to_string()),
+            }
+        }
         ("agent", "state.set") => {
             let pane = str_field(&params, "pane_id");
             let tty = str_field(&params, "tty");
@@ -297,7 +358,10 @@ fn dispatch(state: &ServerState, req: Request) -> Response {
             let pane = str_field(&params, "pane_id");
             let tty = str_field(&params, "tty");
             let k = key(pane.as_deref(), tty.as_deref(), "history");
-            let limit = params.get("limit").and_then(Value::as_u64).map(|n| n as usize);
+            let limit = params
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map(|n| n as usize);
             let history = state.history.lock().unwrap();
             let list = history.get(&k).cloned().unwrap_or_default();
             let list = match limit {
@@ -381,11 +445,11 @@ pub mod client {
     use std::io::{BufRead, BufReader, Write};
     use std::path::Path;
 
-    use interprocess::local_socket::{prelude::*, ConnectOptions};
     #[cfg(unix)]
     use interprocess::local_socket::GenericFilePath;
     #[cfg(windows)]
     use interprocess::local_socket::GenericNamespaced;
+    use interprocess::local_socket::{prelude::*, ConnectOptions};
     use interprocess::TryClone;
     use serde::Deserialize;
     use serde_json::Value;
@@ -492,6 +556,63 @@ mod tests {
         let mut buf = Vec::new();
         assert!(matches!(read_request(&mut reader, &mut buf), Ok(true)));
         assert_eq!(buf, b"{\"v\":1}\n");
+    }
+
+    fn request(ns: &str, method: &str, params: Value) -> Request {
+        Request {
+            v: PROTO_VERSION,
+            id: 1,
+            kind: "req".to_string(),
+            ns: ns.to_string(),
+            method: method.to_string(),
+            params: Some(params),
+        }
+    }
+
+    #[test]
+    fn file_read_and_write_round_trip() {
+        let state = ServerState::new();
+        let path = std::env::temp_dir().join(format!("miaotty-mtp-file-{}", std::process::id()));
+        let path_str = path.to_string_lossy().to_string();
+
+        let write = dispatch(
+            &state,
+            request(
+                "file",
+                "write",
+                json!({ "path": path_str, "data": "hello" }),
+            ),
+        );
+        assert!(write.ok, "{:?}", write.error);
+
+        let read = dispatch(&state, request("file", "read", json!({ "path": path_str })));
+        assert!(read.ok);
+        let result = read.result.unwrap();
+        assert_eq!(result["data"], "hello");
+        assert_eq!(result["truncated"], false);
+
+        let missing = dispatch(
+            &state,
+            request("file", "read", json!({ "path": path_str + ".nope" })),
+        );
+        assert!(!missing.ok);
+        assert_eq!(missing.error.unwrap().code, "io_error");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn app_view_and_edit_queue_commands() {
+        let state = ServerState::new();
+        assert!(dispatch(&state, request("app", "view", json!({ "path": "/tmp/a" }))).ok);
+        assert!(dispatch(&state, request("app", "edit", json!({ "path": "/tmp/b" }))).ok);
+        let commands = state.take_commands();
+        assert!(matches!(
+            commands.as_slice(),
+            [Command::View(a), Command::Edit(b)] if a == "/tmp/a" && b == "/tmp/b"
+        ));
+        let bad = dispatch(&state, request("app", "view", json!({})));
+        assert!(!bad.ok);
+        assert_eq!(bad.error.unwrap().code, "no_path");
     }
 
     #[test]
