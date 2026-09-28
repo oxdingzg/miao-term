@@ -21,9 +21,11 @@ the `miaotty` application built on top of it.
 - MTP control plane over a Unix socket: `core.ping/health`, `agent.state.*`,
   `history.*`, `pane.list`, `pane.send/run` — interoperates with the existing `miaotty-cli`.
 - zsh shell integration (cwd via OSC 7, command history) installed via a `ZDOTDIR` shim.
+- Config at `~/.config/miaotty/config.toml` (font size + colors) — see
+  [`docs/config.example.toml`](docs/config.example.toml).
 
-Not yet: custom wgpu renderer (currently drawn with egui), splits, config/themes,
-Windows named-pipe transport, packaging.
+Not yet: custom wgpu renderer (currently drawn with egui), splits, config import
+(ghostty/alacritty), Windows named-pipe transport, packaging.
 
 ## Run
 

@@ -18,8 +18,11 @@
 - Unix socket 上的 MTP 控制面:`core.ping/health`、`agent.state.*`、`history.*`、`pane.list`、
   `pane.send/run` —— 与现有 `miaotty-cli` 互通。
 - zsh shell 集成(OSC 7 上报 cwd、命令历史),通过 `ZDOTDIR` shim 自动安装。
+- 配置 `~/.config/miaotty/config.toml`(字号 + 配色)—— 见
+  [`docs/config.example.toml`](docs/config.example.toml)。
 
-尚未完成:自绘 wgpu 渲染器(当前用 egui 画)、分屏、配置/主题、Windows 命名管道传输、打包。
+尚未完成:自绘 wgpu 渲染器(当前用 egui 画)、分屏、配置导入(ghostty/alacritty)、
+Windows 命名管道传输、打包。
 
 ## 运行
 
