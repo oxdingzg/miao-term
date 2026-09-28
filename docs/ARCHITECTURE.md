@@ -225,7 +225,30 @@ R0 最小闭环(pty→vt→grid→render→input,量延迟) → **R0.5 IME 专�
 | 早期过度抽象 | 引擎先"够用";扩展点分阶段 |
 | 上游 `alacritty_terminal` API 变动 | pin 版本;封装 `term-core` 适配层 |
 
-## 20. 待补 ADR(`docs/decisions/`)
+## 20. 性能影响分析(相对 Ghostty / Alacritty)
+
+**结论:选型本身没有根本性性能损失**(内核就是 Alacritty 那套,渲染 GPU 化)。风险集中在四处:
+① egui 立即模式若不加门控会每帧空转;② 自绘渲染器初期不如 Ghostty 多年打磨的 Metal compute;
+③ wgpu 抽象 + macOS present 模式;④ Windows ConPTY 的平台成本(任何方案都有)。
+
+| 维度 | 对比基线 | 影响 | 缓解 |
+|------|----------|------|------|
+| 输入延迟 | Alacritty 同档 | 无本质损失 | 事件驱动(无轮询)+ 优先 Mailbox/Immediate;R0 硬门控 |
+| 输出吞吐 | Alacritty 同档 | **锁竞争**是主要风险 | 分段解析、短临界区;必要时渲染读快照 |
+| 渲染 | vs Ghostty Metal | 初期弱(图集/pass 不极致) | glyphon 起步 → 自绘 damage/持久实例缓冲 → 必要时 compute |
+| **egui 共帧** | 新增开销 | 立即模式可能每帧重建 UI | **仅 chrome 脏/需要时跑 egui**;终端由 damage 驱动重绘;禁用持续 repaint |
+| wgpu 抽象 | vs 直接 Metal | 极小(同一 Metal 后端) | 保留专用路径可能;实测对比 |
+| present/vsync | macOS 模式受限 | 若被迫 Fifo 会增延迟 | 实测 Mailbox/Immediate,动态选择 |
+| 字体/首帧 | — | 加载 + shaping 拖慢首帧 | 并行初始化 + 磁盘缓存 |
+| 内存 | parity | 图集/实例缓冲 | LRU 图集、复用缓冲、按图集脏区上传 |
+| 空闲 CPU | parity(≈0) | 眨眼/动画导致非零 | **仅焦点时眨眼**;无定时轮询 |
+| Windows | ConPTY 平台成本 | 固有变慢(ConHost+VT 重编码) | 读写并发;Windows 单列基线 |
+| macOS 观感 | 丢子像素/emoji/模糊 | **观感**损失,非性能 | 后置专项 |
+
+**红线**:R0 未过"输入延迟 P95 ≤ 16ms / 大文件不丢帧 / 空闲 CPU≈0"三项,不进入后续里程碑;
+egui 每帧空转、present 模式、图集上传是三大重点实测项。
+
+## 21. 待补 ADR(`docs/decisions/`)
 
 - 0001 技术栈选型(本文 §2 固化)
 - 0002 并发与锁纪律
