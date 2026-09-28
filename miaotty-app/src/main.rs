@@ -119,6 +119,7 @@ struct MiaottyApp {
     scroll: usize,
     cursor_on: bool,
     last_blink: Instant,
+    show_details: bool,
 }
 
 impl MiaottyApp {
@@ -135,6 +136,7 @@ impl MiaottyApp {
             scroll: 0,
             cursor_on: true,
             last_blink: Instant::now(),
+            show_details: true,
         }
     }
 
@@ -190,7 +192,27 @@ impl eframe::App for MiaottyApp {
         }
 
         self.sidebar(ctx);
+        if self.show_details {
+            self.details_panel(ctx);
+        }
         self.terminal_panel(ctx);
+    }
+}
+
+fn reveal_in_finder(path: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg("-R").arg(path).spawn();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("explorer")
+            .arg(format!("/select,{path}"))
+            .spawn();
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(path).spawn();
     }
 }
 
@@ -211,6 +233,13 @@ impl MiaottyApp {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("+").on_hover_text("New Tab").clicked() {
                             self.new_tab();
+                        }
+                        if ui
+                            .button("\u{25a4}")
+                            .on_hover_text("Toggle Details")
+                            .clicked()
+                        {
+                            self.show_details = !self.show_details;
                         }
                     });
                 });
@@ -235,6 +264,42 @@ impl MiaottyApp {
                     self.active = i;
                     self.selection = None;
                     self.scroll = 0;
+                }
+            });
+    }
+
+    fn details_panel(&mut self, ctx: &egui::Context) {
+        let cwd = self.tabs[self.active].term.cwd().map(str::to_string);
+        let muted = egui::Color32::from_gray(120);
+        egui::SidePanel::right("details")
+            .resizable(true)
+            .default_width(300.0)
+            .frame(egui::Frame::default().fill(BG).inner_margin(egui::Margin::same(10.0)))
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new("INFO")
+                        .size(11.0)
+                        .strong()
+                        .color(egui::Color32::from_gray(150)),
+                );
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("Working Directory").strong().color(FG));
+                match &cwd {
+                    Some(p) => {
+                        ui.label(egui::RichText::new(p).monospace().color(FG));
+                    }
+                    None => {
+                        ui.label(egui::RichText::new("\u{2014}").color(muted));
+                    }
+                }
+                ui.add_space(8.0);
+                if let Some(p) = cwd {
+                    if ui.button("Copy Path").clicked() {
+                        ctx.copy_text(p.clone());
+                    }
+                    if ui.button("Reveal in Finder").clicked() {
+                        reveal_in_finder(&p);
+                    }
                 }
             });
     }
@@ -267,10 +332,11 @@ impl MiaottyApp {
                             ..
                         } = ev
                         {
-                            if modifiers.command {
+                            if modifiers.mac_cmd {
                                 match key {
                                     egui::Key::T => self.new_tab(),
                                     egui::Key::W => self.close_active(),
+                                    egui::Key::D => self.show_details = !self.show_details,
                                     egui::Key::Plus | egui::Key::Equals => self.font_size += 1.0,
                                     egui::Key::Minus => self.font_size = (self.font_size - 1.0).max(6.0),
                                     egui::Key::Num0 => self.font_size = 14.0,

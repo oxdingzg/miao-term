@@ -23,6 +23,8 @@ pub struct Terminal {
     rows: u16,
     cols: u16,
     exited: bool,
+    cwd: Option<String>,
+    osc_buf: Vec<u8>,
 }
 
 fn default_shell() -> String {
@@ -85,6 +87,8 @@ impl Terminal {
             rows,
             cols,
             exited: false,
+            cwd: None,
+            osc_buf: Vec::new(),
         })
     }
 
@@ -94,6 +98,7 @@ impl Terminal {
         loop {
             match self.rx.try_recv() {
                 Ok(bytes) => {
+                    self.scan_osc7(&bytes);
                     self.parser.process(&bytes);
                     changed = true;
                 }
@@ -145,4 +150,66 @@ impl Terminal {
     pub fn exited(&self) -> bool {
         self.exited
     }
+
+    /// The working directory reported by the shell via OSC 7, if any.
+    pub fn cwd(&self) -> Option<&str> {
+        self.cwd.as_deref()
+    }
+
+    /// Scan a chunk for OSC 7 (`ESC ] 7 ; file://host/path BEL|ST`) and update `cwd`.
+    fn scan_osc7(&mut self, bytes: &[u8]) {
+        self.osc_buf.extend_from_slice(bytes);
+        const PREFIX: &[u8] = b"\x1b]7;";
+        loop {
+            let Some(start) = find_subslice(&self.osc_buf, PREFIX) else {
+                // Keep a small tail in case the prefix is split across chunks.
+                let keep = PREFIX.len().min(self.osc_buf.len());
+                let drain = self.osc_buf.len() - keep;
+                self.osc_buf.drain(..drain);
+                return;
+            };
+            let after = start + PREFIX.len();
+            match find_terminator(&self.osc_buf[after..]) {
+                Some((end, term_len)) => {
+                    if let Ok(payload) = std::str::from_utf8(&self.osc_buf[after..after + end]) {
+                        if let Some(path) = parse_osc7(payload) {
+                            self.cwd = Some(path);
+                        }
+                    }
+                    self.osc_buf.drain(..after + end + term_len);
+                }
+                None => {
+                    self.osc_buf.drain(..start);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|w| w == needle)
+}
+
+/// Returns (payload_len, terminator_len) for BEL or ESC `\`.
+fn find_terminator(bytes: &[u8]) -> Option<(usize, usize)> {
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0x07 {
+            return Some((i, 1));
+        }
+        if bytes[i] == 0x1b && bytes.get(i + 1) == Some(&b'\\') {
+            return Some((i, 2));
+        }
+        i += 1;
+    }
+    None
+}
+
+fn parse_osc7(payload: &str) -> Option<String> {
+    let rest = payload.strip_prefix("file://")?;
+    let slash = rest.find('/')?;
+    Some(rest[slash..].to_string())
 }
