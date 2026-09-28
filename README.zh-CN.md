@@ -22,8 +22,9 @@
 引擎与应用被刻意解耦:`miaotty` 是引擎的第一个消费者,而引擎本身设计为可被第三方嵌入。
 完整设计见 [`docs/ARCHITECTURE.zh-CN.md`](docs/ARCHITECTURE.zh-CN.md)。
 
-> **项目状态 —— 预发布。** 当前版本为 `0.0.0`,API 尚未稳定。macOS 是主要且已验证的平台;
-> Linux 与 Windows 能在 CI 中构建,但尚未经过充分实测。
+> **项目状态 —— 预发布。** 当前版本为 `0.0.0`,API 尚未稳定。macOS 是主要平台;
+> Windows 已在真实硬件上构建、测试并经 MTP 驱动(见 [`docs/WINDOWS-DEV.zh-CN.md`](docs/WINDOWS-DEV.zh-CN.md));
+> Linux 在 CI 中构建并通过测试。
 
 ---
 
@@ -39,19 +40,41 @@
   与带修饰键的光标移动。
 
 **窗口与工作区**
-- 内联标签栏(`+`、`×`),以及带右键菜单(重命名 / 复制 / 关闭 / 关闭其他)的 Tabs 侧边栏。
-- 递归分屏树:`⌘D` 向右分屏,`⇧⌘D` 向下分屏,分隔条可拖拽调整比例。
-- 右侧 details 面板:工作目录、Agent 状态、每个 pane 的命令历史。
-- 设置窗口(`⌘,`):字号、字体族与主题,可写入 `config.toml`。
+- 内联标签栏(图标、Agent 徽章、`+`、`×`、拖拽重排),以及带右键菜单
+  (重命名 / 前缀 / 标记 / 分组 / 复制 / 关闭 / 关闭其他)的 Tabs 侧边栏。
+- 递归分屏树:`⌘D` 向右分屏,`⇧⌘D` 向下分屏,分隔条可拖拽调整比例。`⌘⇧T` 切换临时快速终端。
+- 侧边栏**文件树**(双击用查看器打开)与 **View 规则**:把 pane 的 cwd/命令/agent/host/文件
+  映射为别名、图标、标签标题与徽章 —— 见 [`docs/VIEW-RULES.zh-CN.md`](docs/VIEW-RULES.zh-CN.md)。
+- **Open Quickly**(`⌘K`):一个面板覆盖标签、agent、文件、最近项、内容搜索命中与命令。
+- 右侧 details 面板含分页:**Info / Agent / Outline / Git / Files / Ports / Queue**
+  (git 状态、目录列表、监听端口、提示队列)。
+- **Composer**(`⌘⇧E`)与**提示队列**:agent 空闲时自动投递;由 agent 状态驱动的**通知**与**防休眠**。
+- **查看器/编辑器**:只读预览带行号与跳转行高亮,编辑态带行号栏,*Open Externally* /
+  *Edit in Tab*,以及无依赖的 Markdown 渲染(标题、列表、引用、表格、代码、链接、图片、脚注)。
+- **Recipes**:保存并回放整个工作区;配置导出。
+- 设置窗口(`⌘,`):字号/字体族、透明度、行高、光标样式、主题、agent 徽章、通知、防休眠、
+  agent 集成、View 规则 —— 写入 `config.toml` / `views.json`。
 
 **配置与集成**
-- 配置位于 `~/.config/miaotty/config.toml`:字号、字体族、内置命名主题或显式配色。
+- 配置位于 `~/.config/miaotty/config.toml`:字号、字体族、透明度、行高、光标样式、主题、配色、
+  `language`(英文或简体中文)、`editor`、agent 开关、`quick-terminal-hotkey`、
+  `update-check-url` / `update-pubkey` —— 见 [`docs/config.example.toml`](docs/config.example.toml)。
 - 当不存在 miaotty 配置时,自动导入 ghostty 的 `config` 与 alacritty 的 `alacritty.toml`。
 - zsh shell 集成(经 OSC 7 上报 cwd、命令历史),通过 `ZDOTDIR` shim 安装 —— 不修改用户点文件。
+- **URL scheme**:`miaotty://`、`ssh://`、`x-man-page://` 会用对应命令新开标签;二次启动会转发给
+  正在运行的实例(单实例,含"聚焦 pane""quick"意图)。
+- **全局快速终端热键**:macOS/Windows 用 `global-hotkey`,Linux 用 `GlobalShortcuts` 门户
+  (另提供 sway/hyprland/GNOME 等 compositor 绑定)。
+- **Agent 集成**:检测 claude/codex/opencode/miao,安装状态上报 hook 脚本,复制接入该 agent 自身
+  配置的片段,并可启动 agent —— 不替用户修改 agent 配置。
+- **更新**:检查清单、下载本平台产物、校验 SHA-256(配置后另校验 minisign 签名),macOS 上安装
+  并重启(带回滚 helper)—— 见 [`docs/decisions`](docs/decisions/README.zh-CN.md)。
+- **远端 view/edit**:经 pane 的 ssh ControlMaster 连接读/写远端文件,带零安装 terminfo 引导。
 
 **自动化**
-- **MTP 控制面**,经 per-user Unix socket(Windows 命名管道为规划中的传输方式):
-  `core.ping/health`、`agent.state.*`、`history.*`、`pane.list/send/run/focus/close`。
+- **MTP 控制面**,经 per-user Unix socket(Windows 为命名管道):
+  `core.ping/health`、`agent.state.*`、`history.*`、`pane.list/send/run/focus/close`,
+  以及 `app.view/edit`(在应用中打开文件)与 `file.read/write`(上限 2 MB)。
 - **`miaotty-cli`**,跨平台的控制面客户端。
 
 ---
@@ -175,6 +198,10 @@ miaotty-cli state claude --state processing --pane ID
 miaotty-cli state list
 miaotty-cli history add --command "cargo test" --cwd "$PWD"
 miaotty-cli history list --pane ID
+miaotty-cli view /path/to/file            # 在应用中以只读方式打开
+miaotty-cli edit /path/to/file            # 在编辑器中打开
+miaotty-cli file read  --path /etc/hosts  # 上限 2 MB
+miaotty-cli file write --path /tmp/x --data "hello"
 ```
 
 使用 `--socket PATH` 或设置 `MIAOTTY_SOCKET` 可指定非默认 socket。
@@ -190,7 +217,10 @@ miaotty-cli history list --pane ID
 | `⌘D` / `⇧⌘D` | 向右 / 向下分屏 |
 | `⌥⌘→` / `⌥⌘←`(或 `⌘⇧]` / `⌘⇧[`) | 轮换 pane 焦点 |
 | `⌥⌘D` | 开关 details 面板 |
+| `⌘K` | Open Quickly(标签、agent、文件、命令) |
 | `⌘F` | 查找 |
+| `⌘⇧E` | Composer(向焦点 pane 发送多行提示) |
+| `⌘⇧T` | 快速终端(临时标签) |
 | `⌘,` | 设置 |
 | `⌘+` / `⌘-` / `⌘0` | 增大 / 减小 / 重置字号 |
 | `Shift+PgUp` / `Shift+PgDn` | 滚动视口 |
@@ -208,18 +238,31 @@ miaotty-cli history list --pane ID
 | 架构与设计 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | [`docs/ARCHITECTURE.zh-CN.md`](docs/ARCHITECTURE.zh-CN.md) |
 | 架构决策记录 | [`docs/decisions/`](docs/decisions/README.md) | [`docs/decisions/README.zh-CN.md`](docs/decisions/README.zh-CN.md) |
 | 安装 | [`docs/INSTALL.md`](docs/INSTALL.md) | [`docs/INSTALL.zh-CN.md`](docs/INSTALL.zh-CN.md) |
+| View 规则(标题/图标/徽章) | [`docs/VIEW-RULES.md`](docs/VIEW-RULES.md) | [`docs/VIEW-RULES.zh-CN.md`](docs/VIEW-RULES.zh-CN.md) |
+| 性能预算与门 | [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) | [`docs/PERFORMANCE.zh-CN.md`](docs/PERFORMANCE.zh-CN.md) |
+| Windows 开发/验证 | [`docs/WINDOWS-DEV.md`](docs/WINDOWS-DEV.md) | [`docs/WINDOWS-DEV.zh-CN.md`](docs/WINDOWS-DEV.zh-CN.md) |
+| 工作约定(隐私、检查) | [`AGENTS.md`](AGENTS.md) | —— |
 | 示例配置 | [`docs/config.example.toml`](docs/config.example.toml) | —— |
 
 ---
 
 ## 路线图
 
-尚未实现:
+近期已完成:Windows 命名管道传输与 ConPTY 路径(真实硬件验证)、会话恢复、View 规则、
+Open Quickly、details 面板、agent 闭环(通知、防休眠、提示队列)、Recipes、经 ssh 的远端
+view/edit、更新下载/校验/安装、URL scheme、全局快速终端热键、i18n,以及性能门。
 
-- Windows 命名管道传输与 ConPTY 实测。
-- 打包:公证的 macOS 构建、Linux AppImage/Flatpak/`.deb`、Windows MSI。
-- 渲染器打磨:damage 驱动的图集上传与图集 trim。
-- 更完整的配置导入,以及窗口/分屏状态的持久化。
+仍待完成:
+
+- **发布链**:为发布产物签名(minisign `.sig` + 公钥分发),并对安装包做端到端验证 ——
+  公证的 macOS 构建、Linux AppImage/`.deb`、Windows MSI。
+- **平台验证**:Linux 运行时(及 Wayland 门户热键)需在真实桌面验证;Windows 的 IME 与 GUI
+  渲染需要交互式会话。
+- **更新安装**:Windows 与 Linux(目前仅 macOS)。
+- **CI 性能基线**:回归门对比记录的基线,需 CI 侧基线存储才能在 CI 生效。
+- **Markdown**:Mermaid 图未渲染。
+- **编辑器**:无 vim 模式;i18n 覆盖主要界面但未覆盖全部字符串。
+- **MTP**:无按能力授权;`file.read/write` 仅 UTF-8 文本(无二进制/流式传输)。
 
 ---
 

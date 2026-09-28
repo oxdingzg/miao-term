@@ -26,8 +26,9 @@ engine's first consumer, and the engine is designed to be embedded by others.
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 
 > **Project status — pre-release.** The version is `0.0.0` and the API is not yet
-> stable. macOS is the primary, verified platform; Linux and Windows build in
-> CI but are not yet fully tested in practice.
+> stable. macOS is the primary platform. Windows is built, tested and driven over
+> MTP on real hardware (see [`docs/WINDOWS-DEV.md`](docs/WINDOWS-DEV.md)); Linux
+> builds and passes tests in CI.
 
 ---
 
@@ -44,27 +45,59 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
   (CSI-u) and modifier-aware navigation keys when a program requests them.
 
 **Window and workspace**
-- Inline tab bar (`+`, `×`) plus a Tabs sidebar with a context menu
-  (Rename / Duplicate / Close / Close Others).
+- Inline tab bar (icons, agent badges, `+`, `×`, drag to reorder) plus a Tabs
+  sidebar with a context menu (Rename / Prefix / Mark / Group / Duplicate /
+  Close / Close Others).
 - A recursive split tree: `⌘D` splits right and `⇧⌘D` splits down, with
-  draggable dividers between panes.
-- A right-hand details panel: working directory, agent state, and per-pane
-  command history.
-- A settings window (`⌘,`) for font size, font family and theme, persisted to
-  `config.toml`.
+  draggable dividers between panes. `⌘⇧T` toggles a scratch Quick Terminal.
+- Sidebar **file tree** (double-click opens the reader) and **View rules**: map
+  a pane's cwd/command/agent/host/file to an alias, icon, tab title and badge —
+  see [`docs/VIEW-RULES.md`](docs/VIEW-RULES.md).
+- **Open Quickly** (`⌘K`): one palette over tabs, agents, files, recents,
+  content-search hits and commands.
+- A right-hand details panel with tabs: **Info, Agent, Outline, Git, Files,
+  Ports, Queue** (git status, directory listing, listening ports, prompt queue).
+- **Composer** (`⌘⇧E`) and a **prompt queue** that sends to an agent pane once it
+  is idle; **notifications** and a **sleep guard** driven by agent state.
+- **Reader/editor** (`⌘`-open): read-only preview with line numbers and a
+  jump-to-line highlight, edit mode with a gutter, *Open Externally* / *Edit in
+  Tab*, and a dependency-free Markdown renderer (headings, lists, quotes, tables,
+  code, links, images, footnotes).
+- **Recipes**: save and replay a whole workspace; config export.
+- A settings window (`⌘,`): font size/family, opacity, line height, cursor
+  style, theme, agent badges, notifications, sleep guard, agent integrations,
+  View rules — persisted to `config.toml` / `views.json`.
 
 **Configuration and integration**
 - Configuration at `~/.config/miaotty/config.toml`: font size, font family,
-  built-in named themes, or explicit colors.
+  opacity, line height, cursor style, theme, colors, `language` (English or
+  Simplified Chinese), `editor`, agent toggles, `quick-terminal-hotkey`,
+  `update-check-url` / `update-pubkey` — see
+  [`docs/config.example.toml`](docs/config.example.toml).
 - Automatic import of ghostty `config` and alacritty `alacritty.toml` when no
   miaotty config exists.
 - zsh shell integration (cwd via OSC 7, command history) installed through a
   `ZDOTDIR` shim — the user's dotfiles are never modified.
+- **URL schemes**: `miaotty://`, `ssh://` and `x-man-page://` open a tab with the
+  matching command; a second launch is forwarded to the running instance
+  (single instance, including "focus pane" and "quick" intents).
+- **Global Quick Terminal hotkey**: `global-hotkey` on macOS/Windows, the
+  `GlobalShortcuts` desktop portal on Linux (plus compositor bindings for
+  sway/hyprland/GNOME and friends).
+- **Agent integrations**: detect claude/codex/opencode/miao, install a state hook
+  script, copy the snippet that wires it into the agent's own config, and launch
+  the agent — the user's agent config is never edited for them.
+- **Updates**: check a manifest, download the platform artifact, verify its
+  SHA-256 (and a minisign signature when configured), and on macOS install and
+  relaunch with a rollback helper — see [`docs/decisions`](docs/decisions).
+- **Remote view/edit**: read and write a remote file over the pane's ssh
+  ControlMaster connection, with a zero-install terminfo bootstrap.
 
 **Automation**
-- The **MTP control plane** over a per-user Unix socket (Windows named pipe is
-  the planned transport): `core.ping/health`, `agent.state.*`, `history.*`,
-  `pane.list/send/run/focus/close`.
+- The **MTP control plane** over a per-user Unix socket (a named pipe on
+  Windows): `core.ping/health`, `agent.state.*`, `history.*`,
+  `pane.list/send/run/focus/close`, `app.view/edit` (open a file in the app) and
+  `file.read/write` (bounded to 2 MB).
 - **`miaotty-cli`**, a cross-platform client for the control plane.
 
 ---
@@ -194,6 +227,10 @@ miaotty-cli state claude --state processing --pane ID
 miaotty-cli state list
 miaotty-cli history add --command "cargo test" --cwd "$PWD"
 miaotty-cli history list --pane ID
+miaotty-cli view /path/to/file            # open it read-only in the app
+miaotty-cli edit /path/to/file            # open it in the editor
+miaotty-cli file read  --path /etc/hosts  # bounded to 2 MB
+miaotty-cli file write --path /tmp/x --data "hello"
 ```
 
 Pass `--socket PATH` or set `MIAOTTY_SOCKET` to target a non-default socket.
@@ -209,7 +246,10 @@ Pass `--socket PATH` or set `MIAOTTY_SOCKET` to target a non-default socket.
 | `⌘D` / `⇧⌘D` | Split right / split down |
 | `⌥⌘→` / `⌥⌘←` (or `⌘⇧]` / `⌘⇧[`) | Cycle pane focus |
 | `⌥⌘D` | Toggle the details panel |
+| `⌘K` | Open Quickly (tabs, agents, files, commands) |
 | `⌘F` | Find |
+| `⌘⇧E` | Composer (multi-line prompt to the focused pane) |
+| `⌘⇧T` | Quick Terminal (scratch tab) |
 | `⌘,` | Settings |
 | `⌘+` / `⌘-` / `⌘0` | Increase / decrease / reset font size |
 | `Shift+PgUp` / `Shift+PgDn` | Scroll the viewport |
@@ -229,18 +269,36 @@ version kept in sync as `*.zh-CN.md`.
 | Architecture & design | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | [`docs/ARCHITECTURE.zh-CN.md`](docs/ARCHITECTURE.zh-CN.md) |
 | Architecture decision records | [`docs/decisions/`](docs/decisions/README.md) | [`docs/decisions/README.zh-CN.md`](docs/decisions/README.zh-CN.md) |
 | Installation | [`docs/INSTALL.md`](docs/INSTALL.md) | [`docs/INSTALL.zh-CN.md`](docs/INSTALL.zh-CN.md) |
+| View rules (titles/icons/badges) | [`docs/VIEW-RULES.md`](docs/VIEW-RULES.md) | [`docs/VIEW-RULES.zh-CN.md`](docs/VIEW-RULES.zh-CN.md) |
+| Performance budgets & gate | [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) | [`docs/PERFORMANCE.zh-CN.md`](docs/PERFORMANCE.zh-CN.md) |
+| Windows dev/verification | [`docs/WINDOWS-DEV.md`](docs/WINDOWS-DEV.md) | [`docs/WINDOWS-DEV.zh-CN.md`](docs/WINDOWS-DEV.zh-CN.md) |
+| Working agreement (privacy, checks) | [`AGENTS.md`](AGENTS.md) | — |
 | Example configuration | [`docs/config.example.toml`](docs/config.example.toml) | — |
 
 ---
 
 ## Roadmap
 
-Not yet implemented:
+Done recently: the Windows named-pipe transport and ConPTY path (verified on
+real hardware), session restore, View rules, Open Quickly, the details panels,
+the agent loop (notifications, sleep guard, prompt queue), recipes, remote
+view/edit over ssh, update download/verify/install, URL schemes, the global
+Quick Terminal hotkey, i18n, and a performance gate.
 
-- Windows named-pipe transport and ConPTY testing.
-- Packaging: notarized macOS builds, Linux AppImage/Flatpak/`.deb`, Windows MSI.
-- Renderer hardening: damage-driven atlas uploads and atlas trimming.
-- Expanded config import and persisted window/split state.
+Still open:
+
+- **Release chain**: sign the release artifacts (minisign `.sig` + published
+  public key) and verify the installers end to end — notarized macOS builds,
+  Linux AppImage/`.deb`, Windows MSI.
+- **Platform verification**: Linux runtime (and the Wayland portal hotkey) on a
+  real desktop; Windows IME and GUI rendering need an interactive session.
+- **Update install** on Windows and Linux (macOS only today).
+- **CI performance baseline**: the regression gate compares against a recorded
+  baseline, so it needs a CI-side baseline store to bind there.
+- **Markdown**: Mermaid diagrams are not rendered.
+- **Editor**: no vim mode; i18n covers the main chrome but not every string.
+- **MTP**: no per-capability authorization; `file.read/write` is UTF-8 text only
+  (no binary/streaming transfer).
 
 ---
 
