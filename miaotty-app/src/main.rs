@@ -480,6 +480,7 @@ struct MiaottyApp {
     settings_family: String,
     line_height_ratio: f32,
     cursor_style: miao_term_config::CursorStyle,
+    tab_drag: Option<usize>,
 }
 
 impl MiaottyApp {
@@ -508,6 +509,7 @@ impl MiaottyApp {
             settings_family: cfg.font_family.clone().unwrap_or_default(),
             line_height_ratio: cfg.line_height,
             cursor_style: cfg.cursor_style,
+            tab_drag: None,
         };
         if let Some(session) = Session::load() {
             app.restore(session);
@@ -1264,9 +1266,32 @@ impl MiaottyApp {
     fn tab_bar(&mut self, ctx: &egui::Context) {
         let fg = self.theme.fg;
         let active = self.active;
-        let mut switch: Option<usize> = None;
+        let sel_bg = ctx.style().visuals.selection.bg_fill;
+        let titles: Vec<(String, Option<egui::Color32>)> = self
+            .tabs
+            .iter()
+            .map(|tab| {
+                let focused = tab.focused();
+                let title = focused
+                    .and_then(|p| p.term.cwd())
+                    .and_then(|p| std::path::Path::new(p).file_name())
+                    .map(|s| s.to_string_lossy().to_string())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| tab.title.clone());
+                let color = focused
+                    .and_then(|p| self.state.agent_for(&p.pane_id))
+                    .and_then(|a| a.get("state").and_then(|v| v.as_str()).map(agent_color));
+                (title, color)
+            })
+            .collect();
+
+        let mut rects: Vec<egui::Rect> = Vec::new();
+        let mut click: Option<usize> = None;
+        let mut started: Option<usize> = None;
+        let mut stopped = false;
         let mut close: Option<usize> = None;
         let mut add = false;
+
         egui::TopBottomPanel::top("tabbar")
             .frame(
                 egui::Frame::default()
@@ -1275,27 +1300,28 @@ impl MiaottyApp {
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    let mut title_and_agent = Vec::new();
-                    for tab in self.tabs.iter() {
-                        let focused = tab.focused();
-                        let title = focused
-                            .and_then(|p| p.term.cwd())
-                            .and_then(|p| std::path::Path::new(p).file_name())
-                            .map(|s| s.to_string_lossy().to_string())
-                            .filter(|s| !s.is_empty())
-                            .unwrap_or_else(|| tab.title.clone());
-                        let color = focused
-                            .and_then(|p| self.state.agent_for(&p.pane_id))
-                            .and_then(|a| a.get("state").and_then(|v| v.as_str()).map(agent_color));
-                        title_and_agent.push((title, color));
-                    }
-                    for (i, (title, color)) in title_and_agent.into_iter().enumerate() {
+                    for (i, (title, color)) in titles.into_iter().enumerate() {
                         if let Some(c) = color {
                             ui.colored_label(c, "\u{25cf}");
                         }
-                        let label = egui::RichText::new(title).size(12.0).color(fg);
-                        if ui.selectable_label(i == active, label).clicked() {
-                            switch = Some(i);
+                        let mut text = egui::RichText::new(title).size(12.0).color(fg);
+                        if i == active {
+                            text = text.background_color(sel_bg);
+                        }
+                        let resp = ui.add(
+                            egui::Label::new(text)
+                                .sense(egui::Sense::click_and_drag())
+                                .selectable(false),
+                        );
+                        rects.push(resp.rect);
+                        if resp.clicked() {
+                            click = Some(i);
+                        }
+                        if resp.drag_started() {
+                            started = Some(i);
+                        }
+                        if resp.drag_stopped() {
+                            stopped = true;
                         }
                         if ui.small_button("\u{00d7}").clicked() {
                             close = Some(i);
@@ -1306,13 +1332,47 @@ impl MiaottyApp {
                     }
                 });
             });
+
+        if let Some(i) = started {
+            self.tab_drag = Some(i);
+        }
+        if stopped {
+            self.tab_drag = None;
+        }
+        if let Some(drag) = self.tab_drag {
+            if let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) {
+                if let Some(target) = rects.iter().position(|r| r.contains(pos)) {
+                    if target != drag {
+                        let was_active = self.active == drag;
+                        let old_active = self.active;
+                        let moved = self.tabs.remove(drag);
+                        self.tabs.insert(target, moved);
+                        self.active = if was_active {
+                            target
+                        } else {
+                            let mut a = old_active;
+                            if drag < a {
+                                a -= 1;
+                            }
+                            if target <= a {
+                                a += 1;
+                            }
+                            a.min(self.tabs.len() - 1)
+                        };
+                        self.tab_drag = Some(target);
+                        self.publish_panes();
+                    }
+                }
+            }
+        }
+
         if add {
             self.new_tab();
         }
         if let Some(i) = close {
             self.active = i;
             self.close_active();
-        } else if let Some(i) = switch {
+        } else if let Some(i) = click {
             self.active = i;
             self.selection = None;
             self.scroll = 0;

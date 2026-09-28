@@ -64,6 +64,32 @@ jobs:
           cargo deb -p miaotty-app --no-build
           cp target/debian/*.deb dist/ 2>/dev/null || true
 
+      - name: AppImage (Linux, best-effort)
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        run: |
+          set -e
+          AppDir=AppDir
+          mkdir -p "$AppDir/usr/bin" "$AppDir/usr/share/applications" \
+                   "$AppDir/usr/share/icons/hicolor/256x256/apps"
+          cp target/release/miaotty target/release/miaotty-cli "$AppDir/usr/bin/"
+          cat > "$AppDir/miaotty.desktop" <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=miaotty
+          Exec=miaotty
+          Icon=miaotty
+          Categories=System;TerminalEmulator;
+          Terminal=false
+          EOF
+          cp "$AppDir/miaotty.desktop" "$AppDir/usr/share/applications/"
+          (command -v convert >/dev/null && convert -size 256x256 xc:'#2e3440' "$AppDir/miaotty.png") \
+            || printf '' > "$AppDir/miaotty.png"
+          cp "$AppDir/miaotty.png" "$AppDir/usr/share/icons/hicolor/256x256/apps/miaotty.png"
+          wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage -O appimagetool
+          chmod +x appimagetool
+          ARCH=x86_64 ./appimagetool --appimage-extract-and-run "$AppDir" miaotty-linux-x86_64.AppImage
+
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -73,13 +99,23 @@ jobs:
           Copy-Item target/release/miaotty-cli.exe dist/
           Compress-Archive -Path dist/* -DestinationPath miaotty-windows-x86_64.zip
 
+      - name: MSI (Windows, best-effort)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        run: |
+          cargo install cargo-wix --locked
+          cargo wix init -p miaotty-app --force
+          cargo wix -p miaotty-app --nocapture
+
       - uses: actions/upload-artifact@v4
         with:
           name: miaotty-${{ matrix.os }}
           path: |
             miaotty-*.zip
             miaotty-*.tar.gz
+            miaotty-*.AppImage
             dist/*.deb
+            target/wix/*.msi
 
   release:
     needs: build

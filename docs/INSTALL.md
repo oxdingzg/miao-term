@@ -30,9 +30,10 @@ it builds `miaotty` + `miaotty-cli` on macOS/Linux/Windows and attaches a
 macOS builds are ad-hoc signed by default; if the repo has `APPLE_CERT_P12` +
 `APPLE_CERT_PASSWORD` + `APPLE_ID` + `APPLE_TEAM_ID` + `APPLE_APP_PASSWORD`
 secrets, the workflow signs with a Developer ID, notarizes and staples instead.
-Linux also builds a `.deb` (via `cargo-deb`, metadata in `miaotty-app/Cargo.toml`);
-Windows ships a zip (MSI via the `dist-workspace.toml` cargo-dist scaffold is a
-later option).
+Linux also builds a `.deb` (via `cargo-deb`, metadata in `miaotty-app/Cargo.toml`)
+and, best-effort, an AppImage (`appimagetool`). Windows ships a zip and,
+best-effort, an MSI (`cargo-wix` / WiX). The AppImage/MSI steps are
+`continue-on-error` so a failure there does not fail the release.
 
 ## Cross-platform installers
 
