@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use eframe::egui;
+use eframe::egui_wgpu;
 use unicode_width::UnicodeWidthStr;
 
 use miao_term_core::vt100;
@@ -36,6 +37,14 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(move |cc| {
             install_fonts(&cc.egui_ctx);
+            if let Some(rs) = cc.wgpu_render_state.as_ref() {
+                let renderer = miao_term_render::TermRenderer::new(
+                    &rs.device,
+                    &rs.queue,
+                    rs.target_format,
+                );
+                rs.renderer.write().callback_resources.insert(renderer);
+            }
             Ok(Box::new(MiaottyApp::new(state)))
         }),
     )
@@ -609,17 +618,35 @@ impl MiaottyApp {
 
                     // ---- draw ----
                     let screen = tab.term.screen();
+                    let draw_cursor =
+                        self.scroll == 0 && self.cursor_on && !screen.hide_cursor();
                     draw_screen(
                         ui,
                         screen,
-                        &font,
                         cw,
                         ch,
                         rect,
                         self.selection,
                         &self.theme,
-                        self.scroll == 0 && self.cursor_on && !screen.hide_cursor(),
+                        draw_cursor,
                     );
+                    let rows = build_rows(screen, &self.theme);
+                    let scale = ctx.pixels_per_point();
+                    let fg = self.theme.fg;
+                    ui.painter().add(egui::Shape::Callback(
+                        egui_wgpu::Callback::new_paint_callback(
+                            rect,
+                            TermCallback {
+                                rows,
+                                left: rect.left(),
+                                top: rect.top(),
+                                scale,
+                                font_size: self.font_size,
+                                line_height: ch,
+                                default_color: (fg.r(), fg.g(), fg.b()),
+                            },
+                        ),
+                    ));
                 }
             });
     }
@@ -672,7 +699,6 @@ fn ordered(sel: Selection) -> (u16, u16, u16, u16) {
 fn draw_screen(
     ui: &egui::Ui,
     screen: &vt100::Screen,
-    font: &egui::FontId,
     cw: f32,
     ch: f32,
     rect: egui::Rect,
@@ -704,43 +730,24 @@ fn draw_screen(
         }
     }
 
-    // Cells (wide chars span two columns).
-    let mut row = 0;
-    while row < rows {
-        let mut col = 0;
-        while col < cols {
+    // Backgrounds (non-default only).
+    for row in 0..rows {
+        for col in 0..cols {
             let Some(cell) = screen.cell(row, col) else {
-                col += 1;
                 continue;
             };
-
-            let cell_rect = egui::Rect::from_min_size(
-                egui::pos2(ox + col as f32 * cw, oy + row as f32 * ch),
-                egui::vec2(cw, ch),
-            );
-
             let bg = map_color(cell.bgcolor(), false, theme);
             if bg != theme.bg {
+                let cell_rect = egui::Rect::from_min_size(
+                    egui::pos2(ox + col as f32 * cw, oy + row as f32 * ch),
+                    egui::vec2(cw, ch),
+                );
                 painter.rect_filled(cell_rect, egui::Rounding::ZERO, bg);
             }
-
-            let contents = cell.contents();
-            let width = UnicodeWidthStr::width(contents).max(if contents.is_empty() { 0 } else { 1 });
-            if !contents.is_empty() && contents != " " {
-                let fg = if cell.inverse() {
-                    theme.bg
-                } else {
-                    map_color(cell.fgcolor(), true, theme)
-                };
-                let span = egui::Rect::from_min_size(cell_rect.min, egui::vec2(cw * width as f32, ch));
-                painter.text(span.left_top(), egui::Align2::LEFT_TOP, contents, font.clone(), fg);
-            }
-            col += width.max(1) as u16;
         }
-        row += 1;
     }
 
-    // Cursor.
+    // Cursor outline (glyphs are drawn on top by the GPU callback).
     if draw_cursor {
         let (crow, ccol) = screen.cursor_position();
         if crow < rows && ccol < cols {
@@ -748,19 +755,93 @@ fn draw_screen(
                 egui::pos2(ox + ccol as f32 * cw, oy + crow as f32 * ch),
                 egui::vec2(cw, ch),
             );
-            painter.rect_filled(cur_rect, egui::Rounding::ZERO, theme.fg);
-            if let Some(cell) = screen.cell(crow, ccol) {
-                let c = cell.contents();
-                if !c.is_empty() && c != " " {
-                    painter.text(
-                        cur_rect.left_top(),
-                        egui::Align2::LEFT_TOP,
-                        c,
-                        font.clone(),
-                        theme.bg,
-                    );
-                }
+            painter.rect_stroke(
+                cur_rect,
+                egui::Rounding::ZERO,
+                egui::Stroke::new(1.5_f32, theme.fg),
+            );
+        }
+    }
+}
+
+/// Build per-row, per-color runs from the screen for the GPU renderer.
+fn build_rows(screen: &vt100::Screen, theme: &Theme) -> Vec<Vec<miao_term_render::Span>> {
+    let (rows, cols) = screen.size();
+    let mut out = Vec::with_capacity(rows as usize);
+    for row in 0..rows {
+        let mut spans: Vec<miao_term_render::Span> = Vec::new();
+        let mut col = 0u16;
+        while col < cols {
+            let Some(cell) = screen.cell(row, col) else {
+                col += 1;
+                continue;
+            };
+            let contents = cell.contents();
+            let width = UnicodeWidthStr::width(contents).max(usize::from(!contents.is_empty())) as u16;
+            let text = if contents.is_empty() { " " } else { contents };
+            let color = if cell.inverse() {
+                let c = theme.bg;
+                (c.r(), c.g(), c.b())
+            } else {
+                let c = map_color(cell.fgcolor(), true, theme);
+                (c.r(), c.g(), c.b())
+            };
+            match spans.last_mut() {
+                Some(last) if last.color == color => last.text.push_str(text),
+                _ => spans.push(miao_term_render::Span::new(text, color)),
             }
+            col += width.max(1);
+        }
+        out.push(spans);
+    }
+    out
+}
+
+/// egui→wgpu paint callback that draws the terminal glyphs via `term-render`.
+struct TermCallback {
+    rows: Vec<Vec<miao_term_render::Span>>,
+    left: f32,
+    top: f32,
+    scale: f32,
+    font_size: f32,
+    line_height: f32,
+    default_color: (u8, u8, u8),
+}
+
+impl egui_wgpu::CallbackTrait for TermCallback {
+    fn prepare(
+        &self,
+        device: &egui_wgpu::wgpu::Device,
+        queue: &egui_wgpu::wgpu::Queue,
+        screen: &egui_wgpu::ScreenDescriptor,
+        _encoder: &mut egui_wgpu::wgpu::CommandEncoder,
+        resources: &mut egui_wgpu::CallbackResources,
+    ) -> Vec<egui_wgpu::wgpu::CommandBuffer> {
+        if let Some(renderer) = resources.get_mut::<miao_term_render::TermRenderer>() {
+            renderer.prepare(
+                device,
+                queue,
+                (screen.size_in_pixels[0], screen.size_in_pixels[1]),
+                self.scale,
+                self.font_size,
+                self.line_height,
+                self.left,
+                self.top,
+                self.default_color,
+                &self.rows,
+            );
+        }
+        Vec::new()
+    }
+
+    fn paint(
+        &self,
+        _info: egui::epaint::PaintCallbackInfo,
+        pass: &mut egui_wgpu::wgpu::RenderPass<'static>,
+        resources: &egui_wgpu::CallbackResources,
+    ) {
+        if let Some(renderer) = resources.get::<miao_term_render::TermRenderer>() {
+            renderer.render(pass);
         }
     }
 }
