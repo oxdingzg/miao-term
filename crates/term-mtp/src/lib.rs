@@ -105,6 +105,7 @@ pub struct ServerState {
     seq: AtomicI64,
     states: Mutex<BTreeMap<String, Value>>,
     history: Mutex<BTreeMap<String, Vec<Value>>>,
+    panes: Mutex<Vec<Value>>,
 }
 
 impl ServerState {
@@ -118,6 +119,23 @@ impl ServerState {
 
     fn revision(&self) -> i64 {
         self.revision.load(Ordering::SeqCst)
+    }
+
+    /// Replace the advertised pane list (called by the app on tab changes).
+    pub fn set_panes(&self, panes: Vec<Value>) {
+        *self.panes.lock().unwrap() = panes;
+    }
+
+    /// Command history for a pane, oldest → newest.
+    pub fn history_for(&self, pane_id: &str) -> Vec<Value> {
+        let k = format!("pane:{pane_id}");
+        self.history.lock().unwrap().get(&k).cloned().unwrap_or_default()
+    }
+
+    /// Agent state entry for a pane, if any.
+    pub fn agent_for(&self, pane_id: &str) -> Option<Value> {
+        let k = format!("pane:{pane_id}");
+        self.states.lock().unwrap().get(&k).cloned()
     }
 }
 
@@ -151,6 +169,10 @@ fn dispatch(state: &ServerState, req: Request) -> Response {
             }),
         ),
         ("core", "health") => Response::ok(id, rev, json!({ "ok": true, "revision": rev })),
+        ("pane", "list") => {
+            let panes = state.panes.lock().unwrap().clone();
+            Response::ok(id, rev, json!({ "panes": panes }))
+        }
         ("agent", "state.set") => {
             let pane = str_field(&params, "pane_id");
             let tty = str_field(&params, "tty");

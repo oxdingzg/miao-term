@@ -40,7 +40,13 @@ fn default_shell() -> String {
 
 impl Terminal {
     /// Spawn a shell on a new PTY.
-    pub fn new(shell: Option<String>, cols: u16, rows: u16, scrollback: usize) -> Fallible<Self> {
+    pub fn new(
+        shell: Option<String>,
+        cols: u16,
+        rows: u16,
+        scrollback: usize,
+        extra_env: &[(String, String)],
+    ) -> Fallible<Self> {
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(PtySize {
             rows,
@@ -49,13 +55,20 @@ impl Terminal {
             pixel_height: 0,
         })?;
 
-        let mut cmd = CommandBuilder::new(shell.unwrap_or_else(default_shell));
+        let shell_path = shell.unwrap_or_else(default_shell);
+        let mut cmd = CommandBuilder::new(&shell_path);
         // Inherit the current environment (PATH, MIAOTTY_SOCKET, …), then override.
         for (k, v) in std::env::vars() {
             cmd.env(k, v);
         }
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
+        for (k, v) in extra_env {
+            cmd.env(k, v);
+        }
+        for (k, v) in crate::shell::env_for(&shell_path) {
+            cmd.env(k, v);
+        }
         if let Ok(cwd) = std::env::current_dir() {
             cmd.cwd(cwd);
         }

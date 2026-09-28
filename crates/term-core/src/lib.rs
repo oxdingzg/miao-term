@@ -11,6 +11,7 @@
 //! - `input` key/mouse → PTY bytes (incl. kitty keyboard / CSI u, bracketed paste)
 //! - `event` [`EventSink`] for OSC-driven notifications to the host
 
+mod shell;
 mod term;
 
 pub use term::Terminal;

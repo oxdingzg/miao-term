@@ -19,3 +19,4 @@ miao-term-config = { path = "../crates/term-config" }
 miao-term-mtp = { path = "../crates/term-mtp" }
 eframe = { version = "0.30.0", features = ["wgpu"] }
 unicode-width = "0.2.2"
+serde_json = "1.0.151"

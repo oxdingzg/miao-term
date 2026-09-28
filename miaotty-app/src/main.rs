@@ -19,7 +19,8 @@ fn main() -> eframe::Result<()> {
     // existing `miaotty-cli`) inherit it.
     let socket = miao_term_mtp::default_socket();
     std::env::set_var("MIAOTTY_SOCKET", &socket);
-    match miao_term_mtp::serve(&socket, miao_term_mtp::ServerState::new()) {
+    let state = miao_term_mtp::ServerState::new();
+    match miao_term_mtp::serve(&socket, state.clone()) {
         Ok(()) => eprintln!("miaotty: MTP host listening on {}", socket.display()),
         Err(e) => eprintln!("miaotty: failed to start MTP host: {e}"),
     }
@@ -33,9 +34,9 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "miaotty",
         options,
-        Box::new(|cc| {
+        Box::new(move |cc| {
             install_fonts(&cc.egui_ctx);
-            Ok(Box::new(MiaottyApp::new()))
+            Ok(Box::new(MiaottyApp::new(state)))
         }),
     )
 }
@@ -111,6 +112,17 @@ fn map_color(color: vt100::Color, foreground: bool) -> egui::Color32 {
 struct Tab {
     term: Terminal,
     title: String,
+    pane_id: String,
+}
+
+fn gen_pane_id() -> String {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    format!("{:016x}{:04x}", nanos, COUNTER.fetch_add(1, Ordering::SeqCst))
 }
 
 /// A grid selection, in viewport (row, col) coordinates; end may be before start.
@@ -129,16 +141,13 @@ struct MiaottyApp {
     cursor_on: bool,
     last_blink: Instant,
     show_details: bool,
+    state: Arc<miao_term_mtp::ServerState>,
 }
 
 impl MiaottyApp {
-    fn new() -> Self {
-        let tab = Tab {
-            term: Terminal::new(None, 100, 30, 10_000).expect("failed to spawn shell"),
-            title: "shell".to_owned(),
-        };
-        Self {
-            tabs: vec![tab],
+    fn new(state: Arc<miao_term_mtp::ServerState>) -> Self {
+        let mut app = Self {
+            tabs: Vec::new(),
             active: 0,
             font_size: 14.0,
             selection: None,
@@ -146,24 +155,42 @@ impl MiaottyApp {
             cursor_on: true,
             last_blink: Instant::now(),
             show_details: true,
+            state,
+        };
+        app.push_tab("shell".to_owned(), 100, 30);
+        app
+    }
+
+    fn spawn_terminal(cols: u16, rows: u16, pane_id: &str) -> Option<Terminal> {
+        let env = vec![("MIAOTTY_PANE_ID".to_owned(), pane_id.to_owned())];
+        match Terminal::new(None, cols, rows, 10_000, &env) {
+            Ok(term) => Some(term),
+            Err(e) => {
+                eprintln!("failed to spawn shell: {e}");
+                None
+            }
+        }
+    }
+
+    fn push_tab(&mut self, title: String, cols: u16, rows: u16) {
+        let pane_id = gen_pane_id();
+        if let Some(term) = Self::spawn_terminal(cols, rows, &pane_id) {
+            self.tabs.push(Tab {
+                term,
+                title,
+                pane_id,
+            });
+            self.active = self.tabs.len() - 1;
+            self.selection = None;
+            self.scroll = 0;
+            self.publish_panes();
         }
     }
 
     fn new_tab(&mut self) {
         let (rows, cols) = self.tabs[self.active].term.size();
-        match Terminal::new(None, cols, rows, 10_000) {
-            Ok(term) => {
-                let n = self.tabs.len() + 1;
-                self.tabs.push(Tab {
-                    term,
-                    title: format!("shell {n}"),
-                });
-                self.active = self.tabs.len() - 1;
-                self.selection = None;
-                self.scroll = 0;
-            }
-            Err(e) => eprintln!("failed to spawn shell: {e}"),
-        }
+        let n = self.tabs.len() + 1;
+        self.push_tab(format!("shell {n}"), cols, rows);
     }
 
     fn close_active(&mut self) {
@@ -172,6 +199,17 @@ impl MiaottyApp {
         }
         self.tabs.remove(self.active);
         self.active = self.active.min(self.tabs.len() - 1);
+        self.publish_panes();
+    }
+
+    /// Advertise the current tabs as MTP panes.
+    fn publish_panes(&self) {
+        let panes = self
+            .tabs
+            .iter()
+            .map(|t| serde_json::json!({ "id": t.pane_id, "title": t.title }))
+            .collect();
+        self.state.set_panes(panes);
     }
 }
 
@@ -206,6 +244,13 @@ impl eframe::App for MiaottyApp {
         }
         self.terminal_panel(ctx);
     }
+}
+
+fn section(text: &str) -> egui::RichText {
+    egui::RichText::new(text)
+        .size(11.0)
+        .strong()
+        .color(egui::Color32::from_gray(150))
 }
 
 fn reveal_in_finder(path: &str) {
@@ -279,19 +324,17 @@ impl MiaottyApp {
 
     fn details_panel(&mut self, ctx: &egui::Context) {
         let cwd = self.tabs[self.active].term.cwd().map(str::to_string);
+        let pane_id = self.tabs[self.active].pane_id.clone();
+        let history = self.state.history_for(&pane_id);
+        let agent = self.state.agent_for(&pane_id);
         let muted = egui::Color32::from_gray(120);
         egui::SidePanel::right("details")
             .resizable(true)
             .default_width(300.0)
             .frame(egui::Frame::default().fill(BG).inner_margin(egui::Margin::same(10.0)))
             .show(ctx, |ui| {
-                ui.label(
-                    egui::RichText::new("INFO")
-                        .size(11.0)
-                        .strong()
-                        .color(egui::Color32::from_gray(150)),
-                );
-                ui.add_space(8.0);
+                ui.label(section("INFO"));
+                ui.add_space(6.0);
                 ui.label(egui::RichText::new("Working Directory").strong().color(FG));
                 match &cwd {
                     Some(p) => {
@@ -301,14 +344,48 @@ impl MiaottyApp {
                         ui.label(egui::RichText::new("\u{2014}").color(muted));
                     }
                 }
-                ui.add_space(8.0);
-                if let Some(p) = cwd {
-                    if ui.button("Copy Path").clicked() {
-                        ctx.copy_text(p.clone());
-                    }
-                    if ui.button("Reveal in Finder").clicked() {
-                        reveal_in_finder(&p);
-                    }
+                if let Some(p) = &cwd {
+                    ui.horizontal(|ui| {
+                        if ui.button("Copy Path").clicked() {
+                            ctx.copy_text(p.clone());
+                        }
+                        if ui.button("Reveal in Finder").clicked() {
+                            reveal_in_finder(p);
+                        }
+                    });
+                }
+
+                if let Some(a) = &agent {
+                    ui.add_space(10.0);
+                    ui.label(section("AGENT"));
+                    let st = a.get("state").and_then(|v| v.as_str()).unwrap_or("?");
+                    let name = a.get("agent").and_then(|v| v.as_str()).unwrap_or("agent");
+                    ui.label(egui::RichText::new(format!("{name} \u{00b7} {st}")).color(FG));
+                }
+
+                ui.add_space(10.0);
+                ui.label(section(&format!("OUTLINE ({})", history.len())));
+                ui.add_space(4.0);
+                if history.is_empty() {
+                    ui.label(egui::RichText::new("No commands yet").color(muted));
+                } else {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            for entry in history.iter().rev() {
+                                if let Some(c) = entry.get("cwd").and_then(|v| v.as_str()) {
+                                    ui.label(
+                                        egui::RichText::new(c).monospace().size(10.0).color(muted),
+                                    );
+                                }
+                                let cmd = entry
+                                    .get("command")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                ui.label(egui::RichText::new(cmd).monospace().color(FG));
+                                ui.add_space(2.0);
+                            }
+                        });
                 }
             });
     }
