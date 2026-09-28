@@ -39,12 +39,13 @@ fn main() -> eframe::Result<()> {
         Box::new(move |cc| {
             install_fonts(&cc.egui_ctx);
             if let Some(rs) = cc.wgpu_render_state.as_ref() {
-                let renderer = miao_term_render::TermRenderer::new(
-                    &rs.device,
-                    &rs.queue,
-                    rs.target_format,
-                );
-                rs.renderer.write().callback_resources.insert(renderer);
+                rs.renderer
+                    .write()
+                    .callback_resources
+                    .insert(PaneRenderers {
+                        format: rs.target_format,
+                        map: std::collections::HashMap::new(),
+                    });
             }
             Ok(Box::new(MiaottyApp::new(state)))
         }),
@@ -1098,6 +1099,7 @@ impl MiaottyApp {
 
         // Draw backgrounds / selection / cursor, then the glyphs via the GPU.
         let draw_cursor;
+        let mut need_prepare = false;
         {
             let pane = &mut self.tabs[ti].panes[pi];
             let screen = pane.term.screen();
@@ -1137,6 +1139,7 @@ impl MiaottyApp {
             if pane.dirty {
                 pane.rows = Arc::new(build_rows(screen, &self.theme, cursor_cell));
                 pane.dirty = false;
+                need_prepare = true;
             }
         }
         let rows = Arc::clone(&self.tabs[ti].panes[pi].rows);
@@ -1146,6 +1149,8 @@ impl MiaottyApp {
             egui_wgpu::Callback::new_paint_callback(
                 rect,
                 TermCallback {
+                    pane_id: pane_id.clone(),
+                    prepare: need_prepare,
                     rows,
                     left: rect.left(),
                     top: rect.top(),
@@ -1306,8 +1311,18 @@ fn build_rows(
     out
 }
 
+/// One `TermRenderer` per pane, so each pane keeps its own prepared glyphs and
+/// we can skip re-preparing panes whose content did not change (damage).
+struct PaneRenderers {
+    format: egui_wgpu::wgpu::TextureFormat,
+    map: std::collections::HashMap<String, miao_term_render::TermRenderer>,
+}
+
 /// egui→wgpu paint callback that draws the terminal glyphs via `term-render`.
 struct TermCallback {
+    pane_id: String,
+    /// Re-shape glyphs this frame (the pane's rows changed).
+    prepare: bool,
     rows: Arc<Vec<Vec<miao_term_render::Span>>>,
     left: f32,
     top: f32,
@@ -1326,19 +1341,26 @@ impl egui_wgpu::CallbackTrait for TermCallback {
         _encoder: &mut egui_wgpu::wgpu::CommandEncoder,
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<egui_wgpu::wgpu::CommandBuffer> {
-        if let Some(renderer) = resources.get_mut::<miao_term_render::TermRenderer>() {
-            renderer.prepare(
-                device,
-                queue,
-                (screen.size_in_pixels[0], screen.size_in_pixels[1]),
-                self.scale,
-                self.font_size,
-                self.line_height,
-                self.left,
-                self.top,
-                self.default_color,
-                self.rows.as_slice(),
-            );
+        if let Some(store) = resources.get_mut::<PaneRenderers>() {
+            let format = store.format;
+            let renderer = store
+                .map
+                .entry(self.pane_id.clone())
+                .or_insert_with(|| miao_term_render::TermRenderer::new(device, queue, format));
+            if self.prepare {
+                renderer.prepare(
+                    device,
+                    queue,
+                    (screen.size_in_pixels[0], screen.size_in_pixels[1]),
+                    self.scale,
+                    self.font_size,
+                    self.line_height,
+                    self.left,
+                    self.top,
+                    self.default_color,
+                    self.rows.as_slice(),
+                );
+            }
         }
         Vec::new()
     }
@@ -1349,8 +1371,10 @@ impl egui_wgpu::CallbackTrait for TermCallback {
         pass: &mut egui_wgpu::wgpu::RenderPass<'static>,
         resources: &egui_wgpu::CallbackResources,
     ) {
-        if let Some(renderer) = resources.get::<miao_term_render::TermRenderer>() {
-            renderer.render(pass);
+        if let Some(store) = resources.get::<PaneRenderers>() {
+            if let Some(renderer) = store.map.get(&self.pane_id) {
+                renderer.render(pass);
+            }
         }
     }
 }

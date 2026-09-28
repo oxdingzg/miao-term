@@ -21,4 +21,5 @@
 - 单个 pass、单个 device;没有第二个 surface 或 swapchain。
 - `wgpu` 必须与 egui-wgpu 的版本锁定一致(不一致就无法共享 device)——所以 `glyphon`
   锁在兼容 wgpu 23 的版本(0.7)。
-- 网格仅在脏时重新 shape(每 tab 一个 dirty 标记 + 行 run 缓存),空闲帧不做文字工作。
+- 每个 pane 拥有自己的 `TermRenderer`(各自的字形图集),因此保留已 prepare 的字形;
+  仅当该 pane 内容变脏(damage)时才重新 shape,空闲帧不做文字工作。

@@ -24,5 +24,6 @@ terminal grid, in one window without fighting over the swapchain.
 - One pass, one device; no second surface or swapchain.
 - `wgpu` must stay pinned to egui-wgpu's version (a mismatch would defeat device
   sharing) — hence `glyphon` is pinned to a wgpu-23-compatible release (0.7).
-- The grid is re-shaped only when dirty (row-run cache keyed off a per-tab
-  dirty flag), so idle frames do no text work.
+- Each pane owns its own `TermRenderer` (its own glyph atlas), so a pane keeps
+  its prepared glyphs; glyphs are re-shaped only when that pane's content is
+  dirty (damage), and idle frames submit no text work.
