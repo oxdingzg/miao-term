@@ -17,6 +17,7 @@ use unicode_width::UnicodeWidthChar;
 
 mod agentloop;
 mod icons;
+mod launch;
 mod panels;
 
 use miao_term_core::aterm::{ATerm, Color, NamedColor};
@@ -34,6 +35,9 @@ fn main() -> eframe::Result<()> {
     }
 
     let cfg = miao_term_config::Config::load();
+    let launch = std::env::args()
+        .skip(1)
+        .find_map(|a| launch::command_for(&a));
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1000.0, 660.0])
@@ -55,7 +59,9 @@ fn main() -> eframe::Result<()> {
                         map: std::collections::HashMap::new(),
                     });
             }
-            Ok(Box::new(MiaottyApp::new(state, cfg)))
+            let mut app = MiaottyApp::new(state, cfg);
+            app.launch = launch;
+            Ok(Box::new(app))
         }),
     )
 }
@@ -579,6 +585,9 @@ struct MiaottyApp {
     queue: Vec<QueuedPrompt>,
     composer: Option<Composer>,
     recipe_ui: Option<RecipeDialog>,
+    launch: Option<String>,
+    quick_pane: Option<String>,
+    quick_return: Option<usize>,
 }
 
 /// The save/open recipe dialog (U7).
@@ -643,6 +652,7 @@ enum PaletteAction {
 #[derive(Clone, Copy, PartialEq)]
 enum Verb {
     Composer,
+    QuickTerminal,
     SaveRecipe,
     OpenRecipe,
     NewTab,
@@ -723,6 +733,9 @@ impl MiaottyApp {
             queue: Vec::new(),
             composer: None,
             recipe_ui: None,
+            launch: None,
+            quick_pane: None,
+            quick_return: None,
         };
         if let Some(session) = Session::load() {
             app.restore(session);
@@ -1095,6 +1108,11 @@ impl eframe::App for MiaottyApp {
             ctx.request_repaint();
         }
 
+        // A URL-scheme launch opens a command in a fresh tab (ADR 0013).
+        if let Some(cmd) = self.launch.take() {
+            self.open_command_tab(&cmd);
+        }
+
         // Notifications, sleep guard and the prompt queue (ADR 0010).
         self.agent_loop(ctx);
 
@@ -1260,6 +1278,7 @@ impl MiaottyApp {
         }
         for (label, verb) in [
             ("Composer", Verb::Composer),
+            ("Quick Terminal", Verb::QuickTerminal),
             ("Save Recipe\u{2026}", Verb::SaveRecipe),
             ("Open Recipe\u{2026}", Verb::OpenRecipe),
             ("New Tab", Verb::NewTab),
@@ -1296,6 +1315,7 @@ impl MiaottyApp {
             }
             PaletteAction::Run(verb) => match verb {
                 Verb::Composer => self.open_composer(),
+                Verb::QuickTerminal => self.toggle_quick_terminal(),
                 Verb::SaveRecipe => {
                     self.recipe_ui = Some(RecipeDialog {
                         save: true,
@@ -2288,6 +2308,54 @@ impl MiaottyApp {
         }
     }
 
+    /// Open a new tab and run `cmd` in it (URL-scheme launch).
+    fn open_command_tab(&mut self, cmd: &str) {
+        self.new_tab();
+        let id = self
+            .tabs
+            .get(self.active)
+            .and_then(|t| t.panes.first())
+            .map(|p| p.pane_id.clone());
+        if let Some(id) = id {
+            self.send_to_pane(&id, cmd);
+        }
+    }
+
+    /// Toggle a scratch "Quick Terminal" tab: create it on first use, then
+    /// switch between it and the previously active tab.
+    fn toggle_quick_terminal(&mut self) {
+        if let Some(id) = self.quick_pane.clone() {
+            if let Some(ti) = self
+                .tabs
+                .iter()
+                .position(|t| t.panes.iter().any(|p| p.pane_id == id))
+            {
+                if self.active == ti {
+                    if let Some(prev) = self.quick_return.take() {
+                        self.active = prev.min(self.tabs.len() - 1);
+                        self.selection = None;
+                        self.scroll = 0;
+                    }
+                } else {
+                    self.quick_return = Some(self.active);
+                    self.active = ti;
+                    self.selection = None;
+                    self.scroll = 0;
+                }
+                return;
+            }
+        }
+        let prev = self.active;
+        self.new_tab();
+        if let Some(tab) = self.tabs.last_mut() {
+            tab.title = "Quick".to_string();
+            if let Some(pane) = tab.panes.first() {
+                self.quick_pane = Some(pane.pane_id.clone());
+            }
+        }
+        self.quick_return = Some(prev);
+    }
+
     fn open_composer(&mut self) {
         let pane_id = self
             .tabs
@@ -3193,7 +3261,7 @@ impl MiaottyApp {
                         {
                             if modifiers.mac_cmd {
                                 match (*key, modifiers.shift, modifiers.alt) {
-                                    (egui::Key::T, _, _) => self.new_tab(),
+                                    (egui::Key::T, false, _) => self.new_tab(),
                                     (egui::Key::W, _, _) => self.close_active(),
                                     (egui::Key::D, true, _) => self.split_active(SplitDir::Down),
                                     (egui::Key::D, false, true) => {
@@ -3220,6 +3288,7 @@ impl MiaottyApp {
                                             self.font_family.clone().unwrap_or_default();
                                     }
                                     (egui::Key::E, true, _) => self.open_composer(),
+                                    (egui::Key::T, true, _) => self.toggle_quick_terminal(),
                                     (egui::Key::K, _, _) => {
                                         self.palette = Some(Palette {
                                             query: String::new(),

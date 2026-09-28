@@ -22,6 +22,7 @@ depends = "$auto"
 assets = [
     ["target/release/miaotty", "usr/bin/miaotty", "755"],
     ["target/release/miaotty-cli", "usr/bin/miaotty-cli", "755"],
+    ["assets/miaotty.desktop", "usr/share/applications/miaotty.desktop", "644"],
 ]
 
 [dependencies]
