@@ -173,15 +173,16 @@ pub fn parse_lsof(text: &str) -> Vec<PortInfo> {
         };
         // The NAME column is `addr:port` (a trailing `(LISTEN)` may follow).
         let name = tokens.iter().rev().find(|t| {
-            t.rsplit_once(':')
-                .is_some_and(|(host, port)| {
-                    !host.is_empty() && !port.is_empty() && port.chars().all(|c| c.is_ascii_digit())
-                })
+            t.rsplit_once(':').is_some_and(|(host, port)| {
+                !host.is_empty() && !port.is_empty() && port.chars().all(|c| c.is_ascii_digit())
+            })
         });
         let Some(name) = name else {
             continue;
         };
-        let port = name.rsplit_once(':').and_then(|(_, p)| p.parse::<u16>().ok());
+        let port = name
+            .rsplit_once(':')
+            .and_then(|(_, p)| p.parse::<u16>().ok());
         if let Some(port) = port {
             if !out.iter().any(|p: &PortInfo| p.port == port) {
                 out.push(PortInfo {

@@ -93,6 +93,9 @@ struct RawConfig {
     cursor_style: Option<String>,
     #[serde(rename = "background-opacity")]
     background_opacity: Option<f32>,
+    notifications: Option<bool>,
+    #[serde(rename = "prevent-sleep")]
+    prevent_sleep: Option<bool>,
     theme: Option<String>,
     colors: Option<RawColors>,
 }
@@ -164,6 +167,10 @@ pub struct Config {
     pub cursor_style: CursorStyle,
     /// Window/terminal background opacity, 0.0–1.0.
     pub background_opacity: f32,
+    /// Post a system notification when an agent needs attention.
+    pub notifications: bool,
+    /// Keep the machine awake while an agent is processing.
+    pub prevent_sleep: bool,
     pub theme: Theme,
 }
 
@@ -175,6 +182,8 @@ impl Default for Config {
             line_height: 1.25,
             cursor_style: CursorStyle::Block,
             background_opacity: 1.0,
+            notifications: true,
+            prevent_sleep: true,
             theme: Theme::default(),
         }
     }
@@ -376,6 +385,16 @@ impl Config {
                         cfg.background_opacity = opacity.clamp(0.1, 1.0);
                     }
                 }
+                "notifications" => {
+                    if let Ok(v) = value.parse::<bool>() {
+                        cfg.notifications = v;
+                    }
+                }
+                "prevent-sleep" => {
+                    if let Ok(v) = value.parse::<bool>() {
+                        cfg.prevent_sleep = v;
+                    }
+                }
                 "palette" => {
                     if let Some((idx, hex)) = value.split_once('=') {
                         if let (Ok(i), Some(c)) = (idx.trim().parse::<usize>(), Rgb::parse(hex)) {
@@ -411,6 +430,12 @@ impl Config {
         }
         if let Some(opacity) = raw.background_opacity {
             cfg.background_opacity = opacity.clamp(0.1, 1.0);
+        }
+        if let Some(v) = raw.notifications {
+            cfg.notifications = v;
+        }
+        if let Some(v) = raw.prevent_sleep {
+            cfg.prevent_sleep = v;
         }
         if let Some(name) = raw.theme {
             if let Some(theme) = theme_by_name(&name) {

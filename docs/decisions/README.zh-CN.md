@@ -18,3 +18,4 @@
 | [0007](./0007-view-rule-engine.zh-CN.md) | View 规则引擎 | 已接受 |
 | [0008](./0008-open-quickly.zh-CN.md) | Open Quickly / 命令面板 | 已接受 |
 | [0009](./0009-details-panels-editor.zh-CN.md) | Details 面板与文件编辑器 | 已接受 |
+| [0010](./0010-agent-loop.zh-CN.md) | Agent 闭环：通知、防休眠、提示队列 | 已接受 |

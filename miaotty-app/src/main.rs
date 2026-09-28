@@ -15,6 +15,7 @@ use eframe::egui;
 use eframe::egui_wgpu;
 use unicode_width::UnicodeWidthChar;
 
+mod agentloop;
 mod icons;
 mod panels;
 
@@ -543,6 +544,24 @@ struct MiaottyApp {
     details_tab: DetailsTab,
     file_sel: Option<usize>,
     editor: Option<Editor>,
+    notifications: bool,
+    prevent_sleep: bool,
+    sleep: agentloop::SleepGuard,
+    agent_states: std::collections::HashMap<String, String>,
+    queue: Vec<QueuedPrompt>,
+    composer: Option<Composer>,
+}
+
+/// A prompt waiting to be sent to an agent pane once it is idle.
+struct QueuedPrompt {
+    pane_id: String,
+    text: String,
+}
+
+/// The multi-line prompt composer for one pane.
+struct Composer {
+    pane_id: String,
+    text: String,
 }
 
 /// Details panel tab (ADR 0009).
@@ -554,6 +573,7 @@ enum DetailsTab {
     Git,
     Files,
     Ports,
+    Queue,
 }
 
 /// An open file in the preview/editor window.
@@ -574,6 +594,7 @@ enum PaletteAction {
 
 #[derive(Clone, Copy, PartialEq)]
 enum Verb {
+    Composer,
     NewTab,
     SplitRight,
     SplitDown,
@@ -639,6 +660,12 @@ impl MiaottyApp {
             details_tab: DetailsTab::Info,
             file_sel: None,
             editor: None,
+            notifications: cfg.notifications,
+            prevent_sleep: cfg.prevent_sleep,
+            sleep: agentloop::SleepGuard::new(),
+            agent_states: std::collections::HashMap::new(),
+            queue: Vec::new(),
+            composer: None,
         };
         if let Some(session) = Session::load() {
             app.restore(session);
@@ -979,6 +1006,9 @@ impl eframe::App for MiaottyApp {
             ctx.request_repaint();
         }
 
+        // Notifications, sleep guard and the prompt queue (ADR 0010).
+        self.agent_loop(ctx);
+
         // Refresh details-panel data for the focused pane (ADR 0009).
         let (cwd, pid) = self
             .tabs
@@ -1039,6 +1069,9 @@ impl eframe::App for MiaottyApp {
         if self.show_settings {
             self.settings_window(ctx);
         }
+        if self.composer.is_some() {
+            self.composer_window(ctx);
+        }
         if self.editor.is_some() {
             self.editor_window(ctx);
         }
@@ -1085,6 +1118,7 @@ impl MiaottyApp {
             }
         }
         for (label, verb) in [
+            ("Composer", Verb::Composer),
             ("New Tab", Verb::NewTab),
             ("Split Right", Verb::SplitRight),
             ("Split Down", Verb::SplitDown),
@@ -1115,6 +1149,7 @@ impl MiaottyApp {
                 }
             }
             PaletteAction::Run(verb) => match verb {
+                Verb::Composer => self.open_composer(),
                 Verb::NewTab => self.new_tab(),
                 Verb::SplitRight => self.split_active(SplitDir::Right),
                 Verb::SplitDown => self.split_active(SplitDir::Down),
@@ -1539,6 +1574,7 @@ impl MiaottyApp {
         let muted = egui::Color32::from_gray(120);
         let fg = self.theme.fg;
         let mut open_file: Option<PathBuf> = None;
+        let mut compose = false;
         egui::SidePanel::right("details")
             .resizable(true)
             .default_width(300.0)
@@ -1556,6 +1592,7 @@ impl MiaottyApp {
                         (DetailsTab::Git, "Git"),
                         (DetailsTab::Files, "Files"),
                         (DetailsTab::Ports, "Ports"),
+                        (DetailsTab::Queue, "Queue"),
                     ] {
                         if ui
                             .selectable_label(self.details_tab == tab, label)
@@ -1708,6 +1745,49 @@ impl MiaottyApp {
                                 });
                         }
                     }
+                    DetailsTab::Queue => {
+                        ui.horizontal(|ui| {
+                            if ui.button("Compose").clicked() {
+                                compose = true;
+                            }
+                            ui.label(
+                                egui::RichText::new(format!("{} queued", self.queue.len()))
+                                    .small()
+                                    .color(muted),
+                            );
+                        });
+                        ui.add_space(4.0);
+                        if self.queue.is_empty() {
+                            ui.label(
+                                egui::RichText::new("Prompts send when the agent is idle")
+                                    .color(muted),
+                            );
+                        } else {
+                            let mut send = None;
+                            let mut remove = None;
+                            for (i, q) in self.queue.iter().enumerate() {
+                                ui.horizontal(|ui| {
+                                    let first = q.text.lines().next().unwrap_or("").to_string();
+                                    ui.label(
+                                        egui::RichText::new(first).monospace().size(11.0).color(fg),
+                                    );
+                                    if ui.small_button("Send").clicked() {
+                                        send = Some(i);
+                                    }
+                                    if ui.small_button("\u{2715}").clicked() {
+                                        remove = Some(i);
+                                    }
+                                });
+                            }
+                            if let Some(i) = send {
+                                let q = self.queue.remove(i);
+                                self.send_to_pane(&q.pane_id, &q.text);
+                            }
+                            if let Some(i) = remove {
+                                self.queue.remove(i);
+                            }
+                        }
+                    }
                     DetailsTab::Ports => {
                         if snapshot.ports.is_empty() {
                             ui.label(egui::RichText::new("No listening ports").color(muted));
@@ -1726,6 +1806,153 @@ impl MiaottyApp {
             });
         if let Some(path) = open_file {
             self.open_editor(path);
+        }
+        if compose {
+            self.open_composer();
+        }
+    }
+
+    /// The label of the tab that owns `pane_id`.
+    fn pane_label(&self, pane_id: &str) -> String {
+        for tab in &self.tabs {
+            if tab.panes.iter().any(|p| p.pane_id == pane_id) {
+                return self.tab_title(tab);
+            }
+        }
+        pane_id.to_string()
+    }
+
+    /// Write `text` (then Enter) to a pane.
+    fn send_to_pane(&mut self, pane_id: &str, text: &str) {
+        for tab in &mut self.tabs {
+            for pane in &mut tab.panes {
+                if pane.pane_id == pane_id {
+                    let mut bytes = text.replace("\r\n", "\n").into_bytes();
+                    bytes.push(b'\r');
+                    pane.term.write(&bytes);
+                    pane.dirty = true;
+                    return;
+                }
+            }
+        }
+    }
+
+    fn open_composer(&mut self) {
+        let pane_id = self
+            .tabs
+            .get(self.active)
+            .and_then(|t| t.focused())
+            .map(|p| p.pane_id.clone())
+            .unwrap_or_default();
+        self.composer = Some(Composer {
+            pane_id,
+            text: String::new(),
+        });
+    }
+
+    fn composer_window(&mut self, ctx: &egui::Context) {
+        let fg = self.theme.fg;
+        let Some(mut composer) = self.composer.take() else {
+            return;
+        };
+        let target = self.pane_label(&composer.pane_id);
+        let mut open = true;
+        let mut send = false;
+        let mut queue = false;
+        egui::Window::new("Composer")
+            .open(&mut open)
+            .default_size([520.0, 280.0])
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new(format!("to {target}"))
+                        .small()
+                        .color(fg),
+                );
+                ui.add(
+                    egui::TextEdit::multiline(&mut composer.text)
+                        .hint_text("Prompt\u{2026}")
+                        .desired_width(f32::INFINITY)
+                        .desired_rows(8),
+                );
+                ui.horizontal(|ui| {
+                    let ready = !composer.text.trim().is_empty();
+                    if ui.add_enabled(ready, egui::Button::new("Send")).clicked() {
+                        send = true;
+                    }
+                    if ui.add_enabled(ready, egui::Button::new("Queue")).clicked() {
+                        queue = true;
+                    }
+                });
+            });
+        if send {
+            let text = std::mem::take(&mut composer.text);
+            self.send_to_pane(&composer.pane_id, &text);
+        }
+        if queue {
+            let text = std::mem::take(&mut composer.text);
+            self.queue.push(QueuedPrompt {
+                pane_id: composer.pane_id.clone(),
+                text,
+            });
+        }
+        if open {
+            self.composer = Some(composer);
+        }
+    }
+
+    /// Notifications, sleep prevention and the prompt queue (ADR 0010).
+    fn agent_loop(&mut self, ctx: &egui::Context) {
+        let focused_id = self
+            .tabs
+            .get(self.active)
+            .and_then(|t| t.focused())
+            .map(|p| p.pane_id.clone());
+        let mut states: Vec<(String, String, String)> = Vec::new();
+        let mut any_processing = false;
+        for tab in &self.tabs {
+            for pane in &tab.panes {
+                let Some(a) = self.state.agent_for(&pane.pane_id) else {
+                    continue;
+                };
+                let state = a
+                    .get("state")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let agent = a
+                    .get("agent")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("agent")
+                    .to_string();
+                if state == "processing" {
+                    any_processing = true;
+                }
+                states.push((pane.pane_id.clone(), agent, state));
+            }
+        }
+        let mut alert: Option<(String, String)> = None;
+        for (id, agent, state) in states {
+            let prev = self.agent_states.insert(id.clone(), state.clone());
+            let changed = prev.as_deref() != Some(state.as_str());
+            let wants = matches!(state.as_str(), "awaiting" | "error");
+            if changed && wants && self.notifications && Some(&id) != focused_id.as_ref() {
+                alert = Some((format!("{agent} \u{00b7} {state}"), self.pane_label(&id)));
+            }
+        }
+        if let Some((title, body)) = alert {
+            agentloop::notify(&title, &body);
+        }
+        if self.prevent_sleep {
+            self.sleep.set_awake(any_processing);
+        }
+        if let Some(pos) = self.queue.iter().position(|q| {
+            self.agent_states
+                .get(&q.pane_id)
+                .is_some_and(|s| s == "idle")
+        }) {
+            let q = self.queue.remove(pos);
+            self.send_to_pane(&q.pane_id, &q.text);
+            ctx.request_repaint();
         }
     }
 
@@ -1911,6 +2138,8 @@ impl MiaottyApp {
         };
         out.push_str(&format!("cursor-style = {cursor:?}\n"));
         out.push_str(&format!("background-opacity = {}\n", self.opacity));
+        out.push_str(&format!("notifications = {}\n", self.notifications));
+        out.push_str(&format!("prevent-sleep = {}\n", self.prevent_sleep));
         out.push_str("\n[colors]\n");
         out.push_str(&format!(
             "background = \"#{:02x}{:02x}{:02x}\"\n",
@@ -2151,6 +2380,19 @@ impl MiaottyApp {
                     {
                         self.alpha = (self.opacity * 255.0).round() as u8;
                     }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Agents");
+                    ui.checkbox(&mut self.notifications, "Notify");
+                    ui.checkbox(&mut self.prevent_sleep, "Keep awake");
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Sleep guard");
+                    ui.label(if self.sleep.awake() {
+                        "awake"
+                    } else {
+                        "\u{2014}"
+                    });
                 });
                 ui.horizontal(|ui| {
                     ui.label("Line height");
@@ -2406,6 +2648,7 @@ impl MiaottyApp {
                                         self.settings_family =
                                             self.font_family.clone().unwrap_or_default();
                                     }
+                                    (egui::Key::E, true, _) => self.open_composer(),
                                     (egui::Key::K, _, _) => {
                                         self.palette = Some(Palette {
                                             query: String::new(),

@@ -17,3 +17,4 @@ Docs are English by default; keep a Simplified Chinese version in sync
 | [0007](./0007-view-rule-engine.md) | View rule engine | accepted |
 | [0008](./0008-open-quickly.md) | Open Quickly / command palette | accepted |
 | [0009](./0009-details-panels-editor.md) | Details panels and the file editor | accepted |
+| [0010](./0010-agent-loop.md) | Agent loop: notifications, sleep guard, prompt queue | accepted |
