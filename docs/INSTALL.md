@@ -21,6 +21,15 @@ PROFILE=debug scripts/package-macos.sh
 Produces an ad-hoc-signed `dist/miaotty.app`. For distribution, sign with a
 Developer ID and notarize (not done yet).
 
+## Releases
+
+Pushing a `v*` tag runs [`.github/workflows/release.yml`](../.github/workflows/release.yml):
+it builds `miaotty` + `miaotty-cli` on macOS/Linux/Windows and attaches a
+`miaotty.app` zip / Linux tarball / Windows zip to a GitHub Release.
+
+macOS builds are ad-hoc signed; notarization requires a Developer ID certificate
+and is not wired up yet. All platforms ship as-is (no installer).
+
 ## Cross-platform installers
 
 `dist-workspace.toml` is a [cargo-dist](https://opensource.axo.dev/cargo-dist/)

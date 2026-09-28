@@ -393,6 +393,8 @@ struct MiaottyApp {
     find_query: String,
     split_drag: Option<Vec<bool>>,
     font_family: Option<String>,
+    show_settings: bool,
+    settings_family: String,
 }
 
 impl MiaottyApp {
@@ -417,6 +419,8 @@ impl MiaottyApp {
             find_query: String::new(),
             split_drag: None,
             font_family: cfg.font_family.clone(),
+            show_settings: false,
+            settings_family: cfg.font_family.clone().unwrap_or_default(),
         };
         app.push_tab("shell".to_owned(), 100, 30, None);
         app
@@ -704,6 +708,7 @@ impl eframe::App for MiaottyApp {
             ctx.request_repaint_after(Duration::from_millis(530));
         }
 
+        self.tab_bar(ctx);
         if self.find_open {
             self.find_bar(ctx);
         }
@@ -715,6 +720,19 @@ impl eframe::App for MiaottyApp {
         if let Some(i) = self.renaming {
             self.rename_window(ctx, i);
         }
+        if self.show_settings {
+            self.settings_window(ctx);
+        }
+    }
+}
+
+fn agent_color(state: &str) -> egui::Color32 {
+    match state {
+        "processing" => egui::Color32::from_rgb(0x81, 0xa1, 0xc1),
+        "idle" => egui::Color32::from_rgb(0xa3, 0xbe, 0x8c),
+        "awaiting" => egui::Color32::from_rgb(0xeb, 0xcb, 0x8b),
+        "error" => egui::Color32::from_rgb(0xbf, 0x61, 0x6a),
+        _ => egui::Color32::GRAY,
     }
 }
 
@@ -781,6 +799,7 @@ impl MiaottyApp {
         let mut rename_buf = String::new();
         let mut add = false;
         let mut toggle = false;
+        let mut settings = false;
 
         egui::SidePanel::left("tabs")
             .resizable(true)
@@ -795,6 +814,9 @@ impl MiaottyApp {
                         }
                         if ui.button("\u{25a4}").on_hover_text("Toggle Details").clicked() {
                             toggle = true;
+                        }
+                        if ui.button("\u{2699}").on_hover_text("Settings").clicked() {
+                            settings = true;
                         }
                     });
                 });
@@ -850,6 +872,10 @@ impl MiaottyApp {
         }
         if toggle {
             self.show_details = !self.show_details;
+        }
+        if settings {
+            self.show_settings = true;
+            self.settings_family = self.font_family.clone().unwrap_or_default();
         }
         if let Some(i) = close {
             self.active = i;
@@ -947,6 +973,158 @@ impl MiaottyApp {
             });
     }
 
+    fn mark_all_dirty(&mut self) {
+        for tab in &mut self.tabs {
+            for pane in &mut tab.panes {
+                pane.dirty = true;
+            }
+        }
+    }
+
+    fn save_config(&self) {
+        let bg = self.theme.bg;
+        let fg = self.theme.fg;
+        let mut out = String::new();
+        out.push_str(&format!("font-size = {}\n", self.font_size));
+        if let Some(family) = &self.font_family {
+            out.push_str(&format!("font-family = {family:?}\n"));
+        }
+        out.push_str("\n[colors]\n");
+        out.push_str(&format!(
+            "background = \"#{:02x}{:02x}{:02x}\"\n",
+            bg.r(),
+            bg.g(),
+            bg.b()
+        ));
+        out.push_str(&format!(
+            "foreground = \"#{:02x}{:02x}{:02x}\"\n",
+            fg.r(),
+            fg.g(),
+            fg.b()
+        ));
+        out.push_str("palette = [\n");
+        for c in &self.theme.palette {
+            out.push_str(&format!("  \"#{:02x}{:02x}{:02x}\",\n", c.r(), c.g(), c.b()));
+        }
+        out.push_str("]\n");
+
+        if let Some(path) = miao_term_config::Config::path() {
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            match std::fs::write(&path, out) {
+                Ok(()) => eprintln!("miaotty: wrote {}", path.display()),
+                Err(e) => eprintln!("miaotty: failed to write config: {e}"),
+            }
+        }
+    }
+
+    fn settings_window(&mut self, ctx: &egui::Context) {
+        let mut open = true;
+        egui::Window::new("Settings")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Font size");
+                    if ui
+                        .add(egui::Slider::new(&mut self.font_size, 8.0..=32.0))
+                        .changed()
+                    {
+                        self.mark_all_dirty();
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Font family");
+                    if ui
+                        .add(egui::TextEdit::singleline(&mut self.settings_family).desired_width(180.0))
+                        .changed()
+                    {
+                        let trimmed = self.settings_family.trim();
+                        self.font_family = (!trimmed.is_empty()).then(|| trimmed.to_string());
+                        self.mark_all_dirty();
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Theme");
+                    for name in ["nord", "dracula", "gruvbox", "solarized", "tokyo-night"] {
+                        if ui.button(name).clicked() {
+                            if let Some(theme) = miao_term_config::theme_by_name(name) {
+                                self.theme = Theme::from_config(&theme);
+                                self.mark_all_dirty();
+                            }
+                        }
+                    }
+                });
+                ui.separator();
+                if ui.button("Save to config.toml").clicked() {
+                    self.save_config();
+                }
+            });
+        if !open {
+            self.show_settings = false;
+        }
+    }
+
+    fn tab_bar(&mut self, ctx: &egui::Context) {
+        let fg = self.theme.fg;
+        let active = self.active;
+        let mut switch: Option<usize> = None;
+        let mut close: Option<usize> = None;
+        let mut add = false;
+        egui::TopBottomPanel::top("tabbar")
+            .frame(
+                egui::Frame::default()
+                    .fill(self.theme.bg)
+                    .inner_margin(egui::Margin::symmetric(6.0, 3.0)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    let mut title_and_agent = Vec::new();
+                    for tab in self.tabs.iter() {
+                        let focused = tab.focused();
+                        let title = focused
+                            .and_then(|p| p.term.cwd())
+                            .and_then(|p| std::path::Path::new(p).file_name())
+                            .map(|s| s.to_string_lossy().to_string())
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or_else(|| tab.title.clone());
+                        let color = focused
+                            .and_then(|p| self.state.agent_for(&p.pane_id))
+                            .and_then(|a| a.get("state").and_then(|v| v.as_str()).map(agent_color));
+                        title_and_agent.push((title, color));
+                    }
+                    for (i, (title, color)) in title_and_agent.into_iter().enumerate() {
+                        if let Some(c) = color {
+                            ui.colored_label(c, "\u{25cf}");
+                        }
+                        let label = egui::RichText::new(title).size(12.0).color(fg);
+                        if ui.selectable_label(i == active, label).clicked() {
+                            switch = Some(i);
+                        }
+                        if ui.small_button("\u{00d7}").clicked() {
+                            close = Some(i);
+                        }
+                    }
+                    if ui.small_button("+").clicked() {
+                        add = true;
+                    }
+                });
+            });
+        if add {
+            self.new_tab();
+        }
+        if let Some(i) = close {
+            self.active = i;
+            self.close_active();
+        } else if let Some(i) = switch {
+            self.active = i;
+            self.selection = None;
+            self.scroll = 0;
+        }
+    }
+
     fn find_bar(&mut self, ctx: &egui::Context) {
         let query = self.find_query.to_lowercase();
         let matches = self
@@ -1028,6 +1206,11 @@ impl MiaottyApp {
                                         self.font_size = (self.font_size - 1.0).max(6.0)
                                     }
                                     (egui::Key::Num0, _, _) => self.font_size = 14.0,
+                                    (egui::Key::Comma, _, _) => {
+                                        self.show_settings = true;
+                                        self.settings_family =
+                                            self.font_family.clone().unwrap_or_default();
+                                    }
                                     _ => {}
                                 }
                             }

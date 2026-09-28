@@ -1,0 +1,66 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        run: cargo build --release -p miaotty-app -p miaotty-cli
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          PROFILE=release scripts/package-macos.sh
+          cd dist && zip -qr ../miaotty-macos-arm64.zip miaotty.app
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist
+          cp target/release/miaotty target/release/miaotty-cli dist/
+          tar -C dist -czf miaotty-linux-x86_64.tar.gz .
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/miaotty.exe dist/
+          Copy-Item target/release/miaotty-cli.exe dist/
+          Compress-Archive -Path dist/* -DestinationPath miaotty-windows-x86_64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: miaotty-${{ matrix.os }}
+          path: |
+            miaotty-*.zip
+            miaotty-*.tar.gz
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "${GITHUB_REF_NAME}" artifacts/* --generate-notes

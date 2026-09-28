@@ -14,8 +14,9 @@ the `miaotty` application built on top of it.
 
 - Window, shell on a PTY, VT parsing (`alacritty_terminal`), GPU grid rendering,
   keyboard input, resize.
-- Tabs with a left sidebar (`+`, click to switch, middle-click to close,
-  right-click for Rename / Duplicate / Close / Close Others).
+- A top tab bar (click to switch, `×` to close, `+` to add) plus a left Tabs
+  sidebar (right-click for Rename / Duplicate / Close / Close Others).
+- Settings window (`⌘,`): font size, font family, theme; save to `config.toml`.
 - Splits: a recursive split tree (any number of panes), `⌘D` (right) /
   `⇧⌘D` (down), click to focus, drag the divider to resize, `⌘W` closes the
   focused pane.

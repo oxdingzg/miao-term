@@ -19,6 +19,14 @@ PROFILE=debug scripts/package-macos.sh
 
 产出 ad-hoc 签名的 `dist/miaotty.app`。要分发还需用 Developer ID 签名并公证(尚未做)。
 
+## 发布
+
+推 `v*` tag 会触发 [`.github/workflows/release.yml`](../.github/workflows/release.yml):
+在 macOS/Linux/Windows 构建 `miaotty` + `miaotty-cli`,并把 `miaotty.app` zip / Linux tar / Windows zip
+挂到 GitHub Release。
+
+macOS 为 ad-hoc 签名;公证需要 Developer ID 证书,尚未接入。三平台均为免安装产物。
+
 ## 跨平台安装包
 
 `dist-workspace.toml` 是 [cargo-dist](https://opensource.axo.dev/cargo-dist/) 脚手架
