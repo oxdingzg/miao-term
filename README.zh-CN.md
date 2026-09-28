@@ -20,9 +20,11 @@
 - zsh shell 集成(OSC 7 上报 cwd、命令历史),通过 `ZDOTDIR` shim 自动安装。
 - 配置 `~/.config/miaotty/config.toml`(字号 + 配色)—— 见
   [`docs/config.example.toml`](docs/config.example.toml)。
+- **GPU 字形渲染**:终端网格由 `term-render`(wgpu + glyphon)经 egui `PaintCallback` 绘制,
+  与 egui 共享同一 device/queue/surface。
 
-尚未完成:自绘 wgpu 渲染器(当前用 egui 画)、分屏、配置导入(ghostty/alacritty)、
-Windows 命名管道传输、打包。
+尚未完成:分屏、配置导入(ghostty/alacritty)、Windows 命名管道传输、打包,
+以及渲染器进一步打磨(damage 增量、光标闪烁等)。
 
 ## 运行
 
