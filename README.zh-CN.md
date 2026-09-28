@@ -21,7 +21,7 @@
   `pane.send/run`、`pane.focus/close` —— 与现有 `miaotty-cli` 互通。
 - 本仓库自带**跨平台 `miaotty-cli`**(`miaotty-cli/`,经 `interprocess`:Unix socket 或 Windows 命名管道)。
 - zsh shell 集成(OSC 7 上报 cwd、命令历史),通过 `ZDOTDIR` shim 自动安装。
-- 配置 `~/.config/miaotty/config.toml`(字号 + 配色)—— 见
+- 配置 `~/.config/miaotty/config.toml`(字号、字体族、内置主题名或显式配色)—— 见
   [`docs/config.example.toml`](docs/config.example.toml)。
 - **GPU 字形渲染**:终端网格由 `term-render`(wgpu + glyphon)经 egui `PaintCallback` 绘制,
   与 egui 共享同一 device/queue/surface。

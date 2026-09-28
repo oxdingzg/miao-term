@@ -31,8 +31,8 @@ the `miaotty` application built on top of it.
 - A cross-platform `miaotty-cli` (`miaotty-cli/`, talks over `interprocess`:
   Unix socket or Windows named pipe).
 - zsh shell integration (cwd via OSC 7, command history) installed via a `ZDOTDIR` shim.
-- Config at `~/.config/miaotty/config.toml` (font size + colors) — see
-  [`docs/config.example.toml`](docs/config.example.toml).
+- Config at `~/.config/miaotty/config.toml` (font size, font family, named theme
+  or explicit colors) — see [`docs/config.example.toml`](docs/config.example.toml).
 - **GPU glyph rendering**: the terminal grid is drawn by `term-render` (wgpu +
   glyphon) through an egui `PaintCallback`, sharing egui's device/queue/surface.
 

@@ -96,6 +96,7 @@ impl TermRenderer {
         left: f32,
         top: f32,
         default_color: (u8, u8, u8),
+        family: Option<&str>,
         rows: &[Vec<Span>],
     ) {
         self.viewport.update(
@@ -122,11 +123,15 @@ impl TermRenderer {
             let buffer = &mut self.buffers[i];
             buffer.set_metrics(&mut self.font_system, metrics);
             buffer.set_size(&mut self.font_system, None, None);
+            let fam = match family {
+                Some(name) => Family::Name(name),
+                None => Family::Monospace,
+            };
             let owned: Vec<(String, Attrs)> = row
                 .iter()
                 .map(|span| {
                     let attrs = Attrs::new()
-                        .family(Family::Monospace)
+                        .family(fam)
                         .color(Color::rgb(span.color.0, span.color.1, span.color.2));
                     (span.text.clone(), attrs)
                 })
@@ -134,7 +139,7 @@ impl TermRenderer {
             buffer.set_rich_text(
                 &mut self.font_system,
                 owned.iter().map(|(text, attrs)| (text.as_str(), *attrs)),
-                Attrs::new().family(Family::Monospace),
+                Attrs::new().family(fam),
                 Shaping::Basic,
             );
         }
@@ -207,15 +212,19 @@ impl MetricsProbe {
     }
 
     /// Returns `(cell_width, line_height)` for the given font size.
-    pub fn cell(&mut self, font_size: f32, line_height: f32) -> (f32, f32) {
+    pub fn cell(&mut self, font_size: f32, line_height: f32, family: Option<&str>) -> (f32, f32) {
         let metrics = Metrics::new(font_size, line_height);
+        let fam = match family {
+            Some(name) => Family::Name(name),
+            None => Family::Monospace,
+        };
         self.buffer
             .set_metrics(&mut self.font_system, metrics);
         self.buffer.set_size(&mut self.font_system, None, None);
         self.buffer.set_text(
             &mut self.font_system,
             "M",
-            Attrs::new().family(Family::Monospace),
+            Attrs::new().family(fam),
             Shaping::Basic,
         );
         self.buffer

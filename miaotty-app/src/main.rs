@@ -392,6 +392,7 @@ struct MiaottyApp {
     find_open: bool,
     find_query: String,
     split_drag: Option<Vec<bool>>,
+    font_family: Option<String>,
 }
 
 impl MiaottyApp {
@@ -415,6 +416,7 @@ impl MiaottyApp {
             find_open: false,
             find_query: String::new(),
             split_drag: None,
+            font_family: cfg.font_family.clone(),
         };
         app.push_tab("shell".to_owned(), 100, 30, None);
         app
@@ -986,7 +988,9 @@ impl MiaottyApp {
                 let rect = ui.available_rect_before_wrap();
                 // Cell size comes from the renderer's own font so glyphs line up.
                 let line_height = (self.font_size * 1.25).round();
-                let (cw, ch) = self.metrics.cell(self.font_size, line_height);
+                let (cw, ch) = self
+                    .metrics
+                    .cell(self.font_size, line_height, self.font_family.as_deref());
                 if cw <= 0.0 || ch <= 0.0 {
                     return;
                 }
@@ -1312,6 +1316,7 @@ impl MiaottyApp {
                     font_size: self.font_size,
                     line_height: ch,
                     default_color: (fg.r(), fg.g(), fg.b()),
+                    family: self.font_family.clone(),
                 },
             ),
         ));
@@ -1499,6 +1504,7 @@ struct TermCallback {
     font_size: f32,
     line_height: f32,
     default_color: (u8, u8, u8),
+    family: Option<String>,
 }
 
 impl egui_wgpu::CallbackTrait for TermCallback {
@@ -1527,6 +1533,7 @@ impl egui_wgpu::CallbackTrait for TermCallback {
                     self.left,
                     self.top,
                     self.default_color,
+                    self.family.as_deref(),
                     self.rows.as_slice(),
                 );
             }

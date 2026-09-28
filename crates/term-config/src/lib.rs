@@ -65,13 +65,74 @@ struct RawColors {
 struct RawConfig {
     #[serde(rename = "font-size")]
     font_size: Option<f32>,
+    #[serde(rename = "font-family")]
+    font_family: Option<String>,
+    theme: Option<String>,
     colors: Option<RawColors>,
+}
+
+fn theme_from(bg: &str, fg: &str, palette: &[&str; 16]) -> Theme {
+    let mut p = [Rgb(0, 0, 0); 16];
+    for (i, hex) in palette.iter().enumerate() {
+        p[i] = Rgb::parse(hex).unwrap_or(Rgb(0, 0, 0));
+    }
+    Theme {
+        background: Rgb::parse(bg).unwrap_or(Theme::default().background),
+        foreground: Rgb::parse(fg).unwrap_or(Theme::default().foreground),
+        palette: p,
+    }
+}
+
+/// A built-in named theme.
+pub fn theme_by_name(name: &str) -> Option<Theme> {
+    let t = match name.to_ascii_lowercase().as_str() {
+        "nord" => Theme::default(),
+        "dracula" => theme_from(
+            "#282a36",
+            "#f8f8f2",
+            &[
+                "#21222c", "#ff5555", "#50fa7b", "#f1fa8c", "#bd93f9", "#ff79c6", "#8be9fd",
+                "#f8f8f2", "#6272a4", "#ff6e6e", "#69ff94", "#ffffa5", "#d6acff", "#ff92df",
+                "#a4ffff", "#ffffff",
+            ],
+        ),
+        "gruvbox" | "gruvbox-dark" => theme_from(
+            "#282828",
+            "#ebdbb2",
+            &[
+                "#282828", "#cc241d", "#98971a", "#d79921", "#458588", "#b16286", "#689d6a",
+                "#a89984", "#928374", "#fb4934", "#b8bb26", "#fabd2f", "#83a598", "#d3869b",
+                "#8ec07c", "#ebdbb2",
+            ],
+        ),
+        "solarized" | "solarized-dark" => theme_from(
+            "#002b36",
+            "#839496",
+            &[
+                "#073642", "#dc322f", "#859900", "#b58900", "#268bd2", "#d33682", "#2aa198",
+                "#eee8d5", "#002b36", "#cb4b16", "#586e75", "#657b83", "#839496", "#6c71c4",
+                "#93a1a1", "#fdf6e3",
+            ],
+        ),
+        "tokyo-night" | "tokyonight" => theme_from(
+            "#1a1b26",
+            "#c0caf5",
+            &[
+                "#15161e", "#f7768e", "#9ece6a", "#e0af68", "#7aa2f7", "#bb9af7", "#7dcfff",
+                "#a9b1d6", "#414868", "#f7768e", "#9ece6a", "#e0af68", "#7aa2f7", "#bb9af7",
+                "#7dcfff", "#c0caf5",
+            ],
+        ),
+        _ => return None,
+    };
+    Some(t)
 }
 
 /// Runtime configuration.
 #[derive(Debug, Clone)]
 pub struct Config {
     pub font_size: f32,
+    pub font_family: Option<String>,
     pub theme: Theme,
 }
 
@@ -79,14 +140,21 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             font_size: default_font_size(),
+            font_family: None,
             theme: Theme::default(),
         }
     }
 }
 
 #[derive(Debug, Deserialize)]
+struct AlacrittyFontNormal {
+    family: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct AlacrittyFont {
     size: Option<f32>,
+    normal: Option<AlacrittyFontNormal>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -173,8 +241,15 @@ impl Config {
     pub fn from_alacritty_text(text: &str) -> Option<Self> {
         let raw: AlacrittyConfig = toml::from_str(text).ok()?;
         let mut cfg = Self::default();
-        if let Some(size) = raw.font.and_then(|f| f.size) {
-            cfg.font_size = size.clamp(6.0, 40.0);
+        if let Some(font) = raw.font {
+            if let Some(size) = font.size {
+                cfg.font_size = size.clamp(6.0, 40.0);
+            }
+            if let Some(family) = font.normal.and_then(|n| n.family) {
+                if !family.trim().is_empty() {
+                    cfg.font_family = Some(family.trim().to_string());
+                }
+            }
         }
         if let Some(colors) = raw.colors {
             if let Some(primary) = colors.primary {
@@ -242,6 +317,16 @@ impl Config {
                         cfg.font_size = size.clamp(6.0, 40.0);
                     }
                 }
+                "font-family" => {
+                    if !value.is_empty() {
+                        cfg.font_family = Some(value.to_string());
+                    }
+                }
+                "theme" => {
+                    if let Some(theme) = theme_by_name(value) {
+                        cfg.theme = theme;
+                    }
+                }
                 "palette" => {
                     if let Some((idx, hex)) = value.split_once('=') {
                         if let (Ok(i), Some(c)) = (idx.trim().parse::<usize>(), Rgb::parse(hex)) {
@@ -262,6 +347,17 @@ impl Config {
         let mut cfg = Self::default();
         if let Some(size) = raw.font_size {
             cfg.font_size = size.clamp(6.0, 40.0);
+        }
+        if let Some(family) = raw.font_family {
+            let family = family.trim();
+            if !family.is_empty() {
+                cfg.font_family = Some(family.to_string());
+            }
+        }
+        if let Some(name) = raw.theme {
+            if let Some(theme) = theme_by_name(&name) {
+                cfg.theme = theme;
+            }
         }
         if let Some(colors) = raw.colors {
             if let Some(bg) = colors.background.as_deref().and_then(Rgb::parse) {
@@ -324,6 +420,19 @@ mod tests {
         assert_eq!(cfg.theme.foreground, Rgb(0xcc, 0xcc, 0xcc));
         assert_eq!(cfg.theme.palette[1], Rgb(0xff, 0, 0));
         assert_eq!(cfg.theme.palette[9], Rgb(0xff, 0x55, 0x55));
+    }
+
+    #[test]
+    fn named_theme_and_font_family() {
+        let cfg = Config::from_toml(
+            r##"
+            theme = "Dracula"
+            font-family = "JetBrains Mono"
+            "##,
+        )
+        .unwrap();
+        assert_eq!(cfg.theme.background, Rgb(0x28, 0x2a, 0x36));
+        assert_eq!(cfg.font_family.as_deref(), Some("JetBrains Mono"));
     }
 
     #[test]
