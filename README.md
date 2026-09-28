@@ -22,7 +22,8 @@ the `miaotty` application built on top of it.
 - Selection (drag + double-click word), copy/paste, scrollback (wheel + Shift+PgUp/PgDn).
 - Wide/CJK layout and a system CJK font fallback.
 - MTP control plane over a Unix socket: `core.ping/health`, `agent.state.*`,
-  `history.*`, `pane.list`, `pane.send/run` — interoperates with the existing `miaotty-cli`.
+  `history.*`, `pane.list`, `pane.send/run`, `pane.focus/close` — interoperates
+  with the existing `miaotty-cli`.
 - zsh shell integration (cwd via OSC 7, command history) installed via a `ZDOTDIR` shim.
 - Config at `~/.config/miaotty/config.toml` (font size + colors) — see
   [`docs/config.example.toml`](docs/config.example.toml).

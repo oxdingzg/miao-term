@@ -251,6 +251,7 @@ struct MiaottyApp {
     metrics: miao_term_render::MetricsProbe,
     renaming: Option<usize>,
     rename_buf: String,
+    last_title: Option<String>,
 }
 
 impl MiaottyApp {
@@ -270,6 +271,7 @@ impl MiaottyApp {
             metrics: miao_term_render::MetricsProbe::new(),
             renaming: None,
             rename_buf: String::new(),
+            last_title: None,
         };
         app.push_tab("shell".to_owned(), 100, 30, None);
         app
@@ -493,6 +495,51 @@ impl eframe::App for MiaottyApp {
                 }
             }
             ctx.request_repaint();
+        }
+
+        // MTP `pane.focus` / `pane.close`.
+        let commands = self.state.take_commands();
+        if !commands.is_empty() {
+            for command in commands {
+                match command {
+                    miao_term_mtp::Command::Focus(id) => {
+                        for (ti, tab) in self.tabs.iter_mut().enumerate() {
+                            if tab.panes.iter().any(|p| p.pane_id == id) {
+                                tab.active = id.clone();
+                                self.active = ti;
+                                self.selection = None;
+                                self.scroll = 0;
+                                break;
+                            }
+                        }
+                    }
+                    miao_term_mtp::Command::Close(id) => {
+                        if let Some(ti) = self
+                            .tabs
+                            .iter()
+                            .position(|t| t.panes.iter().any(|p| p.pane_id == id))
+                        {
+                            self.active = ti;
+                            self.tabs[ti].active = id.clone();
+                            self.close_active();
+                        }
+                    }
+                }
+            }
+            ctx.request_repaint();
+        }
+
+        // Window title from the focused pane's OSC 0/2 title.
+        let title = self
+            .tabs
+            .get(self.active)
+            .and_then(|t| t.focused())
+            .and_then(|p| p.term.title().map(str::to_string));
+        if title != self.last_title {
+            self.last_title = title.clone();
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(
+                title.unwrap_or_else(|| "miaotty".to_string()),
+            ));
         }
 
         // Cursor blink (only when focused; keeps idle CPU low otherwise).

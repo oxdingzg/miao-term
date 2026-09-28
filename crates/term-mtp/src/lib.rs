@@ -130,6 +130,14 @@ pub struct ServerState {
     history: Mutex<BTreeMap<String, Vec<Value>>>,
     panes: Mutex<Vec<Value>>,
     writes: Mutex<Vec<(String, Vec<u8>)>>,
+    commands: Mutex<Vec<Command>>,
+}
+
+/// UI-side control actions queued by MTP methods.
+#[derive(Debug, Clone)]
+pub enum Command {
+    Focus(String),
+    Close(String),
 }
 
 impl ServerState {
@@ -169,6 +177,15 @@ impl ServerState {
     /// Take queued writes for the UI to feed into the panes.
     pub fn take_writes(&self) -> Vec<(String, Vec<u8>)> {
         std::mem::take(&mut *self.writes.lock().unwrap())
+    }
+
+    fn queue_command(&self, command: Command) {
+        self.commands.lock().unwrap().push(command);
+    }
+
+    /// Take queued focus/close commands for the UI to apply.
+    pub fn take_commands(&self) -> Vec<Command> {
+        std::mem::take(&mut *self.commands.lock().unwrap())
     }
 }
 
@@ -218,6 +235,19 @@ fn dispatch(state: &ServerState, req: Request) -> Response {
                 data.into_bytes()
             };
             state.queue_write(pane, bytes);
+            Response::ok(id, rev, json!({ "ok": true }))
+        }
+        ("pane", "focus") | ("pane", "close") => {
+            let pane = str_field(&params, "pane_id").unwrap_or_default();
+            if pane.is_empty() {
+                return Response::err(id, rev, "no_pane", "pane_id is required");
+            }
+            let command = if req.method == "focus" {
+                Command::Focus(pane)
+            } else {
+                Command::Close(pane)
+            };
+            state.queue_command(command);
             Response::ok(id, rev, json!({ "ok": true }))
         }
         ("agent", "state.set") => {

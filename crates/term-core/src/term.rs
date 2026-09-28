@@ -28,6 +28,7 @@ pub struct Terminal {
     cols: u16,
     exited: bool,
     cwd: Option<String>,
+    title: Option<String>,
     osc_buf: Vec<u8>,
 }
 
@@ -112,6 +113,7 @@ impl Terminal {
             cols,
             exited: false,
             cwd: None,
+            title: None,
             osc_buf: Vec::new(),
         })
     }
@@ -122,7 +124,7 @@ impl Terminal {
         loop {
             match self.rx.try_recv() {
                 Ok(bytes) => {
-                    self.scan_osc7(&bytes);
+                    self.scan_osc(&bytes);
                     self.parser.process(&bytes);
                     changed = true;
                 }
@@ -180,27 +182,48 @@ impl Terminal {
         self.cwd.as_deref()
     }
 
+    /// The window title reported via OSC 0/2, if any.
+    pub fn title(&self) -> Option<&str> {
+        self.title.as_deref()
+    }
+
     /// Scan a chunk for OSC 7 (`ESC ] 7 ; file://host/path BEL|ST`) and update `cwd`.
-    fn scan_osc7(&mut self, bytes: &[u8]) {
+    fn scan_osc(&mut self, bytes: &[u8]) {
         self.osc_buf.extend_from_slice(bytes);
-        const PREFIX: &[u8] = b"\x1b]7;";
         loop {
-            let Some(start) = find_subslice(&self.osc_buf, PREFIX) else {
-                // Keep a small tail in case the prefix is split across chunks.
-                let keep = PREFIX.len().min(self.osc_buf.len());
+            let Some(start) = find_subslice(&self.osc_buf, b"\x1b]") else {
+                // Keep a short tail in case the prefix is split across chunks.
+                let keep = 2.min(self.osc_buf.len());
                 let drain = self.osc_buf.len() - keep;
                 self.osc_buf.drain(..drain);
                 return;
             };
-            let after = start + PREFIX.len();
-            match find_terminator(&self.osc_buf[after..]) {
+            let after = start + 2;
+            let Some(semi_rel) = self.osc_buf[after..].iter().position(|&b| b == b';') else {
+                if self.osc_buf.len() - start > MAX_OSC {
+                    self.osc_buf.clear();
+                } else {
+                    self.osc_buf.drain(..start);
+                }
+                return;
+            };
+            let semi = after + semi_rel;
+            let code = self.osc_buf[after..semi].to_vec();
+            match find_terminator(&self.osc_buf[semi + 1..]) {
                 Some((end, term_len)) => {
-                    if let Ok(payload) = std::str::from_utf8(&self.osc_buf[after..after + end]) {
-                        if let Some(path) = parse_osc7(payload) {
-                            self.cwd = Some(path);
+                    if let Ok(payload) = std::str::from_utf8(&self.osc_buf[semi + 1..semi + 1 + end])
+                    {
+                        match code.as_slice() {
+                            b"7" => {
+                                if let Some(path) = parse_osc7(payload) {
+                                    self.cwd = Some(path);
+                                }
+                            }
+                            b"0" | b"2" => self.title = Some(payload.to_string()),
+                            _ => {}
                         }
                     }
-                    self.osc_buf.drain(..after + end + term_len);
+                    self.osc_buf.drain(..semi + 1 + end + term_len);
                 }
                 None => {
                     // No terminator yet: keep the pending sequence bounded.
