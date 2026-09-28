@@ -394,6 +394,21 @@ struct Tab {
     /// Focused pane id within the tab.
     active: String,
     title: String,
+    /// Short label shown before the title.
+    prefix: Option<String>,
+    /// Mark shown after the title.
+    mark: Option<String>,
+    /// Tabs sharing a group are drawn together, separated from other groups.
+    group: Option<String>,
+}
+
+/// Which editable text field of a tab the rename dialog is for (U1).
+#[derive(Clone, Copy)]
+enum TabField {
+    Title,
+    Prefix,
+    Mark,
+    Group,
 }
 
 // ---- session persistence ----
@@ -407,6 +422,12 @@ struct Session {
 #[derive(Serialize, Deserialize)]
 struct TabSession {
     title: String,
+    #[serde(default)]
+    prefix: Option<String>,
+    #[serde(default)]
+    mark: Option<String>,
+    #[serde(default)]
+    group: Option<String>,
     panes: Vec<PaneSession>,
     layout: LayoutNode,
     active: usize,
@@ -520,7 +541,7 @@ struct MiaottyApp {
     state: Arc<miao_term_mtp::ServerState>,
     theme: Theme,
     metrics: miao_term_render::MetricsProbe,
-    renaming: Option<usize>,
+    renaming: Option<(usize, TabField)>,
     rename_buf: String,
     last_title: Option<String>,
     find_open: bool,
@@ -543,6 +564,7 @@ struct MiaottyApp {
     panels_at: Instant,
     details_tab: DetailsTab,
     file_sel: Option<usize>,
+    tree_expanded: std::collections::HashSet<PathBuf>,
     editor: Option<Editor>,
     notifications: bool,
     prevent_sleep: bool,
@@ -552,6 +574,14 @@ struct MiaottyApp {
     agent_states: std::collections::HashMap<String, String>,
     queue: Vec<QueuedPrompt>,
     composer: Option<Composer>,
+    recipe_ui: Option<RecipeDialog>,
+}
+
+/// The save/open recipe dialog (U7).
+struct RecipeDialog {
+    save: bool,
+    name: String,
+    list: Vec<String>,
 }
 
 /// A prompt waiting to be sent to an agent pane once it is idle.
@@ -586,6 +616,16 @@ struct Editor {
     readonly: bool,
 }
 
+/// One rendered tab in the top tab bar: label, agent color, view icon,
+/// attention flag and group.
+type TabBarRow = (
+    String,
+    Option<egui::Color32>,
+    Option<miao_term_config::view::Icon>,
+    bool,
+    Option<String>,
+);
+
 /// A command-palette action (Open Quickly, ADR 0008).
 #[derive(Clone)]
 enum PaletteAction {
@@ -597,6 +637,8 @@ enum PaletteAction {
 #[derive(Clone, Copy, PartialEq)]
 enum Verb {
     Composer,
+    SaveRecipe,
+    OpenRecipe,
     NewTab,
     SplitRight,
     SplitDown,
@@ -661,6 +703,7 @@ impl MiaottyApp {
             panels_at: Instant::now(),
             details_tab: DetailsTab::Info,
             file_sel: None,
+            tree_expanded: std::collections::HashSet::new(),
             editor: None,
             notifications: cfg.notifications,
             prevent_sleep: cfg.prevent_sleep,
@@ -670,6 +713,7 @@ impl MiaottyApp {
             agent_states: std::collections::HashMap::new(),
             queue: Vec::new(),
             composer: None,
+            recipe_ui: None,
         };
         if let Some(session) = Session::load() {
             app.restore(session);
@@ -689,6 +733,9 @@ impl MiaottyApp {
                     |id: &str| tab.panes.iter().position(|p| p.pane_id == id).unwrap_or(0);
                 TabSession {
                     title: tab.title.clone(),
+                    prefix: tab.prefix.clone(),
+                    mark: tab.mark.clone(),
+                    group: tab.group.clone(),
                     panes: tab
                         .panes
                         .iter()
@@ -745,6 +792,9 @@ impl MiaottyApp {
                 layout,
                 active,
                 title: ts.title,
+                prefix: ts.prefix,
+                mark: ts.mark,
+                group: ts.group,
             });
         }
         if !self.tabs.is_empty() {
@@ -782,6 +832,9 @@ impl MiaottyApp {
                 layout: Layout::Leaf(pane_id.clone()),
                 active: pane_id,
                 title,
+                prefix: None,
+                mark: None,
+                group: None,
             });
             self.active = self.tabs.len() - 1;
             self.selection = None;
@@ -901,9 +954,15 @@ impl MiaottyApp {
         self.publish_panes();
     }
 
-    fn rename_window(&mut self, ctx: &egui::Context, i: usize) {
+    fn rename_window(&mut self, ctx: &egui::Context, i: usize, field: TabField) {
         let mut open = true;
-        egui::Window::new("Rename Tab")
+        let title = match field {
+            TabField::Title => "Rename Tab",
+            TabField::Prefix => "Tab Prefix",
+            TabField::Mark => "Tab Mark",
+            TabField::Group => "Tab Group",
+        };
+        egui::Window::new(title)
             .collapsible(false)
             .resizable(false)
             .open(&mut open)
@@ -911,8 +970,19 @@ impl MiaottyApp {
                 let resp = ui.text_edit_singleline(&mut self.rename_buf);
                 let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if enter || ui.button("OK").clicked() {
+                    let value = self.rename_buf.trim().to_string();
+                    let value = (!value.is_empty()).then_some(value);
                     if let Some(tab) = self.tabs.get_mut(i) {
-                        tab.title = self.rename_buf.clone();
+                        match field {
+                            TabField::Title => {
+                                if let Some(v) = value {
+                                    tab.title = v;
+                                }
+                            }
+                            TabField::Prefix => tab.prefix = value,
+                            TabField::Mark => tab.mark = value,
+                            TabField::Group => tab.group = value,
+                        }
                     }
                     self.renaming = None;
                     self.publish_panes();
@@ -1067,11 +1137,14 @@ impl eframe::App for MiaottyApp {
             self.details_panel(ctx);
         }
         self.terminal_panel(ctx);
-        if let Some(i) = self.renaming {
-            self.rename_window(ctx, i);
+        if let Some((i, field)) = self.renaming {
+            self.rename_window(ctx, i, field);
         }
         if self.show_settings {
             self.settings_window(ctx);
+        }
+        if self.recipe_ui.is_some() {
+            self.recipe_window(ctx);
         }
         if self.composer.is_some() {
             self.composer_window(ctx);
@@ -1134,6 +1207,8 @@ impl MiaottyApp {
         }
         for (label, verb) in [
             ("Composer", Verb::Composer),
+            ("Save Recipe\u{2026}", Verb::SaveRecipe),
+            ("Open Recipe\u{2026}", Verb::OpenRecipe),
             ("New Tab", Verb::NewTab),
             ("Split Right", Verb::SplitRight),
             ("Split Down", Verb::SplitDown),
@@ -1168,6 +1243,20 @@ impl MiaottyApp {
             }
             PaletteAction::Run(verb) => match verb {
                 Verb::Composer => self.open_composer(),
+                Verb::SaveRecipe => {
+                    self.recipe_ui = Some(RecipeDialog {
+                        save: true,
+                        name: String::new(),
+                        list: Vec::new(),
+                    })
+                }
+                Verb::OpenRecipe => {
+                    self.recipe_ui = Some(RecipeDialog {
+                        save: false,
+                        name: String::new(),
+                        list: list_recipes(),
+                    })
+                }
                 Verb::NewTab => self.new_tab(),
                 Verb::SplitRight => self.split_active(SplitDir::Right),
                 Verb::SplitDown => self.split_active(SplitDir::Down),
@@ -1431,6 +1520,111 @@ fn sample_path(pattern: &str) -> String {
     }
 }
 
+/// Render a directory tree. Hidden entries are skipped, each directory shows at
+/// most 200 entries, and recursion stops at depth 6 so a huge tree cannot stall
+/// the UI. `.` is expanded via `expanded`; double-clicking a file opens it.
+fn file_tree(
+    ui: &mut egui::Ui,
+    dir: &std::path::Path,
+    depth: usize,
+    expanded: &mut std::collections::HashSet<PathBuf>,
+    open: &mut Option<PathBuf>,
+    fg: egui::Color32,
+) {
+    const MAX_DEPTH: usize = 6;
+    const MAX_ENTRIES: usize = 200;
+    if depth > MAX_DEPTH {
+        return;
+    }
+    let muted = egui::Color32::from_gray(150);
+    for entry in panels::read_dir_entries(dir).iter().take(MAX_ENTRIES) {
+        if entry.name.starts_with('.') {
+            continue;
+        }
+        ui.horizontal(|ui| {
+            ui.add_space(depth as f32 * 10.0);
+            if entry.is_dir {
+                let is_open = expanded.contains(&entry.path);
+                let glyph = if is_open { "\u{25be}" } else { "\u{25b8}" };
+                let label = egui::RichText::new(format!("{glyph} {}", entry.name)).color(fg);
+                if ui.selectable_label(false, label).clicked() {
+                    if is_open {
+                        expanded.remove(&entry.path);
+                    } else {
+                        expanded.insert(entry.path.clone());
+                    }
+                }
+            } else {
+                let label = egui::RichText::new(format!("  {}", entry.name)).color(muted);
+                if ui.selectable_label(false, label).double_clicked() {
+                    *open = Some(entry.path.clone());
+                }
+            }
+        });
+        if entry.is_dir && expanded.contains(&entry.path) {
+            file_tree(ui, &entry.path, depth + 1, expanded, open, fg);
+        }
+    }
+}
+
+/// `~/.config/miaotty/recipes` (respecting `XDG_CONFIG_HOME`).
+fn recipes_dir() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    Some(base.join("miaotty").join("recipes"))
+}
+
+fn list_recipes() -> Vec<String> {
+    let Some(dir) = recipes_dir() else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let path = e.path();
+            (path.extension().and_then(|x| x.to_str()) == Some("json"))
+                .then(|| path.file_stem().map(|s| s.to_string_lossy().to_string()))
+                .flatten()
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+fn save_recipe(name: &str, session: &Session) -> std::io::Result<PathBuf> {
+    let dir = recipes_dir()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no config directory"))?;
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("{}.json", sanitize_name(name)));
+    let json = serde_json::to_string_pretty(session).map_err(std::io::Error::other)?;
+    std::fs::write(&path, json)?;
+    Ok(path)
+}
+
+fn load_recipe(name: &str) -> Option<Session> {
+    let path = recipes_dir()?.join(format!("{}.json", sanitize_name(name)));
+    let text = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// Keep recipe names to a safe filename charset.
+fn sanitize_name(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
 fn reveal_in_finder(path: &str) {
     #[cfg(target_os = "macos")]
     {
@@ -1478,13 +1672,19 @@ impl MiaottyApp {
             .collect();
         let active = self.active;
         let fg = self.theme.fg;
+        let tree_root = self
+            .tabs
+            .get(self.active)
+            .and_then(|t| t.focused())
+            .and_then(|p| p.term.cwd().map(str::to_string));
         let can_close = self.tabs.len() > 1;
+        let mut tree_open: Option<PathBuf> = None;
         let mut switch_to: Option<usize> = None;
         let mut close: Option<usize> = None;
         let mut close_others: Option<usize> = None;
         let mut duplicate: Option<usize> = None;
-        let mut rename: Option<usize> = None;
-        let mut rename_buf = String::new();
+        let mut edit: Option<(usize, TabField, String)> = None;
+        let mut ungroup: Option<usize> = None;
         let mut add = false;
         let mut toggle = false;
         let mut settings = false;
@@ -1543,10 +1743,40 @@ impl MiaottyApp {
                         if resp.clicked_by(egui::PointerButton::Middle) && can_close {
                             close = Some(i);
                         }
+                        let fields = (
+                            self.tabs[i].title.clone(),
+                            self.tabs[i].prefix.clone(),
+                            self.tabs[i].mark.clone(),
+                            self.tabs[i].group.clone(),
+                        );
                         resp.context_menu(|ui| {
                             if ui.button("Rename\u{2026}").clicked() {
-                                rename = Some(i);
-                                rename_buf = title.clone();
+                                edit = Some((i, TabField::Title, fields.0.clone()));
+                                ui.close_menu();
+                            }
+                            if ui.button("Prefix\u{2026}").clicked() {
+                                edit = Some((
+                                    i,
+                                    TabField::Prefix,
+                                    fields.1.clone().unwrap_or_default(),
+                                ));
+                                ui.close_menu();
+                            }
+                            if ui.button("Mark\u{2026}").clicked() {
+                                edit =
+                                    Some((i, TabField::Mark, fields.2.clone().unwrap_or_default()));
+                                ui.close_menu();
+                            }
+                            if ui.button("Group\u{2026}").clicked() {
+                                edit = Some((
+                                    i,
+                                    TabField::Group,
+                                    fields.3.clone().unwrap_or_default(),
+                                ));
+                                ui.close_menu();
+                            }
+                            if fields.3.is_some() && ui.button("Remove from Group").clicked() {
+                                ungroup = Some(i);
                                 ui.close_menu();
                             }
                             if ui.button("Duplicate").clicked() {
@@ -1569,8 +1799,33 @@ impl MiaottyApp {
                         });
                     });
                 }
+
+                ui.separator();
+                ui.label(section("FILES"));
+                match &tree_root {
+                    Some(root) => {
+                        let mut expanded = std::mem::take(&mut self.tree_expanded);
+                        file_tree(
+                            ui,
+                            std::path::Path::new(root),
+                            0,
+                            &mut expanded,
+                            &mut tree_open,
+                            fg,
+                        );
+                        self.tree_expanded = expanded;
+                    }
+                    None => {
+                        ui.label(
+                            egui::RichText::new("\u{2014}").color(egui::Color32::from_gray(120)),
+                        );
+                    }
+                }
             });
 
+        if let Some(path) = tree_open {
+            self.open_editor(path);
+        }
         if add {
             self.new_tab();
         }
@@ -1593,9 +1848,14 @@ impl MiaottyApp {
             self.selection = None;
             self.scroll = 0;
         }
-        if let Some(i) = rename {
-            self.renaming = Some(i);
-            self.rename_buf = rename_buf;
+        if let Some(i) = ungroup {
+            if let Some(tab) = self.tabs.get_mut(i) {
+                tab.group = None;
+            }
+        }
+        if let Some((i, field, buf)) = edit {
+            self.renaming = Some((i, field));
+            self.rename_buf = buf;
         }
     }
 
@@ -1966,6 +2226,65 @@ impl MiaottyApp {
         }
         if open {
             self.composer = Some(composer);
+        }
+    }
+
+    fn recipe_window(&mut self, ctx: &egui::Context) {
+        let Some(mut dialog) = self.recipe_ui.take() else {
+            return;
+        };
+        let fg = self.theme.fg;
+        let mut open = true;
+        let mut close = false;
+        let mut saved = false;
+        let mut chosen: Option<String> = None;
+        egui::Window::new(if dialog.save {
+            "Save Recipe"
+        } else {
+            "Open Recipe"
+        })
+        .collapsible(false)
+        .resizable(false)
+        .open(&mut open)
+        .show(ctx, |ui| {
+            if dialog.save {
+                ui.horizontal(|ui| {
+                    ui.label("Name");
+                    ui.text_edit_singleline(&mut dialog.name);
+                });
+                let ready = !dialog.name.trim().is_empty();
+                if ui.add_enabled(ready, egui::Button::new("Save")).clicked() {
+                    saved = true;
+                }
+            } else if dialog.list.is_empty() {
+                ui.label(egui::RichText::new("No recipes yet").color(fg));
+            } else {
+                for name in &dialog.list {
+                    if ui.button(name).clicked() {
+                        chosen = Some(name.clone());
+                        close = true;
+                    }
+                }
+            }
+        });
+        if saved {
+            let session = self.snapshot();
+            match save_recipe(dialog.name.trim(), &session) {
+                Ok(path) => eprintln!("miaotty: wrote {}", path.display()),
+                Err(e) => eprintln!("miaotty: failed to save recipe: {e}"),
+            }
+            open = false;
+        }
+        if close {
+            open = false;
+        }
+        if let Some(name) = chosen {
+            if let Some(session) = load_recipe(&name) {
+                self.restore(session);
+            }
+        }
+        if open {
+            self.recipe_ui = Some(dialog);
         }
     }
 
@@ -2528,17 +2847,17 @@ impl MiaottyApp {
         let fg = self.theme.fg;
         let active = self.active;
         let sel_bg = ctx.style().visuals.selection.bg_fill;
-        let titles: Vec<(
-            String,
-            Option<egui::Color32>,
-            Option<miao_term_config::view::Icon>,
-            bool,
-        )> = self
+        let titles: Vec<TabBarRow> = self
             .tabs
             .iter()
             .map(|tab| {
                 let focused = tab.focused();
-                let title = self.tab_title(tab);
+                let title = format!(
+                    "{}{}{}",
+                    tab.prefix.as_deref().unwrap_or(""),
+                    self.tab_title(tab),
+                    tab.mark.as_deref().unwrap_or("")
+                );
                 let view = focused.and_then(|p| self.view_for(p));
                 let color = focused
                     .and_then(|p| self.state.agent_for(&p.pane_id))
@@ -2546,7 +2865,13 @@ impl MiaottyApp {
                     .filter(|s| self.badges.enabled(s))
                     .map(|s| agent_color(&s));
                 let att = focused.is_some_and(|p| self.attention.contains(&p.pane_id));
-                (title, color, view.and_then(|v| v.icon), att)
+                (
+                    title,
+                    color,
+                    view.and_then(|v| v.icon),
+                    att,
+                    tab.group.clone(),
+                )
             })
             .collect();
 
@@ -2565,7 +2890,14 @@ impl MiaottyApp {
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    for (i, (title, color, icon, att)) in titles.into_iter().enumerate() {
+                    let mut prev_group: Option<String> = None;
+                    for (i, (title, color, icon, att, group)) in titles.into_iter().enumerate() {
+                        if i > 0 && group != prev_group {
+                            ui.label(
+                                egui::RichText::new("\u{2502}").color(egui::Color32::from_gray(80)),
+                            );
+                        }
+                        prev_group = group;
                         if att {
                             ui.colored_label(egui::Color32::from_rgb(0xeb, 0xcb, 0x8b), "\u{0021}");
                         }
@@ -3557,5 +3889,39 @@ mod palette_tests {
     #[test]
     fn earlier_substring_position_ranks_first() {
         assert!(palette_score("New Tab", "command", "new") < palette_score("Renew", "tab", "new"));
+    }
+}
+
+#[cfg(test)]
+mod session_tests {
+    use super::*;
+
+    #[test]
+    fn tab_session_defaults_new_fields() {
+        let old = r#"{"title":"t","panes":[{"cwd":null}],"layout":{"Leaf":0},"active":0}"#;
+        let ts: TabSession = serde_json::from_str(old).unwrap();
+        assert!(ts.prefix.is_none() && ts.mark.is_none() && ts.group.is_none());
+    }
+
+    #[test]
+    fn tab_session_round_trips_grouping() {
+        let ts = TabSession {
+            title: "t".into(),
+            prefix: Some("[w]".into()),
+            mark: Some("*".into()),
+            group: Some("g".into()),
+            panes: vec![PaneSession { cwd: None }],
+            layout: LayoutNode::Leaf(0),
+            active: 0,
+        };
+        let json = serde_json::to_string(&ts).unwrap();
+        let back: TabSession = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.prefix.as_deref(), Some("[w]"));
+        assert_eq!(back.group.as_deref(), Some("g"));
+    }
+
+    #[test]
+    fn sanitize_recipe_names() {
+        assert_eq!(sanitize_name("my work/1"), "my work_1");
     }
 }
