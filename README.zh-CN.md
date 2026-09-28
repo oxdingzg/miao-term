@@ -14,7 +14,7 @@
 - 多标签 + 左侧边栏(`+` 新建、点击切换、中键关闭、右键 重命名/复制/关闭/关闭其他)。
 - 分屏:递归分屏树(任意数量 pane),`⌘D`(右侧)/`⇧⌘D`(下方),点击切换焦点,拖拽分隔条调比例,`⌘W` 关闭当前 pane。
 - 右侧 details 面板:Info(工作目录 + 复制路径 / 在访达中显示)、Agent 状态、Outline(每 pane 命令历史)。
-- 选区(拖拽 + 双击选词)、复制粘贴、回滚(滚轮 + Shift+PgUp/PgDn)。
+- 选区(拖拽 + 双击选词)、复制粘贴、回滚(滚轮 + Shift+PgUp/PgDn,带滚动条指示)。
 - 查找(`⌘F`,匹配高亮 + 计数)。
 - 宽字符/中日韩排版 + 系统 CJK 字体回退。
 - Unix socket 上的 MTP 控制面:`core.ping/health`、`agent.state.*`、`history.*`、`pane.list`、

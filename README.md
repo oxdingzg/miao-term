@@ -21,7 +21,8 @@ the `miaotty` application built on top of it.
   focused pane.
 - Right details panel: Info (working directory + Copy Path / Reveal in Finder),
   Agent state, Outline (per-pane command history).
-- Selection (drag + double-click word), copy/paste, scrollback (wheel + Shift+PgUp/PgDn).
+- Selection (drag + double-click word), copy/paste, scrollback (wheel +
+  Shift+PgUp/PgDn) with a scrollbar indicator.
 - Find (`⌘F`) with match highlighting and a count.
 - Wide/CJK layout and a system CJK font fallback.
 - MTP control plane over a Unix socket: `core.ping/health`, `agent.state.*`,

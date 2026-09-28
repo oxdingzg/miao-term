@@ -1411,12 +1411,32 @@ fn draw_screen(
     if draw_cursor {
         let (crow, ccol) = screen.cursor_position();
         if crow < rows && ccol < cols {
+            let width = screen
+                .cell(crow, ccol)
+                .map(|c| c.ch.width().unwrap_or(1))
+                .unwrap_or(1)
+                .max(1) as f32;
             let cur_rect = egui::Rect::from_min_size(
                 egui::pos2(ox + ccol as f32 * cw, oy + crow as f32 * ch),
-                egui::vec2(cw, ch),
+                egui::vec2(cw * width, ch),
             );
             painter.rect_filled(cur_rect, egui::Rounding::ZERO, theme.fg);
         }
+    }
+
+    // Scrollback indicator.
+    let scrollback = screen.scrollback_len();
+    if scrollback > 0 {
+        let total = (scrollback + rows as usize) as f32;
+        let track = rect.height();
+        let thumb = (track * rows as f32 / total).max(16.0);
+        let pos = screen.scroll_offset() as f32 / scrollback as f32;
+        let y = rect.top() + (track - thumb) * (1.0 - pos);
+        let bar = egui::Rect::from_min_size(
+            egui::pos2(rect.right() - 6.0, y),
+            egui::vec2(4.0, thumb),
+        );
+        painter.rect_filled(bar, egui::Rounding::ZERO, egui::Color32::from_gray(110));
     }
 }
 

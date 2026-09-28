@@ -138,6 +138,19 @@ impl ATerm {
         out
     }
 
+    /// Current scrollback offset (lines scrolled up from the bottom).
+    pub fn scroll_offset(&self) -> usize {
+        self.term.grid().display_offset()
+    }
+
+    /// Lines of history above the viewport (for a scrollbar).
+    pub fn scrollback_len(&self) -> usize {
+        self.term
+            .grid()
+            .total_lines()
+            .saturating_sub(self.term.grid().screen_lines())
+    }
+
     /// Scroll the viewport `n` lines back from the bottom.
     pub fn set_scrollback(&mut self, n: usize) {
         let current = self.term.grid().display_offset() as i32;
