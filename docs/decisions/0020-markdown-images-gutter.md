@@ -28,6 +28,11 @@ row positions (including scroll) and increment on rows that end with a newline
 (logical lines). The numbering is a pure helper (`gutter_numbers`) and is
 tested.
 
+## Addendum (gutter)
+
+The editing gutter now sits **outside** the scroll area in its own column, so it
+stays put when long lines scroll horizontally (the earlier limitation is gone).
+
 ## Consequences
 
 - Preview fidelity improves without a full Markdown engine, and the animated

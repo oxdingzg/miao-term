@@ -1,5 +1,5 @@
 {
-  "$comment": "Performance budgets and measured baselines (design: docs/PERFORMANCE.md, ADR 0018). CI runs crates/term-core/tests/perf.rs and miaotty-app perf_tests in release; a metric below its budget fails the gate.",
+  "$comment": "Performance budgets and measured baselines (design: docs/PERFORMANCE.md, ADR 0018/0023). CI runs crates/term-core/tests/perf.rs and miaotty-app perf_tests in release; each metric fails if it exceeds its absolute budget OR regresses more than regression_pct vs the recorded baseline.",
   "$baseline": {
     "machine": "Apple M-series (macOS/darwin), release build",
     "date": "2026-09-28"
@@ -8,27 +8,49 @@
     "budget": 25,
     "baseline": 73.1,
     "hard": true,
-    "run": "cargo test --release -p miao-term-core -- --ignored vt_parse_throughput"
+    "run": "cargo test --release -p miao-term-core -- --ignored vt_parse_throughput",
+    "regression_pct": 25
   },
   "screen_snapshot_30_rows_ms": {
     "budget": 2.0,
     "baseline": 0.012,
-    "hard": true
+    "hard": true,
+    "regression_pct": 25
   },
   "build_rows_frame_ms": {
     "budget": 4.0,
     "baseline": 0.122,
     "hard": true,
-    "note": "roadmap frame-time budget (p99 < 4 ms); covers the damage rebuild path"
+    "note": "roadmap frame-time budget (p99 < 4 ms); covers the damage rebuild path",
+    "regression_pct": 25
   },
   "palette_rank_10k_ms": {
     "budget": 100.0,
     "baseline": 2.04,
     "hard": false,
-    "note": "roadmap 'Open Quickly first results < 100 ms'"
+    "note": "roadmap 'Open Quickly first results < 100 ms'",
+    "regression_pct": 25
   },
-  "cold_start_ms": { "budget": 300, "baseline": null, "hard": false, "note": "not a CI gate; measured manually" },
-  "new_pane_ms": { "budget": 50, "baseline": null, "hard": false, "note": "not a CI gate; measured manually" },
-  "ipc_idle_cost": { "budget": "~0 (no polling)", "hard": true, "note": "by design: MTP is event-driven, coalesced to <=1 repaint/frame" },
-  "agent_burst_coalesce": { "budget": "100 events -> 1 repaint", "hard": true, "note": "by design: state changes set pane.dirty; one repaint per frame" }
+  "cold_start_ms": {
+    "budget": 300,
+    "baseline": null,
+    "hard": false,
+    "note": "not a CI gate; measured manually"
+  },
+  "new_pane_ms": {
+    "budget": 50,
+    "baseline": null,
+    "hard": false,
+    "note": "not a CI gate; measured manually"
+  },
+  "ipc_idle_cost": {
+    "budget": "~0 (no polling)",
+    "hard": true,
+    "note": "by design: MTP is event-driven, coalesced to <=1 repaint/frame"
+  },
+  "agent_burst_coalesce": {
+    "budget": "100 events -> 1 repaint",
+    "hard": true,
+    "note": "by design: state changes set pane.dirty; one repaint per frame"
+  }
 }

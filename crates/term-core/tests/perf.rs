@@ -26,6 +26,41 @@ fn workload() -> Vec<u8> {
     data
 }
 
+
+/// Compare a measured metric against the committed baseline and fail on a
+/// regression beyond `regression_pct` (ADR 0023).
+fn baseline_gate(key: &str, measured: f64, higher_is_better: bool) {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../benches/budgets.json");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return;
+    };
+    let Some(entry) = value.get(key) else { return };
+    let Some(base) = entry.get("baseline").and_then(|b| b.as_f64()) else {
+        return;
+    };
+    let pct = entry
+        .get("regression_pct")
+        .and_then(|p| p.as_f64())
+        .unwrap_or(25.0);
+    let limit = if higher_is_better {
+        base * (1.0 - pct / 100.0)
+    } else {
+        base * (1.0 + pct / 100.0)
+    };
+    let ok = if higher_is_better {
+        measured >= limit
+    } else {
+        measured <= limit
+    };
+    assert!(
+        ok,
+        "{key}: measured {measured:.4} regressed beyond {pct}% of baseline {base:.4} (limit {limit:.4})"
+    );
+}
+
 #[test]
 #[ignore = "perf gate; run `cargo test --release -- --ignored`"]
 fn vt_parse_throughput() {
@@ -45,6 +80,7 @@ fn vt_parse_throughput() {
         mbps >= 25.0 / scale(),
         "VT parse throughput {mbps:.1} MB/s below the 25 MB/s budget"
     );
+    baseline_gate("vt_parse_mbps", mbps / scale(), true);
 }
 
 #[test]
@@ -70,4 +106,5 @@ fn screen_snapshot_budget() {
         per_ms <= 2.0 * scale(),
         "screen snapshot {per_ms:.4} ms exceeds the 2 ms budget"
     );
+    baseline_gate("screen_snapshot_30_rows_ms", per_ms / scale(), false);
 }

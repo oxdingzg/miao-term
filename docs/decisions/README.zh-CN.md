@@ -31,3 +31,4 @@
 | [0020](./0020-markdown-images-gutter.zh-CN.md) | Markdown 图片、脚注与编辑态行号栏 | 已接受 |
 | [0021](./0021-remote-view-edit.zh-CN.md) | 经 ssh 的远端 view/edit | 已接受 |
 | [0022](./0022-update-download.zh-CN.md) | 应用内更新下载与校验 | 已接受 |
+| [0023](./0023-perf-regression-gate.zh-CN.md) | 性能回归门（共享基线） | 已接受 |

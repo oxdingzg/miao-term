@@ -19,6 +19,8 @@ use std::io::Read;
 pub struct Artifact {
     pub url: String,
     pub sha256: String,
+    /// Optional detached signature (minisign `.sig`) URL.
+    pub signature: Option<String>,
 }
 
 /// A parsed manifest.
@@ -79,6 +81,8 @@ struct RawArtifact {
     url: String,
     #[serde(default)]
     sha256: String,
+    #[serde(default)]
+    signature: Option<String>,
 }
 
 fn parse_json(text: &str) -> Option<Manifest> {
@@ -94,6 +98,7 @@ fn parse_json(text: &str) -> Option<Manifest> {
                     Artifact {
                         url: v.url,
                         sha256: v.sha256.trim().to_ascii_lowercase(),
+                        signature: v.signature,
                     },
                 )
             })
@@ -310,12 +315,14 @@ mod tests {
 
         let json = parse(
             r#"{ "version": "v0.3.0",
-                 "artifacts": { "macos-aarch64": { "url": "https://x/a.dmg", "sha256": "AB" } } }"#,
+                 "artifacts": { "macos-aarch64": { "url": "https://x/a.dmg", "sha256": "AB",
+                                                  "signature": "https://x/a.dmg.sig" } } }"#,
         );
         assert_eq!(json.version, "0.3.0");
         let artifact = &json.artifacts["macos-aarch64"];
         assert_eq!(artifact.url, "https://x/a.dmg");
         assert_eq!(artifact.sha256, "ab");
+        assert_eq!(artifact.signature.as_deref(), Some("https://x/a.dmg.sig"));
     }
 
     #[test]

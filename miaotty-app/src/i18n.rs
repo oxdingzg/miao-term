@@ -103,6 +103,8 @@ fn zh(key: &'static str) -> &'static str {
         "Load" => "载入",
         "Download Update" => "下载更新",
         "No download for this platform" => "本平台无可用下载",
+        "Open Download" => "打开下载文件",
+        "Quit and Install" => "退出并安装",
         "Bind externally:" => "外部绑定：",
         "AGENT INTEGRATIONS" => "Agent 集成",
         "detected" => "已检测到",

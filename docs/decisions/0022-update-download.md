@@ -27,6 +27,15 @@ not trust the download path.
 - **Placement.** A verified file is moved to `~/Downloads` (falling back to the
   temp path), and the status line reports the path and that the checksum matched.
 
+## Addendum (signatures)
+
+When `update-pubkey` (a minisign public key) is set and the artifact carries a
+`signature` URL, the detached `.sig` is fetched and checked with `minisign -V`;
+a failed check deletes the file, and a missing `minisign` binary downgrades the
+status to "signature not checked" rather than failing. After a verified
+download the Settings row offers *Open Download* and *Quit and Install* (open
+the artifact and quit); true self-replacement is still a follow-up.
+
 ## Consequences
 
 - The happy path is fully in-app and the integrity check is independent of curl.

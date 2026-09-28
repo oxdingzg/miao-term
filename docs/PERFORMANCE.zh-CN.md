@@ -12,7 +12,8 @@ cargo test --release -p miao-term-core -p miaotty-app -- --ignored
 
 性能测试标记为 `#[ignore]`,故常规测试保持快速;`perf` CI 作业在 `ubuntu-latest` 上以
 release 运行它们。预算是绝对值且留出宽裕余量(数量级退化会失败,runner 抖动不会)。
-`MIAOTTY_PERF_SCALE`(默认 `1.0`)可在慢机器上按倍数放宽所有预算。
+`MIAOTTY_PERF_SCALE`(默认 `1.0`)可在慢机器上按倍数放宽所有预算。每个指标还会与
+`budgets.json` 里记录的**基线**按 `regression_pct` 比较(ADR 0023),故漂移也会失败,而不只是断崖。
 
 ## 预算
 

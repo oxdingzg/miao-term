@@ -658,6 +658,8 @@ struct MiaottyApp {
     remote_ui: Option<RemoteDialog>,
     remote_rx: Option<(bool, std::sync::mpsc::Receiver<RemoteRead>)>,
     update_manifest: Option<update::Manifest>,
+    update_ready: Option<PathBuf>,
+    update_pubkey: Option<String>,
     hotkeys: Option<hotkey::Hotkeys>,
     hotkey_tried: bool,
     lang: i18n::Lang,
@@ -854,6 +856,8 @@ impl MiaottyApp {
             remote_ui: None,
             remote_rx: None,
             update_manifest: None,
+            update_ready: None,
+            update_pubkey: cfg.update_pubkey.clone(),
             hotkeys: None,
             hotkey_tried: false,
             lang: i18n::Lang::resolve(cfg.language.as_deref()),
@@ -1252,6 +1256,7 @@ impl eframe::App for MiaottyApp {
                     self.update_rx = None;
                 }
                 Ok(UpdateEvent::Downloaded(Ok(path))) => {
+                    self.update_ready = PathBuf::from(&path).into();
                     self.update_msg = Some(format!("Saved {path}"));
                     self.update_rx = None;
                 }
@@ -2350,10 +2355,20 @@ fn spawn_update_check(url: String) -> std::sync::mpsc::Receiver<UpdateEvent> {
 }
 
 /// Download `url` and verify its SHA-256 before moving it to `~/Downloads`.
-fn spawn_update_download(url: String, sha256: String) -> std::sync::mpsc::Receiver<UpdateEvent> {
+fn spawn_update_download(
+    url: String,
+    sha256: String,
+    signature: Option<String>,
+    pubkey: Option<String>,
+) -> std::sync::mpsc::Receiver<UpdateEvent> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let _ = tx.send(UpdateEvent::Downloaded(download_and_verify(&url, &sha256)));
+        let _ = tx.send(UpdateEvent::Downloaded(download_and_verify(
+            &url,
+            &sha256,
+            signature.as_deref(),
+            pubkey.as_deref(),
+        )));
     });
     rx
 }
@@ -2369,7 +2384,12 @@ fn http_get(url: &str) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
-fn download_and_verify(url: &str, sha256: &str) -> Result<String, String> {
+fn download_and_verify(
+    url: &str,
+    sha256: &str,
+    signature: Option<&str>,
+    pubkey: Option<&str>,
+) -> Result<String, String> {
     let name = url
         .rsplit('/')
         .next()
@@ -2406,12 +2426,43 @@ fn download_and_verify(url: &str, sha256: &str) -> Result<String, String> {
         std::fs::copy(&tmp, &target).map_err(|e| e.to_string())?;
         let _ = std::fs::remove_file(&tmp);
     }
+    // Optional minisign signature check (requires the `minisign` tool).
+    let mut signature_note = "";
+    if let (Some(sig_url), Some(key)) = (signature, pubkey) {
+        let sig_path = tmp.with_extension("sig");
+        let out = std::process::Command::new("curl")
+            .args(["-fsSL", "--max-time", "30", "-o"])
+            .arg(&sig_path)
+            .arg(sig_url)
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !out.status.success() {
+            let _ = std::fs::remove_file(&target);
+            return Err("could not fetch the signature".to_string());
+        }
+        let verify = std::process::Command::new("minisign")
+            .args(["-V", "-P", key, "-x"])
+            .arg(&sig_path)
+            .arg("-m")
+            .arg(&target)
+            .output();
+        let _ = std::fs::remove_file(&sig_path);
+        match verify {
+            Ok(out) if out.status.success() => signature_note = ", signature ok",
+            Ok(out) => {
+                let _ = std::fs::remove_file(&target);
+                let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                return Err(format!("signature invalid: {msg}"));
+            }
+            Err(_) => signature_note = ", signature not checked (minisign not found)",
+        }
+    }
     let verified = if sha256.is_empty() {
         "unverified"
     } else {
         "checksum ok"
     };
-    Ok(format!("{} ({verified})", target.display()))
+    Ok(format!("{}{verified}{signature_note}", target.display()))
 }
 
 /// `~/.config/miaotty/recipes` (respecting `XDG_CONFIG_HOME`).
@@ -3436,31 +3487,44 @@ impl MiaottyApp {
                     });
                 });
                 ui.separator();
-                egui::ScrollArea::both()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        if editor.readonly && is_md && !editor.raw {
+                if editor.readonly && is_md && !editor.raw {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
                             markdown_ui(ui, &editor.text, fg, base.as_deref());
-                        } else if editor.readonly {
-                            source_ui(ui, &editor.text, editor.target, &mut editor.jumped, fg);
-                        } else {
-                            // Editable: a line-number gutter beside the editor.
-                            let digits = editor.text.lines().count().to_string().len().max(2);
-                            let gutter_w = 10.0 + digits as f32 * 7.5;
-                            ui.horizontal_top(|ui| {
-                                let height = ui.available_height().max(20.0);
-                                let (gutter, _) = ui.allocate_exact_size(
-                                    egui::vec2(gutter_w, height),
-                                    egui::Sense::hover(),
-                                );
-                                let output = egui::TextEdit::multiline(&mut editor.text)
-                                    .code_editor()
-                                    .desired_width(f32::INFINITY)
-                                    .show(ui);
-                                paint_gutter(ui, gutter, &output, muted);
-                            });
+                        });
+                } else if editor.readonly {
+                    source_ui(ui, &editor.text, editor.target, &mut editor.jumped, fg);
+                } else {
+                    // Editable: a pinned line-number gutter beside the editor.
+                    // The gutter sits outside the scroll area, so it does not
+                    // move when long lines scroll horizontally.
+                    let digits = editor.text.lines().count().to_string().len().max(2);
+                    let gutter_w = 10.0 + digits as f32 * 7.5;
+                    let mut output: Option<egui::text_edit::TextEditOutput> = None;
+                    ui.horizontal_top(|ui| {
+                        let height = ui.available_height().max(20.0);
+                        let (gutter, _) = ui.allocate_exact_size(
+                            egui::vec2(gutter_w, height),
+                            egui::Sense::hover(),
+                        );
+                        ui.vertical(|ui| {
+                            egui::ScrollArea::both()
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    output = Some(
+                                        egui::TextEdit::multiline(&mut editor.text)
+                                            .code_editor()
+                                            .desired_width(f32::INFINITY)
+                                            .show(ui),
+                                    );
+                                });
+                        });
+                        if let Some(out) = &output {
+                            paint_gutter(ui, gutter, out, muted);
                         }
                     });
+                }
             });
         if reload {
             if let Some(editor) = self.editor.as_mut() {
@@ -3552,7 +3616,12 @@ impl MiaottyApp {
             .cloned();
         match artifact {
             Some(a) if !a.url.is_empty() => {
-                self.update_rx = Some(spawn_update_download(a.url, a.sha256));
+                self.update_rx = Some(spawn_update_download(
+                    a.url,
+                    a.sha256,
+                    a.signature,
+                    self.update_pubkey.clone(),
+                ));
                 self.update_msg = Some("Downloading\u{2026}".to_string());
             }
             _ => {
@@ -4066,6 +4135,18 @@ impl MiaottyApp {
                             .small()
                             .color(egui::Color32::from_gray(150)),
                     );
+                }
+                if self.update_ready.is_some() {
+                    ui.horizontal(|ui| {
+                        if ui.button(self.t("Open Download")).clicked() {
+                            if let Some(path) = self.update_ready.clone() {
+                                open_path_externally(&path);
+                            }
+                        }
+                        if ui.button(self.t("Quit and Install")).clicked() {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                    });
                 }
                 ui.horizontal(|ui| {
                     ui.label(self.t("Line height"));
@@ -5276,6 +5357,40 @@ mod perf_tests {
             .unwrap_or(1.0)
     }
 
+    /// Compare a measured metric against the committed baseline and fail on a
+    /// regression beyond `regression_pct` (ADR 0023).
+    fn baseline_gate(key: &str, measured: f64, higher_is_better: bool) {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../benches/budgets.json");
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            return;
+        };
+        let Some(entry) = value.get(key) else { return };
+        let Some(base) = entry.get("baseline").and_then(|b| b.as_f64()) else {
+            return;
+        };
+        let pct = entry
+            .get("regression_pct")
+            .and_then(|p| p.as_f64())
+            .unwrap_or(25.0);
+        let limit = if higher_is_better {
+            base * (1.0 - pct / 100.0)
+        } else {
+            base * (1.0 + pct / 100.0)
+        };
+        let ok = if higher_is_better {
+            measured >= limit
+        } else {
+            measured <= limit
+        };
+        assert!(
+            ok,
+            "{key}: measured {measured:.4} regressed beyond {pct}% of baseline {base:.4} (limit {limit:.4})"
+        );
+    }
+
     #[test]
     #[ignore = "perf gate; run `cargo test --release -- --ignored`"]
     fn build_rows_frame_budget() {
@@ -5297,6 +5412,7 @@ mod perf_tests {
             per_ms <= 4.0 * scale(),
             "row build {per_ms:.3} ms exceeds the 4 ms/frame budget"
         );
+        baseline_gate("build_rows_frame_ms", per_ms / scale(), false);
     }
 
     #[test]
@@ -5321,6 +5437,7 @@ mod perf_tests {
             per_ms <= 100.0 * scale(),
             "palette ranking {per_ms:.3} ms exceeds the 100 ms budget"
         );
+        baseline_gate("palette_rank_10k_ms", per_ms / scale(), false);
     }
 }
 

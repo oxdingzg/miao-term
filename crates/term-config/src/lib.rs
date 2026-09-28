@@ -111,6 +111,8 @@ struct RawConfig {
     editor: Option<String>,
     #[serde(rename = "quick-terminal-hotkey")]
     quick_terminal_hotkey: Option<String>,
+    #[serde(rename = "update-pubkey")]
+    update_pubkey: Option<String>,
     theme: Option<String>,
     colors: Option<RawColors>,
 }
@@ -197,6 +199,8 @@ pub struct Config {
     /// System-wide accelerator that toggles the Quick Terminal, e.g.
     /// `cmd+shift+t` (see ADR 0019). `None` disables it.
     pub quick_terminal_hotkey: Option<String>,
+    /// minisign public key used to verify downloaded updates (see ADR 0023).
+    pub update_pubkey: Option<String>,
     pub theme: Theme,
 }
 
@@ -247,6 +251,7 @@ impl Default for Config {
             update_check_url: None,
             editor: None,
             quick_terminal_hotkey: None,
+            update_pubkey: None,
             theme: Theme::default(),
         }
     }
@@ -522,6 +527,12 @@ impl Config {
             let hotkey = hotkey.trim();
             if !hotkey.is_empty() {
                 cfg.quick_terminal_hotkey = Some(hotkey.to_string());
+            }
+        }
+        if let Some(key) = raw.update_pubkey {
+            let key = key.trim();
+            if !key.is_empty() {
+                cfg.update_pubkey = Some(key.to_string());
             }
         }
         if let Some(b) = raw.badges {

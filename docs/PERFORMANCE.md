@@ -15,7 +15,9 @@ Perf tests are `#[ignore]`d so the normal test run stays fast; the `perf` CI job
 runs them in release on `ubuntu-latest`. Budgets are absolute with generous
 headroom (an order-of-magnitude regression fails, runner jitter does not).
 `MIAOTTY_PERF_SCALE` (default `1.0`) relaxes every budget by a factor on slow
-machines.
+machines. Each metric is also checked against the recorded **baseline** in
+`budgets.json` with a `regression_pct` (ADR 0023), so drift fails, not just
+cliffs.
 
 ## Budgets
 
