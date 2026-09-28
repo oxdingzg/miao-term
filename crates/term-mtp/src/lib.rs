@@ -283,7 +283,10 @@ fn dispatch(state: &ServerState, req: Request) -> Response {
 /// dropped so a single client cannot make us allocate unbounded memory.
 fn read_request(reader: &mut impl BufRead, buf: &mut Vec<u8>) -> std::io::Result<bool> {
     buf.clear();
-    let n = reader.by_ref().take(MAX_LINE as u64).read_until(b'\n', buf)?;
+    let n = reader
+        .by_ref()
+        .take(MAX_LINE as u64)
+        .read_until(b'\n', buf)?;
     if n == 0 {
         return Ok(false);
     }

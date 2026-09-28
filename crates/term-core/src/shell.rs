@@ -108,3 +108,42 @@ pub fn env_for(shell: &str) -> Vec<(String, String)> {
         ("MIAOTTY_ZDOTDIR_ORIG".to_string(), orig),
     ]
 }
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    fn temp_path() -> PathBuf {
+        static N: AtomicU32 = AtomicU32::new(0);
+        std::env::temp_dir().join(format!(
+            "miaotty-shim-test-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::SeqCst)
+        ))
+    }
+
+    #[test]
+    fn creates_a_private_dir() {
+        let base = temp_path();
+        let dir = base.join("nested/shim");
+        ensure_private_dir(&dir).unwrap();
+        let mode = dir.symlink_metadata().unwrap().permissions().mode();
+        assert_eq!(
+            mode & 0o077,
+            0,
+            "shim dir must not be group/other accessible"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn rejects_a_world_accessible_dir() {
+        let dir = temp_path();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(ensure_private_dir(&dir).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
