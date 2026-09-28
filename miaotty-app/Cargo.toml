@@ -25,6 +25,12 @@ assets = [
     ["assets/miaotty.desktop", "usr/share/applications/miaotty.desktop", "644"],
 ]
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Wayland/X11 global shortcut through the XDG desktop portal (MIT). Pulls zbus +
+# a small tokio runtime, Linux only. See ADR 0026.
+ashpd = { version = "0.12", default-features = false, features = ["tokio"] }
+tokio = { version = "1", default-features = false, features = ["rt"] }
+
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 # System-wide Quick Terminal hotkey (MIT). Linux uses an external binding tool
 # instead, so CI's Linux build does not pull X11/Wayland deps. See ADR 0019.

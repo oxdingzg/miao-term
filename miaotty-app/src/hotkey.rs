@@ -198,7 +198,74 @@ mod imp {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(target_os = "linux")]
+mod imp {
+    //! Wayland/X11 global shortcut via the `GlobalShortcuts` XDG portal.
+    //!
+    //! The portal (not us) owns the trigger: it may show a dialog and lets the
+    //! user pick or change the key. We bind one shortcut id, `quick`, and flip
+    //! the pending flag whenever the compositor reports it activated.
+
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    use ashpd::desktop::global_shortcuts::{GlobalShortcuts, NewShortcut};
+    use ashpd::zbus::export::futures_core::Stream;
+
+    use super::Combo;
+
+    pub struct Hotkeys {
+        pending: Arc<AtomicBool>,
+    }
+
+    impl Hotkeys {
+        pub fn register(_combo: &Combo, wake: impl Fn() + Send + Sync + 'static) -> Option<Self> {
+            let pending = Arc::new(AtomicBool::new(false));
+            let flag = pending.clone();
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .ok()?;
+            std::thread::spawn(move || {
+                let _ = runtime.block_on(async move {
+                    let shortcuts = GlobalShortcuts::new().await.ok()?;
+                    let session = shortcuts.create_session().await.ok()?;
+                    let request = shortcuts
+                        .bind_shortcuts(
+                            &session,
+                            &[NewShortcut::new("quick", "Quick Terminal")],
+                            None,
+                        )
+                        .await
+                        .ok()?;
+                    let _ = request.response().ok()?;
+                    let mut activated = shortcuts.receive_activated().await.ok()?;
+                    loop {
+                        let item =
+                            std::future::poll_fn(|cx| Pin::new(&mut activated).poll_next(cx)).await;
+                        match item {
+                            Some(event) if event.shortcut_id() == "quick" => {
+                                flag.store(true, Ordering::SeqCst);
+                                wake();
+                            }
+                            Some(_) => {}
+                            None => break,
+                        }
+                    }
+                    Some(())
+                });
+            });
+            Some(Self { pending })
+        }
+
+        pub fn take_pending(&self) -> bool {
+            self.pending.swap(false, Ordering::SeqCst)
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 mod imp {
     use super::Combo;
 

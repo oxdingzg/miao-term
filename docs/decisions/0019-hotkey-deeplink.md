@@ -34,9 +34,8 @@ the Quick Terminal. A palette verb *Copy Pane ID* yields the id to target.
 
 ## Addendum (Wayland)
 
-A native Wayland global shortcut would need the `GlobalShortcuts` xdg-desktop-portal
-(via `ashpd`), which drags in an async/D-Bus stack for a path we cannot verify
-locally. Instead the Settings row offers **sway** and **hyprland** bindings
+A native Wayland global shortcut is implemented separately (ADR 0026) through the
+`GlobalShortcuts` xdg-desktop-portal. The Settings row additionally offers **sway** and **hyprland** bindings
 alongside skhd/Hammerspoon/AutoHotkey/GNOME, all of which call `miaotty --quick` —
 so Wayland users get the Quick Terminal through their compositor's own bind
 mechanism, which is how they bind everything else anyway.

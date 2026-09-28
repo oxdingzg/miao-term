@@ -31,8 +31,8 @@ AutoHotkey / GNOME 的开箱可粘贴绑定,调用 `miaotty --quick`。
 
 ## 附记(Wayland)
 
-原生 Wayland 全局快捷键需要 `GlobalShortcuts` xdg-desktop-portal(经 `ashpd`),会引入
-async/D-Bus 栈,且该路径本机无法验证。因此设置行在 skhd/Hammerspoon/AutoHotkey/GNOME 之外
+原生 Wayland 全局快捷键已另行实现(见 ADR 0026),经 `GlobalShortcuts` xdg-desktop-portal。
+设置行另在 skhd/Hammerspoon/AutoHotkey/GNOME 之外
 提供 **sway** 与 **hyprland** 绑定,它们都调用 `miaotty --quick` —— 于是 Wayland 用户通过
 compositor 自身的绑定机制获得快速终端,而这本来也是他们绑定其他一切的方式。
 
