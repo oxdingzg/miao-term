@@ -109,6 +109,8 @@ struct RawConfig {
     #[serde(rename = "update-check-url")]
     update_check_url: Option<String>,
     editor: Option<String>,
+    #[serde(rename = "quick-terminal-hotkey")]
+    quick_terminal_hotkey: Option<String>,
     theme: Option<String>,
     colors: Option<RawColors>,
 }
@@ -192,6 +194,9 @@ pub struct Config {
     pub update_check_url: Option<String>,
     /// External editor command used by "Edit in Tab" (see ADR 0017).
     pub editor: Option<String>,
+    /// System-wide accelerator that toggles the Quick Terminal, e.g.
+    /// `cmd+shift+t` (see ADR 0019). `None` disables it.
+    pub quick_terminal_hotkey: Option<String>,
     pub theme: Theme,
 }
 
@@ -241,6 +246,7 @@ impl Default for Config {
             language: None,
             update_check_url: None,
             editor: None,
+            quick_terminal_hotkey: None,
             theme: Theme::default(),
         }
     }
@@ -510,6 +516,12 @@ impl Config {
             let editor = editor.trim();
             if !editor.is_empty() {
                 cfg.editor = Some(editor.to_string());
+            }
+        }
+        if let Some(hotkey) = raw.quick_terminal_hotkey {
+            let hotkey = hotkey.trim();
+            if !hotkey.is_empty() {
+                cfg.quick_terminal_hotkey = Some(hotkey.to_string());
             }
         }
         if let Some(b) = raw.badges {

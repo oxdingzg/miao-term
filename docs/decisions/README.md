@@ -26,3 +26,4 @@ Docs are English by default; keep a Simplified Chinese version in sync
 | [0016](./0016-integration-automation.md) | Agent integration automation and single instance | accepted |
 | [0017](./0017-markdown-tables-editor-config.md) | Markdown tables and the external editor | accepted |
 | [0018](./0018-performance-gate.md) | Performance gate | accepted |
+| [0019](./0019-hotkey-deeplink.md) | Global hotkey and deep-link to a pane | accepted |

@@ -16,6 +16,7 @@ use eframe::egui_wgpu;
 use unicode_width::UnicodeWidthChar;
 
 mod agentloop;
+mod hotkey;
 mod i18n;
 mod icons;
 mod integration;
@@ -32,13 +33,11 @@ fn main() -> eframe::Result<()> {
     let socket = miao_term_mtp::default_socket();
     std::env::set_var("MIAOTTY_SOCKET", &socket);
     let cfg = miao_term_config::Config::load();
-    let launch = std::env::args()
-        .skip(1)
-        .find_map(|a| launch::command_for(&a));
+    let intent = launch::Intent::from_args(&std::env::args().skip(1).collect::<Vec<_>>());
 
     // Single instance: a later launch (e.g. a second `ssh://` link) is handed
     // to the running instance and this process exits.
-    if forward_to_running(launch.as_deref()) {
+    if forward_to_running(&intent.encode()) {
         eprintln!("miaotty: forwarded to the running instance");
         return Ok(());
     }
@@ -70,7 +69,7 @@ fn main() -> eframe::Result<()> {
                     });
             }
             let mut app = MiaottyApp::new(state, cfg);
-            app.launch = launch;
+            app.pending = intent;
             Ok(Box::new(app))
         }),
     )
@@ -477,7 +476,7 @@ fn inbox_dir() -> Option<PathBuf> {
 
 /// Hand a launch to an already-running instance (single-instance deep link).
 /// Returns true when one was reached.
-fn forward_to_running(command: Option<&str>) -> bool {
+fn forward_to_running(request: &str) -> bool {
     let socket = miao_term_mtp::default_socket();
     if miao_term_mtp::client::connect(&socket).is_err() {
         return false;
@@ -488,14 +487,14 @@ fn forward_to_running(command: Option<&str>) -> bool {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let _ = std::fs::write(dir.join(format!("{stamp}.request")), command.unwrap_or(""));
+        let _ = std::fs::write(dir.join(format!("{stamp}.request")), request);
     }
     true
 }
 
 /// Consume forwarding requests written by later launches. `Some(cmd)` opens a
 /// tab; `None` is a bare activation.
-fn drain_inbox() -> Vec<Option<String>> {
+fn drain_inbox() -> Vec<String> {
     let mut out = Vec::new();
     let Some(dir) = inbox_dir() else {
         return out;
@@ -511,8 +510,7 @@ fn drain_inbox() -> Vec<Option<String>> {
     paths.sort();
     for path in paths {
         if let Ok(text) = std::fs::read_to_string(&path) {
-            let text = text.trim().to_string();
-            out.push((!text.is_empty()).then_some(text));
+            out.push(text.trim().to_string());
         }
         let _ = std::fs::remove_file(&path);
     }
@@ -647,12 +645,16 @@ struct MiaottyApp {
     queue: Vec<QueuedPrompt>,
     composer: Option<Composer>,
     recipe_ui: Option<RecipeDialog>,
-    launch: Option<String>,
     quick_pane: Option<String>,
     quick_return: Option<usize>,
     ssh_ui: Option<SshDialog>,
     integration_msg: Option<String>,
     external_editor: Option<String>,
+    pending: launch::Intent,
+    pending_copy: Option<String>,
+    quick_hotkey: Option<String>,
+    hotkeys: Option<hotkey::Hotkeys>,
+    hotkey_tried: bool,
     lang: i18n::Lang,
     update_config: Option<String>,
     update_rx: Option<std::sync::mpsc::Receiver<String>>,
@@ -731,6 +733,7 @@ enum PaletteAction {
 enum Verb {
     Composer,
     QuickTerminal,
+    CopyPaneId,
     NewSsh,
     CheckUpdates,
     SaveRecipe,
@@ -813,12 +816,16 @@ impl MiaottyApp {
             queue: Vec::new(),
             composer: None,
             recipe_ui: None,
-            launch: None,
             quick_pane: None,
             quick_return: None,
             ssh_ui: None,
             integration_msg: None,
             external_editor: cfg.editor.clone(),
+            pending: launch::Intent::Activate,
+            pending_copy: None,
+            quick_hotkey: cfg.quick_terminal_hotkey.clone(),
+            hotkeys: None,
+            hotkey_tried: false,
             lang: i18n::Lang::resolve(cfg.language.as_deref()),
             update_config: cfg.update_check_url.clone(),
             update_rx: None,
@@ -1203,13 +1210,32 @@ impl eframe::App for MiaottyApp {
             }
         }
 
-        // A URL-scheme launch opens a command in a fresh tab (ADR 0013).
-        if let Some(cmd) = self.launch.take() {
-            self.open_command_tab(&cmd);
+        // Register the system-wide Quick Terminal hotkey once (ADR 0019).
+        if !self.hotkey_tried {
+            self.hotkey_tried = true;
+            if let Some(spec) = self.quick_hotkey.clone() {
+                let ctx = ctx.clone();
+                match hotkey::Hotkeys::register(&spec, move || ctx.request_repaint()) {
+                    Some(hk) => {
+                        eprintln!("miaotty: quick-terminal hotkey {spec} registered");
+                        self.hotkeys = Some(hk);
+                    }
+                    None => eprintln!("miaotty: could not register hotkey {spec}"),
+                }
+            }
         }
-        // Later launches forwarded by a second process (single instance).
-        for cmd in drain_inbox().into_iter().flatten() {
-            self.open_command_tab(&cmd);
+        if self.hotkeys.as_ref().is_some_and(|h| h.take_pending()) {
+            self.toggle_quick_terminal();
+        }
+        if let Some(text) = self.pending_copy.take() {
+            ctx.copy_text(text);
+        }
+
+        // Launch intents: this process's argv, then forwarded ones (ADR 0019).
+        let intent = std::mem::take(&mut self.pending);
+        self.apply_intent(intent);
+        for line in drain_inbox() {
+            self.apply_intent(launch::Intent::decode(&line));
         }
 
         // Notifications, sleep guard and the prompt queue (ADR 0010).
@@ -1381,6 +1407,7 @@ impl MiaottyApp {
         for (label, verb) in [
             ("Composer", Verb::Composer),
             ("Quick Terminal", Verb::QuickTerminal),
+            ("Copy Pane ID", Verb::CopyPaneId),
             ("New SSH Session\u{2026}", Verb::NewSsh),
             ("Check for Updates", Verb::CheckUpdates),
             ("Save Recipe\u{2026}", Verb::SaveRecipe),
@@ -1420,6 +1447,13 @@ impl MiaottyApp {
             PaletteAction::Run(verb) => match verb {
                 Verb::Composer => self.open_composer(),
                 Verb::QuickTerminal => self.toggle_quick_terminal(),
+                Verb::CopyPaneId => {
+                    self.pending_copy = self
+                        .tabs
+                        .get(self.active)
+                        .and_then(|t| t.focused())
+                        .map(|p| p.pane_id.clone());
+                }
                 Verb::NewSsh => {
                     self.ssh_ui = Some(SshDialog {
                         target: String::new(),
@@ -2708,6 +2742,30 @@ impl MiaottyApp {
         }
     }
 
+    /// Apply a launch intent (argv, URL scheme or a forwarded request).
+    fn apply_intent(&mut self, intent: launch::Intent) {
+        match intent {
+            launch::Intent::Activate => {}
+            launch::Intent::Quick => self.toggle_quick_terminal(),
+            launch::Intent::Focus(id) => self.focus_pane(&id),
+            launch::Intent::Run(cmd) => self.open_command_tab(&cmd),
+        }
+    }
+
+    /// Focus a pane by id, switching to its tab.
+    fn focus_pane(&mut self, pane_id: &str) {
+        for (ti, tab) in self.tabs.iter_mut().enumerate() {
+            if tab.panes.iter().any(|p| p.pane_id == pane_id) {
+                tab.active = pane_id.to_string();
+                self.active = ti;
+                self.selection = None;
+                self.scroll = 0;
+                return;
+            }
+        }
+        eprintln!("miaotty: no pane {pane_id}");
+    }
+
     /// Open a new tab and run `cmd` in it (URL-scheme launch).
     fn open_command_tab(&mut self, cmd: &str) {
         self.new_tab();
@@ -3305,6 +3363,28 @@ impl MiaottyApp {
         }
     }
 
+    /// Quick Terminal hotkey status and external-binding snippets (ADR 0019).
+    fn quick_hotkey_ui(&mut self, ui: &mut egui::Ui) {
+        let muted = egui::Color32::from_gray(120);
+        ui.label(section("QUICK TERMINAL"));
+        ui.label(match &self.quick_hotkey {
+            Some(spec) => format!("{} · {spec}", self.t("Hotkey")),
+            None => self.t("No hotkey configured").to_string(),
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                egui::RichText::new(self.t("Bind externally:"))
+                    .small()
+                    .color(muted),
+            );
+            for tool in integration::HOTKEY_TOOLS {
+                if ui.small_button(*tool).clicked() {
+                    ui.ctx().copy_text(integration::hotkey_snippet(tool));
+                }
+            }
+        });
+    }
+
     /// Agent integration: detect agents, install hooks, launch them (ADR 0016).
     fn agent_integrations_ui(&mut self, ui: &mut egui::Ui) {
         let muted = egui::Color32::from_gray(120);
@@ -3617,6 +3697,8 @@ impl MiaottyApp {
                         }
                     }
                 });
+                ui.separator();
+                self.quick_hotkey_ui(ui);
                 ui.separator();
                 self.agent_integrations_ui(ui);
                 ui.separator();

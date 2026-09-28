@@ -120,6 +120,26 @@ pub fn snippet(agent: &Agent, path: &Path) -> String {
     )
 }
 
+/// Tools that can bind a system-wide hotkey to `miaotty --quick`, for
+/// platforms (Linux) where the app has no built-in global grab.
+pub const HOTKEY_TOOLS: &[&str] = &["skhd", "hammerspoon", "autohotkey", "gnome"];
+
+/// A ready-to-paste binding for the given tool.
+pub fn hotkey_snippet(tool: &str) -> String {
+    match tool {
+        "skhd" => "# ~/.skhdrc\ncmd + shift - t : miaotty --quick".to_string(),
+        "hammerspoon" => {
+            "hs.hotkey.bind({\"cmd\",\"shift\"}, \"T\", function()\n  hs.execute(\"miaotty --quick\")\nend)"
+                .to_string()
+        }
+        "autohotkey" => "; AutoHotkey v2\n#+t::Run \"miaotty --quick\"".to_string(),
+        "gnome" => "# GNOME: Settings → Keyboard → Custom Shortcuts\n\
+                    # Name: Quick Terminal    Command: miaotty --quick"
+            .to_string(),
+        _ => String::new(),
+    }
+}
+
 /// Launch an agent in the current directory (used by the Launch button).
 pub fn launch_command(agent: &Agent) -> String {
     agent.launch.to_string()
@@ -164,6 +184,15 @@ mod tests {
         let text = snippet(agent, Path::new("/tmp/claude.sh"));
         assert!(text.contains("/tmp/claude.sh"));
         assert!(text.contains("Claude Code"));
+    }
+
+    #[test]
+    fn hotkey_snippets_mention_quick() {
+        for tool in HOTKEY_TOOLS {
+            let snippet = hotkey_snippet(tool);
+            assert!(snippet.contains("miaotty --quick"), "{tool} snippet");
+        }
+        assert!(hotkey_snippet("nope").is_empty());
     }
 
     #[test]

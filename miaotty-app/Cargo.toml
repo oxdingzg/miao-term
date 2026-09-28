@@ -25,6 +25,11 @@ assets = [
     ["assets/miaotty.desktop", "usr/share/applications/miaotty.desktop", "644"],
 ]
 
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+# System-wide Quick Terminal hotkey (MIT). Linux uses an external binding tool
+# instead, so CI's Linux build does not pull X11/Wayland deps. See ADR 0019.
+global-hotkey = "0.8"
+
 [dependencies]
 miao-term-core = { path = "../crates/term-core" }
 miao-term-render = { path = "../crates/term-render" }

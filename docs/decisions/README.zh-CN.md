@@ -27,3 +27,4 @@
 | [0016](./0016-integration-automation.zh-CN.md) | Agent 集成自动化与单实例 | 已接受 |
 | [0017](./0017-markdown-tables-editor-config.zh-CN.md) | Markdown 表格与外部编辑器 | 已接受 |
 | [0018](./0018-performance-gate.zh-CN.md) | 性能门 | 已接受 |
+| [0019](./0019-hotkey-deeplink.zh-CN.md) | 全局热键与深链接到 pane | 已接受 |
