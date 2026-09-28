@@ -29,3 +29,4 @@
 | [0018](./0018-performance-gate.zh-CN.md) | 性能门 | 已接受 |
 | [0019](./0019-hotkey-deeplink.zh-CN.md) | 全局热键与深链接到 pane | 已接受 |
 | [0020](./0020-markdown-images-gutter.zh-CN.md) | Markdown 图片、脚注与编辑态行号栏 | 已接受 |
+| [0021](./0021-remote-view-edit.zh-CN.md) | 经 ssh 的远端 view/edit | 已接受 |

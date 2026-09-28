@@ -654,6 +654,8 @@ struct MiaottyApp {
     pending: launch::Intent,
     pending_copy: Option<String>,
     quick_hotkey: Option<String>,
+    remote_ui: Option<RemoteDialog>,
+    remote_rx: Option<(bool, std::sync::mpsc::Receiver<RemoteRead>)>,
     hotkeys: Option<hotkey::Hotkeys>,
     hotkey_tried: bool,
     lang: i18n::Lang,
@@ -710,6 +712,25 @@ struct Editor {
     target: Option<usize>,
     /// Whether the initial scroll to `target` has happened.
     jumped: bool,
+    /// When set, the file lives on `dest` and is read/written over ssh.
+    remote: Option<RemoteRef>,
+}
+
+/// A file reached over ssh (ADR 0021).
+#[derive(Clone)]
+struct RemoteRef {
+    dest: String,
+    path: String,
+}
+
+/// Result of a threaded remote read: the reference plus its text.
+type RemoteRead = Result<(RemoteRef, String), String>;
+
+/// The "view/edit a remote file" dialog.
+struct RemoteDialog {
+    dest: String,
+    path: String,
+    edit: bool,
 }
 
 /// One rendered tab in the top tab bar: label, agent color, view icon,
@@ -734,6 +755,8 @@ enum PaletteAction {
 enum Verb {
     Composer,
     QuickTerminal,
+    ViewRemote,
+    EditRemote,
     CopyPaneId,
     NewSsh,
     CheckUpdates,
@@ -825,6 +848,8 @@ impl MiaottyApp {
             pending: launch::Intent::Activate,
             pending_copy: None,
             quick_hotkey: cfg.quick_terminal_hotkey.clone(),
+            remote_ui: None,
+            remote_rx: None,
             hotkeys: None,
             hotkey_tried: false,
             lang: i18n::Lang::resolve(cfg.language.as_deref()),
@@ -1318,6 +1343,33 @@ impl eframe::App for MiaottyApp {
         if self.ssh_ui.is_some() {
             self.ssh_window(ctx);
         }
+        if let Some((edit, rx)) = &self.remote_rx {
+            match rx.try_recv() {
+                Ok(Ok((rref, text))) => {
+                    let edit = *edit;
+                    self.remote_rx = None;
+                    self.editor = Some(Editor {
+                        path: PathBuf::from(&rref.path),
+                        original: text.clone(),
+                        text,
+                        readonly: !edit,
+                        raw: false,
+                        target: None,
+                        jumped: false,
+                        remote: Some(rref),
+                    });
+                }
+                Ok(Err(e)) => {
+                    self.integration_msg = Some(format!("remote read failed: {e}"));
+                    self.remote_rx = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.remote_rx = None,
+            }
+        }
+        if self.remote_ui.is_some() {
+            self.remote_window(ctx);
+        }
         if self.recipe_ui.is_some() {
             self.recipe_window(ctx);
         }
@@ -1408,6 +1460,8 @@ impl MiaottyApp {
         for (label, verb) in [
             ("Composer", Verb::Composer),
             ("Quick Terminal", Verb::QuickTerminal),
+            ("View Remote File\u{2026}", Verb::ViewRemote),
+            ("Edit Remote File\u{2026}", Verb::EditRemote),
             ("Copy Pane ID", Verb::CopyPaneId),
             ("New SSH Session\u{2026}", Verb::NewSsh),
             ("Check for Updates", Verb::CheckUpdates),
@@ -1448,6 +1502,13 @@ impl MiaottyApp {
             PaletteAction::Run(verb) => match verb {
                 Verb::Composer => self.open_composer(),
                 Verb::QuickTerminal => self.toggle_quick_terminal(),
+                Verb::ViewRemote | Verb::EditRemote => {
+                    self.remote_ui = Some(RemoteDialog {
+                        dest: String::new(),
+                        path: String::new(),
+                        edit: verb == Verb::EditRemote,
+                    })
+                }
                 Verb::CopyPaneId => {
                     self.pending_copy = self
                         .tabs
@@ -3230,6 +3291,7 @@ impl MiaottyApp {
             raw: false,
             target: line,
             jumped: false,
+            remote: None,
         });
     }
 
@@ -3343,7 +3405,11 @@ impl MiaottyApp {
             });
         if reload {
             if let Some(editor) = self.editor.as_mut() {
-                if let Ok(bytes) = std::fs::read(&editor.path) {
+                let bytes = match &editor.remote {
+                    Some(r) => ssh::read_remote(&r.dest, &r.path).ok(),
+                    None => std::fs::read(&editor.path).ok(),
+                };
+                if let Some(bytes) = bytes {
                     editor.text = String::from_utf8_lossy(&bytes).to_string();
                     editor.original = editor.text.clone();
                 }
@@ -3351,9 +3417,17 @@ impl MiaottyApp {
         }
         if save {
             if let Some(editor) = self.editor.as_mut() {
-                match std::fs::write(&editor.path, editor.text.as_bytes()) {
+                let result = match &editor.remote {
+                    Some(r) => ssh::write_remote(&r.dest, &r.path, editor.text.as_bytes()),
+                    None => std::fs::write(&editor.path, editor.text.as_bytes()),
+                };
+                match result {
                     Ok(()) => editor.original = editor.text.clone(),
-                    Err(e) => eprintln!("miaotty: save failed: {e}"),
+                    Err(e) => {
+                        let msg = format!("save failed: {e}");
+                        eprintln!("miaotty: {msg}");
+                        self.integration_msg = Some(msg);
+                    }
                 }
             }
         }
@@ -3525,6 +3599,66 @@ impl MiaottyApp {
                 Ok(()) => eprintln!("miaotty: wrote {}", path.display()),
                 Err(e) => eprintln!("miaotty: failed to write config: {e}"),
             }
+        }
+    }
+
+    /// The "view/edit a remote file" dialog (ADR 0021).
+    fn remote_window(&mut self, ctx: &egui::Context) {
+        let Some(mut dialog) = self.remote_ui.take() else {
+            return;
+        };
+        let mut open = true;
+        let mut load = false;
+        let title = if dialog.edit {
+            self.t("Edit Remote File\u{2026}")
+        } else {
+            self.t("View Remote File\u{2026}")
+        };
+        egui::Window::new(title)
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(self.t("SSH destination"));
+                    ui.text_edit_singleline(&mut dialog.dest);
+                });
+                ui.horizontal(|ui| {
+                    ui.label(self.t("Remote path"));
+                    ui.text_edit_singleline(&mut dialog.path);
+                });
+                let ready = !dialog.dest.trim().is_empty() && !dialog.path.trim().is_empty();
+                if ui
+                    .add_enabled(ready, egui::Button::new(self.t("Load")))
+                    .clicked()
+                {
+                    load = true;
+                }
+            });
+        if load {
+            let dest = dialog.dest.trim().to_string();
+            let path = dialog.path.trim().to_string();
+            let edit = dialog.edit;
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let result = ssh::read_remote(&dest, &path)
+                    .map(|bytes| {
+                        (
+                            RemoteRef {
+                                dest: dest.clone(),
+                                path: path.clone(),
+                            },
+                            String::from_utf8_lossy(&bytes).to_string(),
+                        )
+                    })
+                    .map_err(|e| e.to_string());
+                let _ = tx.send(result);
+            });
+            self.remote_rx = Some((edit, rx));
+            open = false;
+        }
+        if open {
+            self.remote_ui = Some(dialog);
         }
     }
 

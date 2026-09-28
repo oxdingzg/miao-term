@@ -28,3 +28,4 @@ Docs are English by default; keep a Simplified Chinese version in sync
 | [0018](./0018-performance-gate.md) | Performance gate | accepted |
 | [0019](./0019-hotkey-deeplink.md) | Global hotkey and deep-link to a pane | accepted |
 | [0020](./0020-markdown-images-gutter.md) | Markdown images/footnotes and the editing gutter | accepted |
+| [0021](./0021-remote-view-edit.md) | Remote view/edit over ssh | accepted |

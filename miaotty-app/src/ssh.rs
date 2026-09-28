@@ -173,6 +173,72 @@ pub fn base64_encode(bytes: &[u8]) -> String {
     out
 }
 
+/// Cap on how much of a remote file we read into the reader.
+pub const MAX_REMOTE_BYTES: u64 = 2 * 1024 * 1024;
+
+/// The `ssh` argv for reading a remote file (`cat`), reusing the ControlMaster.
+pub fn read_args(dest: &str, path: &str) -> Vec<String> {
+    let mut args = base_args();
+    args.push(dest.to_string());
+    args.push(format!("cat -- {}", shell_quote(path)));
+    args
+}
+
+/// The `ssh` argv for writing a remote file (`cat >`), reusing the ControlMaster.
+pub fn write_args(dest: &str, path: &str) -> Vec<String> {
+    let mut args = base_args();
+    args.push(dest.to_string());
+    args.push(format!("cat > {}", shell_quote(path)));
+    args
+}
+
+fn base_args() -> Vec<String> {
+    vec![
+        "-o".to_string(),
+        "BatchMode=yes".to_string(),
+        "-o".to_string(),
+        "ControlMaster=auto".to_string(),
+        "-o".to_string(),
+        format!("ControlPath={}", control_path()),
+        "-o".to_string(),
+        "ControlPersist=60s".to_string(),
+    ]
+}
+
+/// Read a remote file over ssh (bounded). Errors carry the ssh stderr.
+pub fn read_remote(dest: &str, path: &str) -> std::io::Result<Vec<u8>> {
+    let out = Command::new("ssh").args(read_args(dest, path)).output()?;
+    if !out.status.success() {
+        return Err(std::io::Error::other(
+            String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        ));
+    }
+    let mut data = out.stdout;
+    data.truncate(MAX_REMOTE_BYTES as usize);
+    Ok(data)
+}
+
+/// Write a remote file over ssh (`cat >`), feeding `data` on stdin.
+pub fn write_remote(dest: &str, path: &str, data: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut child = Command::new("ssh")
+        .args(write_args(dest, path))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin.write_all(data)?;
+    }
+    let out = child.wait_with_output()?;
+    if !out.status.success() {
+        return Err(std::io::Error::other(
+            String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
@@ -234,6 +300,16 @@ mod tests {
         assert!(with.contains("base64 -d"));
         assert!(with.contains("QUJD"));
         assert!(with.contains("export TERM=miaotty"));
+    }
+
+    #[test]
+    fn remote_args_reuse_control_master_and_quote() {
+        let r = read_args("u@h", "/tmp/a b.txt");
+        assert!(r.iter().any(|a| a == "BatchMode=yes"));
+        assert!(r.iter().any(|a| a.starts_with("ControlPath=")));
+        assert_eq!(r.last().unwrap(), "cat -- '/tmp/a b.txt'");
+        let w = write_args("u@h", "x");
+        assert_eq!(w.last().unwrap(), "cat > 'x'");
     }
 
     #[test]
