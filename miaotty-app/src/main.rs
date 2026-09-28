@@ -153,6 +153,7 @@ struct MiaottyApp {
     show_details: bool,
     state: Arc<miao_term_mtp::ServerState>,
     theme: Theme,
+    metrics: miao_term_render::MetricsProbe,
 }
 
 impl MiaottyApp {
@@ -169,6 +170,7 @@ impl MiaottyApp {
             show_details: true,
             state,
             theme: Theme::from_config(&cfg.theme),
+            metrics: miao_term_render::MetricsProbe::new(),
         };
         app.push_tab("shell".to_owned(), 100, 30);
         app
@@ -460,8 +462,9 @@ impl MiaottyApp {
             .frame(egui::Frame::default().fill(self.theme.bg))
             .show(ctx, |ui| {
                 let rect = ui.available_rect_before_wrap();
-                let font = egui::FontId::monospace(self.font_size);
-                let (cw, ch) = ctx.fonts(|f| (f.glyph_width(&font, ' '), f.row_height(&font)));
+                // Cell size comes from the renderer's own font so glyphs line up.
+                let line_height = (self.font_size * 1.25).round();
+                let (cw, ch) = self.metrics.cell(self.font_size, line_height);
                 if cw <= 0.0 || ch <= 0.0 {
                     return;
                 }

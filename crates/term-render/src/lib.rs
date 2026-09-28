@@ -36,6 +36,27 @@ pub struct TermRenderer {
     buffers: Vec<Buffer>,
 }
 
+/// Candidate system CJK fonts (macOS / Linux / Windows).
+const CJK_FONTS: &[&str] = &[
+    "/System/Library/Fonts/PingFang.ttc",
+    "/System/Library/Fonts/STHeiti Light.ttc",
+    "/System/Library/Fonts/Hiragino Sans GB.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+    "C:/Windows/Fonts/msyh.ttc",
+    "C:/Windows/Fonts/simhei.ttf",
+];
+
+/// Load a system CJK font into the font database so CJK glyphs render.
+fn load_system_cjk(font_system: &mut FontSystem) {
+    for path in CJK_FONTS {
+        if let Ok(bytes) = std::fs::read(path) {
+            font_system.db_mut().load_font_data(bytes);
+            return;
+        }
+    }
+}
+
 impl TermRenderer {
     pub fn new(
         device: &wgpu::Device,
@@ -47,8 +68,10 @@ impl TermRenderer {
         let renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         let viewport = Viewport::new(device, &cache);
+        let mut font_system = FontSystem::new();
+        load_system_cjk(&mut font_system);
         Self {
-            font_system: FontSystem::new(),
+            font_system,
             swash_cache: SwashCache::new(),
             cache,
             atlas,
@@ -148,6 +171,55 @@ impl TermRenderer {
         if let Err(e) = self.renderer.render(&self.atlas, &self.viewport, pass) {
             eprintln!("miaotty: text render error: {e}");
         }
+    }
+}
+
+/// Measures the cell size from the actual font, so grid layout matches the
+/// glyphs the renderer draws.
+pub struct MetricsProbe {
+    font_system: FontSystem,
+    buffer: Buffer,
+}
+
+impl Default for MetricsProbe {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MetricsProbe {
+    pub fn new() -> Self {
+        let mut font_system = FontSystem::new();
+        load_system_cjk(&mut font_system);
+        let buffer = Buffer::new(&mut font_system, Metrics::new(14.0, 18.0));
+        Self {
+            font_system,
+            buffer,
+        }
+    }
+
+    /// Returns `(cell_width, line_height)` for the given font size.
+    pub fn cell(&mut self, font_size: f32, line_height: f32) -> (f32, f32) {
+        let metrics = Metrics::new(font_size, line_height);
+        self.buffer
+            .set_metrics(&mut self.font_system, metrics);
+        self.buffer.set_size(&mut self.font_system, None, None);
+        self.buffer.set_text(
+            &mut self.font_system,
+            "M",
+            Attrs::new().family(Family::Monospace),
+            Shaping::Basic,
+        );
+        self.buffer
+            .shape_until_scroll(&mut self.font_system, false);
+        let mut width = font_size * 0.6;
+        for run in self.buffer.layout_runs() {
+            if run.line_w > 0.0 {
+                width = run.line_w;
+                break;
+            }
+        }
+        (width, line_height)
     }
 }
 
