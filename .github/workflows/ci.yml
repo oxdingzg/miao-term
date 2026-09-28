@@ -25,3 +25,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       # Performance gate (ADR 0018): release-mode budgets, generous headroom.
       - run: cargo test --release -p miao-term-core -p miaotty-app -- --ignored
+
+  privacy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Fail if the tree leaks machine-specific details or secrets (AGENTS.md).
+      # Add your own identifiers (host aliases, usernames, internal hostnames)
+      # to the repository secret PRIVACY_DENYLIST, one per line.
+      - name: Machine-specific / secret scan
+        env:
+          PRIVACY_DENYLIST: ${{ secrets.PRIVACY_DENYLIST }}
+        run: sh scripts/check-privacy.sh

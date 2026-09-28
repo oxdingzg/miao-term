@@ -1,0 +1,10 @@
+#!/bin/sh
+# Block commits that leak machine-specific details or secrets.
+# Enable with: sh scripts/install-hooks.sh
+set -eu
+
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+[ -n "$staged" ] || exit 0
+
+# shellcheck disable=SC2086
+sh "$(git rev-parse --show-toplevel)/scripts/check-privacy.sh" $staged
