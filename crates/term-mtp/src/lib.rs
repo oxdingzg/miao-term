@@ -5,8 +5,12 @@
 //! `miaotty-cli`, plugins and agent hooks keep working unchanged.
 
 use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
+
+/// Maximum size of a single newline-delimited request. Lines longer than this
+/// are treated as hostile and the connection is dropped.
+const MAX_LINE: usize = 1 << 20;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -86,9 +90,26 @@ impl Response {
     }
 }
 
-/// Default socket path (`$TMPDIR/miaotty.sock`), shared with `miaotty-cli`.
+/// Per-user runtime directory for the control-plane socket.
+///
+/// Prefers `$XDG_RUNTIME_DIR` (Linux, already mode 0700 and user-owned) and
+/// otherwise falls back to `$TMPDIR` (per-user on macOS). This keeps the
+/// socket off shared, world-writable locations such as `/tmp` whenever the
+/// platform offers a private directory.
+fn runtime_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") {
+        let path = PathBuf::from(dir);
+        if path.is_absolute() {
+            return path;
+        }
+    }
+    std::env::temp_dir()
+}
+
+/// Default socket path (`$XDG_RUNTIME_DIR/miaotty.sock` or `$TMPDIR/miaotty.sock`),
+/// shared with `miaotty-cli`.
 pub fn default_socket() -> PathBuf {
-    std::env::temp_dir().join("miaotty.sock")
+    runtime_dir().join("miaotty.sock")
 }
 
 fn now_ms() -> f64 {
@@ -257,27 +278,59 @@ fn dispatch(state: &ServerState, req: Request) -> Response {
     }
 }
 
+/// Read one request line, bounded to [`MAX_LINE`]. Returns `Ok(false)` at EOF
+/// or when a client sends an oversized line, in which case the connection is
+/// dropped so a single client cannot make us allocate unbounded memory.
+fn read_request(reader: &mut impl BufRead, buf: &mut Vec<u8>) -> std::io::Result<bool> {
+    buf.clear();
+    let n = reader.by_ref().take(MAX_LINE as u64).read_until(b'\n', buf)?;
+    if n == 0 {
+        return Ok(false);
+    }
+    if buf.len() >= MAX_LINE && buf.last() != Some(&b'\n') {
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+fn write_response(writer: &mut impl Write, response: &Response) -> bool {
+    match serde_json::to_string(response) {
+        Ok(mut encoded) => {
+            encoded.push('\n');
+            writer.write_all(encoded.as_bytes()).is_ok() && writer.flush().is_ok()
+        }
+        Err(_) => false,
+    }
+}
+
 fn handle(stream: std::os::unix::net::UnixStream, state: Arc<ServerState>) {
-    let reader = match stream.try_clone() {
+    let mut reader = match stream.try_clone() {
         Ok(s) => BufReader::new(s),
         Err(_) => return,
     };
     let mut writer = stream;
-    for line in reader.lines() {
-        let Ok(line) = line else { break };
-        if line.trim().is_empty() {
-            continue;
-        }
-        let response = match serde_json::from_str::<Request>(&line) {
-            Ok(req) => dispatch(&state, req),
-            Err(e) => Response::err(0, state.revision(), "bad_request", e.to_string()),
-        };
-        if let Ok(mut encoded) = serde_json::to_string(&response) {
-            encoded.push('\n');
-            if writer.write_all(encoded.as_bytes()).is_err() {
-                break;
+    let mut buf = Vec::new();
+    while let Ok(true) = read_request(&mut reader, &mut buf) {
+        let response = match std::str::from_utf8(&buf) {
+            Ok(line) => {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                match serde_json::from_str::<Request>(line) {
+                    Ok(req) => dispatch(&state, req),
+                    Err(e) => Response::err(0, state.revision(), "bad_request", e.to_string()),
+                }
             }
-            let _ = writer.flush();
+            Err(_) => Response::err(
+                0,
+                state.revision(),
+                "bad_request",
+                "request must be valid UTF-8",
+            ),
+        };
+        if !write_response(&mut writer, &response) {
+            break;
         }
     }
 }
@@ -289,6 +342,13 @@ pub fn serve(path: &Path, state: Arc<ServerState>) -> std::io::Result<()> {
         let _ = std::fs::create_dir_all(dir);
     }
     let listener = std::os::unix::net::UnixListener::bind(path)?;
+    // Restrict the socket to its owner. `pane.run`/`pane.send` execute
+    // commands in the user's shell, so other local users must not connect.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let state = state.clone();
@@ -296,4 +356,27 @@ pub fn serve(path: &Path, state: Arc<ServerState>) -> std::io::Result<()> {
         }
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn reads_a_normal_request() {
+        let mut reader = BufReader::new(Cursor::new(b"{\"v\":1}\n".to_vec()));
+        let mut buf = Vec::new();
+        assert!(matches!(read_request(&mut reader, &mut buf), Ok(true)));
+        assert_eq!(buf, b"{\"v\":1}\n");
+    }
+
+    #[test]
+    fn rejects_an_oversized_request() {
+        let mut input = vec![b'a'; MAX_LINE + 10];
+        input.push(b'\n');
+        let mut reader = BufReader::new(Cursor::new(input));
+        let mut buf = Vec::new();
+        assert!(matches!(read_request(&mut reader, &mut buf), Ok(false)));
+    }
 }

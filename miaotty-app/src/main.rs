@@ -5,6 +5,7 @@
 //! grid is drawn with egui for iteration speed; R1 replaces this with the
 //! custom wgpu renderer (`term-render`) per the architecture.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -154,6 +155,8 @@ struct MiaottyApp {
     state: Arc<miao_term_mtp::ServerState>,
     theme: Theme,
     metrics: miao_term_render::MetricsProbe,
+    renaming: Option<usize>,
+    rename_buf: String,
 }
 
 impl MiaottyApp {
@@ -171,14 +174,21 @@ impl MiaottyApp {
             state,
             theme: Theme::from_config(&cfg.theme),
             metrics: miao_term_render::MetricsProbe::new(),
+            renaming: None,
+            rename_buf: String::new(),
         };
-        app.push_tab("shell".to_owned(), 100, 30);
+        app.push_tab("shell".to_owned(), 100, 30, None);
         app
     }
 
-    fn spawn_terminal(cols: u16, rows: u16, pane_id: &str) -> Option<Terminal> {
+    fn spawn_terminal(
+        cols: u16,
+        rows: u16,
+        pane_id: &str,
+        cwd: Option<PathBuf>,
+    ) -> Option<Terminal> {
         let env = vec![("MIAOTTY_PANE_ID".to_owned(), pane_id.to_owned())];
-        match Terminal::new(None, cols, rows, 10_000, &env) {
+        match Terminal::new(None, cols, rows, 10_000, cwd, &env) {
             Ok(term) => Some(term),
             Err(e) => {
                 eprintln!("failed to spawn shell: {e}");
@@ -187,9 +197,9 @@ impl MiaottyApp {
         }
     }
 
-    fn push_tab(&mut self, title: String, cols: u16, rows: u16) {
+    fn push_tab(&mut self, title: String, cols: u16, rows: u16, cwd: Option<PathBuf>) {
         let pane_id = gen_pane_id();
-        if let Some(term) = Self::spawn_terminal(cols, rows, &pane_id) {
+        if let Some(term) = Self::spawn_terminal(cols, rows, &pane_id, cwd) {
             self.tabs.push(Tab {
                 term,
                 title,
@@ -204,8 +214,26 @@ impl MiaottyApp {
 
     fn new_tab(&mut self) {
         let (rows, cols) = self.tabs[self.active].term.size();
+        let cwd = self.tabs[self.active].term.cwd().map(PathBuf::from);
         let n = self.tabs.len() + 1;
-        self.push_tab(format!("shell {n}"), cols, rows);
+        self.push_tab(format!("shell {n}"), cols, rows, cwd);
+    }
+
+    fn duplicate_tab(&mut self, i: usize) {
+        let (rows, cols) = self.tabs[i].term.size();
+        let cwd = self.tabs[i].term.cwd().map(PathBuf::from);
+        let title = self.tabs[i].title.clone();
+        self.push_tab(title, cols, rows, cwd);
+    }
+
+    fn close_other_tabs(&mut self, i: usize) {
+        let keep = self.tabs.remove(i);
+        self.tabs.clear();
+        self.tabs.push(keep);
+        self.active = 0;
+        self.selection = None;
+        self.scroll = 0;
+        self.publish_panes();
     }
 
     fn close_active(&mut self) {
@@ -215,6 +243,28 @@ impl MiaottyApp {
         self.tabs.remove(self.active);
         self.active = self.active.min(self.tabs.len() - 1);
         self.publish_panes();
+    }
+
+    fn rename_window(&mut self, ctx: &egui::Context, i: usize) {
+        let mut open = true;
+        egui::Window::new("Rename Tab")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                let resp = ui.text_edit_singleline(&mut self.rename_buf);
+                let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if enter || ui.button("OK").clicked() {
+                    if let Some(tab) = self.tabs.get_mut(i) {
+                        tab.title = self.rename_buf.clone();
+                    }
+                    self.renaming = None;
+                    self.publish_panes();
+                }
+            });
+        if !open {
+            self.renaming = None;
+        }
     }
 
     /// Advertise the current tabs as MTP panes.
@@ -269,6 +319,9 @@ impl eframe::App for MiaottyApp {
             self.details_panel(ctx);
         }
         self.terminal_panel(ctx);
+        if let Some(i) = self.renaming {
+            self.rename_window(ctx, i);
+        }
     }
 }
 
@@ -326,6 +379,10 @@ impl MiaottyApp {
         let can_close = self.tabs.len() > 1;
         let mut switch_to: Option<usize> = None;
         let mut close: Option<usize> = None;
+        let mut close_others: Option<usize> = None;
+        let mut duplicate: Option<usize> = None;
+        let mut rename: Option<usize> = None;
+        let mut rename_buf = String::new();
         let mut add = false;
         let mut toggle = false;
 
@@ -364,6 +421,30 @@ impl MiaottyApp {
                         if resp.clicked_by(egui::PointerButton::Middle) && can_close {
                             close = Some(i);
                         }
+                        resp.context_menu(|ui| {
+                            if ui.button("Rename\u{2026}").clicked() {
+                                rename = Some(i);
+                                rename_buf = title.clone();
+                                ui.close_menu();
+                            }
+                            if ui.button("Duplicate").clicked() {
+                                duplicate = Some(i);
+                                ui.close_menu();
+                            }
+                            if ui.button("New Tab").clicked() {
+                                add = true;
+                                ui.close_menu();
+                            }
+                            ui.separator();
+                            if ui.button("Close Tab").clicked() {
+                                close = Some(i);
+                                ui.close_menu();
+                            }
+                            if ui.button("Close Other Tabs").clicked() {
+                                close_others = Some(i);
+                                ui.close_menu();
+                            }
+                        });
                     });
                 }
             });
@@ -377,10 +458,18 @@ impl MiaottyApp {
         if let Some(i) = close {
             self.active = i;
             self.close_active();
+        } else if let Some(i) = close_others {
+            self.close_other_tabs(i);
+        } else if let Some(i) = duplicate {
+            self.duplicate_tab(i);
         } else if let Some(i) = switch_to {
             self.active = i;
             self.selection = None;
             self.scroll = 0;
+        }
+        if let Some(i) = rename {
+            self.renaming = Some(i);
+            self.rename_buf = rename_buf;
         }
     }
 

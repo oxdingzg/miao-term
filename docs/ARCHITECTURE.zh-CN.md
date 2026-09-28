@@ -24,6 +24,7 @@
 **约束**
 - 依赖只用宽松许可(Apache-2.0/MIT/BSD/ISC);**引擎内禁止 GPL/AGPL**(如 Pebrel 只能读、不能抄)。
 - 每增加一个外部 crate 都要过性能与许可审查。
+- 对外许可:**引擎与应用均为 Apache-2.0**。
 - Rust stable,MSRV 见 `rust-toolchain.toml`。
 
 ## 2. 锁定决策(摘要)
@@ -38,7 +39,7 @@
 | D6 | 平台差异只出现在 `core::pty` / `widget::platform` / `mtp::transport` | 收敛复杂度 |
 | D7 | 控制面 `term-mtp` 与引擎解耦(Unix socket / Windows named pipe) | 引擎崩不拖垮 CLI;复用现有协议 |
 | D8 | 先做 app、后抽库;扩展点分阶段 | 由真实需求驱动 API |
-| D9 | 引擎 crate 双许可 `MIT OR Apache-2.0` | 便于被嵌 |
+| D9 | 引擎 crate 采用 `Apache-2.0` | 宽松、便于被嵌 |
 
 ## 3. 依赖分层(DAG)与规则
 
@@ -208,7 +209,7 @@ pub trait Host: Send + Sync {
 
 ## 17. 打包 / 发布 / 版本
 
-- 引擎 crate `MIT OR Apache-2.0`,先内部用,API 稳定后发布 crates.io。
+- 引擎 crate `Apache-2.0`,先内部用,API 稳定后发布 crates.io。
 - 应用:macOS `.app`+notarize;Linux(AppImage/Flatpak/.deb);Windows MSI(`cargo-dist`/`cargo-wix`)+ 代码签名(Azure Artifact Signing 或自签)。
 - `wgpu` DX12 需随包 `dxcompiler.dll` 或静态 `static-dxc`。
 
@@ -250,11 +251,11 @@ R0 最小闭环(pty→vt→grid→render→input,量延迟) → **R0.5 IME 专�
 **红线**:R0 未过"输入延迟 P95 ≤ 16ms / 大文件不丢帧 / 空闲 CPU≈0"三项,不进入后续里程碑;
 egui 每帧空转、present 模式、图集上传是三大重点实测项。
 
-## 21. 待补 ADR(`docs/decisions/`)
+## 21. ADR(`docs/decisions/`)
 
-- 0001 技术栈选型(本文 §2 固化)
+- 0001 技术栈选型(本文 §2 固化)——已写
 - 0002 并发与锁纪律
 - 0003 渲染/egui 共帧方案
 - 0004 自研 tab/split(非 OS 原生)
 - 0005 MTP 传输(Unix socket / named pipe)
-- 0006 许可与依赖策略
+- 0006 许可与依赖策略——已写

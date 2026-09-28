@@ -12,6 +12,10 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize}
 
 type Fallible<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
+/// Upper bound on a pending OSC 7 sequence held between chunks. Terminal output
+/// is untrusted, so an unterminated sequence must not grow this buffer forever.
+const MAX_OSC: usize = 8 * 1024;
+
 /// A running terminal: a child shell on a PTY plus the parsed screen state.
 pub struct Terminal {
     parser: vt100::Parser,
@@ -45,6 +49,7 @@ impl Terminal {
         cols: u16,
         rows: u16,
         scrollback: usize,
+        cwd: Option<std::path::PathBuf>,
         extra_env: &[(String, String)],
     ) -> Fallible<Self> {
         let pty_system = native_pty_system();
@@ -69,8 +74,10 @@ impl Terminal {
         for (k, v) in crate::shell::env_for(&shell_path) {
             cmd.env(k, v);
         }
-        if let Ok(cwd) = std::env::current_dir() {
-            cmd.cwd(cwd);
+        if let Some(dir) = cwd {
+            cmd.cwd(dir);
+        } else if let Ok(dir) = std::env::current_dir() {
+            cmd.cwd(dir);
         }
 
         let child = pair.slave.spawn_command(cmd)?;
@@ -196,7 +203,12 @@ impl Terminal {
                     self.osc_buf.drain(..after + end + term_len);
                 }
                 None => {
-                    self.osc_buf.drain(..start);
+                    // No terminator yet: keep the pending sequence bounded.
+                    if self.osc_buf.len() - start > MAX_OSC {
+                        self.osc_buf.clear();
+                    } else {
+                        self.osc_buf.drain(..start);
+                    }
                     return;
                 }
             }

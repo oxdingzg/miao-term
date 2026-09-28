@@ -13,4 +13,4 @@ Docs are English by default; keep a Simplified Chinese version in sync
 | 0003 | Terminal + egui co-frame rendering | planned |
 | 0004 | Own tab/split model (not OS-native) | planned |
 | 0005 | MTP transport (Unix socket / Windows named pipe) | planned |
-| 0006 | License & dependency policy | planned |
+| [0006](./0006-license-policy.md) | License & dependency policy | accepted |

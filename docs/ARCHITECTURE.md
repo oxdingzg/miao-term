@@ -31,6 +31,7 @@ engine (`miao-term-*`) is separate from the app (`miaotty-app`), and the control
 - Permissive licenses only (Apache-2.0/MIT/BSD/ISC); **no GPL/AGPL inside the engine**
   (e.g. Pebrel is read-only reference, never copied).
 - Every new external crate passes a performance and license review.
+- Outbound license: **Apache-2.0** for the engine and the app.
 - Rust stable; MSRV in `rust-toolchain.toml`.
 
 ## 2. Locked decisions (summary)
@@ -45,7 +46,7 @@ engine (`miao-term-*`) is separate from the app (`miaotty-app`), and the control
 | D6 | Platform differences only in `core::pty` / `widget::platform` / `mtp::transport` | Contain complexity |
 | D7 | `term-mtp` decoupled from the engine (Unix socket / Windows named pipe) | A crash in one doesn't take down the other; reuse the protocol |
 | D8 | Build the app first, extract the library later; phase the extension points | Real needs drive the API |
-| D9 | Engine crates dual-licensed `MIT OR Apache-2.0` | Easy to embed |
+| D9 | Engine crates licensed `Apache-2.0` | Permissive; easy to embed |
 
 ## 3. Layering (DAG) and rules
 
@@ -231,7 +232,7 @@ Use Alacritty's proven model (`FairMutex<Term>` + `EventListener`); do not inven
 
 ## 17. Packaging / release / versioning
 
-- Engine crates `MIT OR Apache-2.0`, internal first, published to crates.io once the API is stable.
+- Engine crates `Apache-2.0`, internal first, published to crates.io once the API is stable.
 - App: macOS `.app` + notarize; Linux (AppImage/Flatpak/.deb); Windows MSI (`cargo-dist`/`cargo-wix`) + signing
   (Azure Artifact Signing or self-signed).
 - `wgpu` DX12 needs a bundled `dxcompiler.dll` or static `static-dxc`.
@@ -276,11 +277,11 @@ modes; ④ Windows ConPTY platform cost (inherent to any approach).
 **Red line**: R0 must pass input latency P95 ≤ 16 ms / no dropped frames on large output / idle CPU ≈ 0
 before later milestones. egui idling, present mode, and atlas uploads are the three key things to measure.
 
-## 21. ADRs to write (`docs/decisions/`)
+## 21. ADRs (`docs/decisions/`)
 
-- 0001 Stack selection (frozen here in §2)
+- 0001 Stack selection (frozen here in §2) — written
 - 0002 Concurrency and lock discipline
 - 0003 Terminal + egui co-frame rendering
 - 0004 Own tab/split model (not OS-native)
 - 0005 MTP transport (Unix socket / Windows named pipe)
-- 0006 License and dependency policy
+- 0006 License and dependency policy — written

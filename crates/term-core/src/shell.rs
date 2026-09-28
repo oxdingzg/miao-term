@@ -5,7 +5,8 @@
 //! The shim restores the user's real `ZDOTDIR` first, then sources their
 //! `~/.zshenv`, so their setup is untouched — same approach Ghostty uses.
 
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
 
 const ZSHENV: &str = r#"# miaotty shell integration (zsh) — auto-generated, do not edit.
 if [[ -n "${MIAOTTY_ZDOTDIR_ORIG+x}" ]]; then
@@ -30,8 +31,54 @@ fi
 _miaotty_osc7
 "#;
 
-fn shim_dir() -> PathBuf {
-    std::env::temp_dir().join("miaotty-zdotdir")
+/// Per-user directory the shim is written to. Prefers `$XDG_RUNTIME_DIR` and
+/// otherwise `$TMPDIR`, falling back to the system temp dir.
+fn runtime_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") {
+        let path = PathBuf::from(dir);
+        if path.is_absolute() {
+            return path;
+        }
+    }
+    std::env::temp_dir()
+}
+
+/// Create (or validate) a directory only the current user can access.
+///
+/// The shim is `source`d by every new shell, so a tamperable directory would
+/// mean arbitrary code execution. We refuse anything that is not a real
+/// directory or that grants group/other permissions.
+#[cfg(unix)]
+fn ensure_private_dir(dir: &Path) -> io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    match dir.symlink_metadata() {
+        Ok(md) => {
+            if !md.is_dir() || md.file_type().is_symlink() {
+                return Err(io::Error::other("shim path is not a directory"));
+            }
+            if md.permissions().mode() & 0o077 != 0 {
+                return Err(io::Error::other("shim directory is group/other accessible"));
+            }
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            let mut builder = std::fs::DirBuilder::new();
+            builder.recursive(true).mode(0o700);
+            builder.create(dir)?;
+        }
+        Err(e) => return Err(e),
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_private_dir(dir: &Path) -> io::Result<()> {
+    std::fs::create_dir_all(dir)
+}
+
+fn shim_dir() -> Option<PathBuf> {
+    let dir = runtime_dir().join("miaotty-zdotdir");
+    ensure_private_dir(&dir).ok()?;
+    Some(dir)
 }
 
 /// Extra environment for `shell` (empty unless it is zsh).
@@ -44,10 +91,9 @@ pub fn env_for(shell: &str) -> Vec<(String, String)> {
         return Vec::new();
     }
 
-    let dir = shim_dir();
-    if std::fs::create_dir_all(&dir).is_err() {
+    let Some(dir) = shim_dir() else {
         return Vec::new();
-    }
+    };
     if std::fs::write(dir.join(".zshenv"), ZSHENV).is_err() {
         return Vec::new();
     }
