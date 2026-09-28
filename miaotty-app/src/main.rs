@@ -546,6 +546,8 @@ struct MiaottyApp {
     editor: Option<Editor>,
     notifications: bool,
     prevent_sleep: bool,
+    badges: miao_term_config::Badges,
+    attention: std::collections::HashSet<String>,
     sleep: agentloop::SleepGuard,
     agent_states: std::collections::HashMap<String, String>,
     queue: Vec<QueuedPrompt>,
@@ -662,6 +664,8 @@ impl MiaottyApp {
             editor: None,
             notifications: cfg.notifications,
             prevent_sleep: cfg.prevent_sleep,
+            badges: cfg.badges,
+            attention: std::collections::HashSet::new(),
             sleep: agentloop::SleepGuard::new(),
             agent_states: std::collections::HashMap::new(),
             queue: Vec::new(),
@@ -1094,6 +1098,17 @@ impl MiaottyApp {
                 icon: view.as_ref().and_then(|v| v.icon.clone()),
                 action: PaletteAction::SwitchTab(i),
             });
+            if tab
+                .focused()
+                .is_some_and(|p| self.attention.contains(&p.pane_id))
+            {
+                out.push(PaletteEntry {
+                    kind: "attention",
+                    label: format!("{} needs attention", self.tab_title(tab)),
+                    icon: view.as_ref().and_then(|v| v.icon.clone()),
+                    action: PaletteAction::SwitchTab(i),
+                });
+            }
             if let Some(agent) = tab
                 .focused()
                 .and_then(|p| self.state.agent_for(&p.pane_id))
@@ -1146,6 +1161,9 @@ impl MiaottyApp {
                     self.active = i;
                     self.selection = None;
                     self.scroll = 0;
+                    if let Some(p) = self.tabs[i].focused() {
+                        self.attention.remove(&p.pane_id);
+                    }
                 }
             }
             PaletteAction::Run(verb) => match verb {
@@ -1313,6 +1331,26 @@ fn opt_text(ui: &mut egui::Ui, opt: &mut Option<String>) -> bool {
     changed
 }
 
+/// The command that resumes a reported agent session, if any. Prefers an
+/// explicit `resume` field, else derives one from `session_id` and the agent.
+fn resume_command(agent_state: &serde_json::Value, agent: &str) -> Option<String> {
+    if let Some(resume) = agent_state.get("resume").and_then(|v| v.as_str()) {
+        if !resume.trim().is_empty() {
+            return Some(resume.to_string());
+        }
+    }
+    let id = agent_state.get("session_id").and_then(|v| v.as_str())?;
+    if id.trim().is_empty() {
+        return None;
+    }
+    Some(match agent {
+        "claude" => format!("claude --resume {id}"),
+        "codex" => format!("codex resume {id}"),
+        "miao" => format!("miao --resume {id}"),
+        other => format!("{other} --resume {id}"),
+    })
+}
+
 /// Rank an entry against a lowercased query: substring hits rank by position,
 /// subsequence hits after all substring hits, and an empty query matches all.
 fn palette_score(label: &str, kind: &str, query: &str) -> Option<usize> {
@@ -1419,25 +1457,23 @@ impl MiaottyApp {
             String,
             Option<egui::Color32>,
             Option<miao_term_config::view::Icon>,
+            bool,
         )> = self
             .tabs
             .iter()
             .map(|tab| {
                 let title = self.tab_title(tab);
                 let view = tab.focused().and_then(|p| self.view_for(p));
+                let att = tab
+                    .focused()
+                    .is_some_and(|p| self.attention.contains(&p.pane_id));
                 let color = tab
                     .focused()
                     .and_then(|p| self.state.agent_for(&p.pane_id))
-                    .and_then(|a| {
-                        a.get("state").and_then(|v| v.as_str()).map(|s| match s {
-                            "processing" => egui::Color32::from_rgb(0x81, 0xa1, 0xc1),
-                            "idle" => egui::Color32::from_rgb(0xa3, 0xbe, 0x8c),
-                            "awaiting" => egui::Color32::from_rgb(0xeb, 0xcb, 0x8b),
-                            "error" => egui::Color32::from_rgb(0xbf, 0x61, 0x6a),
-                            _ => egui::Color32::GRAY,
-                        })
-                    });
-                (title, color, view.and_then(|v| v.icon))
+                    .and_then(|a| a.get("state").and_then(|v| v.as_str()).map(str::to_string))
+                    .filter(|s| self.badges.enabled(s))
+                    .map(|s| agent_color(&s));
+                (title, color, view.and_then(|v| v.icon), att)
             })
             .collect();
         let active = self.active;
@@ -1481,8 +1517,11 @@ impl MiaottyApp {
                     });
                 });
                 ui.separator();
-                for (i, (title, color, icon)) in rows.iter().enumerate() {
+                for (i, (title, color, icon, att)) in rows.iter().enumerate() {
                     ui.horizontal(|ui| {
+                        if *att {
+                            ui.colored_label(egui::Color32::from_rgb(0xeb, 0xcb, 0x8b), "\u{0021}");
+                        }
                         if let Some(icon) = icon {
                             let (rect, _) = ui
                                 .allocate_exact_size(egui::Vec2::splat(13.0), egui::Sense::hover());
@@ -1575,6 +1614,7 @@ impl MiaottyApp {
         let fg = self.theme.fg;
         let mut open_file: Option<PathBuf> = None;
         let mut compose = false;
+        let mut resume: Option<String> = None;
         egui::SidePanel::right("details")
             .resizable(true)
             .default_width(300.0)
@@ -1652,6 +1692,31 @@ impl MiaottyApp {
                             ui.label(
                                 egui::RichText::new(format!("{name} \u{00b7} {st}")).color(fg),
                             );
+                            if let Some(sid) = a.get("session_id").and_then(|v| v.as_str()) {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(sid)
+                                            .monospace()
+                                            .size(10.0)
+                                            .color(muted),
+                                    );
+                                    if ui.small_button("Copy").clicked() {
+                                        ctx.copy_text(sid.to_string());
+                                    }
+                                });
+                            }
+                            if let Some(usage) = a.get("usage") {
+                                let text = usage
+                                    .as_str()
+                                    .map(str::to_string)
+                                    .unwrap_or_else(|| usage.to_string());
+                                ui.label(egui::RichText::new(text).small().color(muted));
+                            }
+                            if let Some(cmd) = resume_command(a, name) {
+                                if ui.button("Resume").on_hover_text(&cmd).clicked() {
+                                    resume = Some(cmd);
+                                }
+                            }
                         }
                         None => {
                             ui.label(egui::RichText::new("No agent in this pane").color(muted));
@@ -1810,6 +1875,10 @@ impl MiaottyApp {
         if compose {
             self.open_composer();
         }
+        if let Some(cmd) = resume {
+            self.send_to_pane(&pane_id, &cmd);
+            self.attention.remove(&pane_id);
+        }
     }
 
     /// The label of the tab that owns `pane_id`.
@@ -1935,7 +2004,13 @@ impl MiaottyApp {
             let prev = self.agent_states.insert(id.clone(), state.clone());
             let changed = prev.as_deref() != Some(state.as_str());
             let wants = matches!(state.as_str(), "awaiting" | "error");
-            if changed && wants && self.notifications && Some(&id) != focused_id.as_ref() {
+            let focused = Some(&id) == focused_id.as_ref();
+            if wants && !focused {
+                self.attention.insert(id.clone());
+            } else {
+                self.attention.remove(&id);
+            }
+            if changed && wants && self.notifications && !focused {
                 alert = Some((format!("{agent} \u{00b7} {state}"), self.pane_label(&id)));
             }
         }
@@ -2140,6 +2215,11 @@ impl MiaottyApp {
         out.push_str(&format!("background-opacity = {}\n", self.opacity));
         out.push_str(&format!("notifications = {}\n", self.notifications));
         out.push_str(&format!("prevent-sleep = {}\n", self.prevent_sleep));
+        out.push_str("[badges]\n");
+        out.push_str(&format!("processing = {}\n", self.badges.processing));
+        out.push_str(&format!("idle = {}\n", self.badges.idle));
+        out.push_str(&format!("awaiting = {}\n", self.badges.awaiting));
+        out.push_str(&format!("error = {}\n", self.badges.error));
         out.push_str("\n[colors]\n");
         out.push_str(&format!(
             "background = \"#{:02x}{:02x}{:02x}\"\n",
@@ -2387,6 +2467,13 @@ impl MiaottyApp {
                     ui.checkbox(&mut self.prevent_sleep, "Keep awake");
                 });
                 ui.horizontal(|ui| {
+                    ui.label("Badges");
+                    ui.checkbox(&mut self.badges.processing, "processing");
+                    ui.checkbox(&mut self.badges.idle, "idle");
+                    ui.checkbox(&mut self.badges.awaiting, "awaiting");
+                    ui.checkbox(&mut self.badges.error, "error");
+                });
+                ui.horizontal(|ui| {
                     ui.label("Sleep guard");
                     ui.label(if self.sleep.awake() {
                         "awake"
@@ -2445,6 +2532,7 @@ impl MiaottyApp {
             String,
             Option<egui::Color32>,
             Option<miao_term_config::view::Icon>,
+            bool,
         )> = self
             .tabs
             .iter()
@@ -2454,8 +2542,11 @@ impl MiaottyApp {
                 let view = focused.and_then(|p| self.view_for(p));
                 let color = focused
                     .and_then(|p| self.state.agent_for(&p.pane_id))
-                    .and_then(|a| a.get("state").and_then(|v| v.as_str()).map(agent_color));
-                (title, color, view.and_then(|v| v.icon))
+                    .and_then(|a| a.get("state").and_then(|v| v.as_str()).map(str::to_string))
+                    .filter(|s| self.badges.enabled(s))
+                    .map(|s| agent_color(&s));
+                let att = focused.is_some_and(|p| self.attention.contains(&p.pane_id));
+                (title, color, view.and_then(|v| v.icon), att)
             })
             .collect();
 
@@ -2474,7 +2565,10 @@ impl MiaottyApp {
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    for (i, (title, color, icon)) in titles.into_iter().enumerate() {
+                    for (i, (title, color, icon, att)) in titles.into_iter().enumerate() {
+                        if att {
+                            ui.colored_label(egui::Color32::from_rgb(0xeb, 0xcb, 0x8b), "\u{0021}");
+                        }
                         if let Some(icon) = &icon {
                             let (rect, _) = ui
                                 .allocate_exact_size(egui::Vec2::splat(13.0), egui::Sense::hover());
@@ -3436,6 +3530,21 @@ fn encode_input(
 #[cfg(test)]
 mod palette_tests {
     use super::palette_score;
+
+    #[test]
+    fn resume_prefers_explicit_then_session() {
+        let explicit = serde_json::json!({ "resume": "claude -c", "session_id": "abc" });
+        assert_eq!(
+            super::resume_command(&explicit, "claude").as_deref(),
+            Some("claude -c")
+        );
+        let session = serde_json::json!({ "session_id": "abc" });
+        assert_eq!(
+            super::resume_command(&session, "codex").as_deref(),
+            Some("codex resume abc")
+        );
+        assert!(super::resume_command(&serde_json::json!({}), "claude").is_none());
+    }
 
     #[test]
     fn scores_substring_then_subsequence() {

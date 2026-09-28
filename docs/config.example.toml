@@ -9,6 +9,12 @@ font-size = 14
 # notifications = true             # system notification when an agent needs attention
 # prevent-sleep = true             # keep the machine awake while an agent is processing
 
+# [badges]                         # which agent states show a tab badge
+# processing = true
+# idle = true
+# awaiting = true
+# error = true
+
 # Built-in named theme: nord | dracula | gruvbox | solarized | tokyo-night.
 # theme = "dracula"   # overridden by explicit [colors] below
 

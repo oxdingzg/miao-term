@@ -31,6 +31,18 @@ plus Enter now, **Queue** appends it. The Details *Queue* tab lists queued
 prompts with Send-now and remove. A queued prompt is delivered automatically
 when its target pane's agent becomes `idle`.
 
+## Addendum (U6 tail)
+
+- **Attention**: a pane whose agent is `awaiting`/`error` while unfocused is
+  marked; the tab bar and sidebar show a `!`, the palette lists *needs
+  attention* entries, and focusing the pane clears it. (System notifications do
+  not deep-link to a pane; this is the in-app equivalent.)
+- **Resume**: the Agent panel shows `session_id` (copyable) and a *Resume*
+  action — the explicit `resume` field if the hook supplies one, else
+  `claude --resume <id>` / `codex resume <id>` / `<agent> --resume <id>`.
+- **Quota**: `usage` from the agent state is shown verbatim in the Agent panel.
+- **Badges**: per-state switches (`[badges]`) gate the tab/sidebar dot.
+
 ## Consequences
 
 - The agent loop is a pure consumer of MTP state, so it works with any agent

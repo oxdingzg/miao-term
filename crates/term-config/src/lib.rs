@@ -62,6 +62,14 @@ struct RawColors {
     palette: Option<Vec<String>>,
 }
 
+#[derive(Debug, Deserialize)]
+struct RawBadges {
+    processing: Option<bool>,
+    idle: Option<bool>,
+    awaiting: Option<bool>,
+    error: Option<bool>,
+}
+
 /// How the text cursor is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CursorStyle {
@@ -96,6 +104,7 @@ struct RawConfig {
     notifications: Option<bool>,
     #[serde(rename = "prevent-sleep")]
     prevent_sleep: Option<bool>,
+    badges: Option<RawBadges>,
     theme: Option<String>,
     colors: Option<RawColors>,
 }
@@ -171,7 +180,41 @@ pub struct Config {
     pub notifications: bool,
     /// Keep the machine awake while an agent is processing.
     pub prevent_sleep: bool,
+    /// Which agent states show a tab badge.
+    pub badges: Badges,
     pub theme: Theme,
+}
+
+/// Per-state tab badge switches (`settings.agents.badge_*`).
+#[derive(Debug, Clone, Copy)]
+pub struct Badges {
+    pub processing: bool,
+    pub idle: bool,
+    pub awaiting: bool,
+    pub error: bool,
+}
+
+impl Default for Badges {
+    fn default() -> Self {
+        Self {
+            processing: true,
+            idle: true,
+            awaiting: true,
+            error: true,
+        }
+    }
+}
+
+impl Badges {
+    pub fn enabled(&self, state: &str) -> bool {
+        match state {
+            "processing" => self.processing,
+            "idle" => self.idle,
+            "awaiting" => self.awaiting,
+            "error" => self.error,
+            _ => false,
+        }
+    }
 }
 
 impl Default for Config {
@@ -184,6 +227,7 @@ impl Default for Config {
             background_opacity: 1.0,
             notifications: true,
             prevent_sleep: true,
+            badges: Badges::default(),
             theme: Theme::default(),
         }
     }
@@ -436,6 +480,20 @@ impl Config {
         }
         if let Some(v) = raw.prevent_sleep {
             cfg.prevent_sleep = v;
+        }
+        if let Some(b) = raw.badges {
+            if let Some(v) = b.processing {
+                cfg.badges.processing = v;
+            }
+            if let Some(v) = b.idle {
+                cfg.badges.idle = v;
+            }
+            if let Some(v) = b.awaiting {
+                cfg.badges.awaiting = v;
+            }
+            if let Some(v) = b.error {
+                cfg.badges.error = v;
+            }
         }
         if let Some(name) = raw.theme {
             if let Some(theme) = theme_by_name(&name) {

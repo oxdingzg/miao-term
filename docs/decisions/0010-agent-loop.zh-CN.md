@@ -26,6 +26,17 @@ U6/M1 要求系统通知、防休眠,以及把提示交给 agent 的方式 —�
 **Send** 立即写入文本并回车,**Queue** 入队。Details 的 *Queue* 标签列出队列提示,可
 Send now / 删除。队列中的提示会在其目标 pane 的 agent 变为 `idle` 时自动投递。
 
+## 附记(U6 尾巴)
+
+- **注意力**:agent 为 `awaiting`/`error` 且该 pane 非焦点时标记之;顶栏与侧栏显示 `!`,
+  面板列出 *needs attention* 条目,聚焦该 pane 即清除。(系统通知不做深链接到 pane;
+  这是应用内的等价物。)
+- **恢复(resume)**:Agent 面板显示 `session_id`(可复制)与 *Resume* 动作 —— 若 hook 提供了
+  显式 `resume` 字段则用之,否则 `claude --resume <id>` / `codex resume <id>` /
+  `<agent> --resume <id>`。
+- **配额**:agent 状态里的 `usage` 原样显示在 Agent 面板。
+- **徽章**:逐状态开关(`[badges]`)控制标签/侧栏圆点。
+
 ## 后果
 
 - agent 闭环只是 MTP 状态的纯消费者,故对任何发布状态的 agent(claude、opencode、miao)
