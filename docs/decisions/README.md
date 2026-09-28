@@ -19,3 +19,4 @@ Docs are English by default; keep a Simplified Chinese version in sync
 | [0009](./0009-details-panels-editor.md) | Details panels and the file editor | accepted |
 | [0010](./0010-agent-loop.md) | Agent loop: notifications, sleep guard, prompt queue | accepted |
 | [0011](./0011-tab-groups-tree-recipes.md) | Tab groups, file tree, recipes | accepted |
+| [0012](./0012-jump-markdown-search.md) | Recent files, Markdown preview, content search | accepted |

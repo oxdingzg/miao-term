@@ -20,3 +20,4 @@
 | [0009](./0009-details-panels-editor.zh-CN.md) | Details 面板与文件编辑器 | 已接受 |
 | [0010](./0010-agent-loop.zh-CN.md) | Agent 闭环：通知、防休眠、提示队列 | 已接受 |
 | [0011](./0011-tab-groups-tree-recipes.zh-CN.md) | 标签分组、文件树与 Recipes | 已接受 |
+| [0012](./0012-jump-markdown-search.zh-CN.md) | 最近文件、Markdown 预览、内容搜索 | 已接受 |

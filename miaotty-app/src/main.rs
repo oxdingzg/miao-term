@@ -417,6 +417,8 @@ enum TabField {
 struct Session {
     tabs: Vec<TabSession>,
     active: usize,
+    #[serde(default)]
+    recent_files: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -562,6 +564,8 @@ struct MiaottyApp {
     panels: panels::PanelsWorker,
     panels_last: panels::Request,
     panels_at: Instant,
+    search_at: Instant,
+    recent_files: Vec<PathBuf>,
     details_tab: DetailsTab,
     file_sel: Option<usize>,
     tree_expanded: std::collections::HashSet<PathBuf>,
@@ -614,6 +618,8 @@ struct Editor {
     text: String,
     original: String,
     readonly: bool,
+    /// Show raw text even for Markdown (preview is the default when read-only).
+    raw: bool,
 }
 
 /// One rendered tab in the top tab bar: label, agent color, view icon,
@@ -651,7 +657,7 @@ enum Verb {
 }
 
 struct PaletteEntry {
-    kind: &'static str,
+    kind: String,
     label: String,
     icon: Option<miao_term_config::view::Icon>,
     action: PaletteAction,
@@ -699,8 +705,11 @@ impl MiaottyApp {
             panels_last: panels::Request {
                 cwd: None,
                 pid: None,
+                search: None,
             },
             panels_at: Instant::now(),
+            search_at: Instant::now(),
+            recent_files: Vec::new(),
             details_tab: DetailsTab::Info,
             file_sel: None,
             tree_expanded: std::collections::HashSet::new(),
@@ -751,11 +760,17 @@ impl MiaottyApp {
         Session {
             tabs,
             active: self.active,
+            recent_files: self
+                .recent_files
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect(),
         }
     }
 
     fn restore(&mut self, session: Session) {
         self.tabs.clear();
+        self.recent_files = session.recent_files.iter().map(PathBuf::from).collect();
         for ts in session.tabs {
             let mut panes = Vec::new();
             let mut ids = Vec::new();
@@ -1090,8 +1105,21 @@ impl eframe::App for MiaottyApp {
             .and_then(|t| t.focused())
             .map(|p| (p.term.cwd().map(str::to_string), p.term.pid()))
             .unwrap_or((None, None));
-        let req = panels::Request { cwd, pid };
-        if req != self.panels_last || self.panels_at.elapsed() >= Duration::from_millis(2500) {
+        let search = self
+            .palette
+            .as_ref()
+            .map(|p| p.query.trim().to_string())
+            .filter(|q| q.starts_with('#') && q.len() >= 2)
+            .map(|q| q[1..].to_string());
+        let req = panels::Request { cwd, pid, search };
+        let search_changed = req.search != self.panels_last.search;
+        let debounce_ok = !search_changed || self.search_at.elapsed() >= Duration::from_millis(200);
+        if (req != self.panels_last || self.panels_at.elapsed() >= Duration::from_millis(2500))
+            && debounce_ok
+        {
+            if search_changed {
+                self.search_at = Instant::now();
+            }
             self.panels.request(req.clone());
             self.panels_last = req;
             self.panels_at = Instant::now();
@@ -1166,7 +1194,7 @@ impl MiaottyApp {
         for (i, tab) in self.tabs.iter().enumerate() {
             let view = tab.focused().and_then(|p| self.view_for(p));
             out.push(PaletteEntry {
-                kind: "tab",
+                kind: "tab".to_string(),
                 label: self.tab_title(tab),
                 icon: view.as_ref().and_then(|v| v.icon.clone()),
                 action: PaletteAction::SwitchTab(i),
@@ -1176,7 +1204,7 @@ impl MiaottyApp {
                 .is_some_and(|p| self.attention.contains(&p.pane_id))
             {
                 out.push(PaletteEntry {
-                    kind: "attention",
+                    kind: "attention".to_string(),
                     label: format!("{} needs attention", self.tab_title(tab)),
                     icon: view.as_ref().and_then(|v| v.icon.clone()),
                     action: PaletteAction::SwitchTab(i),
@@ -1188,7 +1216,7 @@ impl MiaottyApp {
                 .and_then(|a| a.get("agent").and_then(|v| v.as_str()).map(str::to_string))
             {
                 out.push(PaletteEntry {
-                    kind: "agent",
+                    kind: "agent".to_string(),
                     label: agent,
                     icon: view.and_then(|v| v.icon),
                     action: PaletteAction::SwitchTab(i),
@@ -1198,12 +1226,37 @@ impl MiaottyApp {
         for file in &self.panels.snapshot().files {
             if !file.is_dir {
                 out.push(PaletteEntry {
-                    kind: "file",
+                    kind: "file".to_string(),
                     label: file.name.clone(),
                     icon: None,
                     action: PaletteAction::OpenFile(file.path.clone()),
                 });
             }
+        }
+        for hit in &self.panels.snapshot().hits {
+            let name = hit
+                .path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            out.push(PaletteEntry {
+                kind: format!("{name}:{}", hit.line),
+                label: hit.text.clone(),
+                icon: None,
+                action: PaletteAction::OpenFile(hit.path.clone()),
+            });
+        }
+        for path in &self.recent_files {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.display().to_string());
+            out.push(PaletteEntry {
+                kind: "recent".to_string(),
+                label: name,
+                icon: None,
+                action: PaletteAction::OpenFile(path.clone()),
+            });
         }
         for (label, verb) in [
             ("Composer", Verb::Composer),
@@ -1220,7 +1273,7 @@ impl MiaottyApp {
             ("Previous Tab", Verb::PrevTab),
         ] {
             out.push(PaletteEntry {
-                kind: "command",
+                kind: "command".to_string(),
                 label: label.to_string(),
                 icon: None,
                 action: PaletteAction::Run(verb),
@@ -1286,7 +1339,7 @@ impl MiaottyApp {
         let mut filtered: Vec<(usize, usize)> = entries
             .iter()
             .enumerate()
-            .filter_map(|(i, e)| palette_score(&e.label, e.kind, &query).map(|s| (s, i)))
+            .filter_map(|(i, e)| palette_score(&e.label, &e.kind, &query).map(|s| (s, i)))
             .collect();
         filtered.sort_by_key(|(s, i)| (*s, *i));
         if pal.selected >= filtered.len() {
@@ -1362,7 +1415,9 @@ impl MiaottyApp {
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
                                         ui.label(
-                                            egui::RichText::new(entry.kind).small().color(muted),
+                                            egui::RichText::new(entry.kind.clone())
+                                                .small()
+                                                .color(muted),
                                         );
                                     },
                                 );
@@ -1565,6 +1620,73 @@ fn file_tree(
             file_tree(ui, &entry.path, depth + 1, expanded, open, fg);
         }
     }
+}
+
+/// Render a small, dependency-free subset of Markdown: ATX headings, fenced
+/// code, bullet lists, block quotes. Inline emphasis markers are stripped.
+fn markdown_ui(ui: &mut egui::Ui, text: &str, fg: egui::Color32) {
+    let muted = egui::Color32::from_gray(150);
+    let mut in_code = false;
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") {
+            in_code = !in_code;
+            ui.label(egui::RichText::new(line).monospace().color(muted));
+            continue;
+        }
+        if in_code {
+            ui.label(egui::RichText::new(line).monospace().color(fg));
+            continue;
+        }
+        if let Some((level, rest)) = heading(line) {
+            let size = match level {
+                1 => 22.0,
+                2 => 18.0,
+                3 => 16.0,
+                _ => 14.0,
+            };
+            ui.add_space(if level <= 2 { 6.0 } else { 3.0 });
+            ui.label(
+                egui::RichText::new(strip_inline(rest))
+                    .size(size)
+                    .strong()
+                    .color(fg),
+            );
+        } else if let Some(rest) = bullet(line) {
+            ui.label(egui::RichText::new(format!("\u{2022} {}", strip_inline(rest))).color(fg));
+        } else if let Some(rest) = trimmed.strip_prefix('>') {
+            ui.label(
+                egui::RichText::new(strip_inline(rest.trim_start()))
+                    .italics()
+                    .color(muted),
+            );
+        } else if line.trim().is_empty() {
+            ui.add_space(4.0);
+        } else {
+            ui.label(egui::RichText::new(strip_inline(line)).color(fg));
+        }
+    }
+}
+
+fn heading(line: &str) -> Option<(usize, &str)> {
+    let hashes = line.chars().take_while(|c| *c == '#').count();
+    if (1..=6).contains(&hashes) && line.chars().nth(hashes) == Some(' ') {
+        Some((hashes, line[hashes..].trim_start()))
+    } else {
+        None
+    }
+}
+
+fn bullet(line: &str) -> Option<&str> {
+    let t = line.trim_start();
+    t.strip_prefix("- ").or_else(|| t.strip_prefix("* "))
+}
+
+/// Strip inline emphasis/code markers, returning plain text.
+fn strip_inline(s: &str) -> String {
+    s.chars()
+        .filter(|c| !matches!(c, '`' | '*' | '_'))
+        .collect()
 }
 
 /// `~/.config/miaotty/recipes` (respecting `XDG_CONFIG_HOME`).
@@ -2366,11 +2488,15 @@ impl MiaottyApp {
             Err(_) => return,
         };
         let text = String::from_utf8_lossy(&bytes).to_string();
+        self.recent_files.retain(|p| p != &path);
+        self.recent_files.insert(0, path.clone());
+        self.recent_files.truncate(50);
         self.editor = Some(Editor {
             path,
             original: text.clone(),
             text,
             readonly: true,
+            raw: false,
         });
     }
 
@@ -2386,6 +2512,15 @@ impl MiaottyApp {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| editor.path.display().to_string());
         let dirty = editor.text != editor.original;
+        let is_md = matches!(
+            editor
+                .path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_lowercase())
+                .as_deref(),
+            Some("md" | "markdown")
+        );
         let mut save = false;
         let mut reload = false;
         let mut close = false;
@@ -2412,6 +2547,12 @@ impl MiaottyApp {
                         if ui.button("Reload").clicked() {
                             reload = true;
                         }
+                        if is_md {
+                            let label = if editor.raw { "Markdown" } else { "Raw" };
+                            if ui.button(label).clicked() {
+                                editor.raw = !editor.raw;
+                            }
+                        }
                         let mode = if editor.readonly { "Preview" } else { "Edit" };
                         if ui.button(mode).clicked() {
                             editor.readonly = !editor.readonly;
@@ -2422,12 +2563,16 @@ impl MiaottyApp {
                 egui::ScrollArea::both()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        ui.add(
-                            egui::TextEdit::multiline(&mut editor.text)
-                                .code_editor()
-                                .desired_width(f32::INFINITY)
-                                .interactive(!editor.readonly),
-                        );
+                        if editor.readonly && is_md && !editor.raw {
+                            markdown_ui(ui, &editor.text, fg);
+                        } else {
+                            ui.add(
+                                egui::TextEdit::multiline(&mut editor.text)
+                                    .code_editor()
+                                    .desired_width(f32::INFINITY)
+                                    .interactive(!editor.readonly),
+                            );
+                        }
                     });
             });
         if reload {
@@ -3918,6 +4063,16 @@ mod session_tests {
         let back: TabSession = serde_json::from_str(&json).unwrap();
         assert_eq!(back.prefix.as_deref(), Some("[w]"));
         assert_eq!(back.group.as_deref(), Some("g"));
+    }
+
+    #[test]
+    fn markdown_helpers() {
+        assert_eq!(heading("# Hi"), Some((1, "Hi")));
+        assert_eq!(heading("### Deep"), Some((3, "Deep")));
+        assert_eq!(heading("#nospace"), None);
+        assert_eq!(bullet("- item"), Some("item"));
+        assert_eq!(bullet("  * item"), Some("item"));
+        assert_eq!(strip_inline("a**b** `c` _d_"), "ab c d");
     }
 
     #[test]

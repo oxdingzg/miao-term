@@ -31,12 +31,22 @@ pub struct PortInfo {
     pub process: String,
 }
 
-/// The published snapshot for one (cwd, pid).
+/// A content-search hit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hit {
+    pub path: PathBuf,
+    pub line: u32,
+    pub text: String,
+}
+
+/// The published snapshot for one (cwd, pid, query).
 #[derive(Debug, Clone, Default)]
 pub struct Panels {
     pub git: Option<GitInfo>,
     pub files: Vec<FileEntry>,
     pub ports: Vec<PortInfo>,
+    /// Content-search hits for the request's `search` term.
+    pub hits: Vec<Hit>,
 }
 
 /// A request to refresh for a given context.
@@ -44,6 +54,8 @@ pub struct Panels {
 pub struct Request {
     pub cwd: Option<String>,
     pub pid: Option<u32>,
+    /// When set, also search files under `cwd` for this term.
+    pub search: Option<String>,
 }
 
 /// Handle to the background refresher.
@@ -81,8 +93,17 @@ fn worker(rx: Receiver<Request>, slot: Arc<Mutex<Panels>>) {
         let git = req.cwd.as_deref().and_then(git_info);
         let files = req.cwd.as_deref().map(list_dir).unwrap_or_default();
         let ports = req.pid.map(list_ports).unwrap_or_default();
+        let hits = match (req.cwd.as_deref(), req.search.as_deref()) {
+            (Some(cwd), Some(term)) if !term.is_empty() => search(cwd, term),
+            _ => Vec::new(),
+        };
         if let Ok(mut guard) = slot.lock() {
-            *guard = Panels { git, files, ports };
+            *guard = Panels {
+                git,
+                files,
+                ports,
+                hits,
+            };
         }
     }
 }
@@ -196,6 +217,60 @@ pub fn parse_lsof(text: &str) -> Vec<PortInfo> {
     out
 }
 
+/// Case-insensitive content search under `cwd`. Bounded: depth 5, 600 files,
+/// 256 KiB per file and 40 hits, so it stays cheap on the worker thread.
+fn search(cwd: &str, term: &str) -> Vec<Hit> {
+    const MAX_FILES: usize = 600;
+    const MAX_HITS: usize = 40;
+    const MAX_BYTES: u64 = 256 * 1024;
+    const MAX_DEPTH: usize = 5;
+
+    let needle = term.to_lowercase();
+    let mut hits = Vec::new();
+    let mut stack = vec![(PathBuf::from(cwd), 0usize)];
+    let mut scanned = 0usize;
+    while let Some((dir, depth)) = stack.pop() {
+        if depth > MAX_DEPTH {
+            continue;
+        }
+        for entry in read_dir_entries(&dir) {
+            if entry.name.starts_with('.') {
+                continue;
+            }
+            if entry.is_dir {
+                stack.push((entry.path, depth + 1));
+                continue;
+            }
+            if scanned >= MAX_FILES {
+                return hits;
+            }
+            scanned += 1;
+            if entry.size > MAX_BYTES {
+                continue;
+            }
+            let Ok(bytes) = std::fs::read(&entry.path) else {
+                continue;
+            };
+            let Ok(text) = std::str::from_utf8(&bytes) else {
+                continue;
+            };
+            for (i, line) in text.lines().enumerate() {
+                if line.to_lowercase().contains(&needle) {
+                    hits.push(Hit {
+                        path: entry.path.clone(),
+                        line: (i + 1) as u32,
+                        text: line.trim().chars().take(120).collect(),
+                    });
+                    if hits.len() >= MAX_HITS {
+                        return hits;
+                    }
+                }
+            }
+        }
+    }
+    hits
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,6 +287,20 @@ mod tests {
             ]
         );
         assert!(parse_porcelain("").is_empty());
+    }
+
+    #[test]
+    fn search_finds_lines_and_is_bounded() {
+        let dir = std::env::temp_dir().join(format!("miaotty-search-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "hello world\nnope\nHELLO again\n").unwrap();
+        std::fs::write(dir.join("b.txt"), "nothing here\n").unwrap();
+        let hits = search(dir.to_str().unwrap(), "hello");
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].line, 1);
+        assert_eq!(hits[1].line, 3);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
