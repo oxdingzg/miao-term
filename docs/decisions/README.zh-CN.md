@@ -24,3 +24,4 @@
 | [0013](./0013-system-integration.zh-CN.md) | URL scheme、快速终端、i18n、更新检查 | 已接受 |
 | [0014](./0014-ssh.zh-CN.md) | SSH 会话与远端 terminfo | 已接受 |
 | [0015](./0015-editor-polish.zh-CN.md) | 编辑器打磨：按行跳转、源码视图、外部打开 | 已接受 |
+| [0016](./0016-integration-automation.zh-CN.md) | Agent 集成自动化与单实例 | 已接受 |

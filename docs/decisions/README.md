@@ -23,3 +23,4 @@ Docs are English by default; keep a Simplified Chinese version in sync
 | [0013](./0013-system-integration.md) | URL schemes, Quick Terminal, i18n, update check | accepted |
 | [0014](./0014-ssh.md) | SSH sessions and remote terminfo | accepted |
 | [0015](./0015-editor-polish.md) | Editor polish: line jumps, source view, external open | accepted |
+| [0016](./0016-integration-automation.md) | Agent integration automation and single instance | accepted |

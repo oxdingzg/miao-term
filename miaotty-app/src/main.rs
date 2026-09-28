@@ -18,6 +18,7 @@ use unicode_width::UnicodeWidthChar;
 mod agentloop;
 mod i18n;
 mod icons;
+mod integration;
 mod launch;
 mod panels;
 mod ssh;
@@ -30,16 +31,23 @@ fn main() -> eframe::Result<()> {
     // existing `miaotty-cli`) inherit it.
     let socket = miao_term_mtp::default_socket();
     std::env::set_var("MIAOTTY_SOCKET", &socket);
+    let cfg = miao_term_config::Config::load();
+    let launch = std::env::args()
+        .skip(1)
+        .find_map(|a| launch::command_for(&a));
+
+    // Single instance: a later launch (e.g. a second `ssh://` link) is handed
+    // to the running instance and this process exits.
+    if forward_to_running(launch.as_deref()) {
+        eprintln!("miaotty: forwarded to the running instance");
+        return Ok(());
+    }
+
     let state = miao_term_mtp::ServerState::new();
     match miao_term_mtp::serve(&socket, state.clone()) {
         Ok(()) => eprintln!("miaotty: MTP host listening on {}", socket.display()),
         Err(e) => eprintln!("miaotty: failed to start MTP host: {e}"),
     }
-
-    let cfg = miao_term_config::Config::load();
-    let launch = std::env::args()
-        .skip(1)
-        .find_map(|a| launch::command_for(&a));
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1000.0, 660.0])
@@ -459,6 +467,58 @@ enum LayoutNode {
     },
 }
 
+/// The inbox directory for cross-instance launches.
+fn inbox_dir() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))?;
+    Some(base.join("miaotty").join("inbox"))
+}
+
+/// Hand a launch to an already-running instance (single-instance deep link).
+/// Returns true when one was reached.
+fn forward_to_running(command: Option<&str>) -> bool {
+    let socket = miao_term_mtp::default_socket();
+    if miao_term_mtp::client::connect(&socket).is_err() {
+        return false;
+    }
+    if let Some(dir) = inbox_dir() {
+        let _ = std::fs::create_dir_all(&dir);
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let _ = std::fs::write(dir.join(format!("{stamp}.request")), command.unwrap_or(""));
+    }
+    true
+}
+
+/// Consume forwarding requests written by later launches. `Some(cmd)` opens a
+/// tab; `None` is a bare activation.
+fn drain_inbox() -> Vec<Option<String>> {
+    let mut out = Vec::new();
+    let Some(dir) = inbox_dir() else {
+        return out;
+    };
+    let Ok(read) = std::fs::read_dir(&dir) else {
+        return out;
+    };
+    let mut paths: Vec<PathBuf> = read
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("request"))
+        .collect();
+    paths.sort();
+    for path in paths {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            let text = text.trim().to_string();
+            out.push((!text.is_empty()).then_some(text));
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+    out
+}
+
 fn session_path() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
@@ -591,6 +651,7 @@ struct MiaottyApp {
     quick_pane: Option<String>,
     quick_return: Option<usize>,
     ssh_ui: Option<SshDialog>,
+    integration_msg: Option<String>,
     lang: i18n::Lang,
     update_config: Option<String>,
     update_rx: Option<std::sync::mpsc::Receiver<String>>,
@@ -755,6 +816,7 @@ impl MiaottyApp {
             quick_pane: None,
             quick_return: None,
             ssh_ui: None,
+            integration_msg: None,
             lang: i18n::Lang::resolve(cfg.language.as_deref()),
             update_config: cfg.update_check_url.clone(),
             update_rx: None,
@@ -1141,6 +1203,10 @@ impl eframe::App for MiaottyApp {
 
         // A URL-scheme launch opens a command in a fresh tab (ADR 0013).
         if let Some(cmd) = self.launch.take() {
+            self.open_command_tab(&cmd);
+        }
+        // Later launches forwarded by a second process (single instance).
+        for cmd in drain_inbox().into_iter().flatten() {
             self.open_command_tab(&cmd);
         }
 
@@ -3122,6 +3188,59 @@ impl MiaottyApp {
         }
     }
 
+    /// Agent integration: detect agents, install hooks, launch them (ADR 0016).
+    fn agent_integrations_ui(&mut self, ui: &mut egui::Ui) {
+        let muted = egui::Color32::from_gray(120);
+        let ok = egui::Color32::from_rgb(0xa3, 0xbe, 0x8c);
+        ui.label(section("AGENT INTEGRATIONS"));
+        let mut install: Option<&'static str> = None;
+        let mut copy: Option<String> = None;
+        let mut launch: Option<String> = None;
+        for agent in integration::AGENTS {
+            ui.horizontal(|ui| {
+                ui.label(agent.name);
+                let found = integration::detected(agent.bin);
+                let label = if found {
+                    self.t("detected")
+                } else {
+                    self.t("not found")
+                };
+                ui.label(
+                    egui::RichText::new(label)
+                        .small()
+                        .color(if found { ok } else { muted }),
+                );
+                if ui.small_button(self.t("Install hook")).clicked() {
+                    install = Some(agent.name);
+                }
+                if ui.small_button(self.t("Copy snippet")).clicked() {
+                    if let Some(path) = integration::script_path(agent.name) {
+                        copy = Some(integration::snippet(agent, &path));
+                    }
+                }
+                if ui.small_button(self.t("Launch")).clicked() {
+                    launch = Some(integration::launch_command(agent));
+                }
+            });
+        }
+        if let Some(msg) = &self.integration_msg {
+            ui.label(egui::RichText::new(msg).small().color(muted));
+        }
+        if let Some(name) = install {
+            self.integration_msg = Some(match integration::install(name) {
+                Ok(path) => format!("installed {}", path.display()),
+                Err(e) => format!("install failed: {e}"),
+            });
+        }
+        if let Some(text) = copy {
+            ui.ctx().copy_text(text);
+            self.integration_msg = Some(self.t("Snippet copied").to_string());
+        }
+        if let Some(cmd) = launch {
+            self.open_command_tab(&cmd);
+        }
+    }
+
     /// The View-rule editor: rule list with priority, a per-rule form and a
     /// live preview (ADR 0007).
     fn view_rules_ui(&mut self, ui: &mut egui::Ui) {
@@ -3381,6 +3500,8 @@ impl MiaottyApp {
                         }
                     }
                 });
+                ui.separator();
+                self.agent_integrations_ui(ui);
                 ui.separator();
                 self.view_rules_ui(ui);
                 ui.separator();
