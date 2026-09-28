@@ -41,7 +41,8 @@ Packaging: `scripts/package-macos.sh` builds an ad-hoc-signed `dist/miaotty.app`
 Keyboard: `⌘T` new tab, `⌘W` close pane/tab, `⌘D`/`⇧⌘D` split, `⌥⌘→`/`⌥⌘←`
 (or `⌘⇧[`/`⌘⇧]`) cycle panes, `⌥⌘D` toggle details, `⌘F` find,
 `⌘+`/`⌘-`/`⌘0` font size. Modifier-aware arrows (Ctrl/Alt = word
-movement), Ctrl/Alt+Backspace.
+movement), Ctrl/Alt+Backspace, and the **kitty keyboard protocol** (CSI-u for
+Esc/Enter/Tab/Backspace and Ctrl+key) when a program enables it.
 
 Not yet: Windows named-pipe transport + ConPTY testing, packaging
 (MSI/AppImage/notarize), and further renderer hardening (damage uploads, atlas

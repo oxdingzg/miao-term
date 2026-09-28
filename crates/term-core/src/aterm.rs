@@ -163,6 +163,16 @@ impl ATerm {
     pub fn bracketed_paste(&self) -> bool {
         self.term.mode().contains(TermMode::BRACKETED_PASTE)
     }
+
+    /// Kitty keyboard protocol: disambiguate escape codes (CSI-u).
+    pub fn kitty_disambiguate(&self) -> bool {
+        self.term.mode().contains(TermMode::DISAMBIGUATE_ESC_CODES)
+    }
+
+    /// Kitty keyboard protocol: report key event types (press/repeat/release).
+    pub fn kitty_report_event_types(&self) -> bool {
+        self.term.mode().contains(TermMode::REPORT_EVENT_TYPES)
+    }
 }
 
 #[cfg(test)]

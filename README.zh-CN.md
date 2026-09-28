@@ -32,7 +32,7 @@
 
 快捷键:`⌘T` 新建标签、`⌘W` 关 pane/标签、`⌘D`/`⇧⌘D` 分屏、`⌥⌘→`/`⌥⌘←`(或 `⌘⇧[`/`⌘⇧]`)轮换 pane、
 `⌥⌘D` 开关 details、`⌘F` 查找、`⌘+`/`⌘-`/`⌘0` 字号。方向键带修饰键(Ctrl/Alt 按词移动)、
-Ctrl/Alt+Backspace。
+Ctrl/Alt+Backspace;程序启用 **kitty keyboard 协议**时按 CSI-u 输出(Esc/Enter/Tab/Backspace、Ctrl+键)。
 
 尚未完成:Windows 命名管道传输 + ConPTY 实测、打包(MSI/AppImage/公证),
 以及渲染器进一步打磨(damage 上传、图集 trim)。

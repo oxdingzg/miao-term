@@ -1077,15 +1077,19 @@ impl MiaottyApp {
                 self.selection = None;
             }
 
-            let (app_cursor, bracketed) = {
+            let (app_cursor, bracketed, kitty) = {
                 let screen = self.tabs[ti].panes[pi].term.screen();
-                (screen.application_cursor(), screen.bracketed_paste())
+                (
+                    screen.application_cursor(),
+                    screen.bracketed_paste(),
+                    screen.kitty_disambiguate(),
+                )
             };
             let mut out = Vec::new();
             let has_selection = self.selection.is_some();
             ctx.input(|i| {
                 for ev in &i.events {
-                    encode_input(ev, app_cursor, bracketed, has_selection, &mut out);
+                    encode_input(ev, app_cursor, bracketed, kitty, has_selection, &mut out);
                 }
             });
             if !out.is_empty() {
@@ -1411,10 +1415,56 @@ fn ctrl_byte(key: egui::Key) -> Option<u8> {
     })
 }
 
+/// Base codepoint for a printable key (lowercase), for kitty CSI-u encoding.
+fn key_codepoint(key: egui::Key) -> Option<u32> {
+    use egui::Key::*;
+    Some(match key {
+        A => 'a' as u32,
+        B => 'b' as u32,
+        C => 'c' as u32,
+        D => 'd' as u32,
+        E => 'e' as u32,
+        F => 'f' as u32,
+        G => 'g' as u32,
+        H => 'h' as u32,
+        I => 'i' as u32,
+        J => 'j' as u32,
+        K => 'k' as u32,
+        L => 'l' as u32,
+        M => 'm' as u32,
+        N => 'n' as u32,
+        O => 'o' as u32,
+        P => 'p' as u32,
+        Q => 'q' as u32,
+        R => 'r' as u32,
+        S => 's' as u32,
+        T => 't' as u32,
+        U => 'u' as u32,
+        V => 'v' as u32,
+        W => 'w' as u32,
+        X => 'x' as u32,
+        Y => 'y' as u32,
+        Z => 'z' as u32,
+        Num0 => '0' as u32,
+        Num1 => '1' as u32,
+        Num2 => '2' as u32,
+        Num3 => '3' as u32,
+        Num4 => '4' as u32,
+        Num5 => '5' as u32,
+        Num6 => '6' as u32,
+        Num7 => '7' as u32,
+        Num8 => '8' as u32,
+        Num9 => '9' as u32,
+        Space => ' ' as u32,
+        _ => return None,
+    })
+}
+
 fn encode_input(
     ev: &egui::Event,
     app_cursor: bool,
     bracketed: bool,
+    kitty: bool,
     has_selection: bool,
     out: &mut Vec<u8>,
 ) {
@@ -1443,6 +1493,40 @@ fn encode_input(
             if modifiers.shift && matches!(key, egui::Key::PageUp | egui::Key::PageDown) {
                 return;
             }
+            // Kitty keyboard protocol: disambiguate special keys and Ctrl+keys
+            // as CSI-u (`ESC [ code ; mods u`).
+            if kitty && !modifiers.mac_cmd {
+                let mut n: u8 = 1;
+                if modifiers.shift {
+                    n += 1;
+                }
+                if modifiers.alt {
+                    n += 2;
+                }
+                if modifiers.ctrl {
+                    n += 4;
+                }
+                let special = match key {
+                    egui::Key::Escape => Some(27u32),
+                    egui::Key::Enter => Some(13),
+                    egui::Key::Tab => Some(9),
+                    egui::Key::Backspace => Some(127),
+                    _ => None,
+                };
+                if let Some(cp) = special {
+                    if n > 1 {
+                        out.extend_from_slice(format!("\x1b[{cp};{n}u").as_bytes());
+                        return;
+                    }
+                }
+                if modifiers.ctrl {
+                    if let Some(cp) = key_codepoint(*key) {
+                        out.extend_from_slice(format!("\x1b[{cp};{n}u").as_bytes());
+                        return;
+                    }
+                }
+            }
+
             // Ctrl combos (Unix control bytes). On macOS, Cmd is reserved for copy/paste etc.
             if modifiers.ctrl && !modifiers.mac_cmd {
                 if let Some(b) = ctrl_byte(*key) {
