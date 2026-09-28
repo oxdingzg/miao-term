@@ -473,7 +473,10 @@ pub mod client {
         #[cfg(unix)]
         let name = path.to_fs_name::<GenericFilePath>()?;
         #[cfg(windows)]
-        let name = "miaotty".to_ns_name::<GenericNamespaced>()?;
+        let name = {
+            let _ = path;
+            "miaotty".to_ns_name::<GenericNamespaced>()?
+        };
         let stream = ConnectOptions::new().name(name).connect_sync()?;
         let writer = stream.try_clone()?;
         Ok(Client {
@@ -525,7 +528,10 @@ pub fn serve(path: &Path, state: Arc<ServerState>) -> std::io::Result<()> {
         path.to_fs_name::<GenericFilePath>()?
     };
     #[cfg(windows)]
-    let name = "miaotty".to_ns_name::<GenericNamespaced>()?;
+    let name = {
+        let _ = path;
+        "miaotty".to_ns_name::<GenericNamespaced>()?
+    };
 
     let listener = ListenerOptions::new().name(name).create_sync()?;
 
