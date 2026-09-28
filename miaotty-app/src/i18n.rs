@@ -105,6 +105,17 @@ fn zh(key: &'static str) -> &'static str {
         "No download for this platform" => "本平台无可用下载",
         "Open Download" => "打开下载文件",
         "Quit and Install" => "退出并安装",
+        "Install and Relaunch" => "安装并重启",
+        "Replaces this app with the download, then restarts it." => {
+            "用下载内容替换本应用,然后重启。"
+        }
+        "No verified download" => "没有已校验的下载",
+        "Not running from an app bundle" => "当前不是从 .app 包运行",
+        "Could not unpack the update" => "无法解包更新",
+        "No .app in the update" => "更新中没有 .app",
+        "Could not stage the installer" => "无法准备安装脚本",
+        "Installing and relaunching…" => "正在安装并重启…",
+        "Open the download to install" => "打开下载文件以安装",
         "Bind externally:" => "外部绑定：",
         "AGENT INTEGRATIONS" => "Agent 集成",
         "detected" => "已检测到",

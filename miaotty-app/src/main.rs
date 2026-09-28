@@ -666,6 +666,8 @@ struct MiaottyApp {
     update_config: Option<String>,
     update_rx: Option<std::sync::mpsc::Receiver<UpdateEvent>>,
     update_msg: Option<String>,
+    /// In-progress IME composition (e.g. Pinyin), shown inline near the cursor.
+    ime_preedit: String,
 }
 
 /// The save/open recipe dialog (U7).
@@ -864,6 +866,7 @@ impl MiaottyApp {
             update_config: cfg.update_check_url.clone(),
             update_rx: None,
             update_msg: None,
+            ime_preedit: String::new(),
         };
         if let Some(session) = Session::load() {
             app.restore(session);
@@ -1901,6 +1904,60 @@ fn file_tree(
 
 /// Render a small, dependency-free subset of Markdown: ATX headings, fenced
 /// code, bullet lists, block quotes. Inline emphasis markers are stripped.
+/// The `.app` bundle root containing `exe`, if it is inside one
+/// (`…/X.app/Contents/MacOS/x` → `…/X.app`).
+fn bundle_root(exe: &std::path::Path) -> Option<PathBuf> {
+    let macos = exe.parent()?;
+    let contents = macos.parent()?;
+    if macos.file_name()? != "MacOS" || contents.file_name()? != "Contents" {
+        return None;
+    }
+    let bundle = contents.parent()?;
+    (bundle.extension().and_then(|e| e.to_str()) == Some("app")).then(|| bundle.to_path_buf())
+}
+
+/// The shell script that swaps `bundle` for `new_app` once `pid` exits, then
+/// relaunches. Restores the old bundle if the swap fails.
+fn install_script(pid: u32, bundle: &std::path::Path, new_app: &std::path::Path) -> String {
+    let bundle = bundle.display();
+    let new_app = new_app.display();
+    format!(
+        "#!/bin/sh\n\
+         # miaotty self-update helper\n\
+         set -eu\n\
+         while kill -0 {pid} 2>/dev/null; do sleep 0.3; done\n\
+         old=\"{bundle}.old\"\n\
+         rm -rf \"$old\"\n\
+         mv \"{bundle}\" \"$old\"\n\
+         if mv \"{new_app}\" \"{bundle}\"; then\n\
+         \x20 open \"{bundle}\"\n\
+         \x20 rm -rf \"$old\"\n\
+         else\n\
+         \x20 mv \"$old\" \"{bundle}\"\n\
+         fi\n"
+    )
+}
+
+/// The first `.app` bundle anywhere under `dir`.
+fn find_app(dir: &std::path::Path) -> Option<PathBuf> {
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(read) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for entry in read.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("app") {
+                return Some(path);
+            }
+            if path.is_dir() {
+                stack.push(path);
+            }
+        }
+    }
+    None
+}
+
 /// Open a path with the OS default application.
 fn open_path_externally(path: &std::path::Path) {
     #[cfg(target_os = "macos")]
@@ -3616,6 +3673,69 @@ impl MiaottyApp {
         }
     }
 
+    /// Replace the running `.app` with the verified download and relaunch
+    /// (macOS). Elsewhere (or when not running from a bundle) the artifact is
+    /// opened instead.
+    fn install_update(&mut self, ctx: &egui::Context) {
+        let Some(artifact) = self.update_ready.clone() else {
+            self.update_msg = Some(self.t("No verified download").to_string());
+            return;
+        };
+        #[cfg(target_os = "macos")]
+        {
+            let Some(bundle) = std::env::current_exe()
+                .ok()
+                .as_deref()
+                .and_then(bundle_root)
+            else {
+                self.update_msg = Some(self.t("Not running from an app bundle").to_string());
+                open_path_externally(&artifact);
+                return;
+            };
+            let stage = std::env::temp_dir().join(format!("miaotty-update-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&stage);
+            let unzip = std::process::Command::new("unzip")
+                .args(["-q", "-o"])
+                .arg(&artifact)
+                .arg("-d")
+                .arg(&stage)
+                .status();
+            if !matches!(unzip, Ok(s) if s.success()) {
+                self.update_msg = Some(self.t("Could not unpack the update").to_string());
+                return;
+            }
+            let Some(new_app) = find_app(&stage) else {
+                self.update_msg = Some(self.t("No .app in the update").to_string());
+                return;
+            };
+            let script =
+                std::env::temp_dir().join(format!("miaotty-install-{}.sh", std::process::id()));
+            if std::fs::write(
+                &script,
+                install_script(std::process::id(), &bundle, &new_app),
+            )
+            .is_err()
+            {
+                self.update_msg = Some(self.t("Could not stage the installer").to_string());
+                return;
+            }
+            let _ = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(format!("nohup sh '{}' >/dev/null 2>&1 &", script.display()))
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+            self.update_msg = Some(self.t("Installing and relaunching\u{2026}").to_string());
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.update_msg = Some(self.t("Open the download to install").to_string());
+            open_path_externally(&artifact);
+        }
+    }
+
     /// Whether a download is offered for this platform right now.
     fn update_available(&self) -> bool {
         self.update_manifest
@@ -4077,6 +4197,7 @@ impl MiaottyApp {
 
     fn settings_window(&mut self, ctx: &egui::Context) {
         let mut open = true;
+        let mut install = false;
         egui::Window::new("Settings")
             .collapsible(false)
             .resizable(false)
@@ -4160,10 +4281,19 @@ impl MiaottyApp {
                                 open_path_externally(&path);
                             }
                         }
-                        if ui.button(self.t("Quit and Install")).clicked() {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        if ui
+                            .button(self.t("Install and Relaunch"))
+                            .on_hover_text(
+                                self.t("Replaces this app with the download, then restarts it."),
+                            )
+                            .clicked()
+                        {
+                            install = true;
                         }
                     });
+                }
+                if install {
+                    self.install_update(ctx);
                 }
                 ui.horizontal(|ui| {
                     ui.label(self.t("Line height"));
@@ -4640,17 +4770,39 @@ impl MiaottyApp {
                     screen.kitty_disambiguate(),
                 )
             };
+            // Enable the OS input method while the terminal is focused (and no
+            // other widget is capturing text), anchoring the candidate window at
+            // the cursor cell, so CJK / IME input works.
+            if ctx.memory(|m| m.focused().is_none()) {
+                let (crow, ccol) = self.tabs[ti].panes[pi].term.screen().cursor_position();
+                let ime_rect = egui::Rect::from_min_size(
+                    egui::pos2(
+                        rect.left() + ccol as f32 * cw,
+                        rect.top() + crow as f32 * ch,
+                    ),
+                    egui::vec2(cw, ch),
+                );
+                ctx.send_viewport_cmd(egui::ViewportCommand::IMEAllowed(true));
+                ctx.send_viewport_cmd(egui::ViewportCommand::IMERect(ime_rect));
+            }
+
             let mut out = Vec::new();
+            let mut preedit = String::new();
             let has_selection = self.selection.is_some();
             if self.palette.is_none() {
                 ctx.input(|i| {
                     for ev in &i.events {
+                        if let egui::Event::Ime(egui::ImeEvent::Preedit(t)) = ev {
+                            preedit = t.clone();
+                        }
                         encode_input(ev, app_cursor, bracketed, kitty, has_selection, &mut out);
                     }
                 });
             }
+            self.ime_preedit = preedit;
             if !out.is_empty() {
                 self.tabs[ti].panes[pi].term.write(&out);
+                self.ime_preedit.clear();
                 ctx.request_repaint();
             }
 
@@ -4701,6 +4853,35 @@ impl MiaottyApp {
                 self.cursor_style,
                 draw_cursor,
             );
+            // Inline IME composition (preedit), underlined at the cursor cell.
+            if focused && !self.ime_preedit.is_empty() {
+                let (crow, ccol) = screen.cursor_position();
+                let pos = egui::pos2(
+                    rect.left() + ccol as f32 * cw,
+                    rect.top() + crow as f32 * ch,
+                );
+                let painter = ui.painter_at(rect);
+                let galley = painter.layout_no_wrap(
+                    self.ime_preedit.clone(),
+                    egui::FontId::monospace(self.font_size),
+                    self.theme.fg,
+                );
+                let w = galley.size().x.max(cw);
+                painter.rect_filled(
+                    egui::Rect::from_min_size(pos, egui::vec2(w, ch)),
+                    egui::Rounding::ZERO,
+                    self.theme.bg,
+                );
+                painter.galley(pos, galley, self.theme.fg);
+                painter.rect_filled(
+                    egui::Rect::from_min_max(
+                        egui::pos2(pos.x, pos.y + ch - 2.0),
+                        egui::pos2(pos.x + w, pos.y + ch),
+                    ),
+                    egui::Rounding::ZERO,
+                    self.theme.fg,
+                );
+            }
             if focused && !self.find_query.is_empty() {
                 let painter = ui.painter_at(rect);
                 for (frow, start, end) in find_matches(screen, &self.find_query.to_lowercase()) {
@@ -5087,6 +5268,11 @@ fn encode_input(
         egui::Event::Text(t) => {
             out.extend_from_slice(t.as_bytes());
         }
+        // OS input method (e.g. Pinyin / Kotoeri): send the committed text to the
+        // shell. Pre-edit text is shown by the IME overlay, not sent.
+        egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
+            out.extend_from_slice(text.as_bytes());
+        }
         egui::Event::Paste(text) => {
             // Normalize newlines to CR; shells expect carriage returns for Enter.
             let body = text.replace('\n', "\r");
@@ -5288,6 +5474,25 @@ mod session_tests {
         let back: TabSession = serde_json::from_str(&json).unwrap();
         assert_eq!(back.prefix.as_deref(), Some("[w]"));
         assert_eq!(back.group.as_deref(), Some("g"));
+    }
+
+    #[test]
+    fn bundle_root_and_install_script() {
+        let exe = std::path::Path::new("/Applications/miaotty.app/Contents/MacOS/miaotty");
+        assert_eq!(
+            bundle_root(exe).as_deref(),
+            Some(std::path::Path::new("/Applications/miaotty.app"))
+        );
+        assert!(bundle_root(std::path::Path::new("/tmp/target/debug/miaotty")).is_none());
+
+        let script = install_script(
+            42,
+            std::path::Path::new("/Applications/miaotty.app"),
+            std::path::Path::new("/tmp/new/miaotty.app"),
+        );
+        assert!(script.contains("while kill -0 42"));
+        assert!(script.contains("mv \"/Applications/miaotty.app\" \"$old\""));
+        assert!(script.contains("open \"/Applications/miaotty.app\""));
     }
 
     #[test]

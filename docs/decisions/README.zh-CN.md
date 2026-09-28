@@ -33,3 +33,4 @@
 | [0022](./0022-update-download.zh-CN.md) | 应用内更新下载与校验 | 已接受 |
 | [0023](./0023-perf-regression-gate.zh-CN.md) | 性能回归门（共享基线） | 已接受 |
 | [0024](./0024-mtp-view-edit.zh-CN.md) | MTP view/edit 与 file read/write | 已接受 |
+| [0025](./0025-self-install.zh-CN.md) | 安装并重启（自我替换） | 已接受 |
