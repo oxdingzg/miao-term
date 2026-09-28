@@ -50,7 +50,7 @@ fn main() -> eframe::Result<()> {
     }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1000.0, 660.0])
+            .with_inner_size([1180.0, 760.0])
             .with_title("miaotty")
             .with_transparent(true),
         ..Default::default()
@@ -668,6 +668,8 @@ struct MiaottyApp {
     update_msg: Option<String>,
     /// In-progress IME composition (e.g. Pinyin), shown inline near the cursor.
     ime_preedit: String,
+    /// Sidebar session search filter.
+    tab_filter: String,
 }
 
 /// The save/open recipe dialog (U7).
@@ -867,6 +869,7 @@ impl MiaottyApp {
             update_rx: None,
             update_msg: None,
             ime_preedit: String::new(),
+            tab_filter: String::new(),
         };
         if let Some(session) = Session::load() {
             app.restore(session);
@@ -2670,8 +2673,10 @@ impl MiaottyApp {
                     .inner_margin(egui::Margin::same(6.0)),
             )
             .show(ctx, |ui| {
+                ui.visuals_mut().selection.bg_fill = self.theme.palette[4];
+                ui.visuals_mut().selection.stroke = egui::Stroke::NONE;
                 ui.horizontal(|ui| {
-                    ui.label(section(self.t("TABS")));
+                    ui.label(section(&format!("{} ({})", self.t("TABS"), rows.len())));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("+").on_hover_text("New Tab").clicked() {
                             add = true;
@@ -2688,8 +2693,18 @@ impl MiaottyApp {
                         }
                     });
                 });
-                ui.separator();
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.tab_filter)
+                        .hint_text("Search sessions…")
+                        .desired_width(f32::INFINITY)
+                        .margin(egui::Margin::symmetric(6.0, 3.0)),
+                );
+                ui.add_space(4.0);
+                let needle = self.tab_filter.to_lowercase();
                 for (i, (title, color, icon, att)) in rows.iter().enumerate() {
+                    if !needle.is_empty() && !title.to_lowercase().contains(&needle) {
+                        continue;
+                    }
                     ui.horizontal(|ui| {
                         if *att {
                             ui.colored_label(egui::Color32::from_rgb(0xeb, 0xcb, 0x8b), "\u{0021}");
