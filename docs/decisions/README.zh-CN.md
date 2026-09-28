@@ -15,3 +15,4 @@
 | 0004 | 自研 tab/split 模型(非 OS 原生) | 待定 |
 | 0005 | MTP 传输(Unix socket / Windows 命名管道) | 待定 |
 | [0006](./0006-license-policy.zh-CN.md) | 许可与依赖策略 | 已接受 |
+| [0007](./0007-view-rule-engine.zh-CN.md) | View 规则引擎 | 已接受 |

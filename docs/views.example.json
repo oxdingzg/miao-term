@@ -1,0 +1,32 @@
+{
+  "rules": [
+    {
+      "name": "work repos",
+      "match": { "path": "~/work/**" },
+      "alias": "work",
+      "icon": { "name": "git-branch", "color": "#81a1c1" },
+      "title": "{alias}:{folder}",
+      "badge": "repo"
+    },
+    {
+      "name": "claude",
+      "match": { "agent": "claude" },
+      "icon": { "name": "claude" }
+    },
+    {
+      "name": "cargo projects",
+      "match": { "command": "cargo*" },
+      "icon": { "emoji": "🦀" }
+    },
+    {
+      "name": "fallback",
+      "match": {},
+      "title": "{folder} · {osc_title}"
+    }
+  ],
+  "projects": [
+    { "path": "~/work/miao", "alias": "miao" },
+    { "path": "~/work/infra", "alias": "infra" }
+  ],
+  "worktree_suffix": true
+}

@@ -485,6 +485,7 @@ struct MiaottyApp {
     tab_drag: Option<usize>,
     opacity: f32,
     alpha: u8,
+    rules: miao_term_config::view::RuleSet,
 }
 
 impl MiaottyApp {
@@ -516,6 +517,7 @@ impl MiaottyApp {
             tab_drag: None,
             opacity,
             alpha: (opacity * 255.0).round() as u8,
+            rules: miao_term_config::view::RuleSet::load(),
         };
         if let Some(session) = Session::load() {
             app.restore(session);
@@ -849,11 +851,12 @@ impl eframe::App for MiaottyApp {
         }
 
         // Window title from the focused pane's OSC 0/2 title.
-        let title = self
-            .tabs
-            .get(self.active)
-            .and_then(|t| t.focused())
-            .and_then(|p| p.term.title().map(str::to_string));
+        let pane = self.tabs.get(self.active).and_then(|t| t.focused());
+        let title = pane
+            .and_then(|p| self.view_for(p))
+            .map(|v| v.title)
+            .filter(|s| !s.is_empty())
+            .or_else(|| pane.and_then(|p| p.term.title().map(str::to_string)));
         if title != self.last_title {
             self.last_title = title.clone();
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(
@@ -942,13 +945,7 @@ impl MiaottyApp {
             .tabs
             .iter()
             .map(|tab| {
-                let title = tab
-                    .focused()
-                    .and_then(|p| p.term.cwd())
-                    .and_then(|p| std::path::Path::new(p).file_name())
-                    .map(|s| s.to_string_lossy().to_string())
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| tab.title.clone());
+                let title = self.tab_title(tab);
                 let color = tab
                     .focused()
                     .and_then(|p| self.state.agent_for(&p.pane_id))
@@ -1159,6 +1156,50 @@ impl MiaottyApp {
         }
     }
 
+    /// Evaluate the view rule engine for a pane (ADR 0007).
+    fn view_for(&self, pane: &Pane) -> Option<miao_term_config::view::Resolved> {
+        let agent = self
+            .state
+            .agent_for(&pane.pane_id)
+            .and_then(|a| a.get("agent").and_then(|v| v.as_str()).map(str::to_string));
+        let ctx = miao_term_config::view::Context {
+            cwd: pane.term.cwd().map(str::to_string),
+            command: None,
+            agent,
+            host: None,
+            file: None,
+            user: std::env::var("USER").ok(),
+            shell: std::env::var("SHELL").ok(),
+            branch: None,
+            osc_title: pane.term.title().map(str::to_string),
+            index: None,
+        };
+        self.rules.evaluate(&ctx)
+    }
+
+    /// The label for a tab: the view rule result, else the cwd folder, else the
+    /// tab's stored title.
+    fn tab_title(&self, tab: &Tab) -> String {
+        if let Some(pane) = tab.focused() {
+            if let Some(view) = self.view_for(pane) {
+                if !view.title.is_empty() {
+                    return view.title;
+                }
+            }
+            if let Some(name) = pane
+                .term
+                .cwd()
+                .and_then(|p| std::path::Path::new(p).file_name())
+            {
+                let name = name.to_string_lossy();
+                if !name.is_empty() {
+                    return name.to_string();
+                }
+            }
+        }
+        tab.title.clone()
+    }
+
     fn mark_all_dirty(&mut self) {
         for tab in &mut self.tabs {
             for pane in &mut tab.panes {
@@ -1298,12 +1339,7 @@ impl MiaottyApp {
             .iter()
             .map(|tab| {
                 let focused = tab.focused();
-                let title = focused
-                    .and_then(|p| p.term.cwd())
-                    .and_then(|p| std::path::Path::new(p).file_name())
-                    .map(|s| s.to_string_lossy().to_string())
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| tab.title.clone());
+                let title = self.tab_title(tab);
                 let color = focused
                     .and_then(|p| self.state.agent_for(&p.pane_id))
                     .and_then(|a| a.get("state").and_then(|v| v.as_str()).map(agent_color));

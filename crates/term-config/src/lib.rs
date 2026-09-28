@@ -7,6 +7,8 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
+pub mod view;
+
 /// An RGB color parsed from `#rrggbb`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rgb(pub u8, pub u8, pub u8);
