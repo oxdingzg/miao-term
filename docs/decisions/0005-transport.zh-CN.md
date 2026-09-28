@@ -12,8 +12,8 @@
 
 - **报文**:换行分隔 JSON(NDJSON),沿用现有 `miaotty` 的 MTP 信封
   (`v/id/kind/ns/method/params` → `v/id/kind/ok/result/error/revision`)。
-- **传输**:Unix socket `$TMPDIR/miaotty.sock`(当前);Windows 命名管道 `\\.\pipe\miaotty`(计划)。
-  路径通过 `MIAOTTY_SOCKET` 导出,子进程(与 CLI)据此找到。
+- **传输**:用 `interprocess`(同一 API → macOS/Linux 的 Unix socket `$TMPDIR/miaotty.sock`,
+  Windows 命名管道 `\\.\pipe\miaotty`)。路径经 `MIAOTTY_SOCKET` 导出;Unix 下 socket 文件权限 `0600`。
 - **进程内 UI** 直接读注册表(不走 socket);外部调用走 socket/pipe。
 - 请求有上界(`MAX_LINE`),单客户端无法撑爆内存。
 

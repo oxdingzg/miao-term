@@ -5,16 +5,21 @@
 //! `miaotty-cli`, plugins and agent hooks keep working unchanged.
 
 use std::collections::BTreeMap;
-#[cfg(unix)]
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
+
+use interprocess::local_socket::{prelude::*, ListenerOptions};
+#[cfg(unix)]
+use interprocess::local_socket::GenericFilePath;
+#[cfg(windows)]
+use interprocess::local_socket::GenericNamespaced;
+use interprocess::TryClone;
 
 /// Maximum size of a single newline-delimited request. Lines longer than this
 /// are treated as hostile and the connection is dropped.
 const MAX_LINE: usize = 1 << 20;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
-#[cfg(unix)]
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -313,16 +318,6 @@ fn dispatch(state: &ServerState, req: Request) -> Response {
 /// Read one request line, bounded to [`MAX_LINE`]. Returns `Ok(false)` at EOF
 /// or when a client sends an oversized line, in which case the connection is
 /// dropped so a single client cannot make us allocate unbounded memory.
-/// Transport on non-Unix platforms (Windows named pipe) is not implemented yet.
-#[cfg(not(unix))]
-pub fn serve(_path: &Path, _state: Arc<ServerState>) -> std::io::Result<()> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "MTP transport is not implemented on this platform yet",
-    ))
-}
-
-#[cfg(unix)]
 fn read_request(reader: &mut impl BufRead, buf: &mut Vec<u8>) -> std::io::Result<bool> {
     buf.clear();
     let n = reader
@@ -338,7 +333,6 @@ fn read_request(reader: &mut impl BufRead, buf: &mut Vec<u8>) -> std::io::Result
     Ok(true)
 }
 
-#[cfg(unix)]
 fn write_response(writer: &mut impl Write, response: &Response) -> bool {
     match serde_json::to_string(response) {
         Ok(mut encoded) => {
@@ -349,8 +343,7 @@ fn write_response(writer: &mut impl Write, response: &Response) -> bool {
     }
 }
 
-#[cfg(unix)]
-fn handle(stream: std::os::unix::net::UnixStream, state: Arc<ServerState>) {
+fn handle(stream: LocalSocketStream, state: Arc<ServerState>) {
     let mut reader = match stream.try_clone() {
         Ok(s) => BufReader::new(s),
         Err(_) => return,
@@ -385,12 +378,20 @@ fn handle(stream: std::os::unix::net::UnixStream, state: Arc<ServerState>) {
 /// Bind `path` and serve connections on a background thread.
 #[cfg(unix)]
 pub fn serve(path: &Path, state: Arc<ServerState>) -> std::io::Result<()> {
-    let _ = std::fs::remove_file(path);
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let listener = std::os::unix::net::UnixListener::bind(path)?;
-    // Restrict the socket to its owner. `pane.run`/`pane.send` execute
+    #[cfg(unix)]
+    let name = {
+        let _ = std::fs::remove_file(path);
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        path.to_fs_name::<GenericFilePath>()?
+    };
+    #[cfg(windows)]
+    let name = "miaotty".to_ns_name::<GenericNamespaced>()?;
+
+    let listener = ListenerOptions::new().name(name).create_sync()?;
+
+    // Restrict the endpoint to its owner. `pane.run`/`pane.send` execute
     // commands in the user's shell, so other local users must not connect.
     #[cfg(unix)]
     {

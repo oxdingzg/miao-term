@@ -13,9 +13,10 @@ hooks, on all three platforms, without coupling to the engine.
 
 - **Wire**: newline-delimited JSON (NDJSON), the existing `miaotty` MTP envelope
   (`v/id/kind/ns/method/params` → `v/id/kind/ok/result/error/revision`).
-- **Transport**: Unix domain socket at `$TMPDIR/miaotty.sock` (current);
-  Windows named pipe `\\.\pipe\miaotty` (planned). The path is exported as
-  `MIAOTTY_SOCKET` so children (and the CLI) find it.
+- **Transport**: `interprocess` (one API → Unix domain socket on macOS/Linux at
+  `$TMPDIR/miaotty.sock`, Windows named pipe `\\.\pipe\miaotty`). The socket path
+  is exported as `MIAOTTY_SOCKET` so children (and the CLI) find it; on Unix the
+  socket file is restricted to `0600`.
 - **In-process UI** reads the registries directly (no socket round-trip);
   external callers go over the socket/pipe.
 - Requests are bounded (`MAX_LINE`) so one client cannot exhaust memory.
