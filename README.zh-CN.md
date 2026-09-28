@@ -11,7 +11,8 @@
 ## 目前能做什么
 
 - 窗口、PTY 上跑 shell、VT 解析、网格渲染、键盘输入、resize。
-- 多标签 + 左侧边栏(`+` 新建、点击切换、中键关闭)。
+- 多标签 + 左侧边栏(`+` 新建、点击切换、中键关闭、右键 重命名/复制/关闭/关闭其他)。
+- 分屏:每标签两 pane,`⌘D`(右侧)/`⇧⌘D`(下方),点击切换焦点。
 - 右侧 details 面板:Info(工作目录 + 复制路径 / 在访达中显示)、Agent 状态、Outline(每 pane 命令历史)。
 - 选区(拖拽 + 双击选词)、复制粘贴、回滚(滚轮 + Shift+PgUp/PgDn)。
 - 宽字符/中日韩排版 + 系统 CJK 字体回退。
@@ -23,8 +24,10 @@
 - **GPU 字形渲染**:终端网格由 `term-render`(wgpu + glyphon)经 egui `PaintCallback` 绘制,
   与 egui 共享同一 device/queue/surface。
 
-尚未完成:分屏、配置导入(ghostty/alacritty)、Windows 命名管道传输、打包,
-以及渲染器进一步打磨(damage 增量、光标闪烁等)。
+配置导入:当没有 miaotty 配置时会自动读取 ghostty 的 `config`;alacritty 导入待做。
+
+尚未完成:递归分屏、Windows 命名管道传输、打包,
+以及渲染器进一步打磨(damage 上传、光标块反色等)。
 
 ## 运行
 

@@ -13,7 +13,9 @@ the `miaotty` application built on top of it.
 ## What works today
 
 - Window, shell on a PTY, VT parsing, grid rendering, keyboard input, resize.
-- Tabs with a left sidebar (`+`, click to switch, middle-click to close).
+- Tabs with a left sidebar (`+`, click to switch, middle-click to close,
+  right-click for Rename / Duplicate / Close / Close Others).
+- Splits: two panes per tab, `⌘D` (right) / `⇧⌘D` (down), click to focus.
 - Right details panel: Info (working directory + Copy Path / Reveal in Finder),
   Agent state, Outline (per-pane command history).
 - Selection (drag + double-click word), copy/paste, scrollback (wheel + Shift+PgUp/PgDn).
@@ -26,8 +28,11 @@ the `miaotty` application built on top of it.
 - **GPU glyph rendering**: the terminal grid is drawn by `term-render` (wgpu +
   glyphon) through an egui `PaintCallback`, sharing egui's device/queue/surface.
 
-Not yet: splits, config import (ghostty/alacritty), Windows named-pipe transport,
-packaging, and further renderer hardening (damage tracking, cursor blink polish).
+Config import: ghostty's `config` is picked up automatically when there is no
+miaotty config; alacritty import is pending.
+
+Not yet: recursive splits, Windows named-pipe transport, packaging, and further
+renderer hardening (damage uploads, cursor block inversion).
 
 ## Run
 

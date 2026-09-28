@@ -11,6 +11,6 @@ Docs are English by default; keep a Simplified Chinese version in sync
 | [0001](./0001-stack.md) | Stack selection (pty/vt/render/window/UI) | accepted |
 | [0002](./0002-concurrency.md) | Concurrency & lock discipline | accepted |
 | [0003](./0003-co-frame-rendering.md) | Terminal + egui co-frame rendering | accepted |
-| 0004 | Own tab/split model (not OS-native) | planned |
+| [0004](./0004-tab-split-model.md) | Own tab/split model (not OS-native) | accepted |
 | [0005](./0005-transport.md) | MTP transport (Unix socket / Windows named pipe) | accepted |
 | [0006](./0006-license-policy.md) | License & dependency policy | accepted |
