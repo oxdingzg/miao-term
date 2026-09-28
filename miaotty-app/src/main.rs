@@ -20,6 +20,7 @@ mod i18n;
 mod icons;
 mod launch;
 mod panels;
+mod ssh;
 
 use miao_term_core::aterm::{ATerm, Color, NamedColor};
 use miao_term_core::Terminal;
@@ -589,6 +590,7 @@ struct MiaottyApp {
     launch: Option<String>,
     quick_pane: Option<String>,
     quick_return: Option<usize>,
+    ssh_ui: Option<SshDialog>,
     lang: i18n::Lang,
     update_config: Option<String>,
     update_rx: Option<std::sync::mpsc::Receiver<String>>,
@@ -600,6 +602,11 @@ struct RecipeDialog {
     save: bool,
     name: String,
     list: Vec<String>,
+}
+
+/// The "New SSH Session" dialog (M4/ADR 0014).
+struct SshDialog {
+    target: String,
 }
 
 /// A prompt waiting to be sent to an agent pane once it is idle.
@@ -658,6 +665,7 @@ enum PaletteAction {
 enum Verb {
     Composer,
     QuickTerminal,
+    NewSsh,
     CheckUpdates,
     SaveRecipe,
     OpenRecipe,
@@ -742,6 +750,7 @@ impl MiaottyApp {
             launch: None,
             quick_pane: None,
             quick_return: None,
+            ssh_ui: None,
             lang: i18n::Lang::resolve(cfg.language.as_deref()),
             update_config: cfg.update_check_url.clone(),
             update_rx: None,
@@ -1207,6 +1216,9 @@ impl eframe::App for MiaottyApp {
         if self.show_settings {
             self.settings_window(ctx);
         }
+        if self.ssh_ui.is_some() {
+            self.ssh_window(ctx);
+        }
         if self.recipe_ui.is_some() {
             self.recipe_window(ctx);
         }
@@ -1297,6 +1309,7 @@ impl MiaottyApp {
         for (label, verb) in [
             ("Composer", Verb::Composer),
             ("Quick Terminal", Verb::QuickTerminal),
+            ("New SSH Session\u{2026}", Verb::NewSsh),
             ("Check for Updates", Verb::CheckUpdates),
             ("Save Recipe\u{2026}", Verb::SaveRecipe),
             ("Open Recipe\u{2026}", Verb::OpenRecipe),
@@ -1335,6 +1348,11 @@ impl MiaottyApp {
             PaletteAction::Run(verb) => match verb {
                 Verb::Composer => self.open_composer(),
                 Verb::QuickTerminal => self.toggle_quick_terminal(),
+                Verb::NewSsh => {
+                    self.ssh_ui = Some(SshDialog {
+                        target: String::new(),
+                    })
+                }
                 Verb::CheckUpdates => self.check_updates(),
                 Verb::SaveRecipe => {
                     self.recipe_ui = Some(RecipeDialog {
@@ -2392,6 +2410,46 @@ impl MiaottyApp {
             .map(|p| p.pane_id.clone());
         if let Some(id) = id {
             self.send_to_pane(&id, cmd);
+        }
+    }
+
+    /// The "New SSH Session" dialog: resolve the typed target through the ssh
+    /// config, then open a tab running the reused/bootstrap ssh command.
+    fn ssh_window(&mut self, ctx: &egui::Context) {
+        let Some(mut dialog) = self.ssh_ui.take() else {
+            return;
+        };
+        let mut open = true;
+        let mut connect = false;
+        egui::Window::new(self.t("New SSH Session"))
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("user@host:port");
+                    ui.text_edit_singleline(&mut dialog.target);
+                });
+                ui.horizontal(|ui| {
+                    let ready = ssh::Target::parse(&dialog.target).is_some();
+                    if ui
+                        .add_enabled(ready, egui::Button::new(self.t("Connect")))
+                        .clicked()
+                    {
+                        connect = true;
+                    }
+                });
+            });
+        if connect {
+            if let Some(target) = ssh::Target::parse(&dialog.target) {
+                let resolved = ssh::resolve(&target);
+                let cmd = ssh::command(&resolved, &ssh::bootstrap("xterm-256color"));
+                self.open_command_tab(&cmd);
+            }
+            open = false;
+        }
+        if open {
+            self.ssh_ui = Some(dialog);
         }
     }
 

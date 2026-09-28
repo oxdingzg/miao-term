@@ -22,3 +22,4 @@
 | [0011](./0011-tab-groups-tree-recipes.zh-CN.md) | 标签分组、文件树与 Recipes | 已接受 |
 | [0012](./0012-jump-markdown-search.zh-CN.md) | 最近文件、Markdown 预览、内容搜索 | 已接受 |
 | [0013](./0013-system-integration.zh-CN.md) | URL scheme、快速终端、i18n、更新检查 | 已接受 |
+| [0014](./0014-ssh.zh-CN.md) | SSH 会话与远端 terminfo | 已接受 |

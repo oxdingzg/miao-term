@@ -12,50 +12,21 @@ pub fn command_for(arg: &str) -> Option<String> {
         "ssh" => ssh_command(rest),
         "x-man-page" => {
             let cmd = rest.split(['/', '?']).next().filter(|s| !s.is_empty())?;
-            Some(format!("man {}", shell_quote(cmd)))
+            Some(format!("man {}", crate::ssh::shell_quote(cmd)))
         }
         _ => None,
     }
 }
 
-/// Parse `[user@]host[:port][/path][?query]` into an `ssh` invocation.
+/// Parse `[user@]host[:port][/path][?query]` into an `ssh` invocation using
+/// the SSH integration (connection reuse + remote bootstrap, ADR 0014).
 fn ssh_command(rest: &str) -> Option<String> {
     let authority = rest.split(['/', '?']).next().unwrap_or("");
-    if authority.is_empty() {
-        return None;
-    }
-    let (host, port) = split_host_port(authority);
-    if host.is_empty() {
-        return None;
-    }
-    let mut cmd = String::from("ssh");
-    if let Some(port) = port {
-        cmd.push_str(&format!(" -p {}", shell_quote(&port)));
-    }
-    cmd.push(' ');
-    cmd.push_str(&shell_quote(&host));
-    Some(cmd)
-}
-
-/// Split a URL authority into host and optional port, handling `[ipv6]:port`.
-fn split_host_port(authority: &str) -> (String, Option<String>) {
-    if let Some(rest) = authority.strip_prefix('[') {
-        if let Some((host, tail)) = rest.split_once(']') {
-            let port = tail.strip_prefix(':').filter(|p| !p.is_empty());
-            return (format!("[{host}]"), port.map(str::to_string));
-        }
-    }
-    if let Some((host, port)) = authority.rsplit_once(':') {
-        if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) {
-            return (host.to_string(), Some(port.to_string()));
-        }
-    }
-    (authority.to_string(), None)
-}
-
-/// Single-quote a string for the shell.
-fn shell_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
+    let target = crate::ssh::Target::parse(authority)?;
+    Some(crate::ssh::command(
+        &target,
+        &crate::ssh::bootstrap("xterm-256color"),
+    ))
 }
 
 #[cfg(test)]
@@ -64,19 +35,15 @@ mod tests {
 
     #[test]
     fn ssh_variants() {
-        assert_eq!(command_for("ssh://host").as_deref(), Some("ssh 'host'"));
-        assert_eq!(
-            command_for("ssh://user@host:2222").as_deref(),
-            Some("ssh -p '2222' 'user@host'")
-        );
-        assert_eq!(
-            command_for("ssh://user@host:2222/some/path").as_deref(),
-            Some("ssh -p '2222' 'user@host'")
-        );
-        assert_eq!(
-            command_for("ssh://[::1]:2200").as_deref(),
-            Some("ssh -p '2200' '[::1]'")
-        );
+        let cmd = command_for("ssh://user@host:2222/some/path").unwrap();
+        assert!(cmd.starts_with("ssh -t "));
+        assert!(cmd.contains("ControlMaster=auto"));
+        assert!(cmd.contains(" -p 2222 "));
+        assert!(cmd.contains("'user@host'"));
+        assert!(command_for("ssh://host").unwrap().contains("'host'"));
+        assert!(command_for("ssh://[::1]:2200")
+            .unwrap()
+            .contains(" -p 2200 "));
         assert!(command_for("ssh://").is_none());
     }
 
@@ -94,6 +61,6 @@ mod tests {
 
     #[test]
     fn quoting_is_safe() {
-        assert_eq!(shell_quote("a'b"), "'a'\\''b'");
+        assert_eq!(crate::ssh::shell_quote("a'b"), "'a'\\''b'");
     }
 }

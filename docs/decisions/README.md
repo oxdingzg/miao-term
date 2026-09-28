@@ -21,3 +21,4 @@ Docs are English by default; keep a Simplified Chinese version in sync
 | [0011](./0011-tab-groups-tree-recipes.md) | Tab groups, file tree, recipes | accepted |
 | [0012](./0012-jump-markdown-search.md) | Recent files, Markdown preview, content search | accepted |
 | [0013](./0013-system-integration.md) | URL schemes, Quick Terminal, i18n, update check | accepted |
+| [0014](./0014-ssh.md) | SSH sessions and remote terminfo | accepted |
