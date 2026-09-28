@@ -23,6 +23,7 @@ mod integration;
 mod launch;
 mod panels;
 mod ssh;
+mod update;
 
 use miao_term_core::aterm::{ATerm, Color, NamedColor};
 use miao_term_core::Terminal;
@@ -656,11 +657,12 @@ struct MiaottyApp {
     quick_hotkey: Option<String>,
     remote_ui: Option<RemoteDialog>,
     remote_rx: Option<(bool, std::sync::mpsc::Receiver<RemoteRead>)>,
+    update_manifest: Option<update::Manifest>,
     hotkeys: Option<hotkey::Hotkeys>,
     hotkey_tried: bool,
     lang: i18n::Lang,
     update_config: Option<String>,
-    update_rx: Option<std::sync::mpsc::Receiver<String>>,
+    update_rx: Option<std::sync::mpsc::Receiver<UpdateEvent>>,
     update_msg: Option<String>,
 }
 
@@ -757,6 +759,7 @@ enum Verb {
     QuickTerminal,
     ViewRemote,
     EditRemote,
+    DownloadUpdate,
     CopyPaneId,
     NewSsh,
     CheckUpdates,
@@ -850,6 +853,7 @@ impl MiaottyApp {
             quick_hotkey: cfg.quick_terminal_hotkey.clone(),
             remote_ui: None,
             remote_rx: None,
+            update_manifest: None,
             hotkeys: None,
             hotkey_tried: false,
             lang: i18n::Lang::resolve(cfg.language.as_deref()),
@@ -1228,11 +1232,35 @@ impl eframe::App for MiaottyApp {
             ctx.request_repaint();
         }
 
-        // Poll a pending update check.
+        // Poll a pending update check / download.
         if let Some(rx) = &self.update_rx {
-            if let Ok(msg) = rx.try_recv() {
-                self.update_msg = Some(msg);
-                self.update_rx = None;
+            let local = env!("CARGO_PKG_VERSION");
+            match rx.try_recv() {
+                Ok(UpdateEvent::Checked(Ok(manifest))) => {
+                    self.update_msg = Some(if manifest.version.is_empty() {
+                        "Update check: empty response".to_string()
+                    } else if update::is_newer(&manifest.version, local) {
+                        format!("Update available: {} (you have {local})", manifest.version)
+                    } else {
+                        format!("Up to date ({local})")
+                    });
+                    self.update_manifest = Some(manifest);
+                    self.update_rx = None;
+                }
+                Ok(UpdateEvent::Checked(Err(e))) => {
+                    self.update_msg = Some(format!("Update check failed: {e}"));
+                    self.update_rx = None;
+                }
+                Ok(UpdateEvent::Downloaded(Ok(path))) => {
+                    self.update_msg = Some(format!("Saved {path}"));
+                    self.update_rx = None;
+                }
+                Ok(UpdateEvent::Downloaded(Err(e))) => {
+                    self.update_msg = Some(format!("Download failed: {e}"));
+                    self.update_rx = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.update_rx = None,
             }
         }
 
@@ -1462,6 +1490,7 @@ impl MiaottyApp {
             ("Quick Terminal", Verb::QuickTerminal),
             ("View Remote File\u{2026}", Verb::ViewRemote),
             ("Edit Remote File\u{2026}", Verb::EditRemote),
+            ("Download Update", Verb::DownloadUpdate),
             ("Copy Pane ID", Verb::CopyPaneId),
             ("New SSH Session\u{2026}", Verb::NewSsh),
             ("Check for Updates", Verb::CheckUpdates),
@@ -1502,6 +1531,7 @@ impl MiaottyApp {
             PaletteAction::Run(verb) => match verb {
                 Verb::Composer => self.open_composer(),
                 Verb::QuickTerminal => self.toggle_quick_terminal(),
+                Verb::DownloadUpdate => self.download_update(),
                 Verb::ViewRemote | Verb::EditRemote => {
                     self.remote_ui = Some(RemoteDialog {
                         dest: String::new(),
@@ -2303,56 +2333,85 @@ fn strip_inline(s: &str) -> String {
 
 /// Run an update check on a thread: fetch `url` with curl, compare the first
 /// token to the running version, and report a human string.
-fn spawn_update_check(url: String) -> std::sync::mpsc::Receiver<String> {
+/// An update-related result delivered from a worker thread.
+enum UpdateEvent {
+    Checked(Result<update::Manifest, String>),
+    Downloaded(Result<String, String>),
+}
+
+/// Fetch the manifest at `url` (bounded) and parse it.
+fn spawn_update_check(url: String) -> std::sync::mpsc::Receiver<UpdateEvent> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let local = env!("CARGO_PKG_VERSION");
-        let msg = match std::process::Command::new("curl")
-            .args(["-fsSL", "--max-time", "5", &url])
-            .output()
-        {
-            Ok(out) if out.status.success() => {
-                let remote = String::from_utf8_lossy(&out.stdout)
-                    .lines()
-                    .next()
-                    .unwrap_or("")
-                    .trim()
-                    .trim_start_matches('v')
-                    .to_string();
-                if remote.is_empty() {
-                    "Update check: empty response".to_string()
-                } else if version_newer(&remote, local) {
-                    format!("Update available: {remote} (you have {local})")
-                } else {
-                    format!("Up to date ({local})")
-                }
-            }
-            _ => "Update check failed".to_string(),
-        };
-        let _ = tx.send(msg);
+        let result = http_get(&url).map(|body| update::parse(&body));
+        let _ = tx.send(UpdateEvent::Checked(result));
     });
     rx
 }
 
-fn version_newer(remote: &str, local: &str) -> bool {
-    parse_version(remote) > parse_version(local)
+/// Download `url` and verify its SHA-256 before moving it to `~/Downloads`.
+fn spawn_update_download(url: String, sha256: String) -> std::sync::mpsc::Receiver<UpdateEvent> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(UpdateEvent::Downloaded(download_and_verify(&url, &sha256)));
+    });
+    rx
 }
 
-fn parse_version(s: &str) -> (u32, u32, u32) {
-    let s = s.trim().trim_start_matches('v');
-    let mut parts = s.split('.').map(|p| {
-        p.trim()
-            .split(|c: char| !c.is_ascii_digit())
-            .next()
-            .unwrap_or("")
-            .parse::<u32>()
-            .unwrap_or(0)
-    });
-    (
-        parts.next().unwrap_or(0),
-        parts.next().unwrap_or(0),
-        parts.next().unwrap_or(0),
-    )
+fn http_get(url: &str) -> Result<String, String> {
+    let out = std::process::Command::new("curl")
+        .args(["-fsSL", "--max-time", "8", url])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(format!("curl failed: {}", out.status));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+fn download_and_verify(url: &str, sha256: &str) -> Result<String, String> {
+    let name = url
+        .rsplit('/')
+        .next()
+        .filter(|n| !n.is_empty())
+        .unwrap_or("miaotty-download")
+        .to_string();
+    let tmp = std::env::temp_dir().join(format!("miaotty-dl-{name}"));
+    let out = std::process::Command::new("curl")
+        .args(["-fL", "--max-time", "600", "-o"])
+        .arg(&tmp)
+        .arg(url)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(format!("download failed: {}", out.status));
+    }
+    if !sha256.is_empty() {
+        match update::verify_file(&tmp, sha256) {
+            Ok(true) => {}
+            Ok(false) => {
+                let _ = std::fs::remove_file(&tmp);
+                return Err("checksum mismatch".to_string());
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    let target = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|h| h.join("Downloads"))
+        .filter(|d| d.is_dir())
+        .map(|d| d.join(&name))
+        .unwrap_or_else(|| tmp.clone());
+    if target != tmp && std::fs::rename(&tmp, &target).is_err() {
+        std::fs::copy(&tmp, &target).map_err(|e| e.to_string())?;
+        let _ = std::fs::remove_file(&tmp);
+    }
+    let verified = if sha256.is_empty() {
+        "unverified"
+    } else {
+        "checksum ok"
+    };
+    Ok(format!("{} ({verified})", target.display()))
 }
 
 /// `~/.config/miaotty/recipes` (respecting `XDG_CONFIG_HOME`).
@@ -3476,6 +3535,32 @@ impl MiaottyApp {
         }
     }
 
+    /// Whether a download is offered for this platform right now.
+    fn update_available(&self) -> bool {
+        self.update_manifest
+            .as_ref()
+            .and_then(|m| m.for_platform())
+            .is_some_and(|a| !a.url.is_empty())
+    }
+
+    /// Download and verify the platform artifact of the checked manifest.
+    fn download_update(&mut self) {
+        let artifact = self
+            .update_manifest
+            .as_ref()
+            .and_then(|m| m.for_platform())
+            .cloned();
+        match artifact {
+            Some(a) if !a.url.is_empty() => {
+                self.update_rx = Some(spawn_update_download(a.url, a.sha256));
+                self.update_msg = Some("Downloading\u{2026}".to_string());
+            }
+            _ => {
+                self.update_msg = Some(self.t("No download for this platform").to_string());
+            }
+        }
+    }
+
     /// The theme background with the configured opacity applied.
     fn bg(&self) -> egui::Color32 {
         let c = self.theme.bg;
@@ -3964,7 +4049,24 @@ impl MiaottyApp {
                     } else {
                         "\u{2014}"
                     });
+                    if ui.button(self.t("Check for Updates")).clicked() {
+                        self.check_updates();
+                    }
+                    let can_download = self.update_available();
+                    if ui
+                        .add_enabled(can_download, egui::Button::new(self.t("Download Update")))
+                        .clicked()
+                    {
+                        self.download_update();
+                    }
                 });
+                if let Some(msg) = &self.update_msg {
+                    ui.label(
+                        egui::RichText::new(msg)
+                            .small()
+                            .color(egui::Color32::from_gray(150)),
+                    );
+                }
                 ui.horizontal(|ui| {
                     ui.label(self.t("Line height"));
                     if ui
@@ -5228,10 +5330,9 @@ mod update_tests {
 
     #[test]
     fn version_comparison() {
-        assert!(version_newer("1.2.0", "1.1.9"));
-        assert!(version_newer("v2.0.0", "1.9.9"));
-        assert!(!version_newer("1.0.0", "1.0.0"));
-        assert!(!version_newer("0.9.9", "1.0.0"));
-        assert_eq!(parse_version("1.2.3-rc1"), (1, 2, 3));
+        assert!(update::is_newer("1.2.0", "1.1.9"));
+        assert!(update::is_newer("v2.0.0", "1.9.9"));
+        assert!(!update::is_newer("1.0.0", "1.0.0"));
+        assert!(!update::is_newer("0.9.9", "1.0.0"));
     }
 }

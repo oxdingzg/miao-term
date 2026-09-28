@@ -12,7 +12,9 @@ font-size = 14
 # quick-terminal-hotkey = "cmd+shift+t"  # system-wide Quick Terminal toggle
 # editor = "code --wait"            # command used by "Edit in Tab"
 # language = "zh"                  # UI language ("en" default; also reads $LANG)
-# update-check-url = "https://example.com/miaotty/latest.txt"  # first line = version
+# update-check-url = "https://example.com/miaotty/latest.json"
+#   JSON manifest: {"version":"0.2.0","artifacts":{"macos-aarch64":{"url":"…","sha256":"…"}}}
+#   A plain document whose first line is the version also works.
 
 # [badges]                         # which agent states show a tab badge
 # processing = true

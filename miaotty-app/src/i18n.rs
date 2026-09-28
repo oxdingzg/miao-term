@@ -101,6 +101,8 @@ fn zh(key: &'static str) -> &'static str {
         "SSH destination" => "SSH 目标",
         "Remote path" => "远端路径",
         "Load" => "载入",
+        "Download Update" => "下载更新",
+        "No download for this platform" => "本平台无可用下载",
         "Bind externally:" => "外部绑定：",
         "AGENT INTEGRATIONS" => "Agent 集成",
         "detected" => "已检测到",

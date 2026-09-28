@@ -1,0 +1,381 @@
+//! Update manifest parsing, download and SHA-256 verification (ADR 0022).
+//!
+//! The manifest at `update-check-url` may be either a plain document whose first
+//! line is the version, or JSON:
+//!
+//! ```json
+//! { "version": "0.2.0",
+//!   "artifacts": { "macos-aarch64": { "url": "https://…", "sha256": "…" } } }
+//! ```
+//!
+//! Downloads run through `curl`; the integrity hash is computed in-crate (a
+//! dependency-free SHA-256), so verification never trusts the download path.
+
+use std::collections::BTreeMap;
+use std::io::Read;
+
+/// One downloadable artifact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Artifact {
+    pub url: String,
+    pub sha256: String,
+}
+
+/// A parsed manifest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Manifest {
+    pub version: String,
+    pub artifacts: BTreeMap<String, Artifact>,
+}
+
+impl Manifest {
+    /// The artifact for this platform, if the manifest offers one.
+    pub fn for_platform(&self) -> Option<&Artifact> {
+        self.artifacts.get(platform_key())
+    }
+}
+
+/// A stable key for the running platform, e.g. `macos-aarch64`.
+pub fn platform_key() -> &'static str {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "macos-aarch64",
+        ("macos", _) => "macos-x86_64",
+        ("linux", "aarch64") => "linux-aarch64",
+        ("linux", _) => "linux-x86_64",
+        ("windows", _) => "windows-x86_64",
+        _ => "unknown",
+    }
+}
+
+/// Parse a manifest: JSON when it looks like JSON, else first-line version.
+pub fn parse(text: &str) -> Manifest {
+    let trimmed = text.trim_start();
+    if trimmed.starts_with('{') {
+        if let Some(manifest) = parse_json(trimmed) {
+            return manifest;
+        }
+    }
+    Manifest {
+        version: text
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim()
+            .trim_start_matches('v')
+            .to_string(),
+        artifacts: BTreeMap::new(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct RawManifest {
+    version: String,
+    #[serde(default)]
+    artifacts: BTreeMap<String, RawArtifact>,
+}
+
+#[derive(serde::Deserialize)]
+struct RawArtifact {
+    url: String,
+    #[serde(default)]
+    sha256: String,
+}
+
+fn parse_json(text: &str) -> Option<Manifest> {
+    let raw: RawManifest = serde_json::from_str(text).ok()?;
+    Some(Manifest {
+        version: raw.version.trim_start_matches('v').to_string(),
+        artifacts: raw
+            .artifacts
+            .into_iter()
+            .map(|(k, v)| {
+                (
+                    k,
+                    Artifact {
+                        url: v.url,
+                        sha256: v.sha256.trim().to_ascii_lowercase(),
+                    },
+                )
+            })
+            .collect(),
+    })
+}
+
+/// True when `remote` is a newer version than `local`.
+pub fn is_newer(remote: &str, local: &str) -> bool {
+    parse_version(remote) > parse_version(local)
+}
+
+fn parse_version(s: &str) -> (u32, u32, u32) {
+    let s = s.trim().trim_start_matches('v');
+    let mut parts = s.split('.').map(|p| {
+        p.split(|c: char| !c.is_ascii_digit())
+            .next()
+            .unwrap_or("")
+            .parse::<u32>()
+            .unwrap_or(0)
+    });
+    (
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+    )
+}
+
+/// Hex-encode bytes.
+pub fn hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
+}
+
+/// Streaming SHA-256 (FIPS 180-4).
+#[derive(Clone)]
+pub struct Sha256 {
+    state: [u32; 8],
+    buffer: Vec<u8>,
+    length: u64,
+}
+
+const K: [u32; 64] = [
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+];
+
+impl Default for Sha256 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Sha256 {
+    pub fn new() -> Self {
+        Self {
+            state: [
+                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+                0x5be0cd19,
+            ],
+            buffer: Vec::new(),
+            length: 0,
+        }
+    }
+
+    pub fn update(&mut self, data: &[u8]) {
+        self.length += data.len() as u64;
+        self.buffer.extend_from_slice(data);
+        while self.buffer.len() >= 64 {
+            let block: [u8; 64] = self.buffer[..64].try_into().unwrap();
+            self.compress(&block);
+            self.buffer.drain(..64);
+        }
+    }
+
+    pub fn finalize(mut self) -> [u8; 32] {
+        let bit_len = self.length * 8;
+        self.buffer.push(0x80);
+        while self.buffer.len() % 64 != 56 {
+            self.buffer.push(0);
+        }
+        self.buffer.extend_from_slice(&bit_len.to_be_bytes());
+        let blocks: Vec<[u8; 64]> = self
+            .buffer
+            .chunks(64)
+            .map(|c| c.try_into().unwrap())
+            .collect();
+        for block in blocks {
+            self.compress(&block);
+        }
+        let mut out = [0u8; 32];
+        for (i, word) in self.state.iter().enumerate() {
+            out[i * 4..i * 4 + 4].copy_from_slice(&word.to_be_bytes());
+        }
+        out
+    }
+
+    fn compress(&mut self, block: &[u8; 64]) {
+        let mut w = [0u32; 64];
+        for i in 0..16 {
+            w[i] = u32::from_be_bytes(block[i * 4..i * 4 + 4].try_into().unwrap());
+        }
+        for i in 16..64 {
+            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
+            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
+        }
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = self.state;
+        for i in 0..64 {
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & f) ^ ((!e) & g);
+            let t1 = h
+                .wrapping_add(s1)
+                .wrapping_add(ch)
+                .wrapping_add(K[i])
+                .wrapping_add(w[i]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let t2 = s0.wrapping_add(maj);
+            h = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(t1);
+            d = c;
+            c = b;
+            b = a;
+            a = t1.wrapping_add(t2);
+        }
+        let add = [a, b, c, d, e, f, g, h];
+        for (s, v) in self.state.iter_mut().zip(add) {
+            *s = s.wrapping_add(v);
+        }
+    }
+}
+
+/// SHA-256 of a byte slice (used by tests and small buffers).
+#[cfg(test)]
+pub fn sha256(data: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hasher.finalize()
+}
+
+/// Streaming SHA-256 of a file.
+pub fn sha256_file(path: &std::path::Path) -> std::io::Result<[u8; 32]> {
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hasher.finalize())
+}
+
+/// Whether a file's hex digest matches `expected` (case-insensitive).
+pub fn verify_file(path: &std::path::Path, expected: &str) -> std::io::Result<bool> {
+    let actual = hex(&sha256_file(path)?);
+    Ok(actual.eq_ignore_ascii_case(expected.trim()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sha256_vectors() {
+        assert_eq!(
+            hex(&sha256(b"")),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            hex(&sha256(b"abc")),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            hex(&sha256(
+                b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
+            )),
+            "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
+        );
+    }
+
+    #[test]
+    fn sha256_streaming_matches_oneshot() {
+        let data: Vec<u8> = (0..100_000u32).map(|i| (i % 251) as u8).collect();
+        let mut hasher = Sha256::new();
+        for chunk in data.chunks(7) {
+            hasher.update(chunk);
+        }
+        assert_eq!(hasher.finalize(), sha256(&data));
+    }
+
+    #[test]
+    fn parses_plain_and_json_manifests() {
+        let plain = parse("v0.2.0\nhttps://example.com\n");
+        assert_eq!(plain.version, "0.2.0");
+        assert!(plain.artifacts.is_empty());
+
+        let json = parse(
+            r#"{ "version": "v0.3.0",
+                 "artifacts": { "macos-aarch64": { "url": "https://x/a.dmg", "sha256": "AB" } } }"#,
+        );
+        assert_eq!(json.version, "0.3.0");
+        let artifact = &json.artifacts["macos-aarch64"];
+        assert_eq!(artifact.url, "https://x/a.dmg");
+        assert_eq!(artifact.sha256, "ab");
+    }
+
+    #[test]
+    fn compares_versions() {
+        assert!(is_newer("0.2.0", "0.1.9"));
+        assert!(!is_newer("0.1.0", "0.1.0"));
+        assert!(!is_newer("0.0.9", "0.1.0"));
+    }
+
+    #[test]
+    fn sha256_matches_the_system_tool() {
+        // Cross-check our implementation against shasum/sha256sum when present.
+        let path = std::env::temp_dir().join(format!("miaotty-xcheck-{}", std::process::id()));
+        let data: Vec<u8> = (0..70_000u32).map(|i| (i % 253) as u8).collect();
+        std::fs::write(&path, &data).unwrap();
+        let tool = ["shasum", "sha256sum"].into_iter().find(|t| {
+            std::process::Command::new(t)
+                .arg("--version")
+                .output()
+                .is_ok()
+                || std::process::Command::new(t).output().is_ok()
+        });
+        if let Some(tool) = tool {
+            let args: Vec<&str> = if tool == "shasum" {
+                vec!["-a", "256"]
+            } else {
+                vec![]
+            };
+            if let Ok(out) = std::process::Command::new(tool)
+                .args(args)
+                .arg(&path)
+                .output()
+            {
+                let expected = String::from_utf8_lossy(&out.stdout)
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if expected.len() == 64 {
+                    assert_eq!(
+                        hex(&sha256_file(&path).unwrap()),
+                        expected,
+                        "{tool} mismatch"
+                    );
+                }
+            }
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn verifies_a_file() {
+        let path = std::env::temp_dir().join(format!("miaotty-digest-{}", std::process::id()));
+        std::fs::write(&path, b"abc").unwrap();
+        assert!(verify_file(
+            &path,
+            "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD"
+        )
+        .unwrap());
+        assert!(!verify_file(&path, "00").unwrap());
+        let _ = std::fs::remove_file(&path);
+    }
+}
