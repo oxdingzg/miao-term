@@ -327,6 +327,33 @@ impl MiaottyApp {
         self.push_tab(title, cols, rows, cwd);
     }
 
+    /// Move focus to the next/previous pane in the active tab.
+    fn focus_cycle(&mut self, forward: bool) {
+        let tab = &mut self.tabs[self.active];
+        if tab.panes.len() < 2 {
+            return;
+        }
+        let mut order = Vec::new();
+        layout_rects(
+            &tab.layout,
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1.0, 1.0)),
+            &mut order,
+        );
+        let ids: Vec<String> = order.into_iter().map(|(id, _)| id).collect();
+        if ids.len() < 2 {
+            return;
+        }
+        let idx = ids.iter().position(|id| id == &tab.active).unwrap_or(0);
+        let next = if forward {
+            (idx + 1) % ids.len()
+        } else {
+            (idx + ids.len() - 1) % ids.len()
+        };
+        tab.active = ids[next].clone();
+        self.selection = None;
+        self.scroll = 0;
+    }
+
     /// Split the focused pane in the active tab and focus the new pane.
     fn split_active(&mut self, dir: SplitDir) {
         let tab = &mut self.tabs[self.active];
@@ -758,6 +785,10 @@ impl MiaottyApp {
                                     (egui::Key::D, false, false) => {
                                         self.split_active(SplitDir::Right)
                                     }
+                                    (egui::Key::ArrowRight, _, true) => self.focus_cycle(true),
+                                    (egui::Key::ArrowLeft, _, true) => self.focus_cycle(false),
+                                    (egui::Key::CloseBracket, _, _) => self.focus_cycle(true),
+                                    (egui::Key::OpenBracket, _, _) => self.focus_cycle(false),
                                     (egui::Key::Plus, _, _) | (egui::Key::Equals, _, _) => {
                                         self.font_size += 1.0
                                     }

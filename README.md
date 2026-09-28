@@ -32,6 +32,12 @@ the `miaotty` application built on top of it.
 Config import: ghostty `config` and alacritty `alacritty.toml` are picked up
 automatically when there is no miaotty config.
 
+Packaging: `scripts/package-macos.sh` builds an ad-hoc-signed `dist/miaotty.app`;
+`dist-workspace.toml` is a cargo-dist scaffold. See [`docs/INSTALL.md`](docs/INSTALL.md).
+
+Keyboard: `⌘T` new tab, `⌘W` close pane/tab, `⌘D`/`⇧⌘D` split, `⌥⌘→`/`⌥⌘←`
+(or `⌘⇧[`/`⌘⇧]`) cycle panes, `⌥⌘D` toggle details, `⌘+`/`⌘-`/`⌘0` font size.
+
 Not yet: Windows named-pipe transport + ConPTY testing, packaging
 (MSI/AppImage/notarize), and further renderer hardening (damage uploads, atlas
 trim).

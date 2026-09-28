@@ -26,6 +26,12 @@
 
 配置导入:当没有 miaotty 配置时,会自动读取 ghostty `config` 与 alacritty `alacritty.toml`。
 
+打包:`scripts/package-macos.sh` 生成 ad-hoc 签名的 `dist/miaotty.app`;
+`dist-workspace.toml` 是 cargo-dist 脚手架。见 [`docs/INSTALL.zh-CN.md`](docs/INSTALL.zh-CN.md)。
+
+快捷键:`⌘T` 新建标签、`⌘W` 关 pane/标签、`⌘D`/`⇧⌘D` 分屏、`⌥⌘→`/`⌥⌘←`(或 `⌘⇧[`/`⌘⇧]`)轮换 pane、
+`⌥⌘D` 开关 details、`⌘+`/`⌘-`/`⌘0` 字号。
+
 尚未完成:Windows 命名管道传输 + ConPTY 实测、打包(MSI/AppImage/公证),
 以及渲染器进一步打磨(damage 上传、图集 trim)。
 
