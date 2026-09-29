@@ -2313,9 +2313,9 @@ fn markdown_ui(
                     j += 1;
                 }
                 ui.add_space(4.0);
-                if let Some(g) = miao_term_ui::mermaid::parse(&body) {
+                if let Some(d) = miao_term_ui::mermaid::parse_diagram(&body) {
                     let panel = ui.visuals().extreme_bg_color;
-                    miao_term_ui::mermaid::show(ui, &g, fg, panel);
+                    miao_term_ui::mermaid::show_diagram(ui, &d, fg, panel);
                 } else {
                     // Not a `graph`/`flowchart` we can draw; say so.
                     ui.label(

@@ -4794,8 +4794,8 @@ fn render_markdown(
                         .max_height(400.0),
                 );
             }
-        } else if let Some(g) = miao_term_ui::mermaid::parse(body) {
-            miao_term_ui::mermaid::show(ui, &g, fg, panel);
+        } else if let Some(d) = miao_term_ui::mermaid::parse_diagram(body) {
+            miao_term_ui::mermaid::show_diagram(ui, &d, fg, panel);
         } else {
             ui.label(
                 egui::RichText::new(miao_term_ui::i18n::t(

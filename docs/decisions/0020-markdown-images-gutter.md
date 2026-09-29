@@ -44,3 +44,6 @@ stays put when long lines scroll horizontally (the earlier limitation is gone).
   HTTP loader and a network fetch).
 - Update: the gutter now sits outside the scroll area (see the addendum), so it
   no longer scrolls horizontally with long lines.
+- Update: Mermaid diagrams are drawn inline for `graph`/`flowchart` and, since
+  the sequence-diagram support landed, `sequenceDiagram`; other types (and the
+  binary side of rendering) still fall back to `mermaid-command` or a placeholder.

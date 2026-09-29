@@ -1,6 +1,8 @@
-//! A small, self-contained Mermaid renderer for the common case: `graph` /
-//! `flowchart` with `TD|TB|BT|LR|RL`, `id[Label]` / `id(Label)` / `id{Label}`,
-//! and `-->` / `---` / `-.->` / `==>` edges (optionally labelled).
+//! A small, self-contained Mermaid renderer for the common cases:
+//! `graph` / `flowchart` with `TD|TB|BT|LR|RL`, `id[Label]` / `id(Label)` /
+//! `id{Label}`, and `-->` / `---` / `-.->` / `==>` edges (optionally labelled);
+//! and `sequenceDiagram` with participants, `->`/`->>`/`-->`/`-->>`/`-x`/`--x`
+//! messages and `Note over|left of|right of`.
 //!
 //! This is deliberately a **subset**: anything else makes [`parse`] return
 //! `None`, and the caller falls back to an external renderer or a placeholder.
@@ -129,6 +131,228 @@ fn find_operator(s: &str) -> Option<(usize, usize, bool)> {
 }
 
 /// Split one statement into an alternating node / operator chain.
+/// A parsed Mermaid diagram: the caller renders either kind the same way.
+pub enum Diagram {
+    Graph(Graph),
+    Sequence(Sequence),
+}
+
+/// A `sequenceDiagram`: declared/implied participants and ordered steps.
+#[derive(Clone, Debug)]
+pub struct Sequence {
+    pub actors: Vec<Actor>,
+    pub steps: Vec<SeqStep>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Actor {
+    pub id: String,
+    pub label: String,
+}
+
+#[derive(Clone, Debug)]
+pub enum SeqStep {
+    Message {
+        from: usize,
+        to: usize,
+        text: String,
+        /// `--` arrows.
+        dashed: bool,
+        /// Open arrowhead (`->`) rather than a filled one (`->>`).
+        open: bool,
+    },
+    Note {
+        over: Vec<usize>,
+        text: String,
+        side: NoteSide,
+    },
+}
+
+/// Where a note sits relative to its participants.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NoteSide {
+    Over,
+    Left,
+    Right,
+}
+
+/// Parse either a graph/flowchart or a sequence diagram.
+pub fn parse_diagram(src: &str) -> Option<Diagram> {
+    let header = src
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !l.starts_with("%%"))?;
+    if header == "sequenceDiagram" || header.starts_with("sequenceDiagram ") {
+        parse_sequence(src).map(Diagram::Sequence)
+    } else {
+        parse(src).map(Diagram::Graph)
+    }
+}
+
+/// Render a [`Diagram`].
+pub fn show_diagram(ui: &mut egui::Ui, d: &Diagram, fg: egui::Color32, panel: egui::Color32) {
+    match d {
+        Diagram::Graph(g) => show(ui, g, fg, panel),
+        Diagram::Sequence(s) => show_sequence(ui, s, fg, panel),
+    }
+}
+
+/// Intern an actor id, appending it in first-seen order.
+fn intern(
+    actors: &mut Vec<Actor>,
+    index: &mut std::collections::HashMap<String, usize>,
+    name: &str,
+) -> usize {
+    if let Some(&i) = index.get(name) {
+        return i;
+    }
+    actors.push(Actor {
+        id: name.to_string(),
+        label: name.to_string(),
+    });
+    index.insert(name.to_string(), actors.len() - 1);
+    actors.len() - 1
+}
+
+/// The arrows we understand, longest first so `-->>` wins over `->`.
+const SEQ_ARROWS: [&str; 6] = ["-->>", "->>", "-->", "->", "--x", "-x"];
+
+fn split_arrow(line: &str) -> Option<(&str, &str, &'static str)> {
+    let (pos, tok) = SEQ_ARROWS
+        .iter()
+        .filter_map(|t| line.find(t).map(|p| (p, *t)))
+        .min_by_key(|(p, _)| *p)?;
+    let from = &line[..pos];
+    let rest = &line[pos + tok.len()..];
+    let to = rest.split(':').next().unwrap_or(rest);
+    Some((from.trim(), to.trim(), tok))
+}
+
+/// Keywords that change the layout we do not model; refusing keeps us honest.
+const SEQ_UNSUPPORTED: [&str; 14] = [
+    "loop",
+    "alt",
+    "else",
+    "opt",
+    "par",
+    "and",
+    "critical",
+    "break",
+    "rect",
+    "end",
+    "activate",
+    "deactivate",
+    "create",
+    "destroy",
+];
+
+fn parse_sequence(src: &str) -> Option<Sequence> {
+    use std::collections::HashMap;
+    let mut actors: Vec<Actor> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
+    let mut steps: Vec<SeqStep> = Vec::new();
+    let mut started = false;
+    for raw in src.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with("%%") {
+            continue;
+        }
+        if !started {
+            if line == "sequenceDiagram" || line.starts_with("sequenceDiagram ") {
+                started = true;
+            }
+            continue;
+        }
+        let lower = line.to_ascii_lowercase();
+        // Harmless directives we can ignore.
+        if lower == "autonumber"
+            || lower.starts_with("autonumber ")
+            || lower.starts_with("title ")
+            || lower.starts_with("acctitle")
+            || lower.starts_with("accdescr")
+        {
+            continue;
+        }
+        if let Some(word) = lower.split_whitespace().next() {
+            if SEQ_UNSUPPORTED.contains(&word) {
+                return None;
+            }
+        }
+        // participant/actor declarations.
+        let decl = if lower.starts_with("participant ") {
+            Some(&line["participant ".len()..])
+        } else if lower.starts_with("actor ") {
+            Some(&line["actor ".len()..])
+        } else {
+            None
+        };
+        if let Some(rest) = decl {
+            let rest = rest.trim();
+            let (id, label) = match rest.split_once(" as ") {
+                Some((id, alias)) => (id.trim(), alias.trim()),
+                None => (rest, rest),
+            };
+            if id.is_empty() {
+                return None;
+            }
+            let i = intern(&mut actors, &mut index, id);
+            actors[i].label = if label.is_empty() {
+                id.to_string()
+            } else {
+                label.to_string()
+            };
+            continue;
+        }
+        // Notes.
+        if lower.starts_with("note ") {
+            let rest = line[5..].trim();
+            let (targets, text) = rest.split_once(':')?;
+            let (targets, text) = (targets.trim(), text.trim().to_string());
+            let t_lower = targets.to_ascii_lowercase();
+            let (side, names) = if t_lower.starts_with("over ") {
+                (NoteSide::Over, &targets[5..])
+            } else if t_lower.starts_with("left of ") {
+                (NoteSide::Left, &targets[8..])
+            } else if t_lower.starts_with("right of ") {
+                (NoteSide::Right, &targets[9..])
+            } else {
+                return None;
+            };
+            let mut over = Vec::new();
+            for name in names.split(',') {
+                let name = name.trim();
+                if !name.is_empty() {
+                    over.push(intern(&mut actors, &mut index, name));
+                }
+            }
+            if over.is_empty() {
+                return None;
+            }
+            steps.push(SeqStep::Note { over, text, side });
+            continue;
+        }
+        // Messages.
+        let (from, to, tok) = split_arrow(line)?;
+        let (_, text) = line.split_once(':')?;
+        if from.is_empty() || to.is_empty() {
+            return None;
+        }
+        let from = intern(&mut actors, &mut index, from);
+        let to = intern(&mut actors, &mut index, to);
+        steps.push(SeqStep::Message {
+            from,
+            to,
+            text: text.trim().to_string(),
+            dashed: tok.starts_with("--"),
+            open: !tok.ends_with('>'),
+        });
+    }
+    if !started || steps.is_empty() {
+        return None;
+    }
+    Some(Sequence { actors, steps })
+}
+
 fn parse_statement(
     stmt: &str,
     g: &mut Graph,
@@ -459,6 +683,241 @@ pub fn show(ui: &mut egui::Ui, g: &Graph, fg: egui::Color32, panel: egui::Color3
     }
 }
 
+/// Render a sequence diagram: actor boxes with lifelines, messages between
+/// them and notes. Laid out in a single column per participant, top to bottom.
+pub fn show_sequence(ui: &mut egui::Ui, s: &Sequence, fg: egui::Color32, panel: egui::Color32) {
+    let actor_font = egui::FontId::proportional(13.0);
+    let text_font = egui::FontId::proportional(11.5);
+    let pad = egui::vec2(12.0, 6.0);
+    let margin = 12.0f32;
+    let col_gap = 56.0f32;
+
+    let actor_galleys: Vec<Arc<egui::Galley>> = s
+        .actors
+        .iter()
+        .map(|a| {
+            ui.painter()
+                .layout_no_wrap(a.label.clone(), actor_font.clone(), fg)
+        })
+        .collect();
+    let actor_sizes: Vec<egui::Vec2> = actor_galleys
+        .iter()
+        .map(|gl| {
+            egui::vec2(
+                (gl.size().x + pad.x * 2.0).max(64.0),
+                gl.size().y + pad.y * 2.0,
+            )
+        })
+        .collect();
+
+    // Column centres, left to right.
+    let mut cx: Vec<f32> = Vec::with_capacity(actor_sizes.len());
+    let mut x = margin;
+    for (i, sz) in actor_sizes.iter().enumerate() {
+        if i == 0 {
+            cx.push(x + sz.x / 2.0);
+            x += sz.x;
+        } else {
+            x += col_gap;
+            cx.push(x + sz.x / 2.0);
+            x += sz.x;
+        }
+    }
+    let row_h = actor_sizes.iter().map(|s| s.y).fold(0.0f32, f32::max);
+    let box_bottom = margin + row_h;
+
+    // Steps: lay out vertically and remember what each one needs to draw.
+    struct Msg<'a> {
+        from: usize,
+        to: usize,
+        y: f32,
+        galley: Arc<egui::Galley>,
+        dashed: bool,
+        open: bool,
+        _t: std::marker::PhantomData<&'a ()>,
+    }
+    struct Note<'a> {
+        rect: egui::Rect,
+        galley: Arc<egui::Galley>,
+        _h: std::marker::PhantomData<&'a ()>,
+    }
+    let mut msgs: Vec<Msg> = Vec::new();
+    let mut notes: Vec<Note> = Vec::new();
+    let mut y = box_bottom + 16.0;
+    for step in &s.steps {
+        match step {
+            SeqStep::Message {
+                from,
+                to,
+                text,
+                dashed,
+                open,
+            } => {
+                let galley = ui
+                    .painter()
+                    .layout_no_wrap(text.clone(), text_font.clone(), fg);
+                y += galley.size().y + 6.0;
+                msgs.push(Msg {
+                    from: *from,
+                    to: *to,
+                    y,
+                    galley,
+                    dashed: *dashed,
+                    open: *open,
+                    _t: std::marker::PhantomData,
+                });
+                y += 14.0;
+            }
+            SeqStep::Note { over, text, side } => {
+                let galley = ui
+                    .painter()
+                    .layout_no_wrap(text.clone(), text_font.clone(), fg);
+                let lo = over.iter().copied().min().unwrap_or(0);
+                let hi = over.iter().copied().max().unwrap_or(0);
+                let (left, right) = (cx[lo], cx[hi]);
+                let span = (right - left).max(56.0);
+                let width = (galley.size().x + pad.x * 2.0).min(span);
+                let size = egui::vec2(width, galley.size().y + pad.y * 2.0);
+                let centre_x = match side {
+                    NoteSide::Over => (left + right) / 2.0,
+                    NoteSide::Left => left - 8.0 - size.x / 2.0,
+                    NoteSide::Right => right + 8.0 + size.x / 2.0,
+                };
+                let rect =
+                    egui::Rect::from_center_size(egui::pos2(centre_x, y + size.y / 2.0), size);
+                y += size.y + 10.0;
+                notes.push(Note {
+                    rect,
+                    galley,
+                    _h: std::marker::PhantomData,
+                });
+            }
+        }
+    }
+    let content_bottom = y + 6.0;
+    let width = (x + margin).max(200.0).min(ui.available_width().max(200.0));
+    // Notes placed beside a lifeline can stick out; slide them back inside.
+    for note in &mut notes {
+        let (lo, hi) = (margin, width - margin);
+        if note.rect.left() < lo {
+            note.rect = note.rect.translate(egui::vec2(lo - note.rect.left(), 0.0));
+        } else if note.rect.right() > hi {
+            note.rect = note.rect.translate(egui::vec2(hi - note.rect.right(), 0.0));
+        }
+    }
+    let size = egui::vec2(width, content_bottom);
+    let (resp, painter) = ui.allocate_painter(size, egui::Sense::hover());
+    let origin = resp.rect.min.to_vec2();
+    let at = |p: egui::Pos2| p + origin;
+
+    let line = egui::Stroke::new(1.2_f32, fg.gamma_multiply(0.5));
+    let flow = egui::Stroke::new(1.3_f32, fg.gamma_multiply(0.85));
+
+    // Lifelines down from each actor box.
+    for (i, c) in cx.iter().enumerate() {
+        let top = at(egui::pos2(*c, box_bottom));
+        let bottom = at(egui::pos2(*c, content_bottom - 4.0));
+        painter.extend(egui::Shape::dashed_line(&[top, bottom], line, 4.0, 4.0));
+        let box_rect = egui::Rect::from_center_size(
+            at(egui::pos2(*c, margin + actor_sizes[i].y / 2.0)),
+            actor_sizes[i],
+        );
+        painter.rect_filled(box_rect, egui::Rounding::same(4.0), panel);
+        for (a, b) in [
+            (box_rect.left_top(), box_rect.right_top()),
+            (box_rect.right_top(), box_rect.right_bottom()),
+            (box_rect.right_bottom(), box_rect.left_bottom()),
+            (box_rect.left_bottom(), box_rect.left_top()),
+        ] {
+            painter.line_segment([a, b], line);
+        }
+        let gl = &actor_galleys[i];
+        painter.galley(box_rect.center() - gl.size() / 2.0, gl.clone(), fg);
+    }
+
+    // Arrowheads for each message.
+    for m in &msgs {
+        if m.from == m.to {
+            // Self-message: a small loop to the right of the lifeline.
+            let c = cx[m.from];
+            let y0 = m.y;
+            let y1 = m.y + 10.0;
+            let x1 = c + 26.0;
+            for (a, b) in [
+                (egui::pos2(c, y0), egui::pos2(x1, y0)),
+                (egui::pos2(x1, y0), egui::pos2(x1, y1)),
+                (egui::pos2(x1, y1), egui::pos2(c + 6.0, y1)),
+            ] {
+                let (a, b) = (at(a), at(b));
+                if m.dashed {
+                    painter.extend(egui::Shape::dashed_line(&[a, b], flow, 4.0, 3.0));
+                } else {
+                    painter.line_segment([a, b], flow);
+                }
+            }
+            let tip = at(egui::pos2(c + 6.0, y1));
+            painter.add(egui::Shape::convex_polygon(
+                vec![tip, tip + egui::vec2(8.0, -4.0), tip + egui::vec2(8.0, 4.0)],
+                fg.gamma_multiply(0.85),
+                egui::Stroke::NONE,
+            ));
+            let r = egui::Rect::from_min_size(
+                at(egui::pos2(c + 32.0, y0 - m.galley.size().y - 2.0)),
+                m.galley.size(),
+            );
+            painter.galley(r.min, m.galley.clone(), fg);
+            continue;
+        }
+        let a = at(egui::pos2(cx[m.from], m.y));
+        let b = at(egui::pos2(cx[m.to], m.y));
+        if m.dashed {
+            painter.extend(egui::Shape::dashed_line(&[a, b], flow, 4.0, 3.0));
+        } else {
+            painter.line_segment([a, b], flow);
+        }
+        let dir = (b - a).normalized();
+        let n = egui::vec2(-dir.y, dir.x);
+        if m.open {
+            // Open head: two strokes.
+            painter.line_segment([b, b - dir * 9.0 + n * 4.0], flow);
+            painter.line_segment([b, b - dir * 9.0 - n * 4.0], flow);
+        } else {
+            painter.add(egui::Shape::convex_polygon(
+                vec![b, b - dir * 9.0 + n * 4.0, b - dir * 9.0 - n * 4.0],
+                fg.gamma_multiply(0.85),
+                egui::Stroke::NONE,
+            ));
+        }
+        let mid = a + (b - a) * 0.5;
+        let r = egui::Rect::from_center_size(
+            egui::pos2(mid.x, mid.y - m.galley.size().y / 2.0 - 2.0),
+            m.galley.size() + egui::vec2(6.0, 2.0),
+        );
+        painter.rect_filled(r, egui::Rounding::same(3.0), panel);
+        painter.galley(r.min + egui::vec2(3.0, 1.0), m.galley.clone(), fg);
+    }
+
+    // Notes on top.
+    for note in &notes {
+        let rect = note.rect.translate(origin);
+        painter.rect_filled(rect, egui::Rounding::same(4.0), panel);
+        for (a, b) in [
+            (rect.left_top(), rect.right_top()),
+            (rect.right_top(), rect.right_bottom()),
+            (rect.right_bottom(), rect.left_bottom()),
+            (rect.left_bottom(), rect.left_top()),
+        ] {
+            painter.line_segment([a, b], line);
+        }
+        let inner = rect.shrink2(pad);
+        painter.galley(
+            egui::pos2(inner.left(), inner.center().y - note.galley.size().y / 2.0),
+            note.galley.clone(),
+            fg,
+        );
+    }
+}
+
 /// Point on the border of a box (centered at `c`, size `s`) in the direction of
 /// `toward`.
 fn edge_point(c: egui::Pos2, s: egui::Vec2, toward: egui::Pos2) -> egui::Pos2 {
@@ -574,6 +1033,7 @@ mod tests {
 
     #[test]
     fn rejects_unsupported() {
+        // `parse` is graph-only; `parse_diagram` dispatches on the header.
         assert!(parse("sequenceDiagram\n A->>B: hi").is_none());
         assert!(parse("graph TD\n").is_none());
         assert!(parse("just some text").is_none());
@@ -605,6 +1065,114 @@ mod tests {
             });
         });
         assert!(!out.shapes.is_empty(), "mermaid::show produced no shapes");
+    }
+
+    #[test]
+    fn parses_sequence_diagram() {
+        let src = "sequenceDiagram\n  participant A as Alice\n  actor B\n  A->>B: Hello\n  B-->>A: Hi\n  A-xB: gone\n  Note over A,B: shared\n  Note right of B: aside";
+        let Diagram::Sequence(seq) = parse_diagram(src).expect("parses") else {
+            panic!("expected a sequence diagram");
+        };
+        assert_eq!(seq.actors.len(), 2);
+        assert_eq!(seq.actors[0].label, "Alice");
+        assert_eq!(seq.actors[1].label, "B");
+        assert_eq!(seq.steps.len(), 5);
+        match &seq.steps[0] {
+            SeqStep::Message {
+                from,
+                to,
+                text,
+                dashed,
+                open,
+            } => {
+                assert_eq!((*from, *to), (0, 1));
+                assert_eq!(text, "Hello");
+                assert!(!dashed && !open);
+            }
+            other => panic!("expected a message, got {other:?}"),
+        }
+        match &seq.steps[1] {
+            SeqStep::Message { dashed, open, .. } => assert!(*dashed && !*open),
+            other => panic!("expected a message, got {other:?}"),
+        }
+        match &seq.steps[2] {
+            SeqStep::Message { open, .. } => assert!(*open, "`-x` has an open head"),
+            other => panic!("expected a message, got {other:?}"),
+        }
+        match &seq.steps[3] {
+            SeqStep::Note { over, side, .. } => {
+                assert_eq!(over, &[0, 1]);
+                assert_eq!(*side, NoteSide::Over);
+            }
+            other => panic!("expected a note, got {other:?}"),
+        }
+        match &seq.steps[4] {
+            SeqStep::Note { side, .. } => assert_eq!(*side, NoteSide::Right),
+            other => panic!("expected a note, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sequence_declares_participants_implicitly() {
+        let Diagram::Sequence(seq) =
+            parse_diagram("sequenceDiagram\n  X->>Y: hi\n  Y->>Z: fwd").unwrap()
+        else {
+            panic!("expected a sequence diagram");
+        };
+        assert_eq!(
+            seq.actors.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+            vec!["X", "Y", "Z"]
+        );
+    }
+
+    #[test]
+    fn sequence_rejects_blocks_we_do_not_model() {
+        assert!(parse_diagram("sequenceDiagram\n loop 3 times\n A->>B: hi\n end").is_none());
+        assert!(parse_diagram("sequenceDiagram\n A->>B: hi\n alt yes\n end").is_none());
+        assert!(parse_diagram("sequenceDiagram\n  hello").is_none());
+        // A sequence header with no steps is not renderable.
+        assert!(parse_diagram("sequenceDiagram\n participant A").is_none());
+    }
+
+    #[test]
+    fn shows_sequence_diagram_headless() {
+        let Diagram::Sequence(seq) = parse_diagram(
+            "sequenceDiagram\n participant A\n participant B\n A->>B: one\n B-->A: two\n Note over A,B: both",
+        )
+        .unwrap()
+        else {
+            panic!("expected a sequence diagram");
+        };
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(640.0, 480.0),
+            )),
+            ..Default::default()
+        };
+        let out = ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                show_sequence(ui, &seq, egui::Color32::WHITE, egui::Color32::BLACK);
+            });
+        });
+        assert!(
+            !out.shapes.is_empty(),
+            "mermaid::show_sequence drew nothing"
+        );
+    }
+
+    #[test]
+    fn dispatches_graphs_and_sequences() {
+        assert!(matches!(
+            parse_diagram("graph TD\n A --> B"),
+            Some(Diagram::Graph(_))
+        ));
+        assert!(matches!(
+            parse_diagram("sequenceDiagram\n A->>B: hi"),
+            Some(Diagram::Sequence(_))
+        ));
+        assert!(parse_diagram("not a diagram").is_none());
     }
 
     #[test]
