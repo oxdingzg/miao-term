@@ -175,6 +175,41 @@ impl Theme {
     pub const NAMES: [&'static str; 3] = ["Nord", "Dracula", "Gruvbox"];
 }
 
+/// Colours for the surrounding chrome (menu/tabs/sidebar/details/status).
+/// A neutral dark palette in the reference app's style, kept separate from the
+/// terminal theme so the UI reads cleanly regardless of the terminal colours.
+#[derive(Clone, Copy)]
+pub struct Chrome {
+    pub bg: Rgb,
+    pub card: Rgb,
+    pub text: Rgb,
+    pub muted: Rgb,
+    pub hover: Rgb,
+    pub active: Rgb,
+    pub accent: Rgb,
+}
+
+impl Chrome {
+    pub fn dark() -> Self {
+        Self {
+            bg: Rgb(0x1c, 0x1c, 0x1e),
+            card: Rgb(0x23, 0x23, 0x25),
+            text: Rgb(0xd1, 0xd1, 0xd1),
+            muted: Rgb(0x8a, 0x8a, 0x8a),
+            hover: Rgb(0x2c, 0x2c, 0x2e),
+            active: Rgb(0x3a, 0x3a, 0x3c),
+            accent: Rgb(0x0a, 0x84, 0xff),
+        }
+    }
+}
+
+impl Theme {
+    /// The chrome palette (neutral dark, not tied to the terminal colours).
+    pub fn chrome(&self) -> Chrome {
+        Chrome::dark()
+    }
+}
+
 impl Default for Theme {
     fn default() -> Self {
         Self::nord()

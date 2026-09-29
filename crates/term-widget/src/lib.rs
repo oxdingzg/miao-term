@@ -4605,6 +4605,26 @@ fn install_egui_fonts(ctx: &egui::Context) {
         list.push("cjk".to_owned());
         list.push("nerd".to_owned());
     }
+    // Phosphor Icons (MIT) as the UI icon family.
+    fonts.font_data.insert(
+        "ph".to_owned(),
+        Arc::new(egui::FontData::from_static(include_bytes!(
+            "../../../assets/fonts/Phosphor-Fill.ttf"
+        ))),
+    );
+    fonts.font_data.insert(
+        "ph-bold".to_owned(),
+        Arc::new(egui::FontData::from_static(include_bytes!(
+            "../../../assets/fonts/Phosphor-Bold.ttf"
+        ))),
+    );
+    fonts
+        .families
+        .insert(egui::FontFamily::Name("ph".into()), vec!["ph".to_owned()]);
+    fonts.families.insert(
+        egui::FontFamily::Name("ph-bold".into()),
+        vec!["ph-bold".to_owned()],
+    );
     ctx.set_fonts(fonts);
 }
 

@@ -1,7 +1,7 @@
 //! Reusable egui chrome widgets, shared by both hosts. They only take plain
 //! data and return actions, so they are independent of any host's state type.
 
-use crate::theme::Rgb;
+use crate::theme::{Chrome as ChromeColors, Rgb};
 
 pub fn fg_color(t: &crate::theme::Theme) -> egui::Color32 {
     egui::Color32::from_rgb(t.fg.0, t.fg.1, t.fg.2)
@@ -37,7 +37,7 @@ pub struct TabBarEvents {
 /// A horizontal tab bar: clickable, draggable labels, a close affordance, `+`.
 pub fn tab_bar(
     ui: &mut egui::Ui,
-    theme: &crate::theme::Theme,
+    ch: &ChromeColors,
     titles: &[String],
     icons: &[crate::icons::Icon],
     active: usize,
@@ -45,10 +45,10 @@ pub fn tab_bar(
 ) -> TabBarEvents {
     const DRAG_ID: &str = "miao_tab_drag";
     let mut ev = TabBarEvents::default();
-    ui.visuals_mut().selection.bg_fill = bg_color(theme.palette[4]);
-    ui.visuals_mut().override_text_color = Some(fg_color(theme));
+    ui.visuals_mut().selection.bg_fill = bg_color(ch.active);
+    ui.visuals_mut().override_text_color = Some(bg_color(ch.text));
     let font = egui::FontId::proportional(13.0);
-    let text_color = fg_color(theme);
+    let text_color = bg_color(ch.text);
     let mut rects: Vec<egui::Rect> = Vec::with_capacity(titles.len());
     for (i, title) in titles.iter().enumerate() {
         let icon = icons[i];
@@ -58,9 +58,9 @@ pub fn tab_bar(
         let desired = egui::vec2(galley.size().x + 26.0, 22.0);
         let (rect, resp) = ui.allocate_exact_size(desired, egui::Sense::click_and_drag());
         let bg = if i == active {
-            bg_color(theme.palette[4])
+            bg_color(ch.active)
         } else if resp.hovered() {
-            bg_color(lighten(theme.bg, 0.10))
+            bg_color(ch.hover)
         } else {
             egui::Color32::TRANSPARENT
         };
@@ -120,7 +120,7 @@ pub fn tab_bar(
 #[allow(clippy::too_many_arguments)]
 pub fn sidebar(
     ui: &mut egui::Ui,
-    theme: &crate::theme::Theme,
+    ch: &ChromeColors,
     titles: &[String],
     icons: &[crate::icons::Icon],
     badges: &[Option<Rgb>],
@@ -129,8 +129,8 @@ pub fn sidebar(
     heading: &str,
 ) -> Option<usize> {
     let mut switch = None;
-    ui.visuals_mut().selection.bg_fill = bg_color(theme.palette[4]);
-    ui.visuals_mut().override_text_color = Some(fg_color(theme));
+    ui.visuals_mut().selection.bg_fill = bg_color(ch.active);
+    ui.visuals_mut().override_text_color = Some(bg_color(ch.text));
     ui.label(section(&format!("{heading} ({})", titles.len())));
     ui.separator();
     for (i, title) in titles.iter().enumerate() {
@@ -143,7 +143,7 @@ pub fn sidebar(
                     .get(i)
                     .copied()
                     .unwrap_or(crate::icons::Icon::Terminal),
-                fg_color(theme),
+                bg_color(ch.text),
             );
             match badges.get(i).copied().flatten() {
                 Some(c) => {
@@ -174,13 +174,13 @@ pub fn sidebar(
 /// A row of selectable details tabs; returns the newly selected index.
 pub fn details_tabs(
     ui: &mut egui::Ui,
-    theme: &crate::theme::Theme,
+    ch: &ChromeColors,
     tabs: &[(crate::icons::Icon, &str)],
     active: usize,
 ) -> Option<usize> {
     let mut sel = None;
-    ui.visuals_mut().selection.bg_fill = bg_color(theme.palette[4]);
-    ui.visuals_mut().override_text_color = Some(fg_color(theme));
+    ui.visuals_mut().selection.bg_fill = bg_color(ch.active);
+    ui.visuals_mut().override_text_color = Some(bg_color(ch.text));
     ui.horizontal_wrapped(|ui| {
         for (i, (icon, l)) in tabs.iter().enumerate() {
             // Reserve leading space so the icon sits left of the label text.
@@ -192,7 +192,7 @@ pub fn details_tabs(
                 egui::pos2(resp.rect.left() + 10.0, resp.rect.center().y),
                 egui::Vec2::splat(13.0),
             );
-            crate::icons::draw(ui.painter(), ir, *icon, fg_color(theme));
+            crate::icons::draw(ui.painter(), ir, *icon, bg_color(ch.text));
         }
     });
     sel
@@ -211,13 +211,13 @@ pub struct QueueEvents {
 /// A minimal prompt queue: type a prompt, queue it, then send to the shell.
 pub fn queue(
     ui: &mut egui::Ui,
-    theme: &crate::theme::Theme,
+    ch: &ChromeColors,
     items: &[String],
     input: &mut String,
     lang: Lang,
 ) -> QueueEvents {
     let mut ev = QueueEvents::default();
-    ui.visuals_mut().override_text_color = Some(fg_color(theme));
+    ui.visuals_mut().override_text_color = Some(bg_color(ch.text));
     ui.label(section(&format!(
         "{} ({})",
         t(lang, "Queue", "队列"),
@@ -259,13 +259,8 @@ pub fn queue(
 }
 
 /// A two-column label/value info list (details panel).
-pub fn info(
-    ui: &mut egui::Ui,
-    theme: &crate::theme::Theme,
-    title: &str,
-    rows: &[(String, String)],
-) {
-    ui.visuals_mut().override_text_color = Some(fg_color(theme));
+pub fn info(ui: &mut egui::Ui, ch: &ChromeColors, title: &str, rows: &[(String, String)]) {
+    ui.visuals_mut().override_text_color = Some(bg_color(ch.text));
     ui.label(section(title));
     ui.add_space(4.0);
     for (k, v) in rows {
@@ -281,18 +276,10 @@ pub fn info(
 
 use crate::i18n::{t, Lang};
 
-fn lighten(c: Rgb, f: f32) -> Rgb {
-    let l = |v: u8| (v as f32 + (255.0 - v as f32) * f).clamp(0.0, 255.0) as u8;
-    Rgb(l(c.0), l(c.1), l(c.2))
-}
-
-fn panel_frame(theme: &crate::theme::Theme, margin: egui::Margin) -> egui::Frame {
+fn panel_frame(ch: &ChromeColors, margin: egui::Margin) -> egui::Frame {
     egui::Frame::default()
-        .fill(bg_color(theme.bg))
-        .stroke(egui::Stroke::new(
-            1.0_f32,
-            bg_color(lighten(theme.bg, 0.10)),
-        ))
+        .fill(bg_color(ch.bg))
+        .stroke(egui::Stroke::new(1.0_f32, bg_color(ch.hover)))
         .inner_margin(margin)
 }
 
@@ -305,13 +292,13 @@ pub struct ChromeItem {
 }
 
 /// Render `items` as a compact one-line-per-row list.
-pub fn list(ui: &mut egui::Ui, theme: &crate::theme::Theme, items: &[ChromeItem]) {
-    ui.visuals_mut().override_text_color = Some(fg_color(theme));
+pub fn list(ui: &mut egui::Ui, ch: &ChromeColors, items: &[ChromeItem]) {
+    ui.visuals_mut().override_text_color = Some(bg_color(ch.text));
     let muted = egui::Color32::from_gray(132);
     for it in items {
         ui.horizontal(|ui| {
             let (irect, _) = ui.allocate_exact_size(egui::Vec2::splat(14.0), egui::Sense::hover());
-            crate::icons::draw(ui.painter(), irect, it.icon, fg_color(theme));
+            crate::icons::draw(ui.painter(), irect, it.icon, bg_color(ch.text));
             ui.add_space(2.0);
             ui.label(egui::RichText::new(&it.label).monospace().size(12.0));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -467,6 +454,7 @@ pub const CHROME_DETAILS_W: f32 = 300.0;
 pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
     use crate::icons::{icon_button, Icon};
     let theme = host.theme();
+    let ch = theme.chrome();
     let lang = host.lang();
 
     // Snapshot (owned), so nothing borrows the host while egui closures run.
@@ -523,17 +511,17 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
 
     egui::TopBottomPanel::top("menu")
         .exact_height(CHROME_MENU_H)
-        .frame(panel_frame(&theme, egui::Margin::symmetric(6.0, 1.0)))
+        .frame(panel_frame(&ch, egui::Margin::symmetric(6.0, 1.0)))
         .show(ctx, |ui| {
             // Menu-bar styling: transparent idle, subtle rounded hover/active.
             {
                 let v = ui.visuals_mut();
-                v.override_text_color = Some(fg_color(&theme));
+                v.override_text_color = Some(bg_color(ch.text));
                 v.widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
-                v.widgets.hovered.weak_bg_fill = bg_color(lighten(theme.bg, 0.16));
-                v.widgets.active.weak_bg_fill = bg_color(lighten(theme.bg, 0.22));
-                v.widgets.hovered.bg_fill = bg_color(lighten(theme.bg, 0.16));
-                v.widgets.active.bg_fill = bg_color(lighten(theme.bg, 0.22));
+                v.widgets.hovered.weak_bg_fill = bg_color(ch.hover);
+                v.widgets.active.weak_bg_fill = bg_color(ch.active);
+                v.widgets.hovered.bg_fill = bg_color(ch.hover);
+                v.widgets.active.bg_fill = bg_color(ch.active);
                 let r = egui::Rounding::same(5.0);
                 v.widgets.inactive.rounding = r;
                 v.widgets.hovered.rounding = r;
@@ -739,10 +727,10 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
 
     egui::TopBottomPanel::top("tabs")
         .exact_height(CHROME_TAB_H)
-        .frame(panel_frame(&theme, egui::Margin::symmetric(6.0, 3.0)))
+        .frame(panel_frame(&ch, egui::Margin::symmetric(6.0, 3.0)))
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                let ev = tab_bar(ui, &theme, &titles, &icons, active, lang);
+                let ev = tab_bar(ui, &ch, &titles, &icons, active, lang);
                 switch = ev.switch;
                 close = ev.close;
                 rename = ev.rename;
@@ -761,13 +749,13 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
                     if ui.button("A-").clicked() {
                         font_delta = -1.0;
                     }
-                    if icon_button(ui, Icon::Sidebar, fg_color(&theme))
+                    if icon_button(ui, Icon::Sidebar, bg_color(ch.text))
                         .on_hover_text(t(lang, "Toggle sidebar", "开关侧栏"))
                         .clicked()
                     {
                         toggle_sidebar = true;
                     }
-                    if icon_button(ui, Icon::Details, fg_color(&theme))
+                    if icon_button(ui, Icon::Details, bg_color(ch.text))
                         .on_hover_text(t(lang, "Toggle details", "开关详情"))
                         .clicked()
                     {
@@ -780,12 +768,11 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
     if show_sidebar {
         egui::SidePanel::left("sessions")
             .exact_width(CHROME_SIDEBAR_W)
-            .frame(panel_frame(&theme, egui::Margin::same(6.0)))
+            .frame(panel_frame(&ch, egui::Margin::same(6.0)))
             .show(ctx, |ui| {
                 let heading = t(lang, "Sessions", "会话");
-                if let Some(i) = sidebar(
-                    ui, &theme, &titles, &icons, &badges, &metas, active, heading,
-                ) {
+                if let Some(i) = sidebar(ui, &ch, &titles, &icons, &badges, &metas, active, heading)
+                {
                     switch = Some(i);
                 }
             });
@@ -804,9 +791,9 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
         ];
         egui::SidePanel::right("details")
             .exact_width(CHROME_DETAILS_W)
-            .frame(panel_frame(&theme, egui::Margin::same(8.0)))
+            .frame(panel_frame(&ch, egui::Margin::same(8.0)))
             .show(ctx, |ui| {
-                if let Some(i) = details_tabs(ui, &theme, &tabs_icons, details_tab) {
+                if let Some(i) = details_tabs(ui, &ch, &tabs_icons, details_tab) {
                     details_sel = Some(i);
                 }
                 ui.separator();
@@ -815,11 +802,11 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
                     .show(ui, |ui| {
                         if !host.details_body(ui, lang) {
                             if details_is_queue {
-                                qev = queue(ui, &theme, &queue_items, &mut queue_input, lang);
+                                qev = queue(ui, &ch, &queue_items, &mut queue_input, lang);
                             } else if let Some(items) = &details_list {
-                                list(ui, &theme, items);
+                                list(ui, &ch, items);
                             } else {
-                                info(ui, &theme, &details_title, &details_rows);
+                                info(ui, &ch, &details_title, &details_rows);
                             }
                         }
                     });
@@ -828,9 +815,9 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
 
     egui::TopBottomPanel::bottom("status")
         .exact_height(CHROME_STATUS_H)
-        .frame(panel_frame(&theme, egui::Margin::symmetric(8.0, 2.0)))
+        .frame(panel_frame(&ch, egui::Margin::symmetric(8.0, 2.0)))
         .show(ctx, |ui| {
-            ui.visuals_mut().override_text_color = Some(fg_color(&theme));
+            ui.visuals_mut().override_text_color = Some(bg_color(ch.text));
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(status).size(11.0));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
