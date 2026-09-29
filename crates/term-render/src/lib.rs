@@ -757,15 +757,16 @@ impl ImageRenderer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         resolution: (u32, u32),
-        quads: &[(u64, ImageInstance)],
+        quads: &[(u64, i32, ImageInstance)],
     ) {
         queue.write_buffer(
             &self.globals,
             0,
             bytemuck_cast(&[resolution.0 as f32, resolution.1 as f32, 0.0, 0.0]),
         );
-        let mut sorted: Vec<(u64, ImageInstance)> = quads.to_vec();
-        sorted.sort_by_key(|(id, _)| *id);
+        let mut sorted: Vec<(u64, i32, ImageInstance)> = quads.to_vec();
+        // Lower z first (drawn underneath); ties keep stable key order.
+        sorted.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
         self.runs.clear();
         let mut start = 0usize;
         for i in 1..=sorted.len() {
@@ -784,7 +785,7 @@ impl ImageRenderer {
                 mapped_at_creation: false,
             });
         }
-        let instances: Vec<ImageInstance> = sorted.iter().map(|(_, q)| *q).collect();
+        let instances: Vec<ImageInstance> = sorted.iter().map(|(_, _, q)| *q).collect();
         if !instances.is_empty() {
             queue.write_buffer(&self.instances, 0, bytemuck_cast(&instances));
         }
@@ -909,6 +910,7 @@ mod gpu_tests {
             (w, h),
             &[(
                 1,
+                0,
                 ImageInstance {
                     min: [36.0, 2.0],
                     max: [60.0, 20.0],

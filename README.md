@@ -64,6 +64,9 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
   (`editor-vim`), *Open Externally* / *Edit in
   Tab*, and a dependency-free Markdown renderer (headings, lists, quotes, tables,
   code, links, images, footnotes).
+- **Inline terminal graphics**: Sixel, Kitty and iTerm2 images are drawn in the
+  grid — they scroll with the content and are clipped to the pane. Toggle with
+  `graphics` (on by default).
 - **Recipes**: save and replay a whole workspace; config export.
 - A settings window (`⌘,`): font size/family, opacity, line height, cursor
   style, theme, agent badges, notifications, sleep guard, agent integrations,

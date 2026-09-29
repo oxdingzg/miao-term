@@ -103,7 +103,7 @@ struct Editor {
 
 /// The inline-image layer for the debug capture (quads + the pane scissor).
 struct ImageLayer<'a> {
-    quads: &'a [(u64, ImageInstance)],
+    quads: &'a [(u64, i32, ImageInstance)],
     rects: &'a [(String, Rect)],
     scale: f32,
 }
@@ -673,7 +673,7 @@ impl State {
             .map(|s| s.chars().count() as u16)
             .unwrap_or(0);
         let mut draws: Vec<PaneDraw> = Vec::new();
-        let mut image_quads: Vec<(u64, ImageInstance)> = Vec::new();
+        let mut image_quads: Vec<(u64, i32, ImageInstance)> = Vec::new();
         let mut image_uploads: Vec<(u64, Arc<miao_term_core::graphics::PlacedImage>)> = Vec::new();
         let mut image_keep: std::collections::HashSet<u64> = std::collections::HashSet::new();
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
@@ -809,7 +809,7 @@ impl State {
                 // callback sets the viewport), so we render per-pane with the
                 // viewer origin at 0 for the glyph renderer.
                 // Inline images (engine layer), drawn under the glyphs.
-                {
+                if self.graphics_enabled {
                     let off = pane.term.screen().scroll_offset() as i32;
                     let px1 = ox + inner.w * scale;
                     let py1 = oy + inner.h * scale;
@@ -837,6 +837,7 @@ impl State {
                         }
                         image_quads.push((
                             key,
+                            im.z,
                             ImageInstance {
                                 min: [x0, y0],
                                 max: [x1, y1],
@@ -1532,6 +1533,7 @@ impl State {
         let mut open = true;
         let mut font = self.font_size;
         let mut cursor = self.theme.cursor;
+        let mut graphics = self.graphics_enabled;
         let current_theme = self.theme_name.clone();
         let mut chosen_theme: Option<&'static str> = None;
         egui::Window::new(miao_term_ui::i18n::t(self.lang, "Settings", "设置"))
@@ -1563,6 +1565,11 @@ impl State {
                     }
                 });
                 ui.separator();
+                ui.checkbox(
+                    &mut graphics,
+                    miao_term_ui::i18n::t(self.lang, "Inline graphics", "终端内联图片"),
+                );
+                ui.separator();
                 ui.label(miao_term_ui::i18n::t(self.lang, "Theme", "主题"));
                 for name in Theme::NAMES {
                     if ui.selectable_label(current_theme == name, name).clicked() {
@@ -1579,6 +1586,15 @@ impl State {
             self.resize();
         }
         self.theme.cursor = cursor;
+        if graphics != self.graphics_enabled {
+            self.graphics_enabled = graphics;
+            for tab in &mut self.tabs {
+                for pane in &mut tab.panes {
+                    pane.term.set_graphics_enabled(graphics);
+                }
+            }
+            self.window.request_redraw();
+        }
         if let Some(n) = chosen_theme {
             if let Some(mut t) = Theme::named(n) {
                 t.cursor = self.theme.cursor;
