@@ -1,8 +1,8 @@
 //! A small, self-contained Mermaid renderer for the common cases:
 //! `graph` / `flowchart` with `TD|TB|BT|LR|RL`, `id[Label]` / `id(Label)` /
 //! `id{Label}`, and `-->` / `---` / `-.->` / `==>` edges (optionally labelled);
-//! and `sequenceDiagram` with participants, `->`/`->>`/`-->`/`-->>`/`-x`/`--x`
-//! messages and `Note over|left of|right of`.
+//! `sequenceDiagram` with participants, `->`/`->>`/`-->`/`-->>`/`-x`/`--x`
+//! messages and `Note over|left of|right of`; and `pie` charts with a title.
 //!
 //! This is deliberately a **subset**: anything else makes [`parse`] return
 //! `None`, and the caller falls back to an external renderer or a placeholder.
@@ -135,6 +135,14 @@ fn find_operator(s: &str) -> Option<(usize, usize, bool)> {
 pub enum Diagram {
     Graph(Graph),
     Sequence(Sequence),
+    Pie(Pie),
+}
+
+/// A `pie` chart: an optional title and labelled values.
+#[derive(Clone, Debug)]
+pub struct Pie {
+    pub title: Option<String>,
+    pub slices: Vec<(String, f64)>,
 }
 
 /// A `sequenceDiagram`: declared/implied participants and ordered steps.
@@ -184,6 +192,8 @@ pub fn parse_diagram(src: &str) -> Option<Diagram> {
         .find(|l| !l.is_empty() && !l.starts_with("%%"))?;
     if header == "sequenceDiagram" || header.starts_with("sequenceDiagram ") {
         parse_sequence(src).map(Diagram::Sequence)
+    } else if header == "pie" || header.starts_with("pie ") || header.starts_with("pie\t") {
+        parse_pie(src).map(Diagram::Pie)
     } else {
         parse(src).map(Diagram::Graph)
     }
@@ -194,6 +204,7 @@ pub fn show_diagram(ui: &mut egui::Ui, d: &Diagram, fg: egui::Color32, panel: eg
     match d {
         Diagram::Graph(g) => show(ui, g, fg, panel),
         Diagram::Sequence(s) => show_sequence(ui, s, fg, panel),
+        Diagram::Pie(p) => show_pie(ui, p, fg, panel),
     }
 }
 
@@ -683,6 +694,158 @@ pub fn show(ui: &mut egui::Ui, g: &Graph, fg: egui::Color32, panel: egui::Color3
     }
 }
 
+/// Parse a `pie` chart: `pie [showData] [title X]` then `"Label" : value` rows.
+fn parse_pie(src: &str) -> Option<Pie> {
+    let mut title = None;
+    let mut slices = Vec::new();
+    let mut started = false;
+    for raw in src.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with("%%") {
+            continue;
+        }
+        if !started {
+            if line == "pie" || line.starts_with("pie ") {
+                started = true;
+                // `pie title X` / `pie showData title X`
+                if let Some((_, t)) = line.split_once("title ") {
+                    let t = t.trim();
+                    if !t.is_empty() {
+                        title = Some(t.to_string());
+                    }
+                }
+            }
+            continue;
+        }
+        if let Some(t) = line.strip_prefix("title ") {
+            let t = t.trim();
+            if !t.is_empty() {
+                title = Some(t.to_string());
+            }
+            continue;
+        }
+        let (label, value) = line.split_once(':')?;
+        let label = label.trim().trim_matches('"').trim();
+        let value: f64 = value.trim().parse().ok()?;
+        if label.is_empty() || !value.is_finite() || value <= 0.0 {
+            return None;
+        }
+        slices.push((label.to_string(), value));
+    }
+    if !started || slices.is_empty() {
+        return None;
+    }
+    Some(Pie { title, slices })
+}
+
+/// A small qualitative palette for pie slices (readable on a dark panel).
+const PIE_COLORS: [(u8, u8, u8); 8] = [
+    (0x88, 0xc0, 0xd0),
+    (0xa3, 0xbe, 0x8c),
+    (0xeb, 0xcb, 0x8b),
+    (0xbf, 0x61, 0x6a),
+    (0xb4, 0x8e, 0xad),
+    (0x81, 0xa1, 0xc1),
+    (0x8f, 0xbc, 0xbb),
+    (0xd0, 0x87, 0x70),
+];
+
+/// Render a pie chart with a legend.
+pub fn show_pie(ui: &mut egui::Ui, p: &Pie, fg: egui::Color32, panel: egui::Color32) {
+    let font = egui::FontId::proportional(12.0);
+    let total: f64 = p.slices.iter().map(|(_, v)| *v).sum();
+    let radius = 96.0f32;
+    let legend: Vec<(Arc<egui::Galley>, String)> = p
+        .slices
+        .iter()
+        .map(|(label, value)| {
+            let pct = *value / total * 100.0;
+            let num = if value.fract().abs() < f64::EPSILON {
+                format!("{}", *value as i64)
+            } else {
+                format!("{value:.1}")
+            };
+            (
+                ui.painter().layout_no_wrap(label.clone(), font.clone(), fg),
+                format!("{num} ({pct:.0}%)"),
+            )
+        })
+        .collect();
+    // Two columns: the label, then its value, each sized to the widest entry.
+    let value_galleys: Vec<Arc<egui::Galley>> = legend
+        .iter()
+        .map(|(_, v)| {
+            ui.painter()
+                .layout_no_wrap(v.clone(), font.clone(), fg.gamma_multiply(0.8))
+        })
+        .collect();
+    let label_w = legend
+        .iter()
+        .map(|(gl, _)| gl.size().x)
+        .fold(0.0f32, f32::max);
+    let value_w = value_galleys
+        .iter()
+        .map(|gl| gl.size().x)
+        .fold(0.0f32, f32::max);
+    let legend_w = 14.0 + label_w + 12.0 + value_w + 12.0;
+    let title_h = if p.title.is_some() { 20.0 } else { 0.0 };
+    let size = egui::vec2(
+        (radius * 2.0 + 16.0 + legend_w).min(ui.available_width().max(200.0)),
+        (radius * 2.0 + title_h + 8.0).max(80.0),
+    );
+    let (resp, painter) = ui.allocate_painter(size, egui::Sense::hover());
+    let rect = resp.rect;
+    if let Some(t) = &p.title {
+        let gl = painter.layout_no_wrap(t.clone(), egui::FontId::proportional(13.0), fg);
+        painter.galley(rect.min, gl, fg);
+    }
+    let centre = egui::pos2(rect.left() + radius + 8.0, rect.top() + title_h + radius);
+    let mut angle = -std::f32::consts::FRAC_PI_2;
+    for (i, (_, value)) in p.slices.iter().enumerate() {
+        let sweep = (*value / total) as f32 * std::f32::consts::TAU;
+        let (r, g, b) = PIE_COLORS[i % PIE_COLORS.len()];
+        let color = egui::Color32::from_rgb(r, g, b);
+        let steps = ((sweep / (std::f32::consts::PI / 24.0)).ceil() as usize).max(2);
+        let mut pts = Vec::with_capacity(steps + 2);
+        pts.push(centre);
+        for s in 0..=steps {
+            let a = angle + sweep * (s as f32 / steps as f32);
+            pts.push(centre + egui::vec2(a.cos(), a.sin()) * radius);
+        }
+        painter.add(egui::Shape::convex_polygon(
+            pts,
+            color,
+            egui::Stroke::new(1.0_f32, panel),
+        ));
+        angle += sweep;
+    }
+    let mut y = rect.top() + title_h + (radius * 2.0 - p.slices.len() as f32 * 18.0) / 2.0;
+    for (i, (label_galley, value_text)) in legend.iter().enumerate() {
+        let (r, g, b) = PIE_COLORS[i % PIE_COLORS.len()];
+        let swatch = egui::Rect::from_min_size(
+            egui::pos2(centre.x + radius + 16.0, y + 4.0),
+            egui::vec2(9.0, 9.0),
+        );
+        painter.rect_filled(
+            swatch,
+            egui::Rounding::same(2.0),
+            egui::Color32::from_rgb(r, g, b),
+        );
+        painter.galley(
+            egui::pos2(swatch.right() + 5.0, y),
+            label_galley.clone(),
+            fg,
+        );
+        painter.galley(
+            egui::pos2(swatch.right() + 5.0 + label_w + 12.0, y),
+            value_galleys[i].clone(),
+            fg.gamma_multiply(0.8),
+        );
+        let _ = value_text;
+        y += 18.0;
+    }
+}
+
 /// Render a sequence diagram: actor boxes with lifelines, messages between
 /// them and notes. Laid out in a single column per participant, top to bottom.
 pub fn show_sequence(ui: &mut egui::Ui, s: &Sequence, fg: egui::Color32, panel: egui::Color32) {
@@ -1160,6 +1323,50 @@ mod tests {
             !out.shapes.is_empty(),
             "mermaid::show_sequence drew nothing"
         );
+    }
+
+    #[test]
+    fn parses_pie_charts() {
+        let Diagram::Pie(pie) =
+            parse_diagram("pie title Pets\n  \"Dogs\" : 386\n  Cats : 85").unwrap()
+        else {
+            panic!("expected a pie chart");
+        };
+        assert_eq!(pie.title.as_deref(), Some("Pets"));
+        assert_eq!(pie.slices.len(), 2);
+        assert_eq!(pie.slices[0], ("Dogs".to_string(), 386.0));
+        assert_eq!(pie.slices[1], ("Cats".to_string(), 85.0));
+        // `pie showData title ...` on the header line works too.
+        let Diagram::Pie(p2) = parse_diagram("pie showData title T\n a : 1\n b : 1").unwrap()
+        else {
+            panic!("expected a pie chart");
+        };
+        assert_eq!(p2.title.as_deref(), Some("T"));
+        // Bad input is refused rather than half-drawn.
+        assert!(parse_diagram("pie\n a : nope").is_none());
+        assert!(parse_diagram("pie\n a : 0").is_none());
+        assert!(parse_diagram("pie title Only").is_none());
+    }
+
+    #[test]
+    fn shows_pie_chart_headless() {
+        let Diagram::Pie(pie) = parse_diagram("pie title P\n one : 3\n two : 1").unwrap() else {
+            panic!("expected a pie chart");
+        };
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(640.0, 480.0),
+            )),
+            ..Default::default()
+        };
+        let out = ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                show_pie(ui, &pie, egui::Color32::WHITE, egui::Color32::BLACK);
+            });
+        });
+        assert!(!out.shapes.is_empty(), "mermaid::show_pie drew nothing");
     }
 
     #[test]

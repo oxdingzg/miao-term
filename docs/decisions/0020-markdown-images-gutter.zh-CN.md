@@ -34,5 +34,5 @@
   滚动区以固定。
 - Mermaid/`svg` 图与远程图片仍属后续(后者需要 HTTP 加载器与网络请求)。
 - Update:行号栏现已位于滚动区之外(见附记),故不再随长行横向滚动。
-- Update:`graph`/`flowchart` 以及后来加入的 `sequenceDiagram` 已在应用内直接绘制;其余类型
+- Update:`graph`/`flowchart`、`sequenceDiagram` 与 `pie` 已在应用内直接绘制;其余类型
   (以及渲染的完整能力)仍回退到 `mermaid-command` 或占位符。

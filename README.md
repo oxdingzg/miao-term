@@ -74,8 +74,8 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
   (`editor-vim`), *Open Externally* / *Edit in
   Tab*, and a CommonMark renderer (`egui_commonmark`): headings, lists, quotes,
   tables, code, links, local and remote images, plus a `graph`/`flowchart`
-  `graph`/`flowchart` and `sequenceDiagram` Mermaid subsets (or full Mermaid
-  via `mermaid-command`).
+  `graph`/`flowchart`, `sequenceDiagram` and `pie` Mermaid subsets (or full
+  Mermaid via `mermaid-command`).
 - **Inline terminal graphics**: Sixel, Kitty and iTerm2 images are drawn in the
   grid by both hosts — they scroll with the content and are clipped to the pane.
   Toggle with `graphics` (on by default).
@@ -359,7 +359,7 @@ Still open:
   grid); anchors are exact up to the scrollback cap and approximate past it
   (alacritty exposes no scroll counter without a patch), and session restore
   keeps no images (they would not match the restored content).
-- **Markdown**: Mermaid renders `graph`/`flowchart` and `sequenceDiagram`
+- **Markdown**: Mermaid renders `graph`/`flowchart`, `sequenceDiagram` and `pie`
   subsets (or fully via `mermaid-command`); other diagram types show a
   placeholder.
 - **i18n**: the main chrome is covered; a few example/hint strings stay English.
