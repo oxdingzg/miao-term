@@ -123,6 +123,27 @@ screen (no auth cookie), and under `xvfb` + software Vulkan (lavapipe) `wgpu`
 fails with `Invalid surface` (a limitation of offscreen software Vulkan, not the
 app). A real desktop session or a GPU is needed for that.
 
+## Verifying a signed release (users)
+
+Fetch the artifact, its `.sig`, and the published public key (`minisign.pub`):
+
+```sh
+curl -fsSLO https://github.com/oxdingzg/miao-term/releases/download/v0.1.0/miaotty-macos-arm64.zip
+curl -fsSLO https://github.com/oxdingzg/miao-term/releases/download/v0.1.0/miaotty-macos-arm64.zip.sig
+curl -fsSLO https://github.com/oxdingzg/miao-term/releases/download/v0.1.0/minisign.pub
+minisign -Vm miaotty-macos-arm64.zip -p minisign.pub      # -> "Signature and comment signature verified"
+```
+
+The manifest ([`latest.json`](#update-manifest)) carries both a `sha256` and a
+`signature` URL per artifact, so a downloader can check either or both:
+
+```sh
+shasum -a 256 miaotty-macos-arm64.zip   # compare with the manifest's "sha256"
+```
+
+Nothing is signed until `MINISIGN_SECRET_KEY` is configured, so unsigned releases
+simply have no `.sig` — verification is optional, not required to install.
+
 ## Still open
 
 - The **AppImage** path is best-effort and not yet verified on a real install.

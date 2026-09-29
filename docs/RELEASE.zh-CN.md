@@ -114,6 +114,25 @@ AppImage 需要**真正的 256x256 图标** —— `appimagetool` 拒绝 1x1 占
 Vulkan(lavapipe)下 `wgpu` 报 `Invalid surface`(离屏软件 Vulkan 的限制,非应用问题)。这需要
 真实桌面会话或 GPU。
 
+## 校验已签名的发布(用户)
+
+下载产物、它的 `.sig`,以及发布的公钥(`minisign.pub`):
+
+```sh
+curl -fsSLO https://github.com/oxdingzg/miao-term/releases/download/v0.1.0/miaotty-macos-arm64.zip
+curl -fsSLO https://github.com/oxdingzg/miao-term/releases/download/v0.1.0/miaotty-macos-arm64.zip.sig
+curl -fsSLO https://github.com/oxdingzg/miao-term/releases/download/v0.1.0/minisign.pub
+minisign -Vm miaotty-macos-arm64.zip -p minisign.pub      # -> "Signature and comment signature verified"
+```
+
+清单([`latest.json`](#更新清单))为每个产物同时提供 `sha256` 与 `signature` URL，可二者择一或都校验:
+
+```sh
+shasum -a 256 miaotty-macos-arm64.zip   # 与清单里的 "sha256" 比对
+```
+
+未配置 `MINISIGN_SECRET_KEY` 时不会签名，因此未签名的发布没有 `.sig` —— 校验是可选的，安装并不要求。
+
 ## 仍待完成
 
 - **AppImage** 路径为尽力而为,尚未在真实安装场景验证。
