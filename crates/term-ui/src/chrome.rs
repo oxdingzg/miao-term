@@ -72,6 +72,13 @@ pub fn sidebar(
     ui.separator();
     for (i, title) in titles.iter().enumerate() {
         ui.horizontal(|ui| {
+            let (irect, _) = ui.allocate_exact_size(egui::Vec2::splat(14.0), egui::Sense::hover());
+            crate::icons::draw(
+                ui.painter(),
+                irect,
+                crate::icons::Icon::Terminal,
+                fg_color(theme),
+            );
             match badges.get(i).copied().flatten() {
                 Some(c) => {
                     ui.colored_label(bg_color(c), "\u{25cf}");
@@ -95,17 +102,23 @@ pub fn sidebar(
 pub fn details_tabs(
     ui: &mut egui::Ui,
     theme: &crate::theme::Theme,
-    labels: &[&str],
+    tabs: &[(crate::icons::Icon, &str)],
     active: usize,
 ) -> Option<usize> {
     let mut sel = None;
     ui.visuals_mut().selection.bg_fill = bg_color(theme.palette[4]);
     ui.visuals_mut().override_text_color = Some(fg_color(theme));
     ui.horizontal_wrapped(|ui| {
-        for (i, l) in labels.iter().enumerate() {
-            if ui.selectable_label(i == active, *l).clicked() {
+        for (i, (icon, l)) in tabs.iter().enumerate() {
+            let resp = ui.selectable_label(i == active, *l);
+            if resp.clicked() {
                 sel = Some(i);
             }
+            let ir = egui::Rect::from_center_size(
+                resp.rect.left_top() + egui::vec2(9.0, resp.rect.height() / 2.0),
+                egui::Vec2::splat(12.0),
+            );
+            crate::icons::draw(ui.painter(), ir, *icon, fg_color(theme));
         }
     });
     sel

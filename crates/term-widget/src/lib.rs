@@ -979,14 +979,15 @@ impl State {
         }
         if self.show_details {
             use miao_term_ui::i18n::t;
+            use miao_term_ui::icons::Icon;
             let tabs = [
-                t(lang, "Info", "信息"),
-                t(lang, "Agent", "Agent"),
-                t(lang, "Outline", "大纲"),
-                t(lang, "Git", "Git"),
-                t(lang, "Files", "文件"),
-                t(lang, "Ports", "端口"),
-                t(lang, "Queue", "队列"),
+                (Icon::Info, t(lang, "Info", "信息")),
+                (Icon::Agent, t(lang, "Agent", "Agent")),
+                (Icon::Outline, t(lang, "Outline", "大纲")),
+                (Icon::Git, t(lang, "Git", "Git")),
+                (Icon::Files, t(lang, "Files", "文件")),
+                (Icon::Ports, t(lang, "Ports", "端口")),
+                (Icon::Queue, t(lang, "Queue", "队列")),
             ];
             let active = self.details_tab.min(tabs.len() - 1);
             let (title, rows) = if active == 6 {
