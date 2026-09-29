@@ -1,14 +1,15 @@
 //! `miao-term-widget` — a native `winit` + `wgpu` render loop for the engine.
 //!
 //! The terminal grid is **self-drawn** (no egui immediate-mode frame flow):
-//! `term-widget` owns the window and surface, and the PTY reader thread wakes
+//! `term-widget` owns the window and surface, and the PTY reader threads wake
 //! the loop (`EventLoopProxy` → `request_redraw`) the moment output arrives, so
-//! echo is drawn on the next frame. The surrounding UI (step 1 of ADR 0030) is
-//! composed as an **egui overlay in the same wgpu frame**: the grid is drawn
-//! first, then egui's meshes on top.
+//! echo is drawn on the next frame. The surrounding UI (ADR 0030, step 1) is an
+//! **egui overlay composed in the same wgpu frame**: the grid is drawn first,
+//! then egui's meshes on top.
 
 use std::error::Error;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use miao_term_core::aterm::Color as TermColor;
 use miao_term_core::{ATerm, Terminal};
@@ -45,7 +46,8 @@ const SEL_BG: (u8, u8, u8) = (0x43, 0x4c, 0x5e);
 const FONT_SIZE: f32 = 13.0;
 const LINE_RATIO: f32 = 1.3;
 /// Height of the egui chrome bar (logical points), reserved above the grid.
-const BAR_H: f32 = 28.0;
+const BAR_H: f32 = 30.0;
+const BLINK: Duration = Duration::from_millis(530);
 
 /// Run a native terminal window until it is closed.
 pub fn run(title: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -67,15 +69,22 @@ struct Host {
     state: Option<State>,
 }
 
+struct Tab {
+    term: Terminal,
+    title: String,
+}
+
 struct State {
     window: Arc<Window>,
+    proxy: EventLoopProxy<()>,
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     glyphs: TermRenderer,
     quads: QuadRenderer,
-    term: Terminal,
+    tabs: Vec<Tab>,
+    active: usize,
     cw: f32,
     ch: f32,
     font_size: f32,
@@ -84,6 +93,9 @@ struct State {
     selection: Option<((u16, u16), (u16, u16))>,
     dragging: bool,
     last_title: Option<String>,
+    focused: bool,
+    cursor_on: bool,
+    last_blink: Instant,
     // egui overlay (chrome).
     egui_ctx: egui::Context,
     egui_state: egui_winit::State,
@@ -102,11 +114,43 @@ impl State {
 
     fn grid_size(&self) -> (u16, u16) {
         let size = self.window.inner_size();
-        let cols = (size.width as f32 / self.cw).floor().max(1.0) as u16;
-        let rows = ((size.height as f32 - BAR_H * self.window.scale_factor() as f32) / self.ch)
+        let scale = self.window.scale_factor() as f32;
+        let cols = (size.width as f32 / (self.cw * scale)).floor().max(1.0) as u16;
+        let rows = ((size.height as f32 - BAR_H * scale) / (self.ch * scale))
             .floor()
             .max(1.0) as u16;
         (rows, cols)
+    }
+
+    fn spawn(&self, title: String) -> Option<Tab> {
+        let (rows, cols) = self.grid_size();
+        let proxy = self.proxy.clone();
+        let waker: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = proxy.send_event(());
+        });
+        Terminal::new(None, cols, rows, 10_000, None, &[], waker)
+            .ok()
+            .map(|term| Tab { term, title })
+    }
+
+    fn new_tab(&mut self) {
+        let n = self.tabs.len() + 1;
+        if let Some(tab) = self.spawn(format!("shell {n}")) {
+            self.tabs.push(tab);
+            self.active = self.tabs.len() - 1;
+            self.selection = None;
+            self.scroll = 0;
+        }
+    }
+
+    fn close_tab(&mut self, i: usize) {
+        if self.tabs.len() <= 1 || i >= self.tabs.len() {
+            return;
+        }
+        self.tabs.remove(i);
+        self.active = self.active.min(self.tabs.len() - 1);
+        self.selection = None;
+        self.scroll = 0;
     }
 
     fn resize(&mut self) {
@@ -118,49 +162,65 @@ impl State {
         self.config.height = size.height;
         self.surface.configure(&self.device, &self.config);
         let (rows, cols) = self.grid_size();
-        self.term.resize(rows, cols);
+        for tab in &mut self.tabs {
+            tab.term.resize(rows, cols);
+        }
     }
 
     fn write_input(&mut self, bytes: &[u8]) {
         if !bytes.is_empty() {
-            self.term.write(bytes);
+            if let Some(tab) = self.tabs.get_mut(self.active) {
+                tab.term.write(bytes);
+            }
             self.scroll = 0;
             self.window.request_redraw();
         }
     }
 
-    fn cell_at(&self, pos: (f64, f64)) -> (u16, u16) {
+    fn cell_at(&self, pos: (f64, f64), rows: u16, cols: u16) -> (u16, u16) {
         let scale = self.window.scale_factor() as f32;
         let cw = self.cw * scale;
         let ch = self.ch * scale;
-        let (rows, cols) = self.term.screen().size();
-        let col = ((pos.0 as f32) / cw).floor().clamp(0.0, cols as f32 - 1.0) as u16;
-        let row = (((pos.1 as f32) - BAR_H * scale) / ch)
+        let col = (pos.0 as f32 / cw).floor().clamp(0.0, cols as f32 - 1.0) as u16;
+        let row = ((pos.1 as f32 - BAR_H * scale) / ch)
             .floor()
             .clamp(0.0, rows as f32 - 1.0) as u16;
         (row, col)
     }
 
     fn copy_selection(&self, ctx: &egui::Context) {
-        if let Some((a, b)) = self.selection {
+        if let (Some((a, b)), Some(tab)) = (self.selection, self.tabs.get(self.active)) {
             let (r1, c1, r2, c2) = ordered(a, b);
-            let text = self.term.screen().contents_between(r1, c1, r2, c2);
+            let text = tab.term.screen().contents_between(r1, c1, r2, c2);
             if !text.is_empty() {
                 ctx.copy_text(text);
             }
         }
     }
 
-    /// The egui chrome overlay (step 1): a slim bar above the grid.
+    /// The egui chrome overlay: a tab bar above the grid.
     fn chrome(&mut self, ctx: &egui::Context) {
+        let mut switch: Option<usize> = None;
+        let mut close: Option<usize> = None;
+        let mut new_tab = false;
         let mut font_delta = 0.0f32;
-        let osc_title = self.term.title().map(str::to_string).unwrap_or_default();
-        let title = if osc_title.is_empty() {
-            self.window.title()
-        } else {
-            osc_title
-        };
-        let cwd = self.term.cwd().map(str::to_string).unwrap_or_default();
+        let active = self.active;
+        let titles: Vec<String> = self
+            .tabs
+            .iter()
+            .map(|t| {
+                t.term
+                    .title()
+                    .map(str::to_string)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| t.title.clone())
+            })
+            .collect();
+        let cwd = self
+            .tabs
+            .get(self.active)
+            .and_then(|t| t.term.cwd().map(str::to_string))
+            .unwrap_or_default();
         let fg = egui::Color32::from_rgb(FG.0, FG.1, FG.2);
         let bg = egui::Color32::from_rgb(0x24, 0x29, 0x33);
         egui::TopBottomPanel::top("bar")
@@ -168,12 +228,22 @@ impl State {
             .frame(
                 egui::Frame::default()
                     .fill(bg)
-                    .inner_margin(egui::Margin::symmetric(8.0, 2.0)),
+                    .inner_margin(egui::Margin::symmetric(6.0, 3.0)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.visuals_mut().override_text_color = Some(fg);
-                    ui.label(egui::RichText::new(title.clone()));
+                    for (i, title) in titles.iter().enumerate() {
+                        if ui.selectable_label(i == active, title).clicked() {
+                            switch = Some(i);
+                        }
+                        if self.tabs.len() > 1 && ui.small_button("\u{00d7}").clicked() {
+                            close = Some(i);
+                        }
+                    }
+                    if ui.button("+").clicked() {
+                        new_tab = true;
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("A+").clicked() {
                             font_delta = 1.0;
@@ -187,6 +257,17 @@ impl State {
                     });
                 });
             });
+        if let Some(i) = switch {
+            self.active = i;
+            self.selection = None;
+            self.scroll = 0;
+        }
+        if new_tab {
+            self.new_tab();
+        }
+        if let Some(i) = close {
+            self.close_tab(i);
+        }
         if font_delta != 0.0 {
             self.font_size = (self.font_size + font_delta).clamp(6.0, 40.0);
             let (cw, ch) = State::cell_size(self.font_size);
@@ -197,77 +278,93 @@ impl State {
     }
 
     fn render(&mut self) {
-        let _ = self.term.process_pending();
-        self.term.screen_mut().set_scrollback(self.scroll);
-
-        // Sync the window title from OSC 0/2.
-        let title = self.term.title().map(str::to_string);
-        if title != self.last_title {
-            if let Some(t) = &title {
-                self.window.set_title(t);
+        // Drain every tab; new output on the active tab jumps to the bottom.
+        let mut active_changed = false;
+        for (i, tab) in self.tabs.iter_mut().enumerate() {
+            if tab.term.process_pending() && i == self.active {
+                active_changed = true;
             }
-            self.last_title = title;
+        }
+        if active_changed {
+            self.scroll = 0;
         }
 
-        let (rows, cols) = self.term.screen().size();
-        let scale = self.window.scale_factor() as f32;
-        let cw = self.cw * scale;
-        let ch = self.ch * scale;
-        let top = BAR_H * scale;
+        let bracketed = {
+            let Some(tab) = self.tabs.get_mut(self.active) else {
+                return;
+            };
+            tab.term.screen_mut().set_scrollback(self.scroll);
 
-        // Backgrounds / selection / cursor as instanced quads (physical px).
-        let mut quads: Vec<Quad> = Vec::new();
-        for row in 0..rows {
-            for col in 0..cols {
-                let Some(cell) = self.term.screen().cell(row, col) else {
-                    continue;
-                };
-                let bg = map_color(cell.bg, false);
-                if bg != BG {
-                    quads.push(cell_quad(row, col, cw, ch, top, bg));
+            // Sync the window title from OSC 0/2.
+            let title = tab.term.title().map(str::to_string);
+            if title != self.last_title {
+                if let Some(t) = &title {
+                    self.window.set_title(t);
+                }
+                self.last_title = title;
+            }
+
+            let (rows, cols) = tab.term.screen().size();
+            let scale = self.window.scale_factor() as f32;
+            let cw = self.cw * scale;
+            let ch = self.ch * scale;
+            let top = BAR_H * scale;
+
+            let mut quads: Vec<Quad> = Vec::new();
+            for row in 0..rows {
+                for col in 0..cols {
+                    let Some(cell) = tab.term.screen().cell(row, col) else {
+                        continue;
+                    };
+                    let bg = map_color(cell.bg, false);
+                    if bg != BG {
+                        quads.push(cell_quad(row, col, cw, ch, top, bg));
+                    }
                 }
             }
-        }
-        if let Some((a, b)) = self.selection {
-            let (r1, c1, r2, c2) = ordered(a, b);
-            let start = r1 as usize * cols as usize + c1 as usize;
-            let end = r2 as usize * cols as usize + c2 as usize;
-            for i in start..=end {
-                let r = (i / cols as usize) as u16;
-                let c = (i % cols as usize) as u16;
-                quads.push(cell_quad(r, c, cw, ch, top, SEL_BG));
+            if let Some((a, b)) = self.selection {
+                let (r1, c1, r2, c2) = ordered(a, b);
+                let start = r1 as usize * cols as usize + c1 as usize;
+                let end = r2 as usize * cols as usize + c2 as usize;
+                for i in start..=end {
+                    let r = (i / cols as usize) as u16;
+                    let c = (i % cols as usize) as u16;
+                    quads.push(cell_quad(r, c, cw, ch, top, SEL_BG));
+                }
             }
-        }
-        let cursor = self.term.screen().cursor_position();
-        let show_cursor = self.scroll == 0
-            && !self.term.screen().hide_cursor()
-            && cursor.0 < rows
-            && cursor.1 < cols;
-        if show_cursor {
-            quads.push(cell_quad(cursor.0, cursor.1, cw, ch, top, FG));
-        }
+            let cursor = tab.term.screen().cursor_position();
+            let show_cursor = self.scroll == 0
+                && self.cursor_on
+                && !tab.term.screen().hide_cursor()
+                && cursor.0 < rows
+                && cursor.1 < cols;
+            if show_cursor {
+                quads.push(cell_quad(cursor.0, cursor.1, cw, ch, top, FG));
+            }
 
-        let rows_data = build_rows(self.term.screen());
-        self.quads.prepare(
-            &self.device,
-            &self.queue,
-            (self.config.width, self.config.height),
-            &quads,
-        );
-        self.glyphs.prepare(
-            &self.device,
-            &self.queue,
-            (self.config.width, self.config.height),
-            scale,
-            self.font_size,
-            (self.font_size * LINE_RATIO).round(),
-            self.cw,
-            0.0,
-            BAR_H,
-            FG,
-            Some("JetBrains Mono"),
-            &rows_data,
-        );
+            let rows_data = build_rows(tab.term.screen());
+            self.quads.prepare(
+                &self.device,
+                &self.queue,
+                (self.config.width, self.config.height),
+                &quads,
+            );
+            self.glyphs.prepare(
+                &self.device,
+                &self.queue,
+                (self.config.width, self.config.height),
+                scale,
+                self.font_size,
+                (self.font_size * LINE_RATIO).round(),
+                self.cw,
+                0.0,
+                BAR_H,
+                FG,
+                Some("JetBrains Mono"),
+                &rows_data,
+            );
+            tab.term.screen().bracketed_paste()
+        };
 
         // egui overlay: run the chrome, then tessellate and upload.
         let raw = self.egui_state.take_egui_input(&self.window);
@@ -333,18 +430,20 @@ impl State {
             self.egui_renderer.free_texture(id);
         }
 
-        // Handle copy/paste delivered by egui-winit.
+        // Copy / paste delivered by egui-winit.
         for ev in &events {
             match ev {
                 egui::Event::Copy => self.copy_selection(&self.egui_ctx),
                 egui::Event::Paste(text) => {
                     let body = text.replace('\n', "\r");
-                    let bytes = if self.term.screen().bracketed_paste() {
+                    let bytes = if bracketed {
                         format!("\x1b[200~{body}\x1b[201~")
                     } else {
                         body
                     };
-                    self.term.write(bytes.as_bytes());
+                    if let Some(tab) = self.tabs.get_mut(self.active) {
+                        tab.term.write(bytes.as_bytes());
+                    }
                     self.window.request_redraw();
                 }
                 _ => {}
@@ -370,26 +469,6 @@ impl ApplicationHandler for Host {
             }
         };
         window.set_ime_allowed(true);
-
-        let proxy = self.proxy.clone();
-        let waker: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
-            let _ = proxy.send_event(());
-        });
-
-        let (cw, ch) = State::cell_size(FONT_SIZE);
-        let size = window.inner_size();
-        let cols = (size.width as f32 / cw).floor().max(1.0) as u16;
-        let rows = ((size.height as f32 - BAR_H * window.scale_factor() as f32) / ch)
-            .floor()
-            .max(1.0) as u16;
-        let term = match Terminal::new(None, cols, rows, 10_000, None, &[], waker) {
-            Ok(t) => t,
-            Err(e) => {
-                eprintln!("miaotty-native: failed to spawn shell: {e}");
-                event_loop.exit();
-                return;
-            }
-        };
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
         let surface = match instance.create_surface(window.clone()) {
@@ -423,6 +502,7 @@ impl ApplicationHandler for Host {
             .copied()
             .find(|f| f.is_srgb())
             .unwrap_or(caps.formats[0]);
+        let size = window.inner_size();
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
@@ -450,15 +530,18 @@ impl ApplicationHandler for Host {
         );
         let egui_renderer = egui_wgpu::Renderer::new(&device, format, None, 1, false);
 
-        self.state = Some(State {
+        let (cw, ch) = State::cell_size(FONT_SIZE);
+        let mut state = State {
             window,
+            proxy: self.proxy.clone(),
             surface,
             device,
             queue,
             config,
             glyphs,
             quads,
-            term,
+            tabs: Vec::new(),
+            active: 0,
             cw,
             ch,
             font_size: FONT_SIZE,
@@ -467,11 +550,18 @@ impl ApplicationHandler for Host {
             selection: None,
             dragging: false,
             last_title: None,
+            focused: false,
+            cursor_on: true,
+            last_blink: Instant::now(),
             egui_ctx,
             egui_state,
             egui_renderer,
-        });
-        self.state.as_ref().unwrap().window.request_redraw();
+        };
+        if let Some(tab) = state.spawn("shell 1".to_string()) {
+            state.tabs.push(tab);
+        }
+        state.window.request_redraw();
+        self.state = Some(state);
     }
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ()) {
@@ -480,13 +570,28 @@ impl ApplicationHandler for Host {
         }
     }
 
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Cursor blink while focused (idle otherwise → ~0% CPU).
+        if let Some(state) = &mut self.state {
+            if state.focused {
+                if state.last_blink.elapsed() >= BLINK {
+                    state.cursor_on = !state.cursor_on;
+                    state.last_blink = Instant::now();
+                    state.window.request_redraw();
+                }
+                event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + BLINK));
+            } else {
+                event_loop.set_control_flow(ControlFlow::Wait);
+            }
+        }
+    }
+
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         let Some(state) = self.state.as_mut() else {
             return;
         };
-        // Let egui see input events (it drives the overlay + clipboard). Do not
-        // forward `RedrawRequested`: egui answers it with "repaint again", which
-        // would spin the loop at 100% CPU.
+        // Let egui see input events (overlay + clipboard). Never forward
+        // `RedrawRequested`: egui answers it with "repaint again" → 100% CPU.
         if !matches!(event, WindowEvent::RedrawRequested) {
             let resp = state.egui_state.on_window_event(&state.window, &event);
             if resp.repaint {
@@ -495,6 +600,7 @@ impl ApplicationHandler for Host {
         }
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::Focused(f) => state.focused = f,
             WindowEvent::Resized(_) => {
                 state.resize();
                 state.window.request_redraw();
@@ -514,13 +620,18 @@ impl ApplicationHandler for Host {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                state.window.request_redraw();
                 if state.dragging {
-                    let cell = state.cell_at((position.x, position.y));
+                    let (rows, cols) = state
+                        .tabs
+                        .get(state.active)
+                        .map(|t| t.term.screen().size())
+                        .unwrap_or((0, 0));
+                    let cell = state.cell_at((position.x, position.y), rows, cols);
                     match &mut state.selection {
                         Some((_, end)) => *end = cell,
                         None => state.selection = Some((cell, cell)),
                     }
+                    state.window.request_redraw();
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -529,7 +640,11 @@ impl ApplicationHandler for Host {
                     MouseScrollDelta::LineDelta(_, y) => y as i32,
                     MouseScrollDelta::PixelDelta(p) => (p.y / 12.0) as i32,
                 };
-                let max = state.term.screen().scrollback_len();
+                let max = state
+                    .tabs
+                    .get(state.active)
+                    .map(|t| t.term.screen().scrollback_len())
+                    .unwrap_or(0);
                 if lines > 0 {
                     state.scroll = (state.scroll + lines as usize).min(max);
                 } else {
@@ -538,13 +653,71 @@ impl ApplicationHandler for Host {
                 state.window.request_redraw();
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                let app_cursor = state.term.screen().application_cursor();
-                let bytes = encode_key(&event, state.mods, app_cursor);
-                state.write_input(&bytes);
+                if let Some(bytes) = shortcut(&event, state.mods) {
+                    match bytes {
+                        Shortcut::NewTab => state.new_tab(),
+                        Shortcut::CloseTab => state.close_tab(state.active),
+                        Shortcut::SelectTab(i) => {
+                            if i < state.tabs.len() {
+                                state.active = i;
+                                state.selection = None;
+                                state.scroll = 0;
+                            }
+                        }
+                        Shortcut::Font(delta) => {
+                            state.font_size = (state.font_size + delta).clamp(6.0, 40.0);
+                            let (cw, ch) = State::cell_size(state.font_size);
+                            state.cw = cw;
+                            state.ch = ch;
+                            state.resize();
+                        }
+                    }
+                    state.window.request_redraw();
+                } else {
+                    let app_cursor = state
+                        .tabs
+                        .get(state.active)
+                        .map(|t| t.term.screen().application_cursor())
+                        .unwrap_or(false);
+                    let bytes = encode_key(&event, state.mods, app_cursor);
+                    state.write_input(&bytes);
+                }
             }
             WindowEvent::RedrawRequested => state.render(),
             _ => {}
         }
+    }
+}
+
+enum Shortcut {
+    NewTab,
+    CloseTab,
+    SelectTab(usize),
+    Font(f32),
+}
+
+fn shortcut(event: &KeyEvent, mods: ModifiersState) -> Option<Shortcut> {
+    if event.state != ElementState::Pressed || !mods.super_key() {
+        return None;
+    }
+    match &event.logical_key {
+        Key::Character(s) => match s.as_str() {
+            "t" => Some(Shortcut::NewTab),
+            "w" => Some(Shortcut::CloseTab),
+            "+" | "=" => Some(Shortcut::Font(1.0)),
+            "-" => Some(Shortcut::Font(-1.0)),
+            "1" => Some(Shortcut::SelectTab(0)),
+            "2" => Some(Shortcut::SelectTab(1)),
+            "3" => Some(Shortcut::SelectTab(2)),
+            "4" => Some(Shortcut::SelectTab(3)),
+            "5" => Some(Shortcut::SelectTab(4)),
+            "6" => Some(Shortcut::SelectTab(5)),
+            "7" => Some(Shortcut::SelectTab(6)),
+            "8" => Some(Shortcut::SelectTab(7)),
+            "9" => Some(Shortcut::SelectTab(8)),
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -735,7 +908,7 @@ fn encode_key(event: &KeyEvent, mods: ModifiersState, app_cursor: bool) -> Vec<u
     if event.state != ElementState::Pressed {
         return Vec::new();
     }
-    // Cmd (super) is reserved for app shortcuts (copy/paste, font size).
+    // Cmd (super) is reserved for app shortcuts (handled by `shortcut`).
     if mods.super_key() {
         return Vec::new();
     }
