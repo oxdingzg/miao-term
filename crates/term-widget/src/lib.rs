@@ -2099,6 +2099,12 @@ impl State {
                 .unwrap_or_else(|| ed.path.display().to_string()),
         };
         let modified = ed.text != ed.original;
+        let lang = miao_term_ui::syntax::detect(&match &ed.remote {
+            Some((_, p)) => p.clone(),
+            None => ed.path.to_string_lossy().to_string(),
+        });
+        let mut layouter =
+            miao_term_ui::syntax::layouter(lang, egui::Color32::from_rgb(0xe5, 0xe5, 0xe5), 13.0);
         let mut open = true;
         let mut save = false;
         egui::Window::new(title)
@@ -2146,6 +2152,7 @@ impl State {
                                     egui::Label::new(
                                         egui::RichText::new(nums)
                                             .monospace()
+                                            .size(13.0)
                                             .color(egui::Color32::from_gray(110)),
                                     )
                                     .selectable(false),
@@ -2153,7 +2160,8 @@ impl State {
                                 ui.add(
                                     egui::TextEdit::multiline(&mut ed.text)
                                         .code_editor()
-                                        .desired_width(f32::INFINITY),
+                                        .desired_width(f32::INFINITY)
+                                        .layouter(&mut layouter),
                                 );
                             });
                         });

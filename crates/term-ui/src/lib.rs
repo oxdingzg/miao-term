@@ -14,6 +14,7 @@ pub mod layout;
 pub mod palette;
 pub mod selection;
 pub mod ssh;
+pub mod syntax;
 pub mod theme;
 pub mod update;
 
