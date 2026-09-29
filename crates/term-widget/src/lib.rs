@@ -189,6 +189,9 @@ struct State {
     read_only: bool,
     hint_mode: bool,
     hints: Vec<miao_term_ui::hints::Hint>,
+    tree_expanded: std::collections::HashSet<std::path::PathBuf>,
+    tree_children: HashMap<std::path::PathBuf, Vec<FileEntry>>,
+    files_filter: String,
     prefix_renaming: Option<usize>,
     prefix_buf: String,
     hotkeys: Option<miao_term_ui::hotkey::Hotkeys>,
@@ -520,6 +523,71 @@ impl State {
         let lines: Vec<String> = (0..rows).map(|r| screen.line_text(r)).collect();
         self.hints = miao_term_ui::hints::scan(&lines);
         self.hint_mode = !self.hints.is_empty();
+    }
+
+    /// Lazily load a directory and (transitively) its expanded subdirectories.
+    fn load_tree(&mut self, dir: &std::path::Path) {
+        if self.tree_children.contains_key(dir) {
+            return;
+        }
+        let entries = files_rows(dir);
+        let subdirs: Vec<std::path::PathBuf> = entries
+            .iter()
+            .filter(|f| f.is_dir)
+            .map(|f| dir.join(&f.name))
+            .collect();
+        self.tree_children.insert(dir.to_path_buf(), entries);
+        if self.tree_expanded.contains(dir) {
+            for s in subdirs {
+                self.load_tree(&s);
+            }
+        }
+    }
+
+    fn files_body(&mut self, ui: &mut egui::Ui, lang: miao_term_ui::i18n::Lang) {
+        use miao_term_ui::i18n::t;
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.files_filter)
+                    .hint_text(t(lang, "Filter…", "过滤…"))
+                    .desired_width(150.0),
+            );
+            if ui
+                .small_button("\u{21bb}")
+                .on_hover_text(t(lang, "Refresh", "刷新"))
+                .clicked()
+            {
+                self.tree_children.clear();
+                self.ensure_details();
+            }
+        });
+        let Some(root) = self.cwd() else {
+            ui.label("\u{2014}");
+            return;
+        };
+        self.load_tree(&root);
+        let filter = self.files_filter.to_lowercase();
+        let mut open_file = None;
+        let mut toggle = None;
+        render_dir_tree(
+            ui,
+            &self.tree_children,
+            &self.tree_expanded,
+            &root,
+            0,
+            &filter,
+            &mut open_file,
+            &mut toggle,
+        );
+        if let Some(d) = toggle {
+            if !self.tree_expanded.insert(d.clone()) {
+                self.tree_expanded.remove(&d);
+            }
+            self.load_tree(&d);
+        }
+        if let Some(f) = open_file {
+            self.open_editor(f);
+        }
     }
 
     fn duplicate_tab(&mut self) {
@@ -3090,6 +3158,96 @@ impl State {
     }
 }
 
+/// Draw a small chevron triangle (avoids font-glyph tofu).
+fn chevron(p: &egui::Painter, rect: egui::Rect, open: bool, color: egui::Color32) {
+    let c = rect.center();
+    let (dx, dy) = (3.0, 4.0);
+    let pts = if open {
+        vec![
+            egui::pos2(c.x - dx, c.y - dy * 0.5),
+            egui::pos2(c.x + dx, c.y - dy * 0.5),
+            egui::pos2(c.x, c.y + dy * 0.7),
+        ]
+    } else {
+        vec![
+            egui::pos2(c.x - dy * 0.5, c.y - dx),
+            egui::pos2(c.x - dy * 0.5, c.y + dx),
+            egui::pos2(c.x + dy * 0.7, c.y),
+        ]
+    };
+    p.add(egui::Shape::convex_polygon(pts, color, egui::Stroke::NONE));
+}
+
+/// Render a lazily-loaded directory tree.
+#[allow(clippy::too_many_arguments)]
+fn render_dir_tree(
+    ui: &mut egui::Ui,
+    children: &HashMap<std::path::PathBuf, Vec<FileEntry>>,
+    expanded: &std::collections::HashSet<std::path::PathBuf>,
+    dir: &std::path::Path,
+    depth: usize,
+    filter: &str,
+    open_file: &mut Option<std::path::PathBuf>,
+    toggle: &mut Option<std::path::PathBuf>,
+) {
+    use miao_term_ui::icons::Icon;
+    let Some(entries) = children.get(dir) else {
+        return;
+    };
+    let muted = egui::Color32::from_gray(132);
+    for e in entries {
+        let is_dir = e.is_dir;
+        if !is_dir && !filter.is_empty() && !e.name.to_lowercase().contains(filter) {
+            continue;
+        }
+        let path = dir.join(&e.name);
+        let is_open = expanded.contains(&path);
+        ui.horizontal(|ui| {
+            ui.add_space(depth as f32 * 12.0);
+            let (ir, _) = ui.allocate_exact_size(egui::Vec2::splat(14.0), egui::Sense::hover());
+            if is_dir {
+                chevron(ui.painter(), ir, is_open, muted);
+            }
+            let (ird, _) = ui.allocate_exact_size(egui::Vec2::splat(14.0), egui::Sense::hover());
+            miao_term_ui::icons::draw(
+                ui.painter(),
+                ird,
+                if is_dir { Icon::Folder } else { Icon::File },
+                muted,
+            );
+            let resp = ui.selectable_label(false, egui::RichText::new(&e.name).size(12.0));
+            if resp.clicked() {
+                if is_dir {
+                    *toggle = Some(path.clone());
+                } else {
+                    *open_file = Some(path.clone());
+                }
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if !is_dir {
+                    ui.label(
+                        egui::RichText::new(human_size(e.size))
+                            .size(10.5)
+                            .color(muted),
+                    );
+                }
+            });
+        });
+        if is_dir && is_open {
+            render_dir_tree(
+                ui,
+                children,
+                expanded,
+                &path,
+                depth + 1,
+                filter,
+                open_file,
+                toggle,
+            );
+        }
+    }
+}
+
 /// Human-readable byte size for the Files panel.
 fn human_size(n: u64) -> String {
     const UNIT: [&str; 5] = ["B", "K", "M", "G", "T"];
@@ -3406,6 +3564,9 @@ impl ApplicationHandler for Host {
             read_only: false,
             hint_mode: false,
             hints: Vec::new(),
+            tree_expanded: std::collections::HashSet::new(),
+            tree_children: HashMap::new(),
+            files_filter: String::new(),
             prefix_renaming: None,
             prefix_buf: String::new(),
             hotkeys: None,
@@ -4397,6 +4558,14 @@ impl chrome::Chrome for State {
                     .unwrap_or_default(),
             ),
             _ => None,
+        }
+    }
+    fn details_body(&mut self, ui: &mut egui::Ui, lang: miao_term_ui::i18n::Lang) -> bool {
+        if self.details_tab.min(6) == 4 {
+            self.files_body(ui, lang);
+            true
+        } else {
+            false
         }
     }
     fn status(&self) -> String {

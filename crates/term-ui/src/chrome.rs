@@ -123,6 +123,7 @@ pub fn sidebar(
     titles: &[String],
     icons: &[crate::icons::Icon],
     badges: &[Option<Rgb>],
+    metas: &[String],
     active: usize,
     heading: &str,
 ) -> Option<usize> {
@@ -151,11 +152,18 @@ pub fn sidebar(
                     ui.label("  ");
                 }
             }
-            if ui
-                .selectable_label(i == active, egui::RichText::new(title).size(13.0))
-                .clicked()
-            {
+            let resp = ui.selectable_label(i == active, egui::RichText::new(title).size(13.0));
+            if resp.clicked() {
                 switch = Some(i);
+            }
+            if let Some(m) = metas.get(i).filter(|m| !m.is_empty()) {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new(m)
+                            .size(10.5)
+                            .color(egui::Color32::from_gray(120)),
+                    );
+                });
             }
         });
     }
@@ -404,6 +412,12 @@ pub trait Chrome {
     fn details_list(&self) -> Option<Vec<ChromeItem>> {
         None
     }
+    /// Let the host render the whole details body (e.g. a file tree). Return
+    /// true if it drew something.
+    fn details_body(&mut self, ui: &mut egui::Ui, lang: Lang) -> bool {
+        let _ = (ui, lang);
+        false
+    }
     fn status(&self) -> String {
         String::new()
     }
@@ -454,6 +468,15 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
     let titles: Vec<String> = tabs.iter().map(|t| t.title.clone()).collect();
     let badges: Vec<Option<Rgb>> = tabs.iter().map(|t| t.badge).collect();
     let icons: Vec<crate::icons::Icon> = tabs.iter().map(|t| t.icon).collect();
+    let metas: Vec<String> = (0..titles.len())
+        .map(|i| {
+            if i < 9 {
+                format!("\u{2318}{}", i + 1)
+            } else {
+                String::new()
+            }
+        })
+        .collect();
     let active = host.active_tab();
     let show_sidebar = host.show_sidebar();
     let show_details = host.show_details();
@@ -733,13 +756,16 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
             .frame(panel_frame(&theme, egui::Margin::same(6.0)))
             .show(ctx, |ui| {
                 let heading = t(lang, "Sessions", "会话");
-                if let Some(i) = sidebar(ui, &theme, &titles, &icons, &badges, active, heading) {
+                if let Some(i) = sidebar(
+                    ui, &theme, &titles, &icons, &badges, &metas, active, heading,
+                ) {
                     switch = Some(i);
                 }
             });
     }
 
     if show_details {
+        let host = &mut *host;
         let tabs_icons = [
             (Icon::Info, t(lang, "Info", "信息")),
             (Icon::Agent, "Agent"),
@@ -760,12 +786,14 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        if details_is_queue {
-                            qev = queue(ui, &theme, &queue_items, &mut queue_input, lang);
-                        } else if let Some(items) = &details_list {
-                            list(ui, &theme, items);
-                        } else {
-                            info(ui, &theme, &details_title, &details_rows);
+                        if !host.details_body(ui, lang) {
+                            if details_is_queue {
+                                qev = queue(ui, &theme, &queue_items, &mut queue_input, lang);
+                            } else if let Some(items) = &details_list {
+                                list(ui, &theme, items);
+                            } else {
+                                info(ui, &theme, &details_title, &details_rows);
+                            }
                         }
                     });
             });
