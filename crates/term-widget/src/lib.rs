@@ -173,6 +173,7 @@ struct State {
     theme_name: String,
     show_palette: bool,
     palette_query: String,
+    palette_idx: usize,
     show_settings: bool,
     editor: Option<Editor>,
     open_path: String,
@@ -1850,6 +1851,7 @@ impl State {
 }
 
 /// A palette command.
+#[derive(Clone, Copy)]
 enum Cmd {
     NewTab,
     Composer,
@@ -2004,6 +2006,7 @@ impl State {
             Cmd::Palette => {
                 self.show_palette = true;
                 self.palette_query.clear();
+                self.palette_idx = 0;
             }
             Cmd::Find => {
                 self.search = Some(String::new());
@@ -2167,8 +2170,10 @@ impl State {
         }
         let cmds = self.commands();
         let mut query = std::mem::take(&mut self.palette_query);
-        let mut chosen: Option<usize> = None;
+        let mut chosen: Option<Cmd> = None;
         let mut open = true;
+        let mut close = false;
+        let ch = self.theme.chrome();
         egui::Window::new(miao_term_ui::i18n::t(
             self.lang,
             "Command Palette",
@@ -2179,6 +2184,7 @@ impl State {
         .anchor(egui::Align2::CENTER_TOP, [0.0, 120.0])
         .open(&mut open)
         .show(ctx, |ui| {
+            ui.visuals_mut().selection.bg_fill = miao_term_ui::chrome::bg_color(ch.active);
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut query)
                     .hint_text(miao_term_ui::i18n::t(
@@ -2190,27 +2196,46 @@ impl State {
             );
             resp.request_focus();
             let q = query.to_lowercase();
-            let filtered: Vec<usize> = (0..cmds.len())
-                .filter(|&i| q.is_empty() || cmds[i].1.to_lowercase().contains(&q))
+            let mut rows: Vec<(usize, Cmd, &'static str)> = cmds
+                .iter()
+                .filter_map(|(c, l)| {
+                    miao_term_ui::palette::score(l, "command", &q).map(|s| (s, *c, *l))
+                })
                 .collect();
-            for &i in &filtered {
-                if ui.selectable_label(false, cmds[i].1).clicked() {
-                    chosen = Some(i);
+            rows.sort_by_key(|(s, _, _)| *s);
+            let down = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown));
+            let up = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp));
+            let esc = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+            if down {
+                self.palette_idx = (self.palette_idx + 1).min(rows.len().saturating_sub(1));
+            }
+            if up {
+                self.palette_idx = self.palette_idx.saturating_sub(1);
+            }
+            if rows.is_empty() {
+                self.palette_idx = 0;
+            } else {
+                self.palette_idx = self.palette_idx.min(rows.len() - 1);
+            }
+            for (i, (_, _, label)) in rows.iter().enumerate() {
+                if ui.selectable_label(i == self.palette_idx, *label).clicked() {
+                    chosen = Some(rows[i].1);
                 }
             }
             if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                chosen = filtered.first().copied();
+                chosen = rows.get(self.palette_idx).map(|(_, c, _)| *c);
+            }
+            if esc {
+                close = true;
             }
         });
         self.palette_query = query;
-        if let Some(i) = chosen {
-            if let Some((cmd, _)) = cmds.into_iter().nth(i) {
-                self.run_command(cmd);
-            }
+        if let Some(cmd) = chosen {
+            self.run_command(cmd);
             self.show_palette = false;
             self.palette_query.clear();
         }
-        if !open {
+        if !open || close {
             self.show_palette = false;
         }
     }
@@ -2235,95 +2260,104 @@ impl State {
             .collapsible(false)
             .open(&mut open)
             .show(ctx, |ui| {
-                ui.label(miao_term_ui::i18n::t(self.lang, "Font size", "字号"));
-                ui.add(egui::Slider::new(&mut font, 6.0..=40.0));
-                ui.horizontal(|ui| {
-                    ui.label(miao_term_ui::i18n::t(self.lang, "Font family", "字体"));
-                    ui.add(
-                        egui::TextEdit::singleline(&mut family)
-                            .hint_text(miao_term_ui::i18n::t(
-                                self.lang,
-                                "system default",
-                                "系统默认",
-                            ))
-                            .desired_width(170.0),
-                    );
-                });
-                ui.label(miao_term_ui::i18n::t(self.lang, "Line height", "行高"));
-                ui.add(egui::Slider::new(&mut line_ratio, 1.0..=2.0));
-                ui.label(miao_term_ui::i18n::t(self.lang, "Opacity", "不透明度"));
-                ui.add(egui::Slider::new(&mut opacity, 0.1..=1.0));
-                ui.separator();
-                ui.label(miao_term_ui::i18n::t(self.lang, "Cursor", "光标"));
-                ui.horizontal(|ui| {
-                    for (s, n) in [
-                        (
-                            miao_term_ui::CursorStyle::Block,
-                            miao_term_ui::i18n::t(self.lang, "Block", "方块"),
-                        ),
-                        (
-                            miao_term_ui::CursorStyle::Bar,
-                            miao_term_ui::i18n::t(self.lang, "Bar", "竖线"),
-                        ),
-                        (
-                            miao_term_ui::CursorStyle::Underline,
-                            miao_term_ui::i18n::t(self.lang, "Underline", "下划线"),
-                        ),
-                    ] {
-                        if ui.radio(cursor == s, n).clicked() {
-                            cursor = s;
-                        }
-                    }
-                });
-                ui.separator();
-                ui.checkbox(
-                    &mut graphics,
-                    miao_term_ui::i18n::t(self.lang, "Inline graphics", "终端内联图片"),
-                );
-                ui.checkbox(
-                    &mut notifications,
-                    miao_term_ui::i18n::t(self.lang, "Notifications", "通知"),
-                );
-                ui.checkbox(
-                    &mut prevent_sleep,
-                    miao_term_ui::i18n::t(self.lang, "Prevent sleep", "防休眠"),
-                );
-                ui.separator();
-                ui.label(miao_term_ui::i18n::t(
-                    self.lang,
-                    "Agent integrations",
-                    "Agent 集成",
-                ));
-                for a in miao_term_ui::integration::AGENTS {
-                    ui.horizontal(|ui| {
-                        ui.label(if miao_term_ui::integration::detected(a.bin) {
-                            "\u{25cf}"
-                        } else {
-                            "\u{25cb}"
+                egui::ScrollArea::vertical()
+                    .max_height(560.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.label(miao_term_ui::i18n::t(self.lang, "Font size", "字号"));
+                        ui.add(egui::Slider::new(&mut font, 6.0..=40.0));
+                        ui.horizontal(|ui| {
+                            ui.label(miao_term_ui::i18n::t(self.lang, "Font family", "字体"));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut family)
+                                    .hint_text(miao_term_ui::i18n::t(
+                                        self.lang,
+                                        "system default",
+                                        "系统默认",
+                                    ))
+                                    .desired_width(170.0),
+                            );
                         });
-                        ui.label(a.name);
-                        if ui
-                            .button(miao_term_ui::i18n::t(self.lang, "Install hook", "安装钩子"))
-                            .clicked()
-                        {
-                            install_agent = Some(a.name);
+                        ui.label(miao_term_ui::i18n::t(self.lang, "Line height", "行高"));
+                        ui.add(egui::Slider::new(&mut line_ratio, 1.0..=2.0));
+                        ui.label(miao_term_ui::i18n::t(self.lang, "Opacity", "不透明度"));
+                        ui.add(egui::Slider::new(&mut opacity, 0.1..=1.0));
+                        ui.separator();
+                        ui.label(miao_term_ui::i18n::t(self.lang, "Cursor", "光标"));
+                        ui.horizontal(|ui| {
+                            for (s, n) in [
+                                (
+                                    miao_term_ui::CursorStyle::Block,
+                                    miao_term_ui::i18n::t(self.lang, "Block", "方块"),
+                                ),
+                                (
+                                    miao_term_ui::CursorStyle::Bar,
+                                    miao_term_ui::i18n::t(self.lang, "Bar", "竖线"),
+                                ),
+                                (
+                                    miao_term_ui::CursorStyle::Underline,
+                                    miao_term_ui::i18n::t(self.lang, "Underline", "下划线"),
+                                ),
+                            ] {
+                                if ui.radio(cursor == s, n).clicked() {
+                                    cursor = s;
+                                }
+                            }
+                        });
+                        ui.separator();
+                        ui.checkbox(
+                            &mut graphics,
+                            miao_term_ui::i18n::t(self.lang, "Inline graphics", "终端内联图片"),
+                        );
+                        ui.checkbox(
+                            &mut notifications,
+                            miao_term_ui::i18n::t(self.lang, "Notifications", "通知"),
+                        );
+                        ui.checkbox(
+                            &mut prevent_sleep,
+                            miao_term_ui::i18n::t(self.lang, "Prevent sleep", "防休眠"),
+                        );
+                        ui.separator();
+                        ui.label(miao_term_ui::i18n::t(
+                            self.lang,
+                            "Agent integrations",
+                            "Agent 集成",
+                        ));
+                        for a in miao_term_ui::integration::AGENTS {
+                            ui.horizontal(|ui| {
+                                ui.label(if miao_term_ui::integration::detected(a.bin) {
+                                    "\u{25cf}"
+                                } else {
+                                    "\u{25cb}"
+                                });
+                                ui.label(a.name);
+                                if ui
+                                    .button(miao_term_ui::i18n::t(
+                                        self.lang,
+                                        "Install hook",
+                                        "安装钩子",
+                                    ))
+                                    .clicked()
+                                {
+                                    install_agent = Some(a.name);
+                                }
+                            });
+                        }
+                        if let Some(msg) = &self.integration_msg {
+                            ui.label(
+                                egui::RichText::new(msg)
+                                    .size(11.0)
+                                    .color(egui::Color32::from_gray(150)),
+                            );
+                        }
+                        ui.separator();
+                        ui.label(miao_term_ui::i18n::t(self.lang, "Theme", "主题"));
+                        for name in Theme::NAMES {
+                            if ui.selectable_label(current_theme == name, name).clicked() {
+                                chosen_theme = Some(name);
+                            }
                         }
                     });
-                }
-                if let Some(msg) = &self.integration_msg {
-                    ui.label(
-                        egui::RichText::new(msg)
-                            .size(11.0)
-                            .color(egui::Color32::from_gray(150)),
-                    );
-                }
-                ui.separator();
-                ui.label(miao_term_ui::i18n::t(self.lang, "Theme", "主题"));
-                for name in Theme::NAMES {
-                    if ui.selectable_label(current_theme == name, name).clicked() {
-                        chosen_theme = Some(name);
-                    }
-                }
             });
         let family_opt = if family.trim().is_empty() {
             None
@@ -3764,6 +3798,7 @@ impl ApplicationHandler for Host {
             theme_name,
             show_palette: false,
             palette_query: String::new(),
+            palette_idx: 0,
             show_settings: false,
             editor: None,
             open_path: String::new(),
@@ -4186,6 +4221,7 @@ impl ApplicationHandler for Host {
                     if s.palette {
                         state.show_palette = true;
                         state.palette_query.clear();
+                        state.palette_idx = 0;
                     }
                     if s.settings {
                         state.show_settings = true;
