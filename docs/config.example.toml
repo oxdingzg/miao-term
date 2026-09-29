@@ -14,7 +14,6 @@ font-size = 14
 # editor = "code --wait"            # command used by "Edit in Tab"
 # mermaid-command = "mmdc"          # render ```mermaid blocks with mermaid-cli (else a built-in subset)
 # graphics = true                  # inline terminal graphics (Sixel / Kitty / iTerm2)
-# graphics-protocols = "sixel,kitty"  # (reserved) which protocols to accept
 # language = "zh"                  # UI language ("en" default; also reads $LANG)
 # update-pubkey = "RW…"            # minisign public key; enables signature checks
 # update-check-url = "https://example.com/miaotty/latest.json"
