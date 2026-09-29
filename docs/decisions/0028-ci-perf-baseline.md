@@ -26,6 +26,14 @@ metrics; the app and the core merge into the same file). The `perf` job:
 
 The first run has no baseline: it reports and passes, then seeds the cache.
 
+### Report-only in CI
+
+Runner variance dwarfs the signal: the same revision measured 139 MB/s and then
+79 MB/s of VT parse throughput on `ubuntu-latest` (1.8x). So the comparison is
+**report-only by default**; the *absolute budgets* asserted inside the tests are
+the CI gate. `PERF_ENFORCE=1` turns it into a gate (with per-metric floors) for
+stable machines.
+
 ### Enforcement floor
 
 Sub-millisecond timings are jitter-dominated on shared runners (the same code

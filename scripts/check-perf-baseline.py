@@ -2,10 +2,14 @@
 """Compare measured perf metrics (ADR 0028) against the CI baseline.
 
 The perf tests write `target/perf-measured.json`; CI restores a baseline from
-the actions cache into `.perf/baseline.json`. This script fails when a metric
-regresses beyond the `regression_pct` recorded in `benches/budgets.json`
-(default 25%, overridable with `PERF_REGRESSION_PCT` so runner noise does not
-flake the gate).
+the actions cache into `.perf/baseline.json` and prints the comparison.
+
+By default it **reports only**: the same code measured 139 MB/s and then 79 MB/s
+of VT parse throughput on `ubuntu-latest`, so a cached baseline is not a gate
+there — the *absolute* budgets asserted inside the tests are. Set
+`PERF_ENFORCE=1` (e.g. on the dev machine, or with a stable runner) to fail on a
+regression beyond the metric's `regression_pct` (default 25%, overridable with
+`PERF_REGRESSION_PCT`) once it is above the noise floor.
 
 On the first run there is no baseline, so every metric is only reported; CI
 copies the measurements into the cache afterwards on `main`.
@@ -15,6 +19,8 @@ import json
 import os
 import pathlib
 import sys
+
+enforce = os.environ.get("PERF_ENFORCE", "0") not in ("", "0", "false", "no")
 
 HIGHER_IS_BETTER = {"vt_parse_mbps"}
 
@@ -49,6 +55,9 @@ for key, value in sorted(measured.items()):
         print(f"{key}: {value:.4f} (no baseline yet)")
         continue
     base = float(base)
+    if not enforce:
+        print(f"{key}: {value:.4f} (report only; baseline {base:.4f})")
+        continue
     if value < ENFORCE_FLOOR.get(key, 0.0):
         print(f"{key}: {value:.4f} (reported only; below the {ENFORCE_FLOOR[key]} floor)")
         continue
