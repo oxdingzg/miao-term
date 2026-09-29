@@ -2014,6 +2014,7 @@ fn file_tree(
 #[cfg(target_os = "macos")]
 /// Render a small, dependency-free subset of Markdown: ATX headings, fenced
 /// code, bullet lists, block quotes. Inline emphasis markers are stripped.
+#[cfg(target_os = "macos")]
 /// The `.app` bundle root containing `exe`, if it is inside one
 /// (`…/X.app/Contents/MacOS/x` → `…/X.app`).
 fn bundle_root(exe: &std::path::Path) -> Option<PathBuf> {
@@ -2050,7 +2051,6 @@ fn install_script(pid: u32, bundle: &std::path::Path, new_app: &std::path::Path)
 }
 
 #[cfg_attr(not(any(target_os = "windows", target_os = "linux")), allow(dead_code))]
-#[cfg(target_os = "macos")]
 /// The helper `.cmd` Windows runs after we exit: wait for our PID, then either
 /// run the MSI or unpack the zip over the current executable, and relaunch.
 fn windows_install_script(pid: u32, artifact: &std::path::Path, exe: &std::path::Path) -> String {
@@ -2103,6 +2103,7 @@ fn linux_install_script(
     )
 }
 
+#[cfg(target_os = "macos")]
 /// The first `.app` bundle anywhere under `dir`.
 fn find_app(dir: &std::path::Path) -> Option<PathBuf> {
     let mut stack = vec![dir.to_path_buf()];
