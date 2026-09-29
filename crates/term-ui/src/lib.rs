@@ -8,6 +8,7 @@
 
 pub mod chrome;
 pub mod ssh;
+pub mod update;
 pub mod i18n;
 pub mod input;
 pub mod layout;

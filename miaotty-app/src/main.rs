@@ -23,7 +23,7 @@ mod integration;
 mod launch;
 mod panels;
 use miao_term_ui::ssh;
-mod update;
+use miao_term_ui::update;
 
 use miao_term_core::aterm::{ATerm, Color};
 use miao_term_core::Terminal;

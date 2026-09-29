@@ -138,6 +138,9 @@ struct State {
     recipe_list: Vec<String>,
     ssh_dialog: Option<String>,
     remote_dialog: Option<(String, String)>,
+    update_url: Option<String>,
+    update_rx: Option<std::sync::mpsc::Receiver<String>>,
+    update_msg: Option<String>,
     details_tab: usize,
     git_cache: Cache,
     files_cache: Cache,
@@ -858,6 +861,13 @@ impl State {
                         }
                     });
                     ui.menu_button(t(lang, "Help", "帮助"), |ui| {
+                        if ui
+                            .button(t(lang, "Check for Updates", "检查更新"))
+                            .clicked()
+                        {
+                            action = Some(Cmd::CheckUpdates);
+                            ui.close_menu();
+                        }
                         ui.hyperlink_to(
                             t(lang, "Documentation", "文档"),
                             "https://github.com/oxdingzg/miao-term#readme",
@@ -1311,19 +1321,25 @@ impl State {
             .get(self.active_tab)
             .map(|t| t.panes.len())
             .unwrap_or(0);
-        format!(
+        let mut s = format!(
             "miaotty-native · tab {}/{} · {} pane(s) · {} tabs",
             self.active_tab + 1,
             self.tabs.len(),
             panes,
             self.tabs.len()
-        )
+        );
+        if let Some(m) = &self.update_msg {
+            s.push_str(" · ");
+            s.push_str(m);
+        }
+        s
     }
 }
 
 /// A palette command.
 enum Cmd {
     NewTab,
+    CheckUpdates,
     NewSsh,
     OpenRemote,
     SaveRecipe,
@@ -1354,6 +1370,7 @@ impl State {
     fn commands(&self) -> Vec<(Cmd, &'static str)> {
         vec![
             (Cmd::NewTab, "New Tab"),
+            (Cmd::CheckUpdates, "Check for Updates"),
             (Cmd::NewSsh, "New SSH Session…"),
             (Cmd::OpenRemote, "Open Remote File…"),
             (Cmd::SaveRecipe, "Save Recipe…"),
@@ -1395,6 +1412,7 @@ impl State {
                 self.ch = ch;
                 self.resize();
             }
+            Cmd::CheckUpdates => self.check_updates(),
             Cmd::NewSsh => self.ssh_dialog = Some(String::new()),
             Cmd::OpenRemote => self.remote_dialog = Some((String::new(), String::new())),
             Cmd::SaveRecipe => {
@@ -1557,6 +1575,34 @@ impl State {
         if !open {
             self.show_settings = false;
         }
+    }
+
+    fn check_updates(&mut self) {
+        let Some(url) = self.update_url.clone() else {
+            self.update_msg = Some("no update URL configured".to_string());
+            return;
+        };
+        self.update_msg = Some("Checking for updates…".to_string());
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let out = std::process::Command::new("curl")
+                .args(["-fsSL", "--max-time", "8", &url])
+                .output();
+            let msg = match out {
+                Ok(o) if o.status.success() => {
+                    let m = miao_term_ui::update::parse(&String::from_utf8_lossy(&o.stdout));
+                    let local = env!("CARGO_PKG_VERSION");
+                    if miao_term_ui::update::is_newer(&m.version, local) {
+                        format!("Update available: v{}", m.version)
+                    } else {
+                        format!("Up to date (v{local})")
+                    }
+                }
+                _ => "Update check failed".to_string(),
+            };
+            let _ = tx.send(msg);
+        });
+        self.update_rx = Some(rx);
     }
 
     fn open_ssh(&mut self, input: &str) {
@@ -2053,6 +2099,9 @@ impl ApplicationHandler for Host {
             recipe_list: Vec::new(),
             ssh_dialog: None,
             remote_dialog: None,
+            update_url: cfg.update_check_url.clone(),
+            update_rx: None,
+            update_msg: None,
             details_tab: 0,
             git_cache: None,
             files_cache: None,
@@ -2082,6 +2131,16 @@ impl ApplicationHandler for Host {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if let Some(state) = &mut self.state {
+            if let Some(rx) = state.update_rx.take() {
+                match rx.try_recv() {
+                    Ok(msg) => {
+                        state.update_msg = Some(msg);
+                        state.window.request_redraw();
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => state.update_rx = Some(rx),
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+                }
+            }
             if state.focused {
                 if state.last_blink.elapsed() >= BLINK {
                     state.cursor_on = !state.cursor_on;
