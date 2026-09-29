@@ -36,3 +36,4 @@ Docs are English by default; keep a Simplified Chinese version in sync
 | [0026](./0026-wayland-shortcut.md) | Native Wayland/X11 global shortcut (portal) | accepted |
 | [0027](./0027-conpty-teardown.md) | ConPTY teardown must not block | accepted |
 | [0028](./0028-ci-perf-baseline.md) | CI-side performance baseline | accepted |
+| [0030](./0030-native-render-loop.md) | Native render loop (self-drawn grid) | accepted |

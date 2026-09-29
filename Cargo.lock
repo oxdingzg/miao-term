@@ -2091,6 +2091,7 @@ version = "0.0.0"
 dependencies = [
  "glyphon",
  "miao-term-core",
+ "pollster",
  "wgpu",
 ]
 
@@ -2100,6 +2101,9 @@ version = "0.0.0"
 dependencies = [
  "miao-term-core",
  "miao-term-render",
+ "pollster",
+ "wgpu",
+ "winit",
 ]
 
 [[package]]

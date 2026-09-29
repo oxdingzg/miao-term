@@ -11,3 +11,6 @@ repository.workspace = true
 glyphon = "0.7"
 miao-term-core = { path = "../term-core" }
 wgpu = "23"
+
+[dev-dependencies]
+pollster = "0.4"

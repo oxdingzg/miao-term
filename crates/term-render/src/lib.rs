@@ -277,5 +277,205 @@ impl MetricsProbe {
     }
 }
 
+/// A solid-colour rectangle in physical pixels (background / selection / cursor).
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct Quad {
+    pub min: [f32; 2],
+    pub max: [f32; 2],
+    pub color: [f32; 4],
+}
+
+impl Quad {
+    pub fn new(min: (f32, f32), max: (f32, f32), color: (u8, u8, u8, u8)) -> Self {
+        Self {
+            min: [min.0, min.1],
+            max: [max.0, max.1],
+            color: [
+                color.0 as f32 / 255.0,
+                color.1 as f32 / 255.0,
+                color.2 as f32 / 255.0,
+                color.3 as f32 / 255.0,
+            ],
+        }
+    }
+}
+
+const QUAD_WGSL: &str = r#"
+struct Globals { resolution: vec2<f32>, _pad: vec2<f32> };
+@group(0) @binding(0) var<uniform> globals: Globals;
+
+struct VsIn {
+    @location(0) min: vec2<f32>,
+    @location(1) max: vec2<f32>,
+    @location(2) color: vec4<f32>,
+    @builtin(vertex_index) vi: u32,
+};
+struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) color: vec4<f32> };
+
+@vertex
+fn vs(in: VsIn) -> VsOut {
+    var corners = array<vec2<f32>, 6>(
+        vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 1.0),
+        vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0),
+    );
+    let c = corners[in.vi];
+    let p = mix(in.min, in.max, c);
+    let ndc = vec2<f32>(
+        p.x / globals.resolution.x * 2.0 - 1.0,
+        p.y / globals.resolution.y * 2.0 - 1.0,
+    );
+    var o: VsOut;
+    o.pos = vec4<f32>(ndc.x, -ndc.y, 0.0, 1.0);
+    o.color = in.color;
+    return o;
+}
+
+@fragment
+fn fs(in: VsOut) -> @location(0) vec4<f32> { return in.color; }
+"#;
+
+/// Instanced renderer for solid-colour quads, drawn beneath the glyphs.
+pub struct QuadRenderer {
+    pipeline: wgpu::RenderPipeline,
+    globals: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+    instances: wgpu::Buffer,
+    capacity: usize,
+    count: u32,
+}
+
+impl QuadRenderer {
+    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("quad shader"),
+            source: wgpu::ShaderSource::Wgsl(QUAD_WGSL.into()),
+        });
+        let globals = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("quad globals"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: globals.as_entire_binding(),
+            }],
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[&bgl],
+            push_constant_ranges: &[],
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("quad pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs"),
+                compilation_options: Default::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<Quad>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &wgpu::vertex_attr_array![
+                        0 => Float32x2, 1 => Float32x2, 2 => Float32x4
+                    ],
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+        let capacity = 4096;
+        let instances = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("quad instances"),
+            size: (capacity * std::mem::size_of::<Quad>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        Self {
+            pipeline,
+            globals,
+            bind_group,
+            instances,
+            capacity,
+            count: 0,
+        }
+    }
+
+    /// Upload this frame's quads. `resolution` is the surface size in pixels.
+    pub fn prepare(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        resolution: (u32, u32),
+        quads: &[Quad],
+    ) {
+        queue.write_buffer(
+            &self.globals,
+            0,
+            bytemuck_cast(&[resolution.0 as f32, resolution.1 as f32, 0.0, 0.0]),
+        );
+        if quads.len() > self.capacity {
+            self.capacity = quads.len().next_power_of_two();
+            self.instances = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("quad instances"),
+                size: (self.capacity * std::mem::size_of::<Quad>()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+        if !quads.is_empty() {
+            queue.write_buffer(&self.instances, 0, bytemuck_cast(quads));
+        }
+        self.count = quads.len() as u32;
+    }
+
+    pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
+        if self.count == 0 {
+            return;
+        }
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_vertex_buffer(0, self.instances.slice(..));
+        pass.draw(0..6, 0..self.count);
+    }
+}
+
+/// Reinterpret a slice of `#[repr(C)]` plain-old-data as bytes (no bytemuck dep).
+fn bytemuck_cast<T: Copy>(data: &[T]) -> &[u8] {
+    // SAFETY: `T` is `#[repr(C)]`/POD here (f32 / Quad of f32) with no padding
+    // bits that matter, so viewing it as bytes is sound.
+    unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, std::mem::size_of_val(data)) }
+}
+
 /// Renderer crate version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

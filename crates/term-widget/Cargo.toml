@@ -1,6 +1,6 @@
 [package]
 name = "miao-term-widget"
-description = "winit integration: input, IME, clipboard, egui composition"
+description = "winit + wgpu native render loop for the miao-term engine"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,3 +10,6 @@ repository.workspace = true
 [dependencies]
 miao-term-core = { path = "../term-core" }
 miao-term-render = { path = "../term-render" }
+winit = "0.30"
+wgpu = "23"
+pollster = "0.4"
