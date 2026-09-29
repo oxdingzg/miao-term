@@ -2227,7 +2227,7 @@ impl ApplicationHandler for Host {
         let line_ratio = cfg.line_height;
         let font_family = cfg.font_family.clone();
         let lang = miao_term_ui::i18n::Lang::parse(cfg.language.as_deref());
-        let theme = theme_from_config(&cfg.theme, cfg.cursor_style);
+        let theme = Theme::from_config(&cfg.theme, cfg.cursor_style);
         let theme_name = "Nord".to_string();
         let (cw, ch) = State::cell_size(font_size, line_ratio, font_family.as_deref());
 
@@ -2779,22 +2779,6 @@ fn files_rows(cwd: &std::path::Path) -> Vec<(String, String)> {
         .collect();
     rows.sort_by(|a, b| a.0.cmp(&b.0));
     rows
-}
-
-fn theme_from_config(t: &miao_term_config::Theme, cursor: miao_term_config::CursorStyle) -> Theme {
-    use miao_term_ui::theme::Rgb;
-    let rgb = |c: miao_term_config::Rgb| Rgb(c.0, c.1, c.2);
-    Theme {
-        bg: rgb(t.background),
-        fg: rgb(t.foreground),
-        palette: t.palette.map(rgb),
-        selection: Rgb(0x43, 0x4c, 0x5e),
-        cursor: match cursor {
-            miao_term_config::CursorStyle::Block => miao_term_ui::CursorStyle::Block,
-            miao_term_config::CursorStyle::Bar => miao_term_ui::CursorStyle::Bar,
-            miao_term_config::CursorStyle::Underline => miao_term_ui::CursorStyle::Underline,
-        },
-    }
 }
 
 fn configure_egui(ctx: &egui::Context) {

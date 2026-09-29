@@ -2100,6 +2100,7 @@ name = "miao-term-ui"
 version = "0.0.0"
 dependencies = [
  "egui",
+ "miao-term-config",
  "miao-term-core",
  "miao-term-render",
  "serde",

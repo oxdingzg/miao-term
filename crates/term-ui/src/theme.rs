@@ -180,3 +180,25 @@ impl Default for Theme {
         Self::nord()
     }
 }
+
+impl Theme {
+    /// Build a UI theme from a `term-config` theme (and cursor style), so both
+    /// hosts share one mapping.
+    pub fn from_config(
+        cfg: &miao_term_config::Theme,
+        cursor: miao_term_config::CursorStyle,
+    ) -> Self {
+        let rgb = |c: miao_term_config::Rgb| Rgb(c.0, c.1, c.2);
+        Self {
+            bg: rgb(cfg.background),
+            fg: rgb(cfg.foreground),
+            palette: cfg.palette.map(rgb),
+            selection: Rgb(0x43, 0x4c, 0x5e),
+            cursor: match cursor {
+                miao_term_config::CursorStyle::Block => CursorStyle::Block,
+                miao_term_config::CursorStyle::Bar => CursorStyle::Bar,
+                miao_term_config::CursorStyle::Underline => CursorStyle::Underline,
+            },
+        }
+    }
+}

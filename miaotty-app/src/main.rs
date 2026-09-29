@@ -149,14 +149,16 @@ struct Theme {
 
 impl Theme {
     fn from_config(theme: &miao_term_config::Theme) -> Self {
-        let c = |r: miao_term_config::Rgb| egui::Color32::from_rgb(r.0, r.1, r.2);
+        // Shared mapping with the native host (miao-term-ui).
+        let ui = miao_term_ui::UiTheme::from_config(theme, miao_term_config::CursorStyle::Block);
+        let c = |r: miao_term_ui::theme::Rgb| egui::Color32::from_rgb(r.0, r.1, r.2);
         let mut palette = [egui::Color32::BLACK; 16];
-        for (i, p) in theme.palette.iter().enumerate() {
+        for (i, p) in ui.palette.iter().enumerate() {
             palette[i] = c(*p);
         }
         Self {
-            bg: c(theme.background),
-            fg: c(theme.foreground),
+            bg: c(ui.bg),
+            fg: c(ui.fg),
             palette,
         }
     }
