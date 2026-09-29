@@ -136,13 +136,19 @@ pub fn bootstrap_with(terminfo_b64: Option<&str>, term: &str) -> String {
     }
 }
 
-/// Compute the bootstrap, embedding the local `miaotty` terminfo entry when
-/// `infocmp` can produce one.
+/// Compute the bootstrap, embedding the local terminfo entry when it is small.
+///
+/// A PTY input line is capped by the kernel (`MAX_CANON`, ~1 KB on macOS), so a
+/// large base64 blob on the command line would be truncated and leave the shell
+/// with an unterminated quote. Only embed short entries; otherwise fall back to
+/// the plain `xterm-256color` bootstrap.
 pub fn bootstrap(term: &str) -> String {
+    const MAX_EMBED: usize = 384;
     let entry = Command::new("infocmp").args(["-x", term]).output().ok();
     let b64 = entry
         .filter(|o| o.status.success() && !o.stdout.is_empty())
-        .map(|o| base64_encode(&o.stdout));
+        .map(|o| base64_encode(&o.stdout))
+        .filter(|s| s.len() <= MAX_EMBED);
     bootstrap_with(b64.as_deref(), term)
 }
 
@@ -245,6 +251,18 @@ pub fn shell_quote(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn bootstrap_fits_a_pty_line() {
+        let b = super::bootstrap("xterm-256color");
+        let t = super::Target::parse("dingzg@host").unwrap();
+        let cmd = super::command(&t, &b);
+        assert!(
+            cmd.len() < 400,
+            "ssh command too long for a PTY input line: {} bytes",
+            cmd.len()
+        );
+    }
+
     use super::*;
 
     #[test]

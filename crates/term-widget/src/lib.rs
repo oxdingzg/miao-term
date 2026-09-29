@@ -1082,7 +1082,8 @@ impl State {
         let cw = self.cw * scale;
         let ch = self.ch * scale;
         let theme = self.theme.clone();
-        let window_bg = theme.bg;
+        let panel_bg = theme.chrome().bg;
+        let window_bg = panel_bg;
         let selection = self.selection.clone();
         let rects = self.pane_rects();
         let active_id = self.active_pane_id().unwrap_or_default();
@@ -1122,8 +1123,8 @@ impl State {
                     w: (r.w - CARD_MARGIN * 2.0).max(1.0),
                     h: (r.h - CARD_MARGIN * 2.0).max(1.0),
                 };
-                let border = lighten(theme.bg, 0.12);
-                let bg = theme.bg;
+                let border = lighten(panel_bg, 0.12);
+                let bg = panel_bg;
                 let radius = CARD_RADIUS * scale;
                 quads.push(Quad::rounded(
                     (card.x * scale, card.y * scale),
@@ -1146,7 +1147,7 @@ impl State {
                             continue;
                         };
                         let bg = theme.color(cell.bg, false);
-                        if bg != theme.bg {
+                        if bg != theme.bg && bg != panel_bg {
                             quads.push(quad(ox, oy, row, col, cw, ch, (bg.0, bg.1, bg.2)));
                         }
                     }
@@ -1402,12 +1403,7 @@ impl State {
                         view: &view,
                         resolve_target: None,
                         ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color {
-                                r: window_bg.0 as f64 / 255.0,
-                                g: window_bg.1 as f64 / 255.0,
-                                b: window_bg.2 as f64 / 255.0,
-                                a: self.opacity as f64,
-                            }),
+                            load: wgpu::LoadOp::Clear(linear_color(window_bg, self.opacity)),
                             store: wgpu::StoreOp::Store,
                         },
                     })],
@@ -2425,12 +2421,7 @@ impl State {
                         view: &view,
                         resolve_target: None,
                         ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color {
-                                r: window_bg.0 as f64 / 255.0,
-                                g: window_bg.1 as f64 / 255.0,
-                                b: window_bg.2 as f64 / 255.0,
-                                a: self.opacity as f64,
-                            }),
+                            load: wgpu::LoadOp::Clear(linear_color(window_bg, self.opacity)),
                             store: wgpu::StoreOp::Store,
                         },
                     })],
@@ -3470,6 +3461,25 @@ fn human_size(n: u64) -> String {
 }
 
 /// A stable texture key for an image: unique across panes.
+/// sRGB-encoded `Rgb` → a linear `wgpu::Color` (the surface is `*Srgb`, so clear
+/// and quad colours must be linear to avoid a washed-out look).
+fn linear_color(c: miao_term_ui::theme::Rgb, alpha: f32) -> wgpu::Color {
+    fn lin(v: u8) -> f64 {
+        let s = v as f64 / 255.0;
+        if s <= 0.04045 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    wgpu::Color {
+        r: lin(c.0),
+        g: lin(c.1),
+        b: lin(c.2),
+        a: alpha as f64,
+    }
+}
+
 /// Pick a transparency-capable surface alpha mode when `transparent`, else the
 /// first (usually Opaque). Falls back to Opaque if none is suitable.
 fn pick_alpha_mode(

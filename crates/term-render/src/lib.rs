@@ -350,6 +350,12 @@ fn vs(in: VsIn) -> VsOut {
     return o;
 }
 
+fn to_linear(c: vec3<f32>) -> vec3<f32> {
+    let lo = c / 12.92;
+    let hi = pow((c + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4));
+    return select(hi, lo, c <= vec3<f32>(0.04045));
+}
+
 @fragment
 fn fs(in: VsOut) -> @location(0) vec4<f32> {
     var alpha = in.color.a;
@@ -361,7 +367,7 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
         let d = length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - in.radius;
         alpha = in.color.a * (1.0 - smoothstep(-1.0, 1.0, d));
     }
-    return vec4<f32>(in.color.rgb, alpha);
+    return vec4<f32>(to_linear(in.color.rgb), alpha);
 }
 "#;
 
