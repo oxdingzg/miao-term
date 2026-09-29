@@ -4839,6 +4839,23 @@ fn save_window_size(w: f32, h: f32) {
 }
 
 impl chrome::Chrome for State {
+    fn pane_close_rects(&self) -> Vec<(String, egui::Rect)> {
+        self.pane_rects()
+            .into_iter()
+            .map(|(id, r)| {
+                (
+                    id,
+                    egui::Rect::from_min_size(egui::pos2(r.x, r.y), egui::vec2(r.w, r.h)),
+                )
+            })
+            .collect()
+    }
+
+    fn on_close_pane(&mut self, id: &str) {
+        self.close_pane_id(id);
+        self.window.request_redraw();
+    }
+
     fn lang(&self) -> miao_term_ui::i18n::Lang {
         self.lang
     }

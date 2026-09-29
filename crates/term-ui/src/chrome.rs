@@ -473,6 +473,15 @@ pub trait Chrome {
     fn on_queue_send_all(&mut self) {}
     fn on_queue_clear(&mut self) {}
     fn on_menu(&mut self, id: MenuId) {}
+
+    /// Screen-space rect of every pane in the active tab. Used to place the
+    /// per-pane close button; empty when the host has no split panes.
+    fn pane_close_rects(&self) -> Vec<(String, egui::Rect)> {
+        Vec::new()
+    }
+    fn on_close_pane(&mut self, id: &str) {
+        let _ = id;
+    }
 }
 
 pub const CHROME_MENU_H: f32 = 24.0;
@@ -878,6 +887,48 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
     if let Some(i) = switch {
         host.on_switch_tab(i);
     }
+    // Per-pane close button, top-right of each pane. Only when the tab is
+    // split — otherwise the tab's own close affordance covers it.
+    let mut close_pane: Option<String> = None;
+    {
+        let panes = host.pane_close_rects();
+        if panes.len() > 1 {
+            for (id, r) in &panes {
+                egui::Area::new(egui::Id::new(("pane-close", id)))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(egui::pos2(r.max.x - 24.0, r.min.y + 6.0))
+                    .show(ctx, |ui| {
+                        let (rect, resp) =
+                            ui.allocate_exact_size(egui::vec2(18.0, 16.0), egui::Sense::click());
+                        if resp.hovered() {
+                            ui.painter().rect_filled(
+                                rect,
+                                egui::Rounding::same(4.0),
+                                bg_color(ch.hover),
+                            );
+                        }
+                        ui.painter().text(
+                            rect.center(),
+                            egui::Align2::CENTER_CENTER,
+                            "\u{00d7}",
+                            egui::FontId::proportional(13.0),
+                            if resp.hovered() {
+                                bg_color(ch.text)
+                            } else {
+                                bg_color(ch.muted)
+                            },
+                        );
+                        if resp.clicked() {
+                            close_pane = Some(id.clone());
+                        }
+                    });
+            }
+        }
+    }
+    if let Some(id) = close_pane {
+        host.on_close_pane(&id);
+    }
+
     if let Some(i) = close {
         host.on_close_tab(i);
     }
