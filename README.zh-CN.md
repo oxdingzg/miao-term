@@ -274,15 +274,15 @@ view/edit、更新下载/校验/安装、URL scheme、全局快速终端热键�
 - **更新安装**:三端均已实现(macOS app bundle、Windows MSI/zip helper、Linux AppImage);
   已在 macOS 验证,Windows/Linux 路径仍需真机确认。
 - **CI 性能基线**:目前用 `actions/cache` 绑定;更持久的基线存储能让门更稳(缓存会被淘汰)。
-- **原生版对齐**:native 宿主仍缺窗口透明度、全局快速终端热键、URL scheme、以及 shell/agent
-  集成安装;其设置窗口是子集。
-- **终端内联图片**:超过回滚容量后的锚定是近似;按整个网格区裁剪而非按 pane;Kitty 按区域
-  删除(`d=p/c/r`)与动画未实现;会话恢复不保留图像。
+- **原生版对齐**:native 宿主仍缺窗口透明度与全局快速终端热键,且其 URL scheme 未在系统注册;
+  设置窗口是 eframe 版的子集。
+- **终端内联图片**:超过回滚容量后的锚定是近似;会话恢复不保留图像;Kitty 动画(`a=f`)未实现。
 - **Markdown**:Mermaid 支持 `graph`/`flowchart` 子集(或经 `mermaid-command` 全量渲染);
   其它图类型显示占位,远程(http/https)图片不加载。
 - **编辑器**:两端编辑器均有可选的 vim 模式(ADR 0029);i18n 覆盖主要界面但未覆盖全部字符串。
 - **Open Quickly**:文件夹/打开文件条目与 frecency 排序(ADR 0008)。
-- **MTP**:`file.read/write` 仅 UTF-8 文本(无二进制/流式传输);已支持按能力授权(`MIAOTTY_MTP_ALLOW`)。
+- **MTP**:`file.read/write` 支持二进制(base64)与 `offset`/`length` 分块;无服务端推送式流。
+  已支持按能力授权(`MIAOTTY_MTP_ALLOW`)。
 
 ---
 

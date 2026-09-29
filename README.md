@@ -316,20 +316,20 @@ Still open:
   paths still need a real host to confirm.
 - **CI performance baseline**: bound through `actions/cache` today; a durable
   baseline store would make the gate robust across cache eviction.
-- **Native parity**: the native host still lacks window opacity, the global
-  Quick Terminal hotkey, URL schemes and the shell/agent integration
-  installers; its Settings window is a subset.
-- **Inline graphics**: anchoring is approximate past the scrollback cap; images
-  are clipped to the grid area rather than per pane; Kitty region-deletes
-  (`d=p/c/r`) and animation are not implemented; session restore keeps none.
+- **Native parity**: the native host still lacks window opacity and the global
+  Quick Terminal hotkey, and its URL schemes are not registered with the OS; its
+  Settings window is a subset of the eframe app's.
+- **Inline graphics**: anchoring is approximate past the scrollback cap, and
+  session restore keeps no images; Kitty animation (`a=f`) is not implemented.
 - **Markdown**: Mermaid renders a `graph`/`flowchart` subset (or fully via
   `mermaid-command`); other diagram types show a placeholder, and remote
   (http/https) images are not loaded.
 - **Editor**: both editors have an opt-in vim mode (ADR 0029); i18n covers the
   main chrome but not every string.
 - **Open Quickly**: folder / open-file entries and frecency ranking (ADR 0008).
-- **MTP**: `file.read/write` is UTF-8 text only (no binary/streaming transfer);
-  per-capability authorization is available via `MIAOTTY_MTP_ALLOW`.
+- **MTP**: `file.read/write` support binary (base64) with `offset`/`length`
+  chunking; there is no server-push streaming. Per-capability authorization is
+  available via `MIAOTTY_MTP_ALLOW`.
 
 ---
 
