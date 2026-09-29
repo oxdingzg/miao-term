@@ -284,6 +284,8 @@ pub struct Quad {
     pub min: [f32; 2],
     pub max: [f32; 2],
     pub color: [f32; 4],
+    /// Corner radius in physical pixels (0 = square).
+    pub radius: f32,
 }
 
 impl Quad {
@@ -297,7 +299,14 @@ impl Quad {
                 color.2 as f32 / 255.0,
                 color.3 as f32 / 255.0,
             ],
+            radius: 0.0,
         }
+    }
+
+    pub fn rounded(min: (f32, f32), max: (f32, f32), color: (u8, u8, u8, u8), radius: f32) -> Self {
+        let mut q = Self::new(min, max, color);
+        q.radius = radius;
+        q
     }
 }
 
@@ -309,9 +318,16 @@ struct VsIn {
     @location(0) min: vec2<f32>,
     @location(1) max: vec2<f32>,
     @location(2) color: vec4<f32>,
+    @location(3) radius: f32,
     @builtin(vertex_index) vi: u32,
 };
-struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) color: vec4<f32> };
+struct VsOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) color: vec4<f32>,
+    @location(1) rect_min: vec2<f32>,
+    @location(2) rect_max: vec2<f32>,
+    @location(3) radius: f32,
+};
 
 @vertex
 fn vs(in: VsIn) -> VsOut {
@@ -328,11 +344,25 @@ fn vs(in: VsIn) -> VsOut {
     var o: VsOut;
     o.pos = vec4<f32>(ndc.x, -ndc.y, 0.0, 1.0);
     o.color = in.color;
+    o.rect_min = in.min;
+    o.rect_max = in.max;
+    o.radius = in.radius;
     return o;
 }
 
 @fragment
-fn fs(in: VsOut) -> @location(0) vec4<f32> { return in.color; }
+fn fs(in: VsOut) -> @location(0) vec4<f32> {
+    var alpha = in.color.a;
+    if (in.radius > 0.5) {
+        let center = (in.rect_min + in.rect_max) * 0.5;
+        let half = (in.rect_max - in.rect_min) * 0.5;
+        let b = max(half - vec2<f32>(in.radius), vec2<f32>(0.0));
+        let q = abs(in.pos.xy - center) - b;
+        let d = length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - in.radius;
+        alpha = in.color.a * (1.0 - smoothstep(-1.0, 1.0, d));
+    }
+    return vec4<f32>(in.color.rgb, alpha);
+}
 "#;
 
 /// Instanced renderer for solid-colour quads, drawn beneath the glyphs.
@@ -394,7 +424,7 @@ impl QuadRenderer {
                     array_stride: std::mem::size_of::<Quad>() as u64,
                     step_mode: wgpu::VertexStepMode::Instance,
                     attributes: &wgpu::vertex_attr_array![
-                        0 => Float32x2, 1 => Float32x2, 2 => Float32x4
+                        0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32
                     ],
                 }],
             },

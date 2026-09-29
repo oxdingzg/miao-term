@@ -29,6 +29,7 @@ const STATUS_H: f32 = 22.0;
 const SIDEBAR_W: f32 = 200.0;
 const DETAILS_W: f32 = 300.0;
 const CARD_MARGIN: f32 = 6.0;
+const CARD_RADIUS: f32 = 9.0;
 const CARD_PAD: f32 = 8.0;
 const BLINK: Duration = Duration::from_millis(530);
 
@@ -138,6 +139,7 @@ struct State {
     recipe_list: Vec<String>,
     ssh_dialog: Option<String>,
     remote_dialog: Option<(String, String)>,
+    composer: Option<String>,
     update_url: Option<String>,
     update_rx: Option<std::sync::mpsc::Receiver<String>>,
     update_msg: Option<String>,
@@ -168,6 +170,7 @@ struct Shortcut {
     toggle_details: bool,
     palette: bool,
     settings: bool,
+    composer: bool,
 }
 
 fn shortcut(event: &KeyEvent, mods: ModifiersState) -> Option<Shortcut> {
@@ -186,11 +189,13 @@ fn shortcut(event: &KeyEvent, mods: ModifiersState) -> Option<Shortcut> {
         toggle_details: false,
         palette: false,
         settings: false,
+        composer: false,
     };
     let mut matched = true;
     match &event.logical_key {
         Key::Character(c) => match c.as_str() {
             "t" => s.new_tab = true,
+            "e" => s.composer = true,
             "k" => s.palette = true,
             "p" if mods.shift_key() => s.palette = true,
             "," => s.settings = true,
@@ -570,18 +575,21 @@ impl State {
                 };
                 let border = lighten(theme.bg, 0.12);
                 let bg = theme.bg;
-                quads.push(Quad::new(
+                let radius = CARD_RADIUS * scale;
+                quads.push(Quad::rounded(
                     (card.x * scale, card.y * scale),
                     ((card.x + card.w) * scale, (card.y + card.h) * scale),
                     (border.0, border.1, border.2, 255),
+                    radius,
                 ));
-                quads.push(Quad::new(
+                quads.push(Quad::rounded(
                     (card.x * scale + 1.0, card.y * scale + 1.0),
                     (
                         (card.x + card.w) * scale - 1.0,
                         (card.y + card.h) * scale - 1.0,
                     ),
                     (bg.0, bg.1, bg.2, 255),
+                    (radius - 1.0).max(0.0),
                 ));
                 for row in 0..sr {
                     for col in 0..sc {
@@ -860,6 +868,12 @@ impl State {
                             ui.close_menu();
                         }
                     });
+                    ui.menu_button(t(lang, "Agent", "Agent"), |ui| {
+                        if ui.button(t(lang, "Composer", "Composer")).clicked() {
+                            action = Some(Cmd::Composer);
+                            ui.close_menu();
+                        }
+                    });
                     ui.menu_button(t(lang, "Help", "帮助"), |ui| {
                         if ui
                             .button(t(lang, "Check for Updates", "检查更新"))
@@ -1073,6 +1087,7 @@ impl State {
         self.settings_window(ctx);
         self.open_dialog_window(ctx);
         self.editor_window(ctx);
+        self.composer_window(ctx);
         self.recipe_dialog_window(ctx);
         self.ssh_dialog_window(ctx);
         self.remote_dialog_window(ctx);
@@ -1339,6 +1354,7 @@ impl State {
 /// A palette command.
 enum Cmd {
     NewTab,
+    Composer,
     CheckUpdates,
     NewSsh,
     OpenRemote,
@@ -1370,6 +1386,7 @@ impl State {
     fn commands(&self) -> Vec<(Cmd, &'static str)> {
         vec![
             (Cmd::NewTab, "New Tab"),
+            (Cmd::Composer, "Composer"),
             (Cmd::CheckUpdates, "Check for Updates"),
             (Cmd::NewSsh, "New SSH Session…"),
             (Cmd::OpenRemote, "Open Remote File…"),
@@ -1412,6 +1429,7 @@ impl State {
                 self.ch = ch;
                 self.resize();
             }
+            Cmd::Composer => self.composer = Some(String::new()),
             Cmd::CheckUpdates => self.check_updates(),
             Cmd::NewSsh => self.ssh_dialog = Some(String::new()),
             Cmd::OpenRemote => self.remote_dialog = Some((String::new(), String::new())),
@@ -1574,6 +1592,59 @@ impl State {
         }
         if !open {
             self.show_settings = false;
+        }
+    }
+
+    fn composer_window(&mut self, ctx: &egui::Context) {
+        let target = self.active_pane().map(|p| p.id.clone()).unwrap_or_default();
+        let Some(text) = self.composer.as_mut() else {
+            return;
+        };
+        use miao_term_ui::i18n::t;
+        let lang = self.lang;
+        let mut open = true;
+        let mut send = false;
+        let mut queue = false;
+        egui::Window::new(t(lang, "Composer", "Composer"))
+            .open(&mut open)
+            .default_size([520.0, 260.0])
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new(format!("to {target}"))
+                        .small()
+                        .color(egui::Color32::from_gray(140)),
+                );
+                ui.add(
+                    egui::TextEdit::multiline(text)
+                        .hint_text(t(lang, "Prompt…", "提示词…"))
+                        .desired_width(f32::INFINITY)
+                        .desired_rows(8),
+                );
+                ui.horizontal(|ui| {
+                    let ready = !text.trim().is_empty();
+                    if ui
+                        .add_enabled(ready, egui::Button::new(t(lang, "Send", "发送")))
+                        .clicked()
+                    {
+                        send = true;
+                    }
+                    if ui
+                        .add_enabled(ready, egui::Button::new(t(lang, "Queue it", "加入队列")))
+                        .clicked()
+                    {
+                        queue = true;
+                    }
+                });
+            });
+        let draft = text.clone();
+        if send {
+            self.composer = None;
+            self.write_input(format!("{draft}\r").as_bytes());
+        } else if queue {
+            self.prompts.push(draft);
+            self.composer = None;
+        } else if !open {
+            self.composer = None;
         }
     }
 
@@ -2038,6 +2109,7 @@ impl ApplicationHandler for Host {
         let quads = QuadRenderer::new(&device, format);
         let egui_ctx = egui::Context::default();
         install_egui_fonts(&egui_ctx);
+        configure_egui(&egui_ctx);
         let egui_state = egui_winit::State::new(
             egui_ctx.clone(),
             egui::ViewportId::ROOT,
@@ -2099,6 +2171,7 @@ impl ApplicationHandler for Host {
             recipe_list: Vec::new(),
             ssh_dialog: None,
             remote_dialog: None,
+            composer: None,
             update_url: cfg.update_check_url.clone(),
             update_rx: None,
             update_msg: None,
@@ -2326,6 +2399,9 @@ impl ApplicationHandler for Host {
                     }
                     if s.settings {
                         state.show_settings = true;
+                    }
+                    if s.composer {
+                        state.composer = Some(String::new());
                     }
                     state.window.request_redraw();
                 } else {
@@ -2584,6 +2660,19 @@ fn theme_from_config(t: &miao_term_config::Theme, cursor: miao_term_config::Curs
             miao_term_config::CursorStyle::Underline => miao_term_ui::CursorStyle::Underline,
         },
     }
+}
+
+fn configure_egui(ctx: &egui::Context) {
+    let mut style = (*ctx.style()).clone();
+    let r = egui::Rounding::same(6.0);
+    style.visuals.widgets.inactive.rounding = r;
+    style.visuals.widgets.hovered.rounding = r;
+    style.visuals.widgets.active.rounding = r;
+    style.visuals.widgets.open.rounding = r;
+    style.visuals.window_rounding = egui::Rounding::same(10.0);
+    style.spacing.item_spacing = egui::vec2(6.0, 4.0);
+    style.spacing.button_padding = egui::vec2(6.0, 2.0);
+    ctx.set_style(style);
 }
 
 fn install_egui_fonts(ctx: &egui::Context) {
