@@ -705,10 +705,6 @@ impl State {
             );
         }
 
-        if std::env::var_os("MIAOTTY_NATIVE_SHOT").is_some() {
-            self.capture(&draws, window_bg);
-        }
-
         // egui chrome.
         let raw = self.egui_state.take_egui_input(&self.window);
         let events = raw.events.clone();
@@ -736,6 +732,9 @@ impl State {
             &paint_jobs,
             &screen,
         );
+        if std::env::var_os("MIAOTTY_NATIVE_SHOT").is_some() {
+            self.capture(&draws, window_bg, &paint_jobs, &screen);
+        }
 
         let Ok(frame) = self.surface.get_current_texture() else {
             return;
@@ -1614,7 +1613,13 @@ impl State {
     }
 
     /// Debug: render the terminal grid offscreen and dump a PPM, then exit.
-    fn capture(&self, draws: &[PaneDraw], window_bg: miao_term_ui::theme::Rgb) {
+    fn capture(
+        &self,
+        draws: &[PaneDraw],
+        window_bg: miao_term_ui::theme::Rgb,
+        paint_jobs: &[egui::ClippedPrimitive],
+        screen: &egui_wgpu::ScreenDescriptor,
+    ) {
         let (w, h) = (self.config.width, self.config.height);
         let tex = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("shot"),
@@ -1662,6 +1667,7 @@ impl State {
                     r.render(&mut pass);
                 }
             }
+            self.egui_renderer.render(&mut pass, paint_jobs, screen);
         }
         let bpr = (w * 4) as usize;
         let padded = (bpr + 255) & !255;

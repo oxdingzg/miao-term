@@ -110,13 +110,14 @@ pub fn details_tabs(
     ui.visuals_mut().override_text_color = Some(fg_color(theme));
     ui.horizontal_wrapped(|ui| {
         for (i, (icon, l)) in tabs.iter().enumerate() {
-            let resp = ui.selectable_label(i == active, *l);
+            // Reserve leading space so the icon sits left of the label text.
+            let resp = ui.selectable_label(i == active, format!("    {l}"));
             if resp.clicked() {
                 sel = Some(i);
             }
             let ir = egui::Rect::from_center_size(
-                resp.rect.left_top() + egui::vec2(9.0, resp.rect.height() / 2.0),
-                egui::Vec2::splat(12.0),
+                egui::pos2(resp.rect.left() + 10.0, resp.rect.center().y),
+                egui::Vec2::splat(13.0),
             );
             crate::icons::draw(ui.painter(), ir, *icon, fg_color(theme));
         }
