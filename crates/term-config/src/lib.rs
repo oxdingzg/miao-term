@@ -114,6 +114,8 @@ struct RawConfig {
     #[serde(rename = "update-check-url")]
     update_check_url: Option<String>,
     editor: Option<String>,
+    #[serde(rename = "editor-vim")]
+    editor_vim: Option<bool>,
     #[serde(rename = "quick-terminal-hotkey")]
     quick_terminal_hotkey: Option<String>,
     #[serde(rename = "update-pubkey")]
@@ -201,6 +203,8 @@ pub struct Config {
     pub update_check_url: Option<String>,
     /// External editor command used by "Edit in Tab" (see ADR 0017).
     pub editor: Option<String>,
+    /// Enable a minimal vim mode in the built-in editor (ADR 0029).
+    pub editor_vim: bool,
     /// System-wide accelerator that toggles the Quick Terminal, e.g.
     /// `cmd+shift+t` (see ADR 0019). `None` disables it.
     pub quick_terminal_hotkey: Option<String>,
@@ -255,6 +259,7 @@ impl Default for Config {
             language: None,
             update_check_url: None,
             editor: None,
+            editor_vim: false,
             quick_terminal_hotkey: None,
             update_pubkey: None,
             theme: Theme::default(),
@@ -521,6 +526,9 @@ impl Config {
             if !url.is_empty() {
                 cfg.update_check_url = Some(url.to_string());
             }
+        }
+        if let Some(vim) = raw.editor_vim {
+            cfg.editor_vim = vim;
         }
         if let Some(editor) = raw.editor {
             let editor = editor.trim();

@@ -37,4 +37,5 @@
 | [0026](./0026-wayland-shortcut.zh-CN.md) | 原生 Wayland/X11 全局快捷键（门户） | 已接受 |
 | [0027](./0027-conpty-teardown.zh-CN.md) | ConPTY 的收尾不得阻塞 | 已接受 |
 | [0028](./0028-ci-perf-baseline.zh-CN.md) | CI 侧性能基线 | 已接受 |
+| [0029](./0029-vim-mode.zh-CN.md) | 极小、可选的 vim 模式 | 已接受 |
 | [0030](./0030-native-render-loop.zh-CN.md) | 原生渲染循环（自绘网格） | 已接受 |

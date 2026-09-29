@@ -10,6 +10,7 @@ font-size = 14
 # prevent-sleep = true             # keep the machine awake while an agent is processing
 
 # quick-terminal-hotkey = "cmd+shift+t"  # system-wide Quick Terminal toggle
+# editor-vim = true                # minimal vim mode in the built-in editor
 # editor = "code --wait"            # command used by "Edit in Tab"
 # language = "zh"                  # UI language ("en" default; also reads $LANG)
 # update-pubkey = "RW…"            # minisign public key; enables signature checks

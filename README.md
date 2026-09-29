@@ -60,7 +60,8 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 - **Composer** (`⌘⇧E`) and a **prompt queue** that sends to an agent pane once it
   is idle; **notifications** and a **sleep guard** driven by agent state.
 - **Reader/editor** (`⌘`-open): read-only preview with line numbers and a
-  jump-to-line highlight, edit mode with a gutter, *Open Externally* / *Edit in
+  jump-to-line highlight, edit mode with a gutter and an opt-in minimal vim mode
+  (`editor-vim`), *Open Externally* / *Edit in
   Tab*, and a dependency-free Markdown renderer (headings, lists, quotes, tables,
   code, links, images, footnotes).
 - **Recipes**: save and replay a whole workspace; config export.
