@@ -270,6 +270,33 @@ fn panel_frame(theme: &crate::theme::Theme, margin: egui::Margin) -> egui::Frame
         .inner_margin(margin)
 }
 
+/// One row in a details list (Files / Ports / Git / Outline): a single line
+/// with an icon, a label and right-aligned meta.
+pub struct ChromeItem {
+    pub icon: crate::icons::Icon,
+    pub label: String,
+    pub meta: String,
+}
+
+/// Render `items` as a compact one-line-per-row list.
+pub fn list(ui: &mut egui::Ui, theme: &crate::theme::Theme, items: &[ChromeItem]) {
+    ui.visuals_mut().override_text_color = Some(fg_color(theme));
+    let muted = egui::Color32::from_gray(132);
+    for it in items {
+        ui.horizontal(|ui| {
+            let (irect, _) = ui.allocate_exact_size(egui::Vec2::splat(14.0), egui::Sense::hover());
+            crate::icons::draw(ui.painter(), irect, it.icon, fg_color(theme));
+            ui.add_space(2.0);
+            ui.label(egui::RichText::new(&it.label).monospace().size(12.0));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if !it.meta.is_empty() {
+                    ui.label(egui::RichText::new(&it.meta).size(10.5).color(muted));
+                }
+            });
+        });
+    }
+}
+
 /// A menu command id; each host maps it to its own action.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum MenuId {
@@ -332,6 +359,10 @@ pub trait Chrome {
     fn details_is_queue(&self) -> bool {
         false
     }
+    /// A single-line list view for list-like tabs; `None` falls back to k/v.
+    fn details_list(&self) -> Option<Vec<ChromeItem>> {
+        None
+    }
     fn status(&self) -> String {
         String::new()
     }
@@ -383,6 +414,7 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
     let details_title = host.details_title();
     let details_rows = host.details_rows();
     let details_is_queue = host.details_is_queue();
+    let details_list = host.details_list();
     let status = host.status();
     let queue_items = host.queue();
     let mut queue_input = host.take_queue_input();
@@ -590,11 +622,17 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
                     details_sel = Some(i);
                 }
                 ui.separator();
-                if details_is_queue {
-                    qev = queue(ui, &theme, &queue_items, &mut queue_input, lang);
-                } else {
-                    info(ui, &theme, &details_title, &details_rows);
-                }
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        if details_is_queue {
+                            qev = queue(ui, &theme, &queue_items, &mut queue_input, lang);
+                        } else if let Some(items) = &details_list {
+                            list(ui, &theme, items);
+                        } else {
+                            info(ui, &theme, &details_title, &details_rows);
+                        }
+                    });
             });
     }
 

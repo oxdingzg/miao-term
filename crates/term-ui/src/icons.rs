@@ -13,6 +13,8 @@ pub enum Icon {
     Sidebar,
     Details,
     Plus,
+    Folder,
+    File,
 }
 
 /// Draw `icon` centered in `rect`.
@@ -40,6 +42,37 @@ pub fn draw(p: &egui::Painter, rect: egui::Rect, icon: Icon, color: egui::Color3
             p.rect_stroke(r, egui::Rounding::same(2.0), s);
             let x = r.right() - 4.0;
             line((x, r.top()), (x, r.bottom()));
+        }
+        Icon::Folder => {
+            let (l, t, rr, b) = (
+                r.left() + 1.0,
+                r.top() + 3.0,
+                r.right() - 1.0,
+                r.bottom() - 1.0,
+            );
+            p.rect_stroke(
+                egui::Rect::from_min_max(egui::pos2(l, t), egui::pos2(rr, b)),
+                egui::Rounding::same(1.5),
+                s,
+            );
+            line((l, t), (l, t - 2.0));
+            line((l, t - 2.0), (l + 4.0, t - 2.0));
+            line((l + 4.0, t - 2.0), (l + 5.5, t));
+        }
+        Icon::File => {
+            let (l, t, rr, b) = (
+                r.left() + 2.0,
+                r.top() + 1.0,
+                r.right() - 2.0,
+                r.bottom() - 1.0,
+            );
+            line((l, t), (rr - 3.0, t));
+            line((rr - 3.0, t), (rr, t + 3.0));
+            line((rr, t + 3.0), (rr, b));
+            line((rr, b), (l, b));
+            line((l, b), (l, t));
+            line((rr - 3.0, t), (rr - 3.0, t + 3.0));
+            line((rr - 3.0, t + 3.0), (rr, t + 3.0));
         }
         Icon::Plus => {
             line((c.x, r.top() + 2.0), (c.x, r.bottom() - 2.0));

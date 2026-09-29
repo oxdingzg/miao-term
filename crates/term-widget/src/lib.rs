@@ -87,8 +87,17 @@ struct Tab {
 #[derive(Default, Clone)]
 struct DetailsData {
     git: Vec<(String, String)>,
-    files: Vec<(String, String)>,
+    files: Vec<FileEntry>,
     ports: Vec<(String, String)>,
+}
+
+/// One entry in the Files panel.
+#[allow(dead_code)]
+#[derive(Clone)]
+struct FileEntry {
+    name: String,
+    is_dir: bool,
+    size: u64,
 }
 
 /// A simple built-in text file editor (with a naive Markdown preview).
@@ -1107,13 +1116,7 @@ impl State {
                     .map(|d| d.git.clone())
                     .unwrap_or_default(),
             ),
-            4 => (
-                "Files",
-                self.details_data
-                    .as_ref()
-                    .map(|d| d.files.clone())
-                    .unwrap_or_default(),
-            ),
+            4 => ("Files", Vec::new()),
             5 => (
                 "Ports",
                 self.details_data
@@ -1967,7 +1970,8 @@ impl State {
             .map(|d| {
                 d.files
                     .iter()
-                    .map(|(n, s)| (n.clone(), s == "dir"))
+                    .filter(|f| f.is_dir)
+                    .map(|f| (f.name.clone(), true))
                     .collect()
             })
             .unwrap_or_default();
@@ -2693,6 +2697,22 @@ impl State {
     }
 }
 
+/// Human-readable byte size for the Files panel.
+fn human_size(n: u64) -> String {
+    const UNIT: [&str; 5] = ["B", "K", "M", "G", "T"];
+    let mut v = n as f64;
+    let mut i = 0;
+    while v >= 1024.0 && i + 1 < UNIT.len() {
+        v /= 1024.0;
+        i += 1;
+    }
+    if i == 0 {
+        format!("{n} B")
+    } else {
+        format!("{v:.1} {}", UNIT[i])
+    }
+}
+
 /// A stable texture key for an image: unique across panes.
 /// Pick a transparency-capable surface alpha mode when `transparent`, else the
 /// first (usually Opaque). Falls back to Opaque if none is suitable.
@@ -2989,7 +3009,10 @@ impl ApplicationHandler for Host {
             update_url: cfg.update_check_url.clone(),
             update_rx: None,
             update_msg: None,
-            details_tab: 0,
+            details_tab: std::env::var("MIAOTTY_DETAILS_TAB")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
             details_cwd: None,
             details_data: None,
             details_rx: None,
@@ -3673,23 +3696,26 @@ fn ports_rows(pid: u32) -> Vec<(String, String)> {
     rows
 }
 
-fn files_rows(cwd: &std::path::Path) -> Vec<(String, String)> {
+fn files_rows(cwd: &std::path::Path) -> Vec<FileEntry> {
     let Ok(read) = std::fs::read_dir(cwd) else {
         return Vec::new();
     };
-    let mut rows: Vec<(String, String)> = read
+    let mut rows: Vec<FileEntry> = read
         .flatten()
         .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
-        .take(200)
+        .take(500)
         .map(|e| {
             let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
-            (
-                e.file_name().to_string_lossy().to_string(),
-                if is_dir { "dir".into() } else { "file".into() },
-            )
+            let size = e.metadata().map(|m| m.len()).unwrap_or(0);
+            FileEntry {
+                name: e.file_name().to_string_lossy().to_string(),
+                is_dir,
+                size,
+            }
         })
         .collect();
-    rows.sort_by(|a, b| a.0.cmp(&b.0));
+    // Directories first, then name.
+    rows.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then(a.name.cmp(&b.name)));
     rows
 }
 
@@ -3845,6 +3871,61 @@ impl chrome::Chrome for State {
     }
     fn details_is_queue(&self) -> bool {
         self.details_tab == 6
+    }
+    fn details_list(&self) -> Option<Vec<chrome::ChromeItem>> {
+        use chrome::ChromeItem;
+        use miao_term_ui::icons::Icon;
+        let item = |icon: Icon, label: String, meta: String| ChromeItem { icon, label, meta };
+        match self.details_tab.min(6) {
+            2 => Some(
+                self.outline_rows()
+                    .into_iter()
+                    .map(|(cwd, cmd)| item(Icon::Terminal, cmd, cwd))
+                    .collect(),
+            ),
+            3 => Some(
+                self.details_data
+                    .as_ref()
+                    .map(|d| {
+                        d.git
+                            .iter()
+                            .map(|(k, v)| item(Icon::Git, v.clone(), k.clone()))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            ),
+            4 => Some(
+                self.details_data
+                    .as_ref()
+                    .map(|d| {
+                        d.files
+                            .iter()
+                            .map(|f| {
+                                let icon = if f.is_dir { Icon::Folder } else { Icon::File };
+                                let meta = if f.is_dir {
+                                    String::new()
+                                } else {
+                                    human_size(f.size)
+                                };
+                                item(icon, f.name.clone(), meta)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            ),
+            5 => Some(
+                self.details_data
+                    .as_ref()
+                    .map(|d| {
+                        d.ports
+                            .iter()
+                            .map(|(k, v)| item(Icon::Ports, v.clone(), k.clone()))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            ),
+            _ => None,
+        }
     }
     fn status(&self) -> String {
         self.status_text()
