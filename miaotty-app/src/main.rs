@@ -1412,24 +1412,23 @@ impl eframe::App for MiaottyApp {
             ));
         }
 
-        // Cursor blink (only when focused; keeps idle CPU low otherwise).
-        if ctx.input(|i| i.focused) {
-            if self.last_blink.elapsed() >= Duration::from_millis(530) {
-                self.cursor_on = !self.cursor_on;
-                self.last_blink = Instant::now();
-                // The block cursor inverts a cell, so the row cache must rebuild.
-                if let Some(tab) = self.tabs.get_mut(self.active) {
-                    let id = tab.active.clone();
-                    if let Some(pane) = tab.panes.iter_mut().find(|p| p.pane_id == id) {
-                        pane.dirty = true;
-                    }
+        // Cursor blink (only when focused).
+        if ctx.input(|i| i.focused) && self.last_blink.elapsed() >= Duration::from_millis(530) {
+            self.cursor_on = !self.cursor_on;
+            self.last_blink = Instant::now();
+            // The block cursor inverts a cell, so the row cache must rebuild.
+            if let Some(tab) = self.tabs.get_mut(self.active) {
+                let id = tab.active.clone();
+                if let Some(pane) = tab.panes.iter_mut().find(|p| p.pane_id == id) {
+                    pane.dirty = true;
                 }
-                ctx.request_repaint();
             }
-            // Keep a responsive frame cadence while focused so PTY output and
-            // input echo are drawn promptly (idle CPU stays ~0 when unfocused).
-            ctx.request_repaint_after(Duration::from_millis(16));
+            ctx.request_repaint();
         }
+        // Keep a steady frame cadence so PTY output and input echo are drawn
+        // promptly. Gating this on focus was unreliable and let frames fall back
+        // to the blink interval (~530 ms), which felt like heavy input lag.
+        ctx.request_repaint_after(Duration::from_millis(16));
 
         self.menu_bar(ctx);
         self.tab_bar(ctx);
