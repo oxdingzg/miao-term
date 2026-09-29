@@ -705,6 +705,10 @@ impl State {
             );
         }
 
+        if std::env::var_os("MIAOTTY_NATIVE_SHOT").is_some() {
+            self.capture(&draws, window_bg);
+        }
+
         // egui chrome.
         let raw = self.egui_state.take_egui_input(&self.window);
         let events = raw.events.clone();
@@ -931,15 +935,13 @@ impl State {
                         if ui.button("A-").clicked() {
                             font_delta = -1.0;
                         }
-                        if ui
-                            .button("\u{2630}")
+                        if icon_button(ui, Icon::Sidebar, chrome::fg_color(&theme))
                             .on_hover_text("Toggle sidebar")
                             .clicked()
                         {
                             self.show_sidebar = !self.show_sidebar;
                         }
-                        if ui
-                            .button("\u{25a4}")
+                        if icon_button(ui, Icon::Details, chrome::fg_color(&theme))
                             .on_hover_text("Toggle details")
                             .clicked()
                         {
@@ -1593,6 +1595,104 @@ impl State {
         if !open {
             self.show_settings = false;
         }
+    }
+
+    /// Debug: render the terminal grid offscreen and dump a PPM, then exit.
+    fn capture(&self, draws: &[PaneDraw], window_bg: miao_term_ui::theme::Rgb) {
+        let (w, h) = (self.config.width, self.config.height);
+        let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("shot"),
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&Default::default());
+        let mut enc = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        {
+            let mut pass = enc
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: None,
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: window_bg.0 as f64 / 255.0,
+                                g: window_bg.1 as f64 / 255.0,
+                                b: window_bg.2 as f64 / 255.0,
+                                a: 1.0,
+                            }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    occlusion_query_set: None,
+                    timestamp_writes: None,
+                })
+                .forget_lifetime();
+            self.quads.render(&mut pass);
+            for d in draws {
+                if let Some(r) = self.renderers.get(&d.id) {
+                    r.render(&mut pass);
+                }
+            }
+        }
+        let bpr = (w * 4) as usize;
+        let padded = (bpr + 255) & !255;
+        let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: (padded * h as usize) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        enc.copy_texture_to_buffer(
+            wgpu::ImageCopyTexture {
+                texture: &tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::ImageCopyBuffer {
+                buffer: &buf,
+                layout: wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded as u32),
+                    rows_per_image: Some(h),
+                },
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit(Some(enc.finish()));
+        let slice = buf.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        self.device.poll(wgpu::Maintain::Wait);
+        let data = slice.get_mapped_range();
+        let mut ppm = format!("P6\n{w} {h}\n255\n").into_bytes();
+        for y in 0..h as usize {
+            let row = &data[y * padded..y * padded + bpr];
+            for x in 0..w as usize {
+                ppm.push(row[x * 4 + 2]);
+                ppm.push(row[x * 4 + 1]);
+                ppm.push(row[x * 4]);
+            }
+        }
+        drop(data);
+        let _ = std::fs::write("/tmp/native_shot.ppm", ppm);
+        std::process::exit(0);
     }
 
     fn composer_window(&mut self, ctx: &egui::Context) {
@@ -2517,6 +2617,40 @@ fn json_to_layout(
         a: Box::new(a),
         b: Box::new(b),
     })
+}
+
+enum Icon {
+    Sidebar,
+    Details,
+}
+
+/// A small, hand-drawn icon button (no font glyphs, so it always renders).
+fn icon_button(ui: &mut egui::Ui, icon: Icon, color: egui::Color32) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(22.0, 18.0), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let p = ui.painter();
+        if resp.hovered() {
+            p.rect_filled(
+                rect,
+                egui::Rounding::same(4.0),
+                ui.visuals().widgets.hovered.bg_fill,
+            );
+        }
+        let r = rect.shrink(4.0);
+        let s = egui::Stroke::new(1.3_f32, color);
+        p.rect_stroke(r, egui::Rounding::same(2.0), s);
+        match icon {
+            Icon::Sidebar => {
+                let x = r.left() + 4.0;
+                p.line_segment([egui::pos2(x, r.top()), egui::pos2(x, r.bottom())], s);
+            }
+            Icon::Details => {
+                let x = r.right() - 4.0;
+                p.line_segment([egui::pos2(x, r.top()), egui::pos2(x, r.bottom())], s);
+            }
+        }
+    }
+    resp
 }
 
 fn card_inner(r: Rect) -> Rect {
