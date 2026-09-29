@@ -936,13 +936,21 @@ impl State {
                             font_delta = -1.0;
                         }
                         if icon_button(ui, Icon::Sidebar, chrome::fg_color(&theme))
-                            .on_hover_text("Toggle sidebar")
+                            .on_hover_text(miao_term_ui::i18n::t(
+                                lang,
+                                "Toggle sidebar",
+                                "开关侧栏",
+                            ))
                             .clicked()
                         {
                             self.show_sidebar = !self.show_sidebar;
                         }
                         if icon_button(ui, Icon::Details, chrome::fg_color(&theme))
-                            .on_hover_text("Toggle details")
+                            .on_hover_text(miao_term_ui::i18n::t(
+                                lang,
+                                "Toggle details",
+                                "开关详情",
+                            ))
                             .clicked()
                         {
                             self.show_details = !self.show_details;
@@ -1339,12 +1347,17 @@ impl State {
             .get(self.active_tab)
             .map(|t| t.panes.len())
             .unwrap_or(0);
+        use miao_term_ui::i18n::t;
+        let l = self.lang;
         let mut s = format!(
-            "miaotty-native · tab {}/{} · {} pane(s) · {} tabs",
+            "miaotty-native · {} {}/{} · {} {} · {} {}",
+            t(l, "tab", "标签"),
             self.active_tab + 1,
             self.tabs.len(),
             panes,
-            self.tabs.len()
+            t(l, "pane(s)", "个 pane"),
+            self.tabs.len(),
+            t(l, "tabs", "个标签"),
         );
         if let Some(m) = &self.update_msg {
             s.push_str(" · ");
@@ -1387,27 +1400,29 @@ impl State {
     }
 
     fn commands(&self) -> Vec<(Cmd, &'static str)> {
+        use miao_term_ui::i18n::t;
+        let l = self.lang;
         vec![
-            (Cmd::NewTab, "New Tab"),
+            (Cmd::NewTab, t(l, "New Tab", "新建标签")),
             (Cmd::Composer, "Composer"),
-            (Cmd::CheckUpdates, "Check for Updates"),
-            (Cmd::NewSsh, "New SSH Session…"),
-            (Cmd::OpenRemote, "Open Remote File…"),
-            (Cmd::SaveRecipe, "Save Recipe…"),
-            (Cmd::OpenRecipe, "Open Recipe…"),
-            (Cmd::OpenFile, "Open File…"),
-            (Cmd::Save, "Save"),
-            (Cmd::Copy, "Copy"),
-            (Cmd::Paste, "Paste"),
-            (Cmd::SplitRight, "Split Right"),
-            (Cmd::SplitDown, "Split Down"),
-            (Cmd::ClosePane, "Close Pane / Tab"),
-            (Cmd::ToggleSidebar, "Toggle Sidebar"),
-            (Cmd::ToggleDetails, "Toggle Details"),
-            (Cmd::FontUp, "Increase Font Size"),
-            (Cmd::FontDown, "Decrease Font Size"),
-            (Cmd::Settings, "Settings"),
-            (Cmd::Quit, "Quit"),
+            (Cmd::CheckUpdates, t(l, "Check for Updates", "检查更新")),
+            (Cmd::NewSsh, t(l, "New SSH Session…", "新建 SSH 会话…")),
+            (Cmd::OpenRemote, t(l, "Open Remote File…", "打开远端文件…")),
+            (Cmd::SaveRecipe, t(l, "Save Recipe…", "保存配方…")),
+            (Cmd::OpenRecipe, t(l, "Open Recipe…", "打开配方…")),
+            (Cmd::OpenFile, t(l, "Open File…", "打开文件…")),
+            (Cmd::Save, t(l, "Save", "保存")),
+            (Cmd::Copy, t(l, "Copy", "复制")),
+            (Cmd::Paste, t(l, "Paste", "粘贴")),
+            (Cmd::SplitRight, t(l, "Split Right", "向右分屏")),
+            (Cmd::SplitDown, t(l, "Split Down", "向下分屏")),
+            (Cmd::ClosePane, t(l, "Close Pane / Tab", "关闭 Pane/标签")),
+            (Cmd::ToggleSidebar, t(l, "Toggle Sidebar", "开关侧栏")),
+            (Cmd::ToggleDetails, t(l, "Toggle Details", "开关详情")),
+            (Cmd::FontUp, t(l, "Increase Font Size", "增大字号")),
+            (Cmd::FontDown, t(l, "Decrease Font Size", "减小字号")),
+            (Cmd::Settings, t(l, "Settings", "设置")),
+            (Cmd::Quit, t(l, "Quit", "退出")),
         ]
     }
 
