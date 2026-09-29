@@ -257,7 +257,12 @@ impl Terminal {
                 let rows_hint = cmd.rows;
                 let before = self.graphics.images.len();
                 let view_offset = self.screen.scroll_offset() as i32;
-                let changed = self.graphics.kitty(cmd, line, col, view_offset);
+                // `a=p` places at an explicit cell (viewport row y, column x).
+                let (anchor, place_col) = match (cmd.action, cmd.cell_x, cmd.cell_y) {
+                    ('p', Some(x), Some(y)) => (y as i32 - view_offset, x),
+                    _ => (line, col),
+                };
+                let changed = self.graphics.kitty(cmd, anchor, place_col, view_offset);
                 if move_now && self.graphics.images.len() > before {
                     let rows = rows_hint
                         .map(u32::from)
@@ -510,6 +515,17 @@ mod tests {
         assert_eq!((imgs[0].image.width, imgs[0].image.height), (10, 6));
         // Red at the top-left pixel.
         assert_eq!(&imgs[0].image.rgba[..4], &[255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn kitty_put_uses_cell_coordinates() {
+        let mut t = make();
+        // a=p at x=5,y=2 with a 1x1 raw RGB pixel (base64 "AAAA").
+        t.feed_for_test(b"\x1b_Ga=p,f=24,s=1x1,x=5,y=2;AAAA\x1b\\");
+        let imgs = &t.graphics().images;
+        assert_eq!(imgs.len(), 1);
+        assert_eq!(imgs[0].col, 5);
+        assert_eq!(imgs[0].anchor, 2);
     }
 
     #[test]
