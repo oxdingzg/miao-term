@@ -19,7 +19,7 @@ use miao_term_ui::agentloop;
 mod hotkey;
 mod i18n;
 mod icons;
-mod integration;
+use miao_term_ui::integration;
 use miao_term_ui::launch;
 mod panels;
 use miao_term_ui::ssh;

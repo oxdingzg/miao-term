@@ -163,6 +163,7 @@ struct State {
     vim_for: String,
     mmd: Mermaid,
     recent_files: Vec<String>,
+    integration_msg: Option<String>,
     notifications: bool,
     prevent_sleep: bool,
     sleep: miao_term_ui::agentloop::SleepGuard,
@@ -1564,6 +1565,7 @@ impl State {
         let mut graphics = self.graphics_enabled;
         let mut notifications = self.notifications;
         let mut prevent_sleep = self.prevent_sleep;
+        let mut install_agent: Option<&'static str> = None;
         let current_theme = self.theme_name.clone();
         let mut chosen_theme: Option<&'static str> = None;
         egui::Window::new(miao_term_ui::i18n::t(self.lang, "Settings", "设置"))
@@ -1608,6 +1610,35 @@ impl State {
                     miao_term_ui::i18n::t(self.lang, "Prevent sleep", "防休眠"),
                 );
                 ui.separator();
+                ui.label(miao_term_ui::i18n::t(
+                    self.lang,
+                    "Agent integrations",
+                    "Agent 集成",
+                ));
+                for a in miao_term_ui::integration::AGENTS {
+                    ui.horizontal(|ui| {
+                        ui.label(if miao_term_ui::integration::detected(a.bin) {
+                            "\u{25cf}"
+                        } else {
+                            "\u{25cb}"
+                        });
+                        ui.label(a.name);
+                        if ui
+                            .button(miao_term_ui::i18n::t(self.lang, "Install hook", "安装钩子"))
+                            .clicked()
+                        {
+                            install_agent = Some(a.name);
+                        }
+                    });
+                }
+                if let Some(msg) = &self.integration_msg {
+                    ui.label(
+                        egui::RichText::new(msg)
+                            .size(11.0)
+                            .color(egui::Color32::from_gray(150)),
+                    );
+                }
+                ui.separator();
                 ui.label(miao_term_ui::i18n::t(self.lang, "Theme", "主题"));
                 for name in Theme::NAMES {
                     if ui.selectable_label(current_theme == name, name).clicked() {
@@ -1624,6 +1655,17 @@ impl State {
             self.resize();
         }
         self.theme.cursor = cursor;
+        if let Some(name) = install_agent {
+            let msg = match miao_term_ui::integration::install(name) {
+                Ok(path) => miao_term_ui::integration::AGENTS
+                    .iter()
+                    .find(|a| a.name == name)
+                    .map(|a| miao_term_ui::integration::snippet(a, &path))
+                    .unwrap_or_default(),
+                Err(e) => format!("install failed: {e}"),
+            };
+            self.integration_msg = Some(msg);
+        }
         self.notifications = notifications;
         if self.prevent_sleep != prevent_sleep {
             self.prevent_sleep = prevent_sleep;
@@ -2810,6 +2852,7 @@ impl ApplicationHandler for Host {
                 cache: std::collections::HashMap::new(),
             },
             recent_files: Vec::new(),
+            integration_msg: None,
             notifications: cfg.notifications,
             prevent_sleep: cfg.prevent_sleep,
             sleep: miao_term_ui::agentloop::SleepGuard::new(),
