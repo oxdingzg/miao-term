@@ -741,6 +741,50 @@ impl State {
         frame.present();
     }
 
+    /// Close one pane by id (drops its tab when it was the last one).
+    fn close_pane_id(&mut self, id: &str) {
+        let Some(ti) = self
+            .tabs
+            .iter()
+            .position(|t| t.panes.iter().any(|p| p.id == id))
+        else {
+            return;
+        };
+        let tab = &mut self.tabs[ti];
+        tab.panes.retain(|p| p.id != id);
+        let _ = tab.layout.remove(id);
+        if tab.panes.is_empty() {
+            self.tabs.remove(ti);
+        } else if tab.active == id {
+            tab.active = tab
+                .layout
+                .ids()
+                .first()
+                .cloned()
+                .unwrap_or_else(|| tab.panes[0].id.clone());
+        }
+        if self.tabs.is_empty() {
+            self.new_tab();
+        }
+        self.active_tab = self.active_tab.min(self.tabs.len().saturating_sub(1));
+        self.selection = None;
+        self.publish_panes();
+    }
+
+    /// Close panes whose shell has exited (so `exit` actually closes).
+    fn reap_exited(&mut self) {
+        let ids: Vec<String> = self
+            .tabs
+            .iter()
+            .flat_map(|t| t.panes.iter())
+            .filter(|p| p.term.exited())
+            .map(|p| p.id.clone())
+            .collect();
+        for id in ids {
+            self.close_pane_id(&id);
+        }
+    }
+
     fn duplicate_tab(&mut self) {
         let cwd = self.cwd();
         let (title, ssh, prefix) = self
@@ -1018,6 +1062,7 @@ impl State {
                 }
             }
         }
+        self.reap_exited();
 
         // Sync the window title from the active pane's OSC 0/2.
         let title = self
