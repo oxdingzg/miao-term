@@ -2026,7 +2026,7 @@ fn install_script(pid: u32, bundle: &std::path::Path, new_app: &std::path::Path)
 
 use miao_term_ui::vim::{vim_handle, VimEffect, VimRuntime};
 
-#[cfg_attr(not(any(target_os = "windows", target_os = "linux")), allow(dead_code))]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 /// The helper `.cmd` Windows runs after we exit: wait for our PID, then either
 /// run the MSI or unpack the zip over the current executable, and relaunch.
 fn windows_install_script(pid: u32, artifact: &std::path::Path, exe: &std::path::Path) -> String {
@@ -2052,7 +2052,7 @@ fn windows_install_script(pid: u32, artifact: &std::path::Path, exe: &std::path:
     )
 }
 
-#[cfg_attr(not(any(target_os = "windows", target_os = "linux")), allow(dead_code))]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 /// The directory part of a Windows path (either separator).
 fn exe_parent(path: &str) -> String {
     match path.rfind(['\\', '/']) {
@@ -2061,7 +2061,7 @@ fn exe_parent(path: &str) -> String {
     }
 }
 
-#[cfg_attr(not(any(target_os = "windows", target_os = "linux")), allow(dead_code))]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 /// The helper `sh` Linux runs after we exit: wait for our PID, replace the
 /// running AppImage and start it again.
 fn linux_install_script(
