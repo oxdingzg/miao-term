@@ -9,3 +9,8 @@
 
 # CI perf baseline cache dir
 .perf/
+
+# Signing material — never commit
+minisign.key
+*.p12
+*.pfx
