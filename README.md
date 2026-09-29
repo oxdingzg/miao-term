@@ -316,18 +316,15 @@ Still open:
   paths still need a real host to confirm.
 - **CI performance baseline**: bound through `actions/cache` today; a durable
   baseline store would make the gate robust across cache eviction.
-- **Native parity**: the native host supports `background-opacity` where the
-  surface offers straight alpha (otherwise it stays opaque), and its URL schemes
-  are handled from argv but not registered with the OS. Its Settings window is a
-  subset of the eframe app's.
-- **Inline graphics**: anchoring is approximate past the scrollback cap, and
-  session restore keeps no images; Kitty animation (`a=f`) is not implemented.
+- **Native parity**: URL schemes are handled from argv but the native binary is
+  not registered with the OS. `background-opacity` works only where the surface
+  offers straight alpha.
+- **Inline graphics**: anchors are exact up to the scrollback cap and
+  approximate past it (alacritty exposes no scroll counter without a patch);
+  session restore keeps no images (they would not match the restored content).
 - **Markdown**: Mermaid renders a `graph`/`flowchart` subset (or fully via
-  `mermaid-command`); other diagram types show a placeholder, and remote
-  (http/https) images are not loaded.
-- **Editor**: both editors have an opt-in vim mode (ADR 0029); i18n covers the
-  main chrome but not every string.
-- **Open Quickly**: folder / open-file entries and frecency ranking (ADR 0008).
+  `mermaid-command`); other diagram types show a placeholder.
+- **i18n**: the main chrome is covered; a few example/hint strings stay English.
 - **MTP**: `file.read/write` support binary (base64) with `offset`/`length`
   chunking; there is no server-push streaming. Per-capability authorization is
   available via `MIAOTTY_MTP_ALLOW`.
