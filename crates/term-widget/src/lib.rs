@@ -80,6 +80,14 @@ struct Tab {
     title: String,
 }
 
+/// A simple built-in text file editor (with a naive Markdown preview).
+struct Editor {
+    path: std::path::PathBuf,
+    text: String,
+    original: String,
+    preview: bool,
+}
+
 struct PaneDraw {
     id: String,
     rect: Rect,
@@ -120,6 +128,9 @@ struct State {
     show_palette: bool,
     palette_query: String,
     show_settings: bool,
+    editor: Option<Editor>,
+    open_path: String,
+    show_open: bool,
     details_tab: usize,
     git_cache: Cache,
     files_cache: Cache,
@@ -1023,6 +1034,8 @@ impl State {
         }
         self.palette_window(ctx);
         self.settings_window(ctx);
+        self.open_dialog_window(ctx);
+        self.editor_window(ctx);
         if let Some(i) = self.renaming {
             self.rename_window(ctx, i);
         }
@@ -1264,6 +1277,8 @@ impl State {
 /// A palette command.
 enum Cmd {
     NewTab,
+    OpenFile,
+    Save,
     Copy,
     Paste,
     SplitRight,
@@ -1288,6 +1303,8 @@ impl State {
     fn commands(&self) -> Vec<(Cmd, &'static str)> {
         vec![
             (Cmd::NewTab, "New Tab"),
+            (Cmd::OpenFile, "Open File…"),
+            (Cmd::Save, "Save"),
             (Cmd::Copy, "Copy"),
             (Cmd::Paste, "Paste"),
             (Cmd::SplitRight, "Split Right"),
@@ -1322,6 +1339,13 @@ impl State {
                 self.cw = cw;
                 self.ch = ch;
                 self.resize();
+            }
+            Cmd::OpenFile => self.show_open = true,
+            Cmd::Save => {
+                if let Some(ed) = self.editor.as_mut() {
+                    let _ = std::fs::write(&ed.path, &ed.text);
+                    ed.original = ed.text.clone();
+                }
             }
             Cmd::Copy => {
                 let ctx = self.egui_ctx.clone();
@@ -1460,6 +1484,130 @@ impl State {
         }
         if !open {
             self.show_settings = false;
+        }
+    }
+
+    fn open_dialog_window(&mut self, ctx: &egui::Context) {
+        if !self.show_open {
+            return;
+        }
+        let mut open = true;
+        let mut path = std::mem::take(&mut self.open_path);
+        let mut do_open = false;
+        egui::Window::new(miao_term_ui::i18n::t(self.lang, "Open File", "打开文件"))
+            .collapsible(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                let r = ui.add(
+                    egui::TextEdit::singleline(&mut path)
+                        .hint_text("/path/to/file")
+                        .desired_width(360.0),
+                );
+                r.request_focus();
+                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    do_open = true;
+                }
+                if ui
+                    .button(miao_term_ui::i18n::t(self.lang, "Open", "打开"))
+                    .clicked()
+                {
+                    do_open = true;
+                }
+            });
+        self.open_path = path;
+        if do_open && !self.open_path.is_empty() {
+            let p = std::path::PathBuf::from(&self.open_path);
+            if let Ok(text) = std::fs::read_to_string(&p) {
+                self.editor = Some(Editor {
+                    path: p,
+                    original: text.clone(),
+                    text,
+                    preview: false,
+                });
+                self.show_open = false;
+            }
+        }
+        if !open {
+            self.show_open = false;
+        }
+    }
+
+    fn editor_window(&mut self, ctx: &egui::Context) {
+        let Some(ed) = self.editor.as_mut() else {
+            return;
+        };
+        let title = ed
+            .path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| ed.path.display().to_string());
+        let modified = ed.text != ed.original;
+        let mut open = true;
+        let mut save = false;
+        egui::Window::new(title)
+            .open(&mut open)
+            .default_size([640.0, 480.0])
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if ui
+                        .button(miao_term_ui::i18n::t(self.lang, "Save", "保存"))
+                        .clicked()
+                    {
+                        save = true;
+                    }
+                    ui.checkbox(
+                        &mut ed.preview,
+                        miao_term_ui::i18n::t(self.lang, "Markdown preview", "Markdown 预览"),
+                    );
+                    if modified {
+                        ui.label(
+                            egui::RichText::new(miao_term_ui::i18n::t(
+                                self.lang,
+                                "modified",
+                                "已修改",
+                            ))
+                            .color(egui::Color32::from_rgb(0xeb, 0xcb, 0x8b)),
+                        );
+                    }
+                });
+                ui.separator();
+                if ed.preview {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| markdown_preview(ui, &ed.text));
+                } else {
+                    egui::ScrollArea::both()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            ui.horizontal_top(|ui| {
+                                let lines = ed.text.lines().count().max(1);
+                                let mut nums = String::new();
+                                for i in 1..=lines {
+                                    nums.push_str(&format!("{i:>4}\n"));
+                                }
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(nums)
+                                            .monospace()
+                                            .color(egui::Color32::from_gray(110)),
+                                    )
+                                    .selectable(false),
+                                );
+                                ui.add(
+                                    egui::TextEdit::multiline(&mut ed.text)
+                                        .code_editor()
+                                        .desired_width(f32::INFINITY),
+                                );
+                            });
+                        });
+                }
+            });
+        if save {
+            let _ = std::fs::write(&ed.path, &ed.text);
+            ed.original = ed.text.clone();
+        }
+        if !open {
+            self.editor = None;
         }
     }
 
@@ -1633,6 +1781,9 @@ impl ApplicationHandler for Host {
             show_palette: false,
             palette_query: String::new(),
             show_settings: false,
+            editor: None,
+            open_path: String::new(),
+            show_open: false,
             details_tab: 0,
             git_cache: None,
             files_cache: None,
@@ -1980,6 +2131,45 @@ fn darken(c: miao_term_ui::theme::Rgb, f: f32) -> miao_term_ui::theme::Rgb {
 fn lighten(c: miao_term_ui::theme::Rgb, f: f32) -> miao_term_ui::theme::Rgb {
     let l = |v: u8| (v as f32 + (255.0 - v as f32) * f).clamp(0.0, 255.0) as u8;
     miao_term_ui::theme::Rgb(l(c.0), l(c.1), l(c.2))
+}
+
+/// A naive Markdown renderer: headings, bullets, quotes and fenced code.
+fn markdown_preview(ui: &mut egui::Ui, text: &str) {
+    let mut in_code = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            in_code = !in_code;
+            ui.separator();
+            continue;
+        }
+        if in_code {
+            ui.label(egui::RichText::new(line).monospace().size(12.0));
+            continue;
+        }
+        let trimmed = line.trim_end();
+        if let Some(h) = trimmed.strip_prefix("### ") {
+            ui.label(egui::RichText::new(h).size(15.0).strong());
+        } else if let Some(h) = trimmed.strip_prefix("## ") {
+            ui.label(egui::RichText::new(h).size(18.0).strong());
+        } else if let Some(h) = trimmed.strip_prefix("# ") {
+            ui.label(egui::RichText::new(h).size(22.0).strong());
+        } else if let Some(b) = trimmed
+            .strip_prefix("- ")
+            .or_else(|| trimmed.strip_prefix("* "))
+        {
+            ui.label(format!("\u{2022} {b}"));
+        } else if let Some(q) = trimmed.strip_prefix("> ") {
+            ui.label(
+                egui::RichText::new(q)
+                    .italics()
+                    .color(egui::Color32::from_gray(150)),
+            );
+        } else if trimmed.is_empty() {
+            ui.add_space(6.0);
+        } else {
+            ui.label(trimmed);
+        }
+    }
 }
 
 fn git_rows(cwd: &std::path::Path) -> Vec<(String, String)> {
