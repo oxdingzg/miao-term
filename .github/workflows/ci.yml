@@ -18,6 +18,24 @@ jobs:
       - run: cargo check --workspace --all-targets
       - run: cargo test --workspace
 
+  render-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Real Linux wgpu coverage (ADR 0030) without a GPU: install Mesa's
+      # software Vulkan (lavapipe) and require the headless smoke test to run.
+      - name: Install software Vulkan (lavapipe)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mesa-vulkan-drivers libvulkan1
+      - name: Headless render smoke (lavapipe)
+        env:
+          MIAO_REQUIRE_GPU: "1"
+          WGPU_BACKEND: vulkan
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: cargo test -p miao-term-render -- --nocapture
+
   perf:
     runs-on: ubuntu-latest
     env:

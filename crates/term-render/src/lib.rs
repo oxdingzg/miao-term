@@ -523,11 +523,19 @@ mod gpu_tests {
         let Some(adapter) =
             pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
         else {
+            assert!(
+                std::env::var_os("MIAO_REQUIRE_GPU").is_none(),
+                "MIAO_REQUIRE_GPU is set but no wgpu adapter is available"
+            );
             return;
         };
         let Ok((device, queue)) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None))
         else {
+            assert!(
+                std::env::var_os("MIAO_REQUIRE_GPU").is_none(),
+                "MIAO_REQUIRE_GPU is set but no wgpu device could be created"
+            );
             return;
         };
 
