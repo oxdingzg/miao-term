@@ -1434,7 +1434,7 @@ impl eframe::App for MiaottyApp {
         // Keep a steady frame cadence so PTY output and input echo are drawn
         // promptly. Gating this on focus was unreliable and let frames fall back
         // to the blink interval (~530 ms), which felt like heavy input lag.
-        ctx.request_repaint_after(Duration::from_millis(16));
+        ctx.request_repaint_after(Duration::from_millis(8));
 
         self.menu_bar(ctx);
         self.tab_bar(ctx);
@@ -5390,6 +5390,7 @@ impl MiaottyApp {
                     scale,
                     font_size: self.font_size,
                     line_height: ch,
+                    cell_width: cw,
                     default_color: (fg.r(), fg.g(), fg.b()),
                     family: self.font_family.clone(),
                 },
@@ -5544,6 +5545,12 @@ fn build_rows(
     let mut out = Vec::with_capacity(rows as usize);
     for row in 0..rows {
         let mut spans: Vec<miao_term_render::Span> = Vec::new();
+        // A running run of single-cell, same-colored characters, plus its start
+        // column. Wide (2-cell) characters are emitted as their own span so the
+        // renderer can pin every glyph to an exact grid cell.
+        let mut run_col: Option<u16> = None;
+        let mut run_color = (0u8, 0u8, 0u8);
+        let mut run_text = String::new();
         let mut col = 0u16;
         while col < cols {
             let Some(cell) = screen.cell(row, col) else {
@@ -5563,11 +5570,40 @@ fn build_rows(
                 let c = map_color(&cell.fg, true, theme);
                 (c.r(), c.g(), c.b())
             };
-            match spans.last_mut() {
-                Some(last) if last.color == color => last.text.push_str(&text),
-                _ => spans.push(miao_term_render::Span::new(text, color)),
+            if width >= 2 {
+                if let Some(rc) = run_col.take() {
+                    spans.push(miao_term_render::Span::new(
+                        rc,
+                        std::mem::take(&mut run_text),
+                        run_color,
+                    ));
+                }
+                spans.push(miao_term_render::Span::new(col, text, color));
+                col += 2;
+            } else {
+                if let Some(rc) = run_col {
+                    if run_color == color {
+                        run_text.push_str(&text);
+                    } else {
+                        spans.push(miao_term_render::Span::new(
+                            rc,
+                            std::mem::take(&mut run_text),
+                            run_color,
+                        ));
+                        run_col = Some(col);
+                        run_color = color;
+                        run_text = text;
+                    }
+                } else {
+                    run_col = Some(col);
+                    run_color = color;
+                    run_text = text;
+                }
+                col += 1;
             }
-            col += width;
+        }
+        if let Some(rc) = run_col.take() {
+            spans.push(miao_term_render::Span::new(rc, run_text, run_color));
         }
         out.push(spans);
     }
@@ -5592,6 +5628,7 @@ struct TermCallback {
     scale: f32,
     font_size: f32,
     line_height: f32,
+    cell_width: f32,
     default_color: (u8, u8, u8),
     family: Option<String>,
 }
@@ -5626,6 +5663,7 @@ impl egui_wgpu::CallbackTrait for TermCallback {
                     self.scale,
                     self.font_size,
                     self.line_height,
+                    self.cell_width,
                     0.0,
                     0.0,
                     self.default_color,

@@ -9,15 +9,20 @@ use glyphon::{
     TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
 };
 
-/// A run of same-colored text within a row.
+/// A run of same-colored text within a row, pinned to a starting cell column.
+///
+/// Runs may only contain single-cell characters; a wide (2-cell) character must
+/// be its own span so it can be positioned at an exact cell.
 pub struct Span {
+    pub col: u16,
     pub text: String,
     pub color: (u8, u8, u8),
 }
 
 impl Span {
-    pub fn new(text: impl Into<String>, color: (u8, u8, u8)) -> Self {
+    pub fn new(col: u16, text: impl Into<String>, color: (u8, u8, u8)) -> Self {
         Self {
+            col,
             text: text.into(),
             color,
         }
@@ -104,6 +109,7 @@ impl TermRenderer {
         scale: f32,
         font_size: f32,
         line_height: f32,
+        cell_width: f32,
         left: f32,
         top: f32,
         default_color: (u8, u8, u8),
@@ -125,63 +131,72 @@ impl TermRenderer {
         }
 
         let metrics = Metrics::new(font_size, line_height);
-        while self.buffers.len() < rows.len() {
-            self.buffers
-                .push(Buffer::new(&mut self.font_system, metrics));
-        }
+        let fam = match family {
+            Some(name) => Family::Name(name),
+            None => Family::Monospace,
+        };
 
-        for (i, row) in rows.iter().enumerate() {
-            let buffer = &mut self.buffers[i];
-            buffer.set_metrics(&mut self.font_system, metrics);
-            buffer.set_size(&mut self.font_system, None, None);
-            let fam = match family {
-                Some(name) => Family::Name(name),
-                None => Family::Monospace,
-            };
-            let owned: Vec<(String, Attrs)> = row
-                .iter()
-                .map(|span| {
-                    let attrs = Attrs::new().family(fam).color(Color::rgb(
-                        span.color.0,
-                        span.color.1,
-                        span.color.2,
-                    ));
-                    (span.text.clone(), attrs)
-                })
-                .collect();
-            // `Shaping::Advanced` is required for font fallback: `Basic` renders
-            // any glyph missing from the primary font (CJK, symbols) as tofu.
-            buffer.set_rich_text(
-                &mut self.font_system,
-                owned.iter().map(|(text, attrs)| (text.as_str(), *attrs)),
-                Attrs::new().family(fam),
-                Shaping::Advanced,
-            );
-        }
-
-        // `left`/`top`/`line_height` are logical points relative to the target
-        // viewport's origin; glyphon positions in *physical* pixels and already
-        // scales per-glyph advances by `scale`, so only these need scaling.
-        // `pixels` must be the viewport's pixel size (egui-wgpu sets the render
-        // viewport to the callback's rect), not the whole surface.
+        // `left`/`top`/`line_height`/`cell_width` are logical points relative to
+        // the target viewport's origin; glyphon positions in *physical* pixels
+        // and already scales per-glyph advances by `scale`. `pixels` must be the
+        // viewport's pixel size (egui-wgpu sets the render viewport to the
+        // callback's rect), not the whole surface.
         let left_px = left * scale;
         let top_px = top * scale;
         let line_px = line_height * scale;
+        let cell_px = cell_width * scale;
         let bounds = TextBounds {
             left: left_px as i32,
             top: top_px as i32,
             right: pixels.0 as i32,
             bottom: pixels.1 as i32,
         };
+
+        // One buffer per span, positioned at an exact cell column, so wide (CJK)
+        // glyphs whose advance isn't exactly 2 cells can't drift the row.
+        let total: usize = rows.iter().map(|r| r.len()).sum();
+        while self.buffers.len() < total {
+            self.buffers
+                .push(Buffer::new(&mut self.font_system, metrics));
+        }
+
+        let mut positions: Vec<(f32, f32)> = Vec::with_capacity(total);
+        let mut idx = 0usize;
+        for (row_idx, row) in rows.iter().enumerate() {
+            for span in row {
+                let buffer = &mut self.buffers[idx];
+                idx += 1;
+                buffer.set_metrics(&mut self.font_system, metrics);
+                buffer.set_size(&mut self.font_system, None, None);
+                let attrs = Attrs::new().family(fam).color(Color::rgb(
+                    span.color.0,
+                    span.color.1,
+                    span.color.2,
+                ));
+                // `Shaping::Advanced` is required for font fallback: `Basic`
+                // renders glyphs missing from the primary font as tofu.
+                buffer.set_rich_text(
+                    &mut self.font_system,
+                    std::iter::once((span.text.as_str(), attrs)),
+                    Attrs::new().family(fam),
+                    Shaping::Advanced,
+                );
+                positions.push((
+                    left_px + span.col as f32 * cell_px,
+                    top_px + row_idx as f32 * line_px,
+                ));
+            }
+        }
+
         let areas: Vec<TextArea> = self
             .buffers
             .iter()
-            .take(rows.len())
-            .enumerate()
-            .map(|(i, buffer)| TextArea {
+            .take(total)
+            .zip(positions.iter())
+            .map(|(buffer, (x, y))| TextArea {
                 buffer,
-                left: left_px,
-                top: top_px + i as f32 * line_px,
+                left: *x,
+                top: *y,
                 scale,
                 bounds,
                 default_color: Color::rgb(default_color.0, default_color.1, default_color.2),

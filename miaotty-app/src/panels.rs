@@ -152,12 +152,9 @@ fn list_dir(cwd: &str) -> Vec<FileEntry> {
 /// sidebar renders the file tree every frame, so without this we would
 /// `read_dir` + `stat` the whole tree on every frame (60x/second).
 const DIR_TTL: std::time::Duration = std::time::Duration::from_millis(1000);
-static DIR_CACHE: std::sync::Mutex<
-    Option<(
-        std::time::Instant,
-        std::collections::HashMap<std::path::PathBuf, Vec<FileEntry>>,
-    )>,
-> = std::sync::Mutex::new(None);
+type DirCache = std::collections::HashMap<std::path::PathBuf, Vec<FileEntry>>;
+static DIR_CACHE: std::sync::Mutex<Option<(std::time::Instant, DirCache)>> =
+    std::sync::Mutex::new(None);
 
 pub fn read_dir_entries(dir: &Path) -> Vec<FileEntry> {
     let now = std::time::Instant::now();
