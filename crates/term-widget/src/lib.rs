@@ -98,6 +98,7 @@ struct State {
     tabs: Vec<Tab>,
     active_tab: usize,
     theme: Theme,
+    rules: miao_term_config::view::RuleSet,
     cw: f32,
     ch: f32,
     font_size: f32,
@@ -425,11 +426,56 @@ impl State {
         self.window.request_redraw();
     }
 
+    /// Evaluate the view rule engine (ADR 0007) for a tab's active pane.
+    fn view_for(&self, tab: &Tab) -> Option<miao_term_config::view::Resolved> {
+        let pane = tab.panes.iter().find(|p| p.id == tab.active)?;
+        let agent = self
+            .mtp
+            .agent_for(&pane.id)
+            .and_then(|a| a.get("agent").and_then(|v| v.as_str()).map(str::to_string));
+        let ctx = miao_term_config::view::Context {
+            cwd: pane.term.cwd().map(str::to_string),
+            command: None,
+            agent,
+            host: None,
+            file: None,
+            user: std::env::var("USER").ok(),
+            shell: std::env::var("SHELL").ok(),
+            branch: None,
+            osc_title: pane.term.title().map(str::to_string),
+            index: None,
+        };
+        self.rules.evaluate(&ctx)
+    }
+
     fn title_of(&self, tab: &Tab) -> String {
-        tab.panes
+        if let Some(res) = self.view_for(tab) {
+            if !res.title.is_empty() {
+                return res.title;
+            }
+            if let Some(alias) = res.alias {
+                return alias;
+            }
+        }
+        // Fall back to the program title, then the cwd folder, then "shell N".
+        if let Some(t) = tab
+            .panes
             .iter()
             .find(|p| p.id == tab.active)
             .and_then(|p| p.term.title().map(str::to_string))
+            .filter(|s| !s.is_empty())
+        {
+            return t;
+        }
+        tab.panes
+            .iter()
+            .find(|p| p.id == tab.active)
+            .and_then(|p| p.term.cwd().map(str::to_string))
+            .and_then(|c| {
+                std::path::Path::new(&c)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+            })
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| tab.title.clone())
     }
@@ -1430,6 +1476,7 @@ impl ApplicationHandler for Host {
             tabs: Vec::new(),
             active_tab: 0,
             theme,
+            rules: miao_term_config::view::RuleSet::load(),
             cw,
             ch,
             font_size,
