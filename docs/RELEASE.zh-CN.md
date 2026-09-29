@@ -41,7 +41,8 @@ minisign -G -W -p minisign.pub -s minisign.key     # -W:无密码,供 CI 使用
 gh secret set MINISIGN_SECRET_KEY < minisign.key   # 密钥文件内容
 ```
 
-将**公钥**(`minisign.pub`)随 release notes / 仓库发布,并告知用户把其单行内容写入配置:
+仓库根目录保留 `minisign.pub`,release 作业也会把它作为附件上传,因此
+`…/releases/download/<tag>/minisign.pub` 始终可用。告知用户把其单行内容写入配置:
 
 ```toml
 update-pubkey = "RWQ…"

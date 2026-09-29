@@ -43,8 +43,9 @@ minisign -G -W -p minisign.pub -s minisign.key     # -W: no password, for CI
 gh secret set MINISIGN_SECRET_KEY < minisign.key   # raw contents of the secret key
 ```
 
-Publish the **public** key (`minisign.pub`) with the release notes / in the repo,
-and tell users to put its single line into their config:
+The repository keeps `minisign.pub` at its root, and the release job attaches it,
+so `…/releases/download/<tag>/minisign.pub` always resolves. Tell users to put
+its single line into their config:
 
 ```toml
 update-pubkey = "RWQ…"
