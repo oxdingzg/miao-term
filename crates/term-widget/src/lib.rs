@@ -226,6 +226,7 @@ struct Shortcut {
     split_down: bool,
     cycle: i32,
     tab: i32,
+    find: i32,
     toggle_sidebar: bool,
     toggle_details: bool,
     palette: bool,
@@ -249,6 +250,7 @@ fn shortcut(event: &KeyEvent, mods: ModifiersState) -> Option<Shortcut> {
         split_down: false,
         cycle: 0,
         tab: 0,
+        find: 0,
         toggle_sidebar: false,
         toggle_details: false,
         palette: false,
@@ -264,6 +266,8 @@ fn shortcut(event: &KeyEvent, mods: ModifiersState) -> Option<Shortcut> {
             "t" if mods.shift_key() => s.reopen = true,
             "t" => s.new_tab = true,
             "e" => s.composer = true,
+            "g" if mods.shift_key() => s.find = -1,
+            "g" => s.find = 1,
             "o" if mods.shift_key() => s.quickly = true,
             "f" => s.search = true,
             "k" => s.palette = true,
@@ -602,17 +606,49 @@ impl State {
         })
     }
 
+    /// The currently selected text, if any.
+    fn selection_text(&self) -> Option<String> {
+        let (pane_id, sel) = self.selection.as_ref()?;
+        let tab = self.tabs.get(self.active_tab)?;
+        let pane = tab.panes.iter().find(|p| &p.id == pane_id)?;
+        let (r1, c1, r2, c2) = sel.ordered();
+        Some(pane.term.screen().contents_between(r1, c1, r2, c2))
+    }
+
     fn copy_selection(&self, ctx: &egui::Context) {
-        let Some((pane_id, sel)) = &self.selection else {
+        if let Some(text) = self.selection_text() {
+            if !text.is_empty() {
+                ctx.copy_text(text);
+            }
+        }
+    }
+
+    fn find_in_all_tabs(&mut self) {
+        let q = self
+            .search
+            .clone()
+            .filter(|s| !s.is_empty())
+            .or_else(|| self.selection_text().map(|s| s.trim().to_string()))
+            .unwrap_or_default();
+        if q.is_empty() {
             return;
-        };
-        if let Some(tab) = self.tabs.get(self.active_tab) {
-            if let Some(pane) = tab.panes.iter().find(|p| &p.id == pane_id) {
-                let (r1, c1, r2, c2) = sel.ordered();
-                let text = pane.term.screen().contents_between(r1, c1, r2, c2);
-                if !text.is_empty() {
-                    ctx.copy_text(text);
-                }
+        }
+        let ql = q.to_lowercase();
+        for (ti, tab) in self.tabs.iter().enumerate() {
+            let hit = tab.panes.iter().any(|pane| {
+                let screen = pane.term.screen();
+                (0..screen.total_lines())
+                    .any(|b| screen.line_text_abs(b).to_lowercase().contains(&ql))
+            });
+            if hit {
+                self.active_tab = ti;
+                self.selection = None;
+                self.search = Some(q);
+                self.search_idx = 0;
+                self.search_key.clear();
+                self.refresh_search();
+                self.scroll_to_search_hit();
+                return;
             }
         }
     }
@@ -1491,6 +1527,11 @@ enum Cmd {
     FontReset,
     Palette,
     Find,
+    FindNext,
+    FindPrev,
+    UseSelForFind,
+    JumpToSel,
+    FindInAllTabs,
     Fullscreen,
     ClearScreen,
     ClearScrollback,
@@ -1537,6 +1578,17 @@ impl State {
             (Cmd::FontReset, t(l, "Reset Font Size", "重置字号")),
             (Cmd::Palette, t(l, "Command Palette", "命令面板")),
             (Cmd::Find, t(l, "Find…", "查找…")),
+            (Cmd::FindNext, t(l, "Find Next", "查找下一个")),
+            (Cmd::FindPrev, t(l, "Find Previous", "查找上一个")),
+            (
+                Cmd::UseSelForFind,
+                t(l, "Use Selection for Find", "用所选内容查找"),
+            ),
+            (Cmd::JumpToSel, t(l, "Jump to Selection", "跳到所选")),
+            (
+                Cmd::FindInAllTabs,
+                t(l, "Find in All Tabs", "在所有标签中查找"),
+            ),
             (Cmd::Fullscreen, t(l, "Toggle Full Screen", "全屏切换")),
             (Cmd::ClearScreen, t(l, "Clear Screen", "清屏")),
             (Cmd::ClearScrollback, t(l, "Clear Scrollback", "清除回滚")),
@@ -1594,6 +1646,31 @@ impl State {
                 self.search_idx = 0;
                 self.search_key.clear();
             }
+            Cmd::FindNext | Cmd::FindPrev => {
+                let step = if matches!(cmd, Cmd::FindNext) { 1 } else { -1 };
+                let n = self.search_hits.len();
+                if self.search.is_some() && n > 0 {
+                    self.search_idx =
+                        ((self.search_idx as i32 + step).rem_euclid(n as i32)) as usize;
+                    self.scroll_to_search_hit();
+                }
+            }
+            Cmd::UseSelForFind => {
+                if let Some(s) = self.selection_text() {
+                    let s = s.trim().to_string();
+                    if !s.is_empty() {
+                        self.search = Some(s);
+                        self.search_idx = 0;
+                        self.search_key.clear();
+                    }
+                }
+            }
+            Cmd::JumpToSel => {
+                if self.search.is_some() {
+                    self.scroll_to_search_hit();
+                }
+            }
+            Cmd::FindInAllTabs => self.find_in_all_tabs(),
             Cmd::Fullscreen => {
                 let full = self.window.fullscreen().is_some();
                 self.window.set_fullscreen(if full {
@@ -3513,6 +3590,14 @@ impl ApplicationHandler for Host {
                     if s.tab != 0 {
                         state.cycle_tab(s.tab > 0);
                     }
+                    if s.find != 0 {
+                        let n = state.search_hits.len();
+                        if state.search.is_some() && n > 0 {
+                            state.search_idx =
+                                ((state.search_idx as i32 + s.find).rem_euclid(n as i32)) as usize;
+                            state.scroll_to_search_hit();
+                        }
+                    }
                     if s.toggle_sidebar {
                         state.show_sidebar = !state.show_sidebar;
                     }
@@ -4300,6 +4385,11 @@ impl chrome::Chrome for State {
             FontReset => Cmd::FontReset,
             Palette => Cmd::Palette,
             Find => Cmd::Find,
+            FindNext => Cmd::FindNext,
+            FindPrev => Cmd::FindPrev,
+            UseSelForFind => Cmd::UseSelForFind,
+            JumpToSel => Cmd::JumpToSel,
+            FindInAllTabs => Cmd::FindInAllTabs,
             Fullscreen => Cmd::Fullscreen,
             ClearScreen => Cmd::ClearScreen,
             ClearScrollback => Cmd::ClearScrollback,
