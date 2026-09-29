@@ -39,7 +39,12 @@ pub fn run(title: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
     // `miaotty-cli`, plugins and agent hooks work exactly as with the eframe app.
     let socket = miao_term_mtp::default_socket();
     std::env::set_var("MIAOTTY_SOCKET", &socket);
-    let mtp = miao_term_mtp::ServerState::new();
+    // MIAOTTY_MTP_TOKEN (if set) requires it on every request; MIAOTTY_MTP_ALLOW
+    // (if set) restricts which capabilities are accepted.
+    let mtp = miao_term_mtp::ServerState::with_config(
+        std::env::var("MIAOTTY_MTP_TOKEN").ok(),
+        miao_term_mtp::ServerState::parse_allow(std::env::var("MIAOTTY_MTP_ALLOW").ok()),
+    );
     match miao_term_mtp::serve(&socket, mtp.clone()) {
         Ok(()) => eprintln!("miaotty-native: MTP host on {}", socket.display()),
         Err(e) => eprintln!("miaotty-native: MTP host failed: {e}"),

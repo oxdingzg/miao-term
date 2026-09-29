@@ -137,6 +137,8 @@ fn now_ms() -> f64 {
 pub struct ServerState {
     /// When set (from `MIAOTTY_MTP_TOKEN`), every request must carry it.
     token: Option<String>,
+    /// When set (from `MIAOTTY_MTP_ALLOW`), only these capabilities are allowed.
+    allow: Option<Vec<String>>,
     revision: AtomicI64,
     seq: AtomicI64,
     states: Mutex<BTreeMap<String, Value>>,
@@ -172,6 +174,51 @@ impl ServerState {
 
     pub fn token(&self) -> Option<&str> {
         self.token.as_deref()
+    }
+
+    /// Like [`ServerState::with_token`] but also applies a capability allowlist.
+    pub fn with_config(token: Option<String>, allow: Option<Vec<String>>) -> Arc<Self> {
+        Arc::new(Self {
+            token,
+            allow,
+            ..Default::default()
+        })
+    }
+
+    /// Parse a comma-separated `MIAOTTY_MTP_ALLOW` value into a policy.
+    /// Empty/blank input means "no policy" (allow everything).
+    pub fn parse_allow(value: Option<String>) -> Option<Vec<String>> {
+        let list: Vec<String> = value?
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if list.is_empty() {
+            None
+        } else {
+            Some(list)
+        }
+    }
+
+    /// Whether a capability is permitted by the current policy. `core.basic`
+    /// (ping/health) is always allowed so a client can discover the host.
+    pub fn allows(&self, cap: &str) -> bool {
+        if cap.is_empty() || cap == "core.basic" {
+            return true;
+        }
+        match &self.allow {
+            None => true,
+            Some(list) => list.iter().any(|c| c == cap),
+        }
+    }
+
+    /// The capabilities this host will actually accept.
+    pub fn allowed_caps(&self) -> Vec<&'static str> {
+        HOST_CAPS
+            .iter()
+            .copied()
+            .filter(|c| self.allows(c))
+            .collect()
     }
 
     fn bump(&self) -> i64 {
@@ -294,6 +341,21 @@ fn str_field(v: &Value, key: &str) -> Option<String> {
     v.get(key).and_then(|x| x.as_str()).map(str::to_string)
 }
 
+/// The capability a method requires ("" when the method is unknown).
+fn method_cap(ns: &str, method: &str) -> &'static str {
+    match (ns, method) {
+        ("core", "ping" | "health") => "core.basic",
+        ("pane", _) | ("app", _) => "app.view.write",
+        ("file", "read") => "file.read",
+        ("file", "write") => "file.write",
+        ("agent", "state.list") => "agent.state.read",
+        ("agent", "state.set") => "agent.state.write",
+        ("history", "list") => "history.read",
+        ("history", "add") => "history.write",
+        _ => "",
+    }
+}
+
 fn dispatch(state: &ServerState, req: Request) -> Response {
     let id = req.id;
     let rev = state.revision();
@@ -302,6 +364,15 @@ fn dispatch(state: &ServerState, req: Request) -> Response {
         if params.get("token").and_then(Value::as_str) != Some(expected) {
             return Response::err(id, rev, "unauthorized", "missing or invalid token");
         }
+    }
+    let cap = method_cap(&req.ns, &req.method);
+    if !state.allows(cap) {
+        return Response::err(
+            id,
+            rev,
+            "forbidden",
+            format!("capability not allowed: {cap}"),
+        );
     }
     match (req.ns.as_str(), req.method.as_str()) {
         ("core", "ping") => Response::ok(
@@ -312,6 +383,7 @@ fn dispatch(state: &ServerState, req: Request) -> Response {
                 "app_version": concat!("miaotty/", env!("CARGO_PKG_VERSION")),
                 "pid": std::process::id(),
                 "caps": HOST_CAPS,
+                "allowed": state.allowed_caps(),
             }),
         ),
         ("core", "health") => Response::ok(id, rev, json!({ "ok": true, "revision": rev })),
@@ -748,6 +820,53 @@ mod tests {
         assert!(allowed.ok, "{:?}", allowed.error);
         // No token configured: nothing to check.
         assert!(dispatch(&ServerState::new(), request("core", "ping", json!({}))).ok);
+    }
+
+    #[test]
+    fn capability_policy_gates_methods() {
+        let state = ServerState::with_config(
+            None,
+            ServerState::parse_allow(Some("core.basic, file.read".into())),
+        );
+        // ping is always allowed, and reports the effective caps.
+        let ping = dispatch(&state, request("core", "ping", json!({})));
+        assert!(ping.ok);
+        assert_eq!(
+            ping.result.unwrap()["allowed"],
+            json!(["core.basic", "file.read"])
+        );
+        // file.write is denied.
+        let denied = dispatch(
+            &state,
+            request("file", "write", json!({ "path": "/tmp/x", "data": "hi" })),
+        );
+        assert!(!denied.ok);
+        assert_eq!(denied.error.unwrap().code, "forbidden");
+        // core.basic stays allowed even under a tight policy.
+        let locked =
+            ServerState::with_config(None, ServerState::parse_allow(Some("core.basic".into())));
+        assert!(dispatch(&locked, request("core", "health", json!({}))).ok);
+        assert!(!dispatch(&locked, request("pane", "list", json!({}))).ok);
+        // No policy: everything is allowed (backwards compatible).
+        let open = ServerState::new();
+        assert!(
+            dispatch(
+                &open,
+                request("file", "write", json!({ "path": "/tmp/y", "data": "z" }))
+            )
+            .ok
+        );
+        let _ = std::fs::remove_file("/tmp/y");
+    }
+
+    #[test]
+    fn parse_allow_blank_is_none() {
+        assert_eq!(ServerState::parse_allow(None), None);
+        assert_eq!(ServerState::parse_allow(Some("  , ,".into())), None);
+        assert_eq!(
+            ServerState::parse_allow(Some("a, b".into())),
+            Some(vec!["a".to_string(), "b".to_string()])
+        );
     }
 
     #[test]

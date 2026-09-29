@@ -206,8 +206,11 @@ miaotty-cli file write --path /tmp/x --data "hello"
 miaotty-cli file write --path /tmp/x --data-b64 "AAECAw=="   # 二进制
 ```
 
-若 host 以 `MIAOTTY_MTP_TOKEN` 启动,请求必须携带该令牌;CLI 会从同一环境变量读取。socket 可经
-ssh 转发(`ssh -R /tmp/fwd.sock:<host socket>`),从而让远端客户端驱动 host。
+若 host 以 `MIAOTTY_MTP_TOKEN` 启动,请求必须携带该令牌;CLI 会从同一环境变量读取。
+`MIAOTTY_MTP_ALLOW`(逗号分隔,如 `core.basic,file.read,history.read`)限定允许的能力,其余返回
+`forbidden`;不设=全允许,`core.basic`(ping/health)始终允许以便客户端发现 host,`ping` 会在
+`allowed` 里报告生效能力集。socket 可经 ssh 转发(`ssh -R /tmp/fwd.sock:<host socket>`),从而让远端
+客户端驱动 host。
 
 使用 `--socket PATH` 或设置 `MIAOTTY_SOCKET` 可指定非默认 socket。
 
@@ -268,7 +271,7 @@ view/edit、更新下载/校验/安装、URL scheme、全局快速终端热键�
 - **CI 性能基线**:回归门对比记录的基线,需 CI 侧基线存储才能在 CI 生效。
 - **Markdown**:Mermaid 图未渲染。
 - **编辑器**:两端编辑器均有可选的 vim 模式(ADR 0029);i18n 覆盖主要界面但未覆盖全部字符串。
-- **MTP**:无按能力授权;`file.read/write` 仅 UTF-8 文本(无二进制/流式传输)。
+- **MTP**:`file.read/write` 仅 UTF-8 文本(无二进制/流式传输);已支持按能力授权(`MIAOTTY_MTP_ALLOW`)。
 
 ---
 

@@ -43,8 +43,12 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-    // MIAOTTY_MTP_TOKEN (if set) makes the host require it on every request.
-    let state = miao_term_mtp::ServerState::with_token(std::env::var("MIAOTTY_MTP_TOKEN").ok());
+    // MIAOTTY_MTP_TOKEN (if set) makes the host require it on every request;
+    // MIAOTTY_MTP_ALLOW (if set) restricts which capabilities are accepted.
+    let state = miao_term_mtp::ServerState::with_config(
+        std::env::var("MIAOTTY_MTP_TOKEN").ok(),
+        miao_term_mtp::ServerState::parse_allow(std::env::var("MIAOTTY_MTP_ALLOW").ok()),
+    );
     match miao_term_mtp::serve(&socket, state.clone()) {
         Ok(()) => eprintln!("miaotty: MTP host listening on {}", socket.display()),
         Err(e) => eprintln!("miaotty: failed to start MTP host: {e}"),

@@ -237,8 +237,12 @@ miaotty-cli file write --path /tmp/x --data-b64 "AAECAw=="   # binary
 ```
 
 If the host was started with `MIAOTTY_MTP_TOKEN`, requests must carry it; the CLI
-picks it up from the same variable. The socket can be forwarded over ssh
-(`ssh -R /tmp/fwd.sock:<host socket>`) so a remote client drives the host.
+picks it up from the same variable. `MIAOTTY_MTP_ALLOW` (comma-separated, e.g.
+`core.basic,file.read,history.read`) restricts which capabilities are accepted —
+anything else returns `forbidden`. Unset means everything is allowed, and
+`core.basic` (ping/health) is always allowed so clients can discover the host;
+`ping` reports the effective set in `allowed`. The socket can be forwarded over
+ssh (`ssh -R /tmp/fwd.sock:<host socket>`) so a remote client drives the host.
 
 Pass `--socket PATH` or set `MIAOTTY_SOCKET` to target a non-default socket.
 
@@ -307,8 +311,8 @@ Still open:
 - **Markdown**: Mermaid diagrams are not rendered.
 - **Editor**: both editors have an opt-in vim mode (ADR 0029); i18n covers the
   main chrome but not every string.
-- **MTP**: no per-capability authorization; `file.read/write` is UTF-8 text only
-  (no binary/streaming transfer).
+- **MTP**: `file.read/write` is UTF-8 text only (no binary/streaming transfer);
+  per-capability authorization is available via `MIAOTTY_MTP_ALLOW`.
 
 ---
 
