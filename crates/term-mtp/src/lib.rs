@@ -847,16 +847,19 @@ mod tests {
             ServerState::with_config(None, ServerState::parse_allow(Some("core.basic".into())));
         assert!(dispatch(&locked, request("core", "health", json!({}))).ok);
         assert!(!dispatch(&locked, request("pane", "list", json!({}))).ok);
-        // No policy: everything is allowed (backwards compatible).
+        // No policy: everything is allowed (backwards compatible). Use the OS
+        // temp dir so this works on Windows too (there is no `/tmp`).
         let open = ServerState::new();
+        let tmp = std::env::temp_dir().join(format!("miaotty-mtp-allow-{}", std::process::id()));
+        let tmp = tmp.to_string_lossy().to_string();
         assert!(
             dispatch(
                 &open,
-                request("file", "write", json!({ "path": "/tmp/y", "data": "z" }))
+                request("file", "write", json!({ "path": tmp, "data": "z" }))
             )
             .ok
         );
-        let _ = std::fs::remove_file("/tmp/y");
+        let _ = std::fs::remove_file(&tmp);
     }
 
     #[test]
