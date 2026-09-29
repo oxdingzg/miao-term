@@ -18,7 +18,7 @@ fn screen_text(term: &Terminal) -> String {
 
 #[test]
 fn conpty_spawns_shell_and_echoes() {
-    let mut term = Terminal::new(Some("cmd.exe".to_string()), 100, 30, 2000, None, &[])
+    let mut term = Terminal::new(Some("cmd.exe".to_string()), 100, 30, 2000, None, &[], std::sync::Arc::new(|| {}))
         .expect("openpty + spawn cmd.exe on ConPTY");
 
     // Let the shell come up; resend a few times in case input raced startup.
@@ -48,7 +48,7 @@ fn conpty_spawns_shell_and_echoes() {
 
 #[test]
 fn conpty_resize_updates_screen_and_pty() {
-    let mut term = Terminal::new(Some("cmd.exe".to_string()), 80, 24, 1000, None, &[])
+    let mut term = Terminal::new(Some("cmd.exe".to_string()), 80, 24, 1000, None, &[], std::sync::Arc::new(|| {}))
         .expect("openpty + spawn cmd.exe on ConPTY");
 
     term.process_pending();
