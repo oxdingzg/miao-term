@@ -3400,17 +3400,30 @@ fn render_dir_tree(
         let is_open = expanded.contains(&path);
         ui.horizontal(|ui| {
             ui.add_space(depth as f32 * 12.0);
-            let (ir, _) = ui.allocate_exact_size(egui::Vec2::splat(14.0), egui::Sense::hover());
+            // The disclosure triangle is itself clickable.
+            let (ir, chev_resp) =
+                ui.allocate_exact_size(egui::Vec2::splat(14.0), egui::Sense::click());
             if is_dir {
                 chevron(ui.painter(), ir, is_open, muted);
+                if chev_resp.clicked() {
+                    *toggle = Some(path.clone());
+                }
             }
-            let (ird, _) = ui.allocate_exact_size(egui::Vec2::splat(14.0), egui::Sense::hover());
+            let (ird, icon_resp) =
+                ui.allocate_exact_size(egui::Vec2::splat(14.0), egui::Sense::click());
             miao_term_ui::icons::draw(
                 ui.painter(),
                 ird,
                 if is_dir { Icon::Folder } else { Icon::File },
                 muted,
             );
+            if icon_resp.clicked() {
+                if is_dir {
+                    *toggle = Some(path.clone());
+                } else {
+                    *open_file = Some(path.clone());
+                }
+            }
             let resp = ui.selectable_label(false, egui::RichText::new(&e.name).size(12.0));
             if resp.clicked() {
                 if is_dir {
