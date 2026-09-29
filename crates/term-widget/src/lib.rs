@@ -2584,26 +2584,6 @@ fn save_window_size(w: f32, h: f32) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn layout_json_round_trip() {
-        let mut l = Layout::leaf("a");
-        assert!(l.split("a", "b", SplitDir::Right));
-        assert!(l.split("b", "c", SplitDir::Down));
-        let map: std::collections::HashMap<String, String> = [("a", "x"), ("b", "y"), ("c", "z")]
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        let back = json_to_layout(&layout_to_json(&l), &map).unwrap();
-        let mut ids = back.ids();
-        ids.sort();
-        assert_eq!(ids, vec!["x".to_string(), "y".to_string(), "z".to_string()]);
-    }
-}
-
 impl chrome::Chrome for State {
     fn lang(&self) -> miao_term_ui::i18n::Lang {
         self.lang
@@ -2740,5 +2720,25 @@ impl chrome::Chrome for State {
         };
         self.run_command(cmd);
         self.window.request_redraw();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn layout_json_round_trip() {
+        let mut l = Layout::leaf("a");
+        assert!(l.split("a", "b", SplitDir::Right));
+        assert!(l.split("b", "c", SplitDir::Down));
+        let map: std::collections::HashMap<String, String> = [("a", "x"), ("b", "y"), ("c", "z")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let back = json_to_layout(&layout_to_json(&l), &map).unwrap();
+        let mut ids = back.ids();
+        ids.sort();
+        assert_eq!(ids, vec!["x".to_string(), "y".to_string(), "z".to_string()]);
     }
 }
