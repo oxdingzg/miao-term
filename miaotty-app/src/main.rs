@@ -702,6 +702,9 @@ struct MiaottyApp {
     update_msg: Option<String>,
     /// In-progress IME composition (e.g. Pinyin), shown inline near the cursor.
     ime_preedit: String,
+    /// Whether to enable the OS input method at all. Can be turned off with
+    /// `MIAOTTY_IME=0` to isolate IME-related input latency.
+    ime_enabled: bool,
     /// Whether IME has been enabled on the window (avoid re-sending every frame,
     /// which resets the input method and makes it flicker).
     ime_allowed: bool,
@@ -922,6 +925,9 @@ impl MiaottyApp {
             update_rx: None,
             update_msg: None,
             ime_preedit: String::new(),
+            ime_enabled: std::env::var("MIAOTTY_IME")
+                .map(|v| v != "0")
+                .unwrap_or(true),
             ime_allowed: false,
             ime_rect: None,
             tab_filter: String::new(),
@@ -5216,7 +5222,7 @@ impl MiaottyApp {
             // the cursor cell. Each command is sent only when it changes:
             // re-sending `IMEAllowed(true)` every frame resets the input method
             // and makes it flicker.
-            if ctx.memory(|m| m.focused().is_none()) {
+            if self.ime_enabled && ctx.memory(|m| m.focused().is_none()) {
                 if !self.ime_allowed {
                     ctx.send_viewport_cmd(egui::ViewportCommand::IMEAllowed(true));
                     self.ime_allowed = true;
