@@ -4914,6 +4914,9 @@ fn configure_egui(ctx: &egui::Context) {
         v.widgets.inactive.bg_fill = col(ch.hover);
         v.widgets.hovered.bg_fill = col(ch.active);
         v.widgets.active.bg_fill = col(ch.active);
+        // Panel separators: egui defaults to a flat grey; use the sidebar edge
+        // colour so the split reads like Otty's `[sidebar] border-right`.
+        v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, col(ch.border));
     }
     let r = egui::Rounding::same(6.0);
     style.visuals.widgets.inactive.rounding = r;
