@@ -12,6 +12,7 @@
 //! - `event` [`EventSink`] for OSC-driven notifications to the host
 
 pub mod aterm;
+pub mod graphics;
 mod shell;
 mod term;
 

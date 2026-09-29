@@ -13,6 +13,11 @@ use crate::aterm::ATerm;
 
 type Fallible<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
+/// Nominal cell height (px) used only to advance the cursor below a Sixel image.
+/// The host owns real font metrics; this keeps the following prompt below the
+/// image without threading the cell size through the engine.
+const NOMINAL_CELL_H: u32 = 16;
+
 /// Upper bound on a pending OSC 7 sequence held between chunks. Terminal output
 /// is untrusted, so an unterminated sequence must not grow this buffer forever.
 const MAX_OSC: usize = 8 * 1024;
@@ -31,6 +36,9 @@ pub struct Terminal {
     cwd: Option<String>,
     title: Option<String>,
     osc_buf: Vec<u8>,
+    scanner: miao_term_graphics::Scanner,
+    graphics: crate::graphics::GraphicsLayer,
+    graphics_enabled: bool,
     /// Pending bytes scanned for a ConPTY cursor-position query (DSR, `ESC[6n`),
     /// which must be answered or the Windows shell stalls before it runs anything.
     dsr_buf: Vec<u8>,
@@ -156,6 +164,9 @@ impl Terminal {
             cwd: None,
             title: None,
             osc_buf: Vec::new(),
+            scanner: miao_term_graphics::Scanner::new(),
+            graphics: crate::graphics::GraphicsLayer::new(),
+            graphics_enabled: true,
             dsr_buf: Vec::new(),
         })
     }
@@ -165,12 +176,7 @@ impl Terminal {
         let mut changed = false;
         loop {
             match self.rx.try_recv() {
-                Ok(bytes) => {
-                    self.scan_osc(&bytes);
-                    self.screen.process(&bytes);
-                    self.answer_dsr(&bytes);
-                    changed = true;
-                }
+                Ok(bytes) => changed |= self.feed(&bytes),
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     self.exited = true;
@@ -178,7 +184,80 @@ impl Terminal {
                 }
             }
         }
+        self.graphics.sync_total(self.screen.total_lines());
         changed
+    }
+
+    /// Feed one chunk: OSC/DSR scanning on the raw bytes, text to the VT parser,
+    /// graphics payloads to the image layer.
+    fn feed(&mut self, bytes: &[u8]) -> bool {
+        let mut changed = false;
+        self.scan_osc(bytes);
+        self.answer_dsr(bytes);
+        for seg in self.scanner.feed(bytes) {
+            match seg {
+                miao_term_graphics::Segment::Text(t) => {
+                    if !t.is_empty() {
+                        self.screen.process(&t);
+                        changed = true;
+                    }
+                }
+                miao_term_graphics::Segment::Graphics(g) => {
+                    if self.graphics_enabled {
+                        changed |= self.handle_graphic(g);
+                    }
+                }
+            }
+        }
+        changed
+    }
+
+    fn handle_graphic(&mut self, g: miao_term_graphics::Graphic) -> bool {
+        use miao_term_graphics as gfx;
+        // Align existing anchors before adding to the layer.
+        self.graphics.sync_total(self.screen.total_lines());
+        let (line, col) = {
+            let (r, c) = self.screen.cursor();
+            (r as i32, c)
+        };
+        match g {
+            gfx::Graphic::Sixel { transparent, data } => {
+                let Some(img) = gfx::sixel::decode(&data, transparent, self.graphics.max_pixels)
+                else {
+                    return false;
+                };
+                let rows = img.height.div_ceil(NOMINAL_CELL_H).max(1);
+                self.graphics.place(img, line, col, None, None, 0);
+                for _ in 0..rows {
+                    self.screen.process(b"\r\n");
+                }
+                true
+            }
+            gfx::Graphic::Kitty(cmd) => self.graphics.kitty(cmd, line, col),
+            gfx::Graphic::Iterm2 { data, .. } => {
+                let Some(img) = gfx::decode_iterm2(&data, self.graphics.max_pixels) else {
+                    return false;
+                };
+                self.graphics.place(img, line, col, None, None, 0);
+                true
+            }
+        }
+    }
+
+    /// Enable/disable inline graphics processing (config `graphics`).
+    pub fn set_graphics_enabled(&mut self, on: bool) {
+        self.graphics_enabled = on;
+    }
+
+    /// Feed bytes as if they came from the PTY (tests only).
+    #[cfg(test)]
+    pub(crate) fn feed_for_test(&mut self, bytes: &[u8]) -> bool {
+        self.feed(bytes)
+    }
+
+    /// Decoded inline images (for the renderer).
+    pub fn graphics(&self) -> &crate::graphics::GraphicsLayer {
+        &self.graphics
     }
 
     /// Send raw bytes (keyboard/paste) to the shell.
@@ -331,4 +410,41 @@ fn parse_osc7(payload: &str) -> Option<String> {
     let rest = payload.strip_prefix("file://")?;
     let slash = rest.find('/')?;
     Some(rest[slash..].to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make() -> Terminal {
+        let waker: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(|| {});
+        Terminal::new(None, 20, 5, 100, None, &[], waker).expect("spawn shell")
+    }
+
+    #[test]
+    fn sixel_reaches_the_graphics_layer() {
+        let mut t = make();
+        t.feed_for_test(b"\x1bPq#0;2;100;0;0#0~~~~~~~~~~\x1b\\");
+        let imgs = &t.graphics().images;
+        assert_eq!(imgs.len(), 1, "one image placed");
+        assert_eq!((imgs[0].image.width, imgs[0].image.height), (10, 6));
+        // Red at the top-left pixel.
+        assert_eq!(&imgs[0].image.rgba[..4], &[255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn graphics_can_be_disabled() {
+        let mut t = make();
+        t.set_graphics_enabled(false);
+        t.feed_for_test(b"\x1bPq#0;2;100;0;0#0~~~~~~~~~~\x1b\\");
+        assert!(t.graphics().images.is_empty());
+    }
+
+    #[test]
+    fn plain_text_still_flows() {
+        let mut t = make();
+        t.feed_for_test(b"hi\r\n");
+        assert_eq!(t.screen().line_text(0), "hi");
+        assert!(t.graphics().images.is_empty());
+    }
 }

@@ -2072,8 +2072,18 @@ name = "miao-term-core"
 version = "0.0.0"
 dependencies = [
  "alacritty_terminal",
+ "miao-term-graphics",
  "portable-pty",
  "serde_json",
+]
+
+[[package]]
+name = "miao-term-graphics"
+version = "0.0.0"
+dependencies = [
+ "base64",
+ "flate2",
+ "image",
 ]
 
 [[package]]

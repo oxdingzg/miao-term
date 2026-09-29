@@ -118,6 +118,7 @@ struct RawConfig {
     editor_vim: Option<bool>,
     #[serde(rename = "mermaid-command")]
     mermaid_command: Option<String>,
+    graphics: Option<bool>,
     #[serde(rename = "quick-terminal-hotkey")]
     quick_terminal_hotkey: Option<String>,
     #[serde(rename = "update-pubkey")]
@@ -210,6 +211,8 @@ pub struct Config {
     /// External Mermaid renderer (e.g. `mmdc`) for `mermaid` code blocks.
     /// `None` (default) draws the built-in `graph`/`flowchart` subset instead.
     pub mermaid_command: Option<String>,
+    /// Inline terminal graphics (Sixel / Kitty / iTerm2). On by default.
+    pub graphics: bool,
     /// System-wide accelerator that toggles the Quick Terminal, e.g.
     /// `cmd+shift+t` (see ADR 0019). `None` disables it.
     pub quick_terminal_hotkey: Option<String>,
@@ -266,6 +269,7 @@ impl Default for Config {
             editor: None,
             editor_vim: false,
             mermaid_command: None,
+            graphics: true,
             quick_terminal_hotkey: None,
             update_pubkey: None,
             theme: Theme::default(),
@@ -541,6 +545,9 @@ impl Config {
             if !cmd.is_empty() {
                 cfg.mermaid_command = Some(cmd.to_string());
             }
+        }
+        if let Some(g) = raw.graphics {
+            cfg.graphics = g;
         }
         if let Some(editor) = raw.editor {
             let editor = editor.trim();

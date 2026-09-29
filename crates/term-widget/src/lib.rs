@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use miao_term_core::Terminal;
-use miao_term_render::{Quad, QuadRenderer, Span, TermRenderer};
+use miao_term_render::{ImageInstance, ImageRenderer, Quad, QuadRenderer, Span, TermRenderer};
 use miao_term_ui::layout::{Layout, Rect, SplitDir};
 use miao_term_ui::{build_rows, chrome, input, theme::Theme, Selection};
 use winit::application::ApplicationHandler;
@@ -116,6 +116,8 @@ struct State {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     quads: QuadRenderer,
+    images: ImageRenderer,
+    graphics_enabled: bool,
     renderers: HashMap<String, TermRenderer>,
     mtp: Arc<miao_term_mtp::ServerState>,
     tabs: Vec<Tab>,
@@ -331,10 +333,13 @@ impl State {
         let env = vec![("MIAOTTY_PANE_ID".to_string(), id.clone())];
         Terminal::new(None, cols, rows, 10_000, cwd, &env, waker)
             .ok()
-            .map(|term| Pane {
-                id,
-                term,
-                scroll: 0,
+            .map(|mut term| {
+                term.set_graphics_enabled(self.graphics_enabled);
+                Pane {
+                    id,
+                    term,
+                    scroll: 0,
+                }
             })
     }
 
@@ -656,6 +661,9 @@ impl State {
             .map(|s| s.chars().count() as u16)
             .unwrap_or(0);
         let mut draws: Vec<PaneDraw> = Vec::new();
+        let mut image_quads: Vec<(u64, ImageInstance)> = Vec::new();
+        let mut image_uploads: Vec<(u64, Arc<miao_term_core::graphics::PlacedImage>)> = Vec::new();
+        let mut image_keep: std::collections::HashSet<u64> = std::collections::HashSet::new();
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
             for (id, r) in &rects {
                 let Some(pane) = tab.panes.iter_mut().find(|p| &p.id == id) else {
@@ -788,6 +796,33 @@ impl State {
                 // Glyph origin is relative to the pane's viewport (the egui-wgpu
                 // callback sets the viewport), so we render per-pane with the
                 // viewer origin at 0 for the glyph renderer.
+                // Inline images (engine layer), drawn under the glyphs.
+                {
+                    let off = pane.term.screen().scroll_offset() as i32;
+                    let px1 = ox + inner.w * scale;
+                    let py1 = oy + inner.h * scale;
+                    for im in pane.term.graphics().images.iter() {
+                        let key = image_key(id, im.id);
+                        image_keep.insert(key);
+                        image_uploads.push((key, Arc::new(im.clone())));
+                        let x0 = ox + im.col as f32 * cw;
+                        let y0 = oy + (im.anchor + off) as f32 * ch;
+                        let x1 = x0 + im.image.width as f32;
+                        let y1 = y0 + im.image.height as f32;
+                        if x1 < ox || y1 < oy || x0 > px1 || y0 > py1 {
+                            continue;
+                        }
+                        image_quads.push((
+                            key,
+                            ImageInstance {
+                                min: [x0, y0],
+                                max: [x1, y1],
+                                uv_min: [0.0, 0.0],
+                                uv_max: [1.0, 1.0],
+                            },
+                        ));
+                    }
+                }
                 draws.push(PaneDraw {
                     id: id.clone(),
                     rect: inner,
@@ -797,10 +832,27 @@ impl State {
             }
         }
 
+        // Upload any new inline images, drop textures for images that are gone.
+        for (key, p) in &image_uploads {
+            if !self.images.has(*key) {
+                self.images.upload(
+                    &self.device,
+                    &self.queue,
+                    *key,
+                    p.image.width,
+                    p.image.height,
+                    &p.image.rgba,
+                );
+            }
+        }
+        self.images.retain(&image_keep);
+
         // GPU: quads (all panes) then per-pane glyphs.
         let all_quads: Vec<Quad> = draws.iter().flat_map(|d| d.quads.iter().copied()).collect();
         self.quads
             .prepare(&self.device, &self.queue, self.window_size(), &all_quads);
+        self.images
+            .prepare(&self.device, &self.queue, self.window_size(), &image_quads);
         let win_size = self.window_size();
         let format = self.config.format;
         for d in &draws {
@@ -894,6 +946,13 @@ impl State {
                 })
                 .forget_lifetime();
             self.quads.render(&mut pass);
+            if !image_quads.is_empty() {
+                let (sx, sy, sw, sh) =
+                    grid_scissor(&rects, scale, self.config.width, self.config.height);
+                pass.set_scissor_rect(sx, sy, sw, sh);
+                self.images.render(&mut pass);
+                pass.set_scissor_rect(0, 0, self.config.width, self.config.height);
+            }
             for d in &draws {
                 if let Some(renderer) = self.renderers.get(&d.id) {
                     renderer.render(&mut pass);
@@ -2301,6 +2360,39 @@ impl State {
     }
 }
 
+/// A stable texture key for an image: unique across panes.
+fn image_key(pane: &str, id: u64) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    pane.hash(&mut h);
+    id.hash(&mut h);
+    h.finish()
+}
+
+/// Scissor rectangle (physical px) covering all panes, clamped to the surface.
+fn grid_scissor(
+    rects: &[(String, Rect)],
+    scale: f32,
+    width: u32,
+    height: u32,
+) -> (u32, u32, u32, u32) {
+    let (mut minx, mut miny, mut maxx, mut maxy) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for (_, r) in rects {
+        minx = minx.min(r.x);
+        miny = miny.min(r.y);
+        maxx = maxx.max(r.x + r.w);
+        maxy = maxy.max(r.y + r.h);
+    }
+    if rects.is_empty() {
+        return (0, 0, 0, 0);
+    }
+    let sx = (minx * scale).max(0.0).min(width as f32) as u32;
+    let sy = (miny * scale).max(0.0).min(height as f32) as u32;
+    let sw = ((maxx - minx) * scale).max(0.0) as u32;
+    let sh = ((maxy - miny) * scale).max(0.0) as u32;
+    (sx, sy, sw.min(width - sx), sh.min(height - sy))
+}
+
 /// The URL token under `col` in a line: `(url, start_col, end_col)`.
 fn link_at(line: &str, col: u16) -> Option<(String, u16, u16)> {
     let chars: Vec<char> = line.chars().collect();
@@ -2438,6 +2530,7 @@ impl ApplicationHandler for Host {
         surface.configure(&device, &config);
 
         let quads = QuadRenderer::new(&device, format);
+        let images = ImageRenderer::new(&device, format);
         let egui_ctx = egui::Context::default();
         egui_extras::install_image_loaders(&egui_ctx);
         install_egui_fonts(&egui_ctx);
@@ -2470,6 +2563,8 @@ impl ApplicationHandler for Host {
             queue,
             config,
             quads,
+            images,
+            graphics_enabled: cfg.graphics,
             renderers: HashMap::new(),
             mtp: self.mtp.clone(),
             tabs: Vec::new(),
