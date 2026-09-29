@@ -229,6 +229,21 @@ mod tests {
     }
 
     #[test]
+    fn kitty_chunks_reassemble() {
+        let mut l = GraphicsLayer::new();
+        // 1x1 raw RGB (base64 "AAAA"), sent as two `m=` chunks.
+        let c1 = gfx::kitty::parse(b"a=T,f=24,s=1x1,m=1;AA");
+        let c2 = gfx::kitty::parse(b"a=T,f=24,s=1x1,m=0;AA");
+        assert!(!l.kitty(c1, 0, 0, 0), "first chunk is held");
+        assert!(l.kitty(c2, 0, 0, 0), "second chunk decodes");
+        assert_eq!(l.images.len(), 1);
+        assert_eq!(
+            (l.images[0].image.width, l.images[0].image.height),
+            (1, 1)
+        );
+    }
+
+    #[test]
     fn region_deletes() {
         let mut l = GraphicsLayer::new();
         l.place(img(2, 2), 3, 1, None, None, 0, 0, 0); // column 1, line 3
