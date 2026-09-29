@@ -306,7 +306,7 @@ use crate::i18n::{t, Lang};
 fn panel_frame(ch: &ChromeColors, margin: egui::Margin) -> egui::Frame {
     egui::Frame::default()
         .fill(bg_color(ch.bg))
-        .stroke(egui::Stroke::new(1.0_f32, bg_color(ch.hover)))
+        .stroke(egui::Stroke::new(1.0_f32, bg_color(ch.border)))
         .inner_margin(margin)
 }
 

@@ -165,6 +165,8 @@ struct State {
     selection: Option<(String, Selection)>,
     dragging: bool,
     divider_drag: Option<(Vec<bool>, SplitDir, Rect)>,
+    /// Mouse button currently forwarded to the application (0/1/2), if any.
+    mouse_captured: Option<u8>,
     cursor: (f64, f64),
     show_sidebar: bool,
     show_details: bool,
@@ -1024,26 +1026,8 @@ impl State {
         let inner = card_inner(r);
         let col = ((px - inner.x * scale) / cw).floor().max(0.0) as u16 + 1;
         let row = ((py - inner.y * scale) / ch).floor().max(0.0) as u16 + 1;
-        let code = if motion && !wheel {
-            button + 32
-        } else {
-            button
-        };
-        let seq = if sgr {
-            let end = if pressed || wheel { 'M' } else { 'm' };
-            format!("\x1b[<{code};{col};{row}{end}")
-        } else if col > 223 || row > 223 {
+        let Some(seq) = mouse_report(sgr, button, pressed, motion, col, row) else {
             return false;
-        } else {
-            let bytes = [
-                0x1b,
-                b'[',
-                b'M',
-                32u8.saturating_add(code),
-                32u8.saturating_add(col as u8),
-                32u8.saturating_add(row as u8),
-            ];
-            String::from_utf8_lossy(&bytes).into_owned()
         };
         pane.term.write(seq.as_bytes());
         self.window.request_redraw();
@@ -1340,6 +1324,32 @@ impl State {
                     quads,
                     rows: rows_data,
                 });
+            }
+        }
+
+        // Split dividers between panes (Otty's 1px `[divider]` token).
+        if let Some(tab) = self.tabs.get(self.active_tab) {
+            let border = theme.chrome().border;
+            let mut divider_quads = Vec::new();
+            for h in tab.layout.handles(self.grid_area()) {
+                let (x0, y0, x1, y1) = match h.dir {
+                    SplitDir::Right => {
+                        let cx = h.rect.x + h.rect.w / 2.0;
+                        (cx - 0.5, h.rect.y, cx + 0.5, h.rect.y + h.rect.h)
+                    }
+                    SplitDir::Down => {
+                        let cy = h.rect.y + h.rect.h / 2.0;
+                        (h.rect.x, cy - 0.5, h.rect.x + h.rect.w, cy + 0.5)
+                    }
+                };
+                divider_quads.push(Quad::new(
+                    (x0 * scale, y0 * scale),
+                    (x1 * scale, y1 * scale),
+                    (border.0, border.1, border.2, 255),
+                ));
+            }
+            if let Some(last) = draws.last_mut() {
+                last.quads.extend(divider_quads);
             }
         }
 
@@ -3843,6 +3853,7 @@ impl ApplicationHandler for Host {
             selection: None,
             dragging: false,
             divider_drag: None,
+            mouse_captured: None,
             cursor: (0.0, 0.0),
             show_sidebar: true,
             show_details: true,
@@ -4079,48 +4090,79 @@ impl ApplicationHandler for Host {
                 state: es, button, ..
             } => match button {
                 MouseButton::Left => {
-                    if es == ElementState::Pressed
-                        && (state.mods.super_key() || state.mods.control_key())
-                    {
-                        if let Some(hit) = state.link_at_pointer() {
-                            open_external(&hit.url);
-                        }
-                    } else if es == ElementState::Pressed {
-                        // Prefer a divider under the pointer, else a selection.
-                        let scale = state.window.scale_factor() as f32;
-                        let (px, py) = (state.cursor.0 as f32, state.cursor.1 as f32);
-                        let hit = state.handles().into_iter().find(|h| {
-                            px >= h.rect.x * scale
-                                && px < (h.rect.x + h.rect.w) * scale
-                                && py >= h.rect.y * scale
-                                && py < (h.rect.y + h.rect.h) * scale
-                        });
-                        match hit {
-                            Some(h) => state.divider_drag = Some((h.path, h.dir, h.area)),
-                            None => {
-                                state.dragging = true;
-                                state.selection = None;
+                    let (px, py) = (state.cursor.0 as f32, state.cursor.1 as f32);
+                    if es == ElementState::Pressed {
+                        // ⌘/Ctrl-click stays a terminal-level link gesture.
+                        let linked = if state.mods.super_key() || state.mods.control_key() {
+                            match state.link_at_pointer() {
+                                Some(hit) => {
+                                    open_external(&hit.url);
+                                    true
+                                }
+                                None => false,
+                            }
+                        } else {
+                            false
+                        };
+                        if !linked {
+                            if state.forward_mouse(px, py, 0, true, false) {
+                                state.mouse_captured = Some(0);
+                            } else {
+                                // Prefer a divider under the pointer, else a selection.
+                                let scale = state.window.scale_factor() as f32;
+                                let hit = state.handles().into_iter().find(|h| {
+                                    px >= h.rect.x * scale
+                                        && px < (h.rect.x + h.rect.w) * scale
+                                        && py >= h.rect.y * scale
+                                        && py < (h.rect.y + h.rect.h) * scale
+                                });
+                                match hit {
+                                    Some(h) => state.divider_drag = Some((h.path, h.dir, h.area)),
+                                    None => {
+                                        state.dragging = true;
+                                        state.selection = None;
+                                    }
+                                }
                             }
                         }
                     } else {
-                        if state.divider_drag.take().is_none() {
+                        if state.mouse_captured.take() == Some(0) {
+                            state.forward_mouse(px, py, 0, false, false);
+                        } else if state.divider_drag.take().is_none() {
                             let ctx = state.egui_ctx.clone();
                             state.copy_selection(&ctx);
                         }
                         state.dragging = false;
                     }
                 }
-                MouseButton::Right if es == ElementState::Pressed => {
-                    if state.selection.is_some() {
-                        let ctx = state.egui_ctx.clone();
-                        state.copy_selection(&ctx);
-                        state.selection = None;
-                    } else {
-                        // Paste.
-                        let text = state.egui_state.clipboard_text().unwrap_or_default();
-                        if !text.is_empty() {
-                            state.paste(&text);
+                MouseButton::Right => {
+                    let (px, py) = (state.cursor.0 as f32, state.cursor.1 as f32);
+                    if es == ElementState::Pressed {
+                        if state.forward_mouse(px, py, 2, true, false) {
+                            state.mouse_captured = Some(2);
+                        } else if state.selection.is_some() {
+                            let ctx = state.egui_ctx.clone();
+                            state.copy_selection(&ctx);
+                            state.selection = None;
+                        } else {
+                            // Paste.
+                            let text = state.egui_state.clipboard_text().unwrap_or_default();
+                            if !text.is_empty() {
+                                state.paste(&text);
+                            }
                         }
+                    } else if state.mouse_captured.take() == Some(2) {
+                        state.forward_mouse(px, py, 2, false, false);
+                    }
+                }
+                MouseButton::Middle => {
+                    let (px, py) = (state.cursor.0 as f32, state.cursor.1 as f32);
+                    if es == ElementState::Pressed {
+                        if state.forward_mouse(px, py, 1, true, false) {
+                            state.mouse_captured = Some(1);
+                        }
+                    } else if state.mouse_captured.take() == Some(1) {
+                        state.forward_mouse(px, py, 1, false, false);
                     }
                 }
                 _ => {}
@@ -4161,6 +4203,12 @@ impl ApplicationHandler for Host {
                         }
                         state.window.request_redraw();
                     }
+                } else if let Some(btn) = state.mouse_captured {
+                    // Drag report for the button the application captured.
+                    state.forward_mouse(px, py, btn, true, true);
+                } else {
+                    // Hover report, only if the application asked for motion.
+                    state.forward_mouse(px, py, 3, false, true);
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -4441,6 +4489,50 @@ fn card_inner(r: Rect) -> Rect {
     }
 }
 
+/// Encode a mouse report for the terminal application.
+///
+/// `button`: 0 left, 1 middle, 2 right, 3 none (hover), 64 wheel-up, 65 wheel-down.
+/// With SGR encoding (`?1006h`) a press ends in `M` and a release in `m`; wheel
+/// and motion reports have no release, so they always use `M`. Otherwise the
+/// legacy X10 encoding applies (coordinates are limited to 223).
+fn mouse_report(
+    sgr: bool,
+    button: u8,
+    pressed: bool,
+    motion: bool,
+    col: u16,
+    row: u16,
+) -> Option<String> {
+    if col == 0 || row == 0 {
+        return None;
+    }
+    let code = if motion && button < 64 {
+        button + 32
+    } else {
+        button
+    };
+    if sgr {
+        let end = if pressed || motion || button >= 64 {
+            'M'
+        } else {
+            'm'
+        };
+        return Some(format!("\x1b[<{code};{col};{row}{end}"));
+    }
+    if col > 223 || row > 223 {
+        return None;
+    }
+    let bytes = [
+        0x1b,
+        b'[',
+        b'M',
+        32u8.saturating_add(code),
+        32u8.saturating_add(col as u8),
+        32u8.saturating_add(row as u8),
+    ];
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 /// External Mermaid rendering (opt-in via `mermaid-command`) with a cache.
 #[derive(Default)]
 struct Mmd {
@@ -4613,6 +4705,10 @@ fn configure_egui(ctx: &egui::Context) {
         v.widgets.inactive.bg_fill = col(ch.hover);
         v.widgets.hovered.bg_fill = col(ch.active);
         v.widgets.active.bg_fill = col(ch.active);
+        // Panel separators and dialog outlines (egui defaults to a flat grey).
+        v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, col(ch.border));
+        v.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, col(ch.muted));
+        v.window_stroke = egui::Stroke::new(1.0, col(ch.border));
     }
     let r = egui::Rounding::same(6.0);
     style.visuals.widgets.inactive.rounding = r;
@@ -5095,5 +5191,51 @@ mod tests {
         let mut ids = back.ids();
         ids.sort();
         assert_eq!(ids, vec!["x".to_string(), "y".to_string(), "z".to_string()]);
+    }
+
+    #[test]
+    fn sgr_mouse_reports() {
+        assert_eq!(
+            super::mouse_report(true, 0, true, false, 10, 5).unwrap(),
+            "\x1b[<0;10;5M"
+        );
+        assert_eq!(
+            super::mouse_report(true, 0, false, false, 10, 5).unwrap(),
+            "\x1b[<0;10;5m"
+        );
+        // Drag: left button plus the motion bit.
+        assert_eq!(
+            super::mouse_report(true, 0, true, true, 10, 5).unwrap(),
+            "\x1b[<32;10;5M"
+        );
+        // Hover without a button.
+        assert_eq!(
+            super::mouse_report(true, 3, false, true, 10, 5).unwrap(),
+            "\x1b[<35;10;5M"
+        );
+        // Wheel events have no release.
+        assert_eq!(
+            super::mouse_report(true, 64, true, false, 10, 5).unwrap(),
+            "\x1b[<64;10;5M"
+        );
+        assert_eq!(
+            super::mouse_report(true, 65, false, false, 10, 5).unwrap(),
+            "\x1b[<65;10;5M"
+        );
+    }
+
+    #[test]
+    fn x10_mouse_reports_and_bounds() {
+        assert_eq!(
+            super::mouse_report(false, 0, true, false, 1, 1).unwrap(),
+            "\x1b[M\x20\x21\x21"
+        );
+        assert_eq!(
+            super::mouse_report(false, 2, true, false, 5, 9).unwrap(),
+            "\x1b[M\x22\x25\x29"
+        );
+        assert!(super::mouse_report(false, 0, true, false, 224, 1).is_none());
+        assert!(super::mouse_report(false, 0, true, false, 1, 224).is_none());
+        assert!(super::mouse_report(true, 0, true, false, 0, 1).is_none());
     }
 }
