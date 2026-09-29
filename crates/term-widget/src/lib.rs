@@ -163,6 +163,7 @@ struct State {
     vim_for: String,
     mmd: Mermaid,
     recent_files: Vec<String>,
+    open_counts: HashMap<String, u32>,
     integration_msg: Option<String>,
     hotkeys: Option<miao_term_ui::hotkey::Hotkeys>,
     opacity: f32,
@@ -380,7 +381,11 @@ impl State {
     }
 
     fn new_tab(&mut self) {
-        let Some(pane) = self.spawn_pane(None) else {
+        self.new_tab_in(None);
+    }
+
+    fn new_tab_in(&mut self, cwd: Option<std::path::PathBuf>) {
+        let Some(pane) = self.spawn_pane(cwd) else {
             return;
         };
         let id = pane.id.clone();
@@ -1125,6 +1130,7 @@ impl State {
             "active_tab": self.active_tab,
             "tabs": tabs,
             "recent": self.recent_files,
+            "counts": self.open_counts,
         })
     }
 
@@ -1216,6 +1222,9 @@ impl State {
                     .collect()
             })
             .unwrap_or_default();
+        self.open_counts =
+            serde_json::from_value(v.get("counts").cloned().unwrap_or(serde_json::Value::Null))
+                .unwrap_or_default();
         self.active_tab = v.get("active_tab").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
         self.active_tab = self.active_tab.min(self.tabs.len() - 1);
         self.publish_panes();
@@ -1927,6 +1936,7 @@ impl State {
         enum Pick {
             Tab(usize),
             File(String),
+            Dir(String),
             Path(std::path::PathBuf),
         }
         let cwd = self.cwd();
@@ -1936,12 +1946,18 @@ impl State {
             .enumerate()
             .map(|(i, t)| (i, self.title_of(t)))
             .collect();
-        let files: Vec<String> = self
+        let files: Vec<(String, bool)> = self
             .details_data
             .as_ref()
-            .map(|d| d.files.iter().map(|(n, _)| n.clone()).collect())
+            .map(|d| {
+                d.files
+                    .iter()
+                    .map(|(n, s)| (n.clone(), s == "dir"))
+                    .collect()
+            })
             .unwrap_or_default();
         let recents = self.recent_files.clone();
+        let counts = self.open_counts.clone();
         let Some(query) = self.quick.as_mut() else {
             return;
         };
@@ -1962,43 +1978,54 @@ impl State {
                 );
                 r.request_focus();
                 let q = query.to_lowercase();
-                let mut rows: Vec<(usize, String, Pick)> = Vec::new();
+                let freq = |p: &str| std::cmp::Reverse(*counts.get(p).unwrap_or(&0));
+                let mut rows: Vec<(usize, std::cmp::Reverse<u32>, String, Pick)> = Vec::new();
                 for (i, title) in &tabs {
                     if let Some(s) = miao_term_ui::palette::score(title, "tab", &q) {
-                        rows.push((s, format!("\u{21e5} {title}"), Pick::Tab(*i)));
+                        rows.push((s, freq(title), format!("\u{21e5} {title}"), Pick::Tab(*i)));
                     }
                 }
-                for name in &files {
-                    if let Some(s) = miao_term_ui::palette::score(name, "file", &q) {
-                        rows.push((s, format!("   {name}"), Pick::File(name.clone())));
+                for (name, is_dir) in &files {
+                    let kind = if *is_dir { "dir" } else { "file" };
+                    if let Some(s) = miao_term_ui::palette::score(name, kind, &q) {
+                        let icon = if *is_dir { "\u{1f4c1}" } else { " " };
+                        let pick = if *is_dir {
+                            Pick::Dir(name.clone())
+                        } else {
+                            Pick::File(name.clone())
+                        };
+                        let f = cwd
+                            .as_ref()
+                            .map(|c| c.join(name).to_string_lossy().to_string())
+                            .unwrap_or_default();
+                        rows.push((s, freq(&f), format!("{icon}  {name}"), pick));
                     }
                 }
                 for path in &recents {
                     if let Some(s) = miao_term_ui::palette::score(path, "recent", &q) {
                         rows.push((
                             s,
+                            freq(path),
                             format!("\u{21ba} {path}"),
                             Pick::Path(std::path::PathBuf::from(path)),
                         ));
                     }
                 }
-                rows.sort_by_key(|(s, _, _)| *s);
-                for (_, label, pick) in rows.iter().take(50) {
+                rows.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+                let clone_pick = |p: &Pick| match p {
+                    Pick::Tab(i) => Pick::Tab(*i),
+                    Pick::File(n) => Pick::File(n.clone()),
+                    Pick::Dir(n) => Pick::Dir(n.clone()),
+                    Pick::Path(p) => Pick::Path(p.clone()),
+                };
+                for (_, _, label, pick) in rows.iter().take(50) {
                     if ui.selectable_label(false, label).clicked() {
-                        chosen = Some(match pick {
-                            Pick::Tab(i) => Pick::Tab(*i),
-                            Pick::File(n) => Pick::File(n.clone()),
-                            Pick::Path(p) => Pick::Path(p.clone()),
-                        });
+                        chosen = Some(clone_pick(pick));
                     }
                 }
                 if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    if let Some((_, _, p)) = rows.first() {
-                        chosen = Some(match p {
-                            Pick::Tab(i) => Pick::Tab(*i),
-                            Pick::File(n) => Pick::File(n.clone()),
-                            Pick::Path(p) => Pick::Path(p.clone()),
-                        });
+                    if let Some((_, _, _, p)) = rows.first() {
+                        chosen = Some(clone_pick(p));
                     }
                 }
             });
@@ -2014,6 +2041,11 @@ impl State {
                 Pick::File(name) => {
                     if let Some(path) = cwd.map(|c| c.join(&name)) {
                         self.open_editor(path);
+                    }
+                }
+                Pick::Dir(name) => {
+                    if let Some(path) = cwd.map(|c| c.join(&name)) {
+                        self.new_tab_in(Some(path));
                     }
                 }
                 Pick::Path(path) => {
@@ -2422,6 +2454,7 @@ impl State {
                 });
                 self.vim_for.clear();
                 self.recent_files.retain(|p| p != &key);
+                *self.open_counts.entry(key.clone()).or_insert(0) += 1;
                 self.recent_files.insert(0, key);
                 self.recent_files.truncate(50);
                 true
@@ -2914,6 +2947,7 @@ impl ApplicationHandler for Host {
                 cache: std::collections::HashMap::new(),
             },
             recent_files: Vec::new(),
+            open_counts: HashMap::new(),
             integration_msg: None,
             hotkeys: None,
             opacity,
