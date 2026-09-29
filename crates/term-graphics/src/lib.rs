@@ -54,6 +54,9 @@ pub struct KittyCmd {
     /// `x`/`y`: cell coordinates (viewport-relative) for `a=d,d=p/c/r`.
     pub cell_x: Option<u16>,
     pub cell_y: Option<u16>,
+    /// `a=a` animation state (`s`) and loop count (`c`).
+    pub state: Option<u32>,
+    pub loops: Option<u32>,
     /// The `;`-separated payload (raw bytes; usually base64 text).
     pub data: Vec<u8>,
 }

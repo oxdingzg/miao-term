@@ -29,6 +29,13 @@ pub struct PlacedImage {
     pub y_off: i32,
     pub image: Arc<gfx::Image>,
     pub z: i32,
+    /// Kitty image id this was placed as (for frames / animation / delete).
+    pub kitty_id: Option<u64>,
+    /// Animation frames (frame 0 is `image`); empty/1 for a still image.
+    pub frames: Vec<Arc<gfx::Image>>,
+    pub animating: bool,
+    pub anim_start: std::time::Instant,
+    pub loops: Option<u32>,
 }
 
 #[derive(Default)]
@@ -43,6 +50,7 @@ struct Partial {
     size: Option<(u32, u32)>,
     x: i32,
     y: i32,
+    action: char,
     data: Vec<u8>,
 }
 
@@ -78,6 +86,7 @@ impl GraphicsLayer {
     ) -> u64 {
         self.next_id += 1;
         let id = self.next_id;
+        let image = Arc::new(image);
         self.images.push(PlacedImage {
             id,
             anchor,
@@ -86,8 +95,13 @@ impl GraphicsLayer {
             rows,
             x_off,
             y_off,
-            image: Arc::new(image),
+            image: image.clone(),
             z,
+            kitty_id: None,
+            frames: vec![image],
+            animating: false,
+            anim_start: std::time::Instant::now(),
+            loops: None,
         });
         // Keep the most recent images only, to bound memory.
         if self.images.len() > 256 {
@@ -132,6 +146,16 @@ impl GraphicsLayer {
     /// Returns true if the visible content changed.
     pub fn kitty(&mut self, cmd: gfx::KittyCmd, anchor: i32, col: u16, view_offset: i32) -> bool {
         let key = cmd.id.unwrap_or(0);
+        // Animation control: start/stop; no payload.
+        if cmd.action == 'a' {
+            if let Some(pl) = self.images.iter_mut().find(|i| i.kitty_id == cmd.id) {
+                let s = cmd.state.unwrap_or(1);
+                pl.animating = s == 1;
+                pl.loops = cmd.loops;
+                pl.anim_start = std::time::Instant::now();
+            }
+            return true;
+        }
         if cmd.action == 'd' {
             let row_of = |im: &PlacedImage| im.anchor + view_offset;
             match cmd
@@ -160,9 +184,11 @@ impl GraphicsLayer {
             }
             return true;
         }
-        // Accumulate chunks (`m=1` means more follow).
+        // Accumulate chunks (`m=1` means more follow). A new action restarts.
         let p = self.partial.entry(key).or_default();
-        if cmd.more || p.data.is_empty() {
+        if cmd.more || p.data.is_empty() || p.action != cmd.action {
+            p.data.clear();
+            p.action = cmd.action;
             p.id = cmd.id;
             p.cols = cmd.cols.or(p.cols);
             p.rows = cmd.rows.or(p.rows);
@@ -185,7 +211,7 @@ impl GraphicsLayer {
         let Some(p) = self.partial.remove(&key) else {
             return false;
         };
-        if !matches!(cmd.action, 'T' | 'p') {
+        if !matches!(cmd.action, 'T' | 'p' | 'f') {
             return false; // transfer-only / query: nothing to show
         }
         let full = gfx::KittyCmd {
@@ -197,7 +223,18 @@ impl GraphicsLayer {
         };
         match gfx::kitty::decode(&full, self.max_pixels) {
             Some(img) => {
-                self.place(img, anchor, col, p.cols, p.rows, p.x, p.y, p.z);
+                if cmd.action == 'f' {
+                    // Append a frame to the image with this kitty id.
+                    if let Some(pl) = self.images.iter_mut().find(|i| i.kitty_id == cmd.id) {
+                        pl.frames.push(Arc::new(img));
+                        pl.anim_start = std::time::Instant::now();
+                    }
+                } else {
+                    let our = self.place(img, anchor, col, p.cols, p.rows, p.x, p.y, p.z);
+                    if let Some(pl) = self.images.iter_mut().find(|i| i.id == our) {
+                        pl.kitty_id = cmd.id;
+                    }
+                }
                 true
             }
             None => false,
@@ -229,6 +266,20 @@ mod tests {
     }
 
     #[test]
+    fn kitty_frames_and_animation() {
+        let mut l = GraphicsLayer::new();
+        l.kitty(gfx::kitty::parse(b"a=T,f=24,s=1x1,i=1;AAAA"), 0, 0, 0);
+        assert_eq!(l.images[0].frames.len(), 1);
+        l.kitty(gfx::kitty::parse(b"a=f,f=24,s=1x1,i=1;AAAA"), 0, 0, 0);
+        assert_eq!(l.images[0].frames.len(), 2);
+        l.kitty(gfx::kitty::parse(b"a=a,i=1,s=1,c=2"), 0, 0, 0);
+        assert!(l.images[0].animating);
+        assert_eq!(l.images[0].loops, Some(2));
+        l.kitty(gfx::kitty::parse(b"a=a,i=1,s=2"), 0, 0, 0);
+        assert!(!l.images[0].animating);
+    }
+
+    #[test]
     fn kitty_chunks_reassemble() {
         let mut l = GraphicsLayer::new();
         // 1x1 raw RGB (base64 "AAAA"), sent as two `m=` chunks.
@@ -237,10 +288,7 @@ mod tests {
         assert!(!l.kitty(c1, 0, 0, 0), "first chunk is held");
         assert!(l.kitty(c2, 0, 0, 0), "second chunk decodes");
         assert_eq!(l.images.len(), 1);
-        assert_eq!(
-            (l.images[0].image.width, l.images[0].image.height),
-            (1, 1)
-        );
+        assert_eq!((l.images[0].image.width, l.images[0].image.height), (1, 1));
     }
 
     #[test]

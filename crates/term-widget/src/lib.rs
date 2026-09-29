@@ -688,8 +688,10 @@ impl State {
             .unwrap_or(0);
         let mut draws: Vec<PaneDraw> = Vec::new();
         let mut image_quads: Vec<(u64, i32, u32, ImageInstance)> = Vec::new();
-        let mut image_uploads: Vec<(u64, Arc<miao_term_core::graphics::PlacedImage>)> = Vec::new();
+        let mut image_uploads: Vec<(u64, Arc<miao_term_core::graphics::PlacedImage>, usize)> =
+            Vec::new();
         let mut image_keep: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        let mut animating = false;
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
             for (pane_idx, (id, r)) in rects.iter().enumerate() {
                 let Some(pane) = tab.panes.iter_mut().find(|p| &p.id == id) else {
@@ -828,11 +830,18 @@ impl State {
                     let px1 = ox + inner.w * scale;
                     let py1 = oy + inner.h * scale;
                     for im in pane.term.graphics().images.iter() {
-                        let key = image_key(id, im.id);
+                        let fi = if im.animating && im.frames.len() > 1 {
+                            animating = true;
+                            (im.anim_start.elapsed().as_millis() / 100) as usize % im.frames.len()
+                        } else {
+                            0
+                        };
+                        let frame = &im.frames[fi.min(im.frames.len().saturating_sub(1))];
+                        let key = image_key(id, im.id, fi);
                         image_keep.insert(key);
-                        image_uploads.push((key, Arc::new(im.clone())));
-                        let w = im.image.width as f32;
-                        let h = im.image.height as f32;
+                        image_uploads.push((key, Arc::new(im.clone()), fi));
+                        let w = frame.width as f32;
+                        let h = frame.height as f32;
                         let bx = ox + im.col as f32 * cw;
                         let by = oy + (im.anchor + off) as f32 * ch;
                         let (x0, y0, x1, y1) = if let (Some(c), Some(r)) = (im.cols, im.rows) {
@@ -872,17 +881,22 @@ impl State {
         }
 
         // Upload any new inline images, drop textures for images that are gone.
-        for (key, p) in &image_uploads {
+        for (key, p, fi) in &image_uploads {
             if !self.images.has(*key) {
-                self.images.upload(
-                    &self.device,
-                    &self.queue,
-                    *key,
-                    p.image.width,
-                    p.image.height,
-                    &p.image.rgba,
-                );
+                if let Some(frame) = p.frames.get(*fi) {
+                    self.images.upload(
+                        &self.device,
+                        &self.queue,
+                        *key,
+                        frame.width,
+                        frame.height,
+                        &frame.rgba,
+                    );
+                }
             }
+        }
+        if animating {
+            self.window.request_redraw();
         }
         self.images.retain(&image_keep);
 
@@ -2695,11 +2709,12 @@ fn pick_alpha_mode(
     modes.first().copied().unwrap_or(M::Opaque)
 }
 
-fn image_key(pane: &str, id: u64) -> u64 {
+fn image_key(pane: &str, id: u64, frame: usize) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     pane.hash(&mut h);
     id.hash(&mut h);
+    frame.hash(&mut h);
     h.finish()
 }
 
