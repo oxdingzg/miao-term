@@ -95,7 +95,10 @@ signature when `update-pubkey` is set), and on macOS *Install and Relaunch*
 swaps the bundle with a rollback helper (ADR 0025).
 
 Platform keys match the app's `platform_key()`: `macos-aarch64`,
-`macos-x86_64`, `linux-x86_64` (+ `linux-x86_64-deb`), `windows-x86_64`.
+`macos-x86_64`, `linux-x86_64`, `linux-aarch64`, `windows-x86_64`.
+`linux-x86_64-deb` is a manifest-only key for the `.deb` artifact (the app never
+asks for it), and `release.yml` does not currently emit a `linux-aarch64`
+manifest entry.
 
 ## MSI (Windows) — verified
 

@@ -6,8 +6,8 @@
 
 ## 背景
 
-roadmap 把每个里程碑的退出条件都设为性能预算(`docs/private/miaotty-performance.md` §2),
-并规定在 baseline + CI 门存在之前不落任何热路径代码。Swift 参考实现用 Instruments 测帧时间
+roadmap 把每个里程碑的退出条件都设为性能预算,并规定在 baseline + CI 门存在之前不落
+任何热路径代码。Swift 参考实现用 Instruments 测帧时间
 与功耗;我们需要无头 CI 能确定运行的东西。
 
 ## 决定

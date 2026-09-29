@@ -1,5 +1,7 @@
 # ADR 0029 — 极小、可选的 vim 模式
 
+> English (default): [`0029-vim-mode.md`](0029-vim-mode.md)
+
 状态:已接受。
 
 ## 背景

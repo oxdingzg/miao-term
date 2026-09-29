@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/oxdingzg/miao-term/actions/workflows/ci.yml/badge.svg)](https://github.com/oxdingzg/miao-term/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.80%2B-orange.svg)](rust-toolchain.toml)
+[![Rust](https://img.shields.io/badge/rust-1.80%2B-orange.svg)](Cargo.toml)
 [![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#环境要求)
 
 [English](README.md) · **简体中文**
@@ -19,7 +19,15 @@
 - **`miaotty`** —— 构建在该引擎之上的、开箱即用的终端应用,具备标签、分屏、侧边面板、
   设置窗口、shell 集成以及可脚本化的控制面。
 
-引擎与应用被刻意解耦:`miaotty` 是引擎的第一个消费者,而引擎本身设计为可被第三方嵌入。
+应用以两个 host 的形式发布,二者共享引擎与界面外壳:
+
+- **`miaotty`**(`miaotty-app`)—— 功能完整的 host,一个 `eframe`/`egui` 应用;字符网格经
+  `egui-wgpu` paint callback 绘制。
+- **`miaotty-native`**(`miao-term-widget`)—— 更新的 host,自带 `winit` + `wgpu` 事件循环,
+  直接绘制网格并在同一帧内叠加 egui 外壳,以降低输入延迟。它新增画中画、hint 模式、
+  只读 pane 与每个 pane 的关闭按钮。
+
+引擎与应用被刻意解耦:hosts 是引擎的第一批消费者,而引擎本身设计为可被第三方嵌入。
 完整设计见 [`docs/ARCHITECTURE.zh-CN.md`](docs/ARCHITECTURE.zh-CN.md)。
 
 > **项目状态 —— 预发布。** 当前版本为 `0.0.0`,API 尚未稳定。macOS 是主要平台;
@@ -41,8 +49,9 @@
 
 **窗口与工作区**
 - 内联标签栏(图标、Agent 徽章、`+`、`×`、拖拽重排),以及带右键菜单
-  (重命名 / 前缀 / 标记 / 分组 / 复制 / 关闭 / 关闭其他)的 Tabs 侧边栏。
-- 递归分屏树:`⌘D` 向右分屏,`⇧⌘D` 向下分屏,分隔条可拖拽调整比例。`⌘⇧T` 切换临时快速终端。
+  (重命名 / 前缀 / 标记 / 分组 / 复制 / 关闭 / 关闭其他标签 / 关闭下方 / 移出分组)的 Tabs 侧边栏。
+- 递归分屏树:`⌘D` 向右分屏,`⇧⌘D` 向下分屏,分隔条可拖拽调整比例,每个 pane 都有
+  关闭按钮。`⌘⇧T` 切换临时快速终端。
 - 侧边栏**文件树**(双击用查看器打开)与 **View 规则**:把 pane 的 cwd/命令/agent/host/文件
   映射为别名、图标、标签标题与徽章 —— 见 [`docs/VIEW-RULES.zh-CN.md`](docs/VIEW-RULES.zh-CN.md)。
 - **Open Quickly**(`⌘K`):一个面板覆盖标签、agent、文件、最近项、内容搜索命中与命令。
@@ -85,27 +94,31 @@
 
 ## 架构
 
-引擎按层组织,依赖只向内指向(`widget → render → core`),平台相关代码被收敛在少数模块中。
+引擎按层组织,依赖只向内指向(`host → render → core`),两个 host 共享引擎之上的全部内容。
 
 | Crate | 职责 |
 |-------|------|
 | [`miao-term-core`](crates/term-core) | PTY、VT 解析、网格/回滚、选区、查找、OSC、输入编码。不含 GPU 与窗口。 |
-| [`miao-term-render`](crates/term-render) | `wgpu` + `glyphon` 字形网格渲染器。 |
-| [`miao-term-widget`](crates/term-widget) | `winit` 集成、输入/IME/剪贴板、egui 组装。 |
-| [`miao-term-config`](crates/term-config) | 配置与主题,以及 ghostty/alacritty 导入。 |
-| [`miao-term-mtp`](crates/term-mtp) | MTP 协议、host/client 与传输。 |
-| [`miaotty-app`](miaotty-app) | `miaotty` 二进制:标签、分屏、面板、设置。 |
+| [`miao-term-graphics`](crates/term-graphics) | 内联图片流扫描器与解码器(Sixel、Kitty、iTerm2)。 |
+| [`miao-term-render`](crates/term-render) | `wgpu` + `glyphon` 字形网格渲染器,含 quad 与图像管线。 |
+| [`miao-term-ui`](crates/term-ui) | 两个 host 共享的、与 host 无关的 UI:主题、输入编码、选区、分屏布局、egui 外壳、命令面板、hint、vim、markdown、ssh、更新与 agent 集成等 helper。 |
+| [`miao-term-config`](crates/term-config) | 配置与主题,ghostty/alacritty 导入,以及 View 规则引擎。 |
+| [`miao-term-mtp`](crates/term-mtp) | MTP 协议、host/client 与传输(Unix socket、Windows 命名管道、TCP)。 |
+| [`miao-term-widget`](crates/term-widget) | `miaotty-native` host:`winit` + `wgpu` 渲染循环,直接绘制网格并合成 egui 外壳。 |
+| [`miaotty-app`](miaotty-app) | `miaotty` eframe host:标签、分屏、面板、设置。 |
 | [`miaotty-cli`](miaotty-cli) | `miaotty-cli` 控制客户端。 |
 
-热路径 —— `pty → vt → grid → renderer` —— 不跨锁,且每帧不做分配。平台差异只出现在
-`core::pty`、`widget::platform` 与 `mtp::transport`。
+热路径 —— `pty → vt → grid → renderer` —— 不跨锁,且每帧不做分配。平台差异只出现在负责
+相应关注点的 crate 中少量 `#[cfg]` 守卫的代码块里:`term-core` 的 PTY 派生
+(`src/term.rs`)、`term-widget` 的窗口/事件循环(`src/lib.rs`),以及 `term-mtp` 的
+socket/命名管道传输(`src/lib.rs`)。
 
 ### 原则
 
-1. 引擎与应用分离;`miaotty-app` 是引擎的第一个消费者。
+1. 引擎与 host 分离;hosts 是引擎的第一批消费者。
 2. 热路径不跨锁、不做分配。
 3. 先做应用、后抽库,API 由真实需求驱动。
-4. 平台差异只出现在 `core::pty`、`widget::platform`、`mtp::transport`。
+4. 平台差异只出现在 `term-core`、`term-widget` 与 `term-mtp` 中 `#[cfg]` 守卫的代码块里。
 5. 控制面(MTP / CLI)与引擎解耦。
 
 ---
@@ -124,8 +137,9 @@
 git clone https://github.com/oxdingzg/miao-term.git
 cd miao-term
 
-# 构建并运行终端
-cargo run -p miaotty-app          # 或:cargo build --release && ./target/release/miaotty
+# 构建并运行终端(任选一个 host)
+cargo run -p miaotty-app                                        # eframe host
+cargo run -p miao-term-widget --bin miaotty-native --release    # native host
 ```
 
 首次构建会编译 `wgpu`/`glyphon`,可能需要几分钟。
@@ -138,8 +152,11 @@ cargo clippy --workspace --all-targets
 cargo fmt --all -- --check
 ```
 
-CI 在 macOS、Linux 与 Windows 上运行 `cargo check` 与 `cargo test`;见
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml)。
+CI([`.github/workflows/ci.yml`](.github/workflows/ci.yml))在每次 push、PR 与 nightly 上运行。
+push 时执行 Linux 与 macOS 的 `cargo check` 以及隐私扫描;完整的三平台
+`cargo test --workspace`、Linux 软件 Vulkan 渲染测试、Windows job 与 release 模式性能门,
+则在 pull request、nightly 计划与手动触发时运行。`cargo fmt` 与 `cargo clippy` 是本地检查,
+不是 CI job。
 
 ### 打包
 
@@ -148,9 +165,10 @@ scripts/package-macos.sh          # -> dist/miaotty.app(ad-hoc 签名)
 ```
 
 发布构建由 [`.github/workflows/release.yml`](.github/workflows/release.yml) 在
-`v*` 标签上生成。[`dist-workspace.toml`](dist-workspace.toml) 是一份
+`v*` 标签上生成:`miaotty` 与 `miaotty-cli`、`miaotty-native` host、macOS app bundle、
+Linux `.deb`/AppImage 以及 Windows MSI。[`dist-workspace.toml`](dist-workspace.toml) 是一份
 [cargo-dist](https://opensource.axo.dev/cargo-dist/) 脚手架。见
-[`docs/INSTALL.zh-CN.md`](docs/INSTALL.zh-CN.md)。
+[`docs/INSTALL.zh-CN.md`](docs/INSTALL.zh-CN.md) 与 [`docs/RELEASE.zh-CN.md`](docs/RELEASE.zh-CN.md)。
 
 ---
 
@@ -161,8 +179,8 @@ miaotty 读取 `~/.config/miaotty/config.toml`(或
 [`docs/config.example.toml`](docs/config.example.toml)。
 
 ```toml
-font-size   = 14
-font-family = "JetBrains Mono"   # 默认:系统等宽字体
+font-size   = 13                 # 默认 13
+font-family = "JetBrains Mono"   # 默认;回退到系统等宽字体
 theme       = "nord"             # nord | dracula | gruvbox | solarized | tokyo-night
 
 [colors]                          # 显式配色会覆盖命名主题
@@ -271,18 +289,20 @@ view/edit、更新下载/校验/安装、URL scheme、全局快速终端热键�
 
 仍待完成:
 
-- **发布链**:取得签名凭证并跑通端到端 —— minisign 密钥 + 公钥分发、macOS 公证
-  (Developer ID 证书 + App 专用密码)、Windows MSI 签名(CA 证书)。工作流已就绪,缺的是密钥
-  (见 `docs/RELEASE.md`)。
+- **发布链**:用真实凭证把流水线端到端跑通。工作流已接好,minisign **公钥**已提交并附加到
+  每个 release;缺的是各项密钥 —— minisign 私钥、macOS 公证(Developer ID 证书 + App 专用
+  密码)以及 Windows MSI 签名(CA 证书)。见 `docs/RELEASE.md`。
 - **平台验证**:Linux 的 wgpu 渲染路径现已在 CI 中通过 Mesa 软件 Vulkan(lavapipe)覆盖;
   真实 Linux 桌面、Wayland 门户热键、以及 Windows 的 IME/GUI 仍需交互式会话。
-- **更新安装**:三端均已实现(macOS app bundle、Windows MSI/zip helper、Linux AppImage);
-  已在 macOS 验证,Windows/Linux 路径仍需真机确认。
+- **更新安装**:三端均已实现(macOS app bundle、Windows MSI/zip helper、Linux AppImage)。
+  MSI 与 `.deb` 已在真机验证;AppImage 安装与自替换路径仍需端到端跑一次
+  (`docs/RELEASE.md`)。
 - **CI 性能基线**:目前用 `actions/cache` 绑定;更持久的基线存储能让门更稳(缓存会被淘汰)。
-- **原生版对齐**:URL scheme 可从 argv 处理,但 native 二进制未在系统注册;
-  `background-opacity` 仅在 surface 支持 straight alpha 时生效。
-- **终端内联图片**:回滚容量内锚定精确,超出后为近似(alacritty 不暴露滚动计数,除非打补丁);
-  会话恢复不保留图像(会与恢复的内容不一致)。
+- **原生版对齐**(`miaotty-native`):URL scheme 仅由 `miaotty` 从 argv 处理;两个 host 都还
+  未在系统注册,`miaotty-native` 没有单实例转发,也没有内联 IME preedit(只有已提交
+  文本)。`background-opacity` 仅在 surface 支持 straight alpha 时生效。
+- **终端内联图片**:仅由 `miaotty-native` 渲染;回滚容量内锚定精确,超出后为近似(alacritty
+  不暴露滚动计数,除非打补丁);会话恢复不保留图像(会与恢复的内容不一致)。
 - **Markdown**:Mermaid 支持 `graph`/`flowchart` 子集(或经 `mermaid-command` 全量渲染);
   其它图类型显示占位。
 - **i18n**:主要界面已覆盖;少量示例/提示串仍为英文。
@@ -297,7 +317,8 @@ view/edit、更新下载/校验/安装、URL scheme、全局快速终端热键�
 
 1. 运行 `cargo fmt --all`、`cargo clippy --workspace --all-targets` 与
    `cargo test --workspace`。
-2. 保持文档双语:修改 `doc.md` 时,请在同一改动中更新 `doc.zh-CN.md`。
+2. 保持文档双语:修改某个文档时,请在同一改动中更新其 `*.zh-CN.md` 对应版本(例如
+   `README.md` / `README.zh-CN.md`,或 `docs/RELEASE.md` / `docs/RELEASE.zh-CN.md`)。
 3. 若要变更某条**锁定**的设计决策,请在 [`docs/decisions/`](docs/decisions/README.md)
    下新增一份 ADR,而不是就地改写记录。
 

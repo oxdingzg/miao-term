@@ -14,7 +14,7 @@ sleep inhibitor and a way to hand prompts to an agent — a *Composer* plus a
 Three effects driven by the agent state published over MTP
 (`agent.state.*`, keyed by pane):
 
-**Notifications** (`miaotty-app/src/agentloop.rs`). The app keeps the last
+**Notifications** (`crates/term-ui/src/agentloop.rs`). The app keeps the last
 state per pane and fires a system notification when a pane **transitions** into
 `awaiting` or `error` while it is not the focused pane. Platform backends:
 `osascript` (macOS), `notify-send` (Linux), `powershell`/BurntToast (Windows,

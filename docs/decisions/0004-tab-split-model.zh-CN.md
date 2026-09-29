@@ -22,3 +22,5 @@ Windows/Linux 没有——跨平台应用不能依赖它。
 - 三平台行为一致;不依赖原生标签 API。
 - 标签栏/侧栏渲染与焦点模型自持。
 - 首版只支持一层分屏;递归分屏树(N pane)是后续细化,复用同一 `Pane` 抽象。
+- Update:递归分屏树现已存在(`crates/term-ui/src/layout.rs` 的 `Layout::Split` 可任意嵌套),
+  因此分屏超过一层。

@@ -1,7 +1,7 @@
 # 性能
 
-预算与 CI 门(ADR 0018)。roadmap 的预算在 `docs/private/miaotty-performance.md` §2;
-本文件把它们映射到 CI 中可确定测量者。机器可读的数值与实测基线见
+预算与 CI 门(ADR 0018)。本文件定义可在 CI 中确定测量的预算。
+机器可读的数值与实测基线见
 [`../benches/budgets.json`](../benches/budgets.json)。
 
 ## 门

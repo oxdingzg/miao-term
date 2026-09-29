@@ -1,4 +1,4 @@
-# ADR 0029 — 原生渲染循环（自绘网格）
+# ADR 0030 — 原生渲染循环（自绘网格）
 
 > English (default): [`0030-native-render-loop.md`](0030-native-render-loop.md)
 

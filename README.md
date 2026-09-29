@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/oxdingzg/miao-term/actions/workflows/ci.yml/badge.svg)](https://github.com/oxdingzg/miao-term/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.80%2B-orange.svg)](rust-toolchain.toml)
+[![Rust](https://img.shields.io/badge/rust-1.80%2B-orange.svg)](Cargo.toml)
 [![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#requirements)
 
 **English** · [简体中文](README.zh-CN.md)
@@ -21,8 +21,17 @@
   with tabs, panes, side panels, a settings window, shell integration and a
   scriptable control plane.
 
-The engine and the application are deliberately decoupled: `miaotty` is the
-engine's first consumer, and the engine is designed to be embedded by others.
+The application ships as two hosts that share the engine and the chrome:
+
+- **`miaotty`** (`miaotty-app`) — the feature-complete host, an `eframe`/`egui`
+  application; the grid is drawn through an `egui-wgpu` paint callback.
+- **`miaotty-native`** (`miao-term-widget`) — the newer host with its own
+  `winit` + `wgpu` event loop that draws the grid directly and overlays the egui
+  chrome in the same frame, for lower input latency. It adds picture-in-picture,
+  hint mode, read-only panes and per-pane close buttons.
+
+The engine and the application are deliberately decoupled: the hosts are the
+engine's first consumers, and the engine is designed to be embedded by others.
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 
 > **Project status — pre-release.** The version is `0.0.0` and the API is not yet
@@ -47,9 +56,10 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 **Window and workspace**
 - Inline tab bar (icons, agent badges, `+`, `×`, drag to reorder) plus a Tabs
   sidebar with a context menu (Rename / Prefix / Mark / Group / Duplicate /
-  Close / Close Others).
+  Close / Close Other Tabs / Close Below / Remove from Group).
 - A recursive split tree: `⌘D` splits right and `⇧⌘D` splits down, with
-  draggable dividers between panes. `⌘⇧T` toggles a scratch Quick Terminal.
+  draggable dividers and a close button on every pane. `⌘⇧T` toggles a scratch
+  Quick Terminal.
 - Sidebar **file tree** (double-click opens the reader) and **View rules**: map
   a pane's cwd/command/agent/host/file to an alias, icon, tab title and badge —
   see [`docs/VIEW-RULES.md`](docs/VIEW-RULES.md).
@@ -111,29 +121,32 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 ## Architecture
 
 The engine is layered so that dependencies point inward only
-(`widget → render → core`), and OS-specific code is confined to a small number
-of modules.
+(`host → render → core`), and the two hosts share everything above the engine.
 
 | Crate | Responsibility |
 |-------|----------------|
 | [`miao-term-core`](crates/term-core) | PTY, VT parsing, grid/scrollback, selection, search, OSC, input encoding. No GPU or windowing. |
-| [`miao-term-render`](crates/term-render) | `wgpu` + `glyphon` glyph-grid renderer. |
-| [`miao-term-widget`](crates/term-widget) | `winit` integration, input/IME/clipboard, egui composition. |
-| [`miao-term-config`](crates/term-config) | Configuration and themes, plus ghostty/alacritty import. |
-| [`miao-term-mtp`](crates/term-mtp) | MTP protocol, host/client and transport. |
-| [`miaotty-app`](miaotty-app) | The `miaotty` binary: tabs, panes, panels, settings. |
+| [`miao-term-graphics`](crates/term-graphics) | Inline-graphics stream scanner and decoders (Sixel, Kitty, iTerm2). |
+| [`miao-term-render`](crates/term-render) | `wgpu` + `glyphon` glyph-grid renderer, quad and image pipelines. |
+| [`miao-term-ui`](crates/term-ui) | Host-agnostic UI shared by both hosts: theme, input encoding, selection, split layout, egui chrome, palette, hints, vim, markdown, ssh, update and agent-integration helpers. |
+| [`miao-term-config`](crates/term-config) | Configuration and themes, ghostty/alacritty import, and the View-rule engine. |
+| [`miao-term-mtp`](crates/term-mtp) | MTP protocol, host/client and transport (Unix socket, Windows named pipe, TCP). |
+| [`miao-term-widget`](crates/term-widget) | The `miaotty-native` host: `winit` + `wgpu` render loop that draws the grid directly and composites the egui chrome. |
+| [`miaotty-app`](miaotty-app) | The `miaotty` eframe host: tabs, panes, panels, settings. |
 | [`miaotty-cli`](miaotty-cli) | The `miaotty-cli` control client. |
 
 The hot path — `pty → vt → grid → renderer` — takes no locks and allocates
-nothing per frame. Platform differences live only in `core::pty`,
-`widget::platform` and `mtp::transport`.
+nothing per frame. Platform differences are confined to small `#[cfg]`-guarded
+blocks in the crate that owns the concern: PTY spawning in `term-core`
+(`src/term.rs`), the window/event loop in `term-widget` (`src/lib.rs`), and the
+socket/named-pipe transport in `term-mtp` (`src/lib.rs`).
 
 ### Principles
 
-1. Engine and application are separate; `miaotty-app` is the engine's first consumer.
+1. Engine and hosts are separate; the hosts are the engine's first consumers.
 2. The hot path takes no locks and allocates nothing.
 3. Build the application first, extract the library later — APIs are driven by real needs.
-4. OS differences are confined to `core::pty`, `widget::platform`, `mtp::transport`.
+4. OS differences are confined to `#[cfg]`-guarded blocks in `term-core`, `term-widget` and `term-mtp`.
 5. The control plane (MTP / CLI) is decoupled from the engine.
 
 ---
@@ -153,8 +166,9 @@ nothing per frame. Platform differences live only in `core::pty`,
 git clone https://github.com/oxdingzg/miao-term.git
 cd miao-term
 
-# Build and run the terminal
-cargo run -p miaotty-app          # or: cargo build --release && ./target/release/miaotty
+# Build and run the terminal (either host)
+cargo run -p miaotty-app                                        # the eframe host
+cargo run -p miao-term-widget --bin miaotty-native --release    # the native host
 ```
 
 The first build compiles `wgpu`/`glyphon` and may take a few minutes.
@@ -167,8 +181,12 @@ cargo clippy --workspace --all-targets
 cargo fmt --all -- --check
 ```
 
-CI runs `cargo check` and `cargo test` across macOS, Linux and Windows; see
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+CI (`.github/workflows/ci.yml`) runs on every push, PR and nightly. On pushes it
+runs `cargo check` on Linux and macOS plus the privacy scan; the full three-OS
+`cargo test --workspace`, the Linux software-Vulkan render test, the Windows job
+and the release-mode performance gate run on pull requests, the nightly schedule
+and manual dispatches. `cargo fmt` and `cargo clippy` are local checks, not CI
+jobs.
 
 ### Packaging
 
@@ -177,9 +195,11 @@ scripts/package-macos.sh          # -> dist/miaotty.app (ad-hoc signed)
 ```
 
 Release builds are produced by [`.github/workflows/release.yml`](.github/workflows/release.yml)
-on `v*` tags. [`dist-workspace.toml`](dist-workspace.toml) is a
+on `v*` tags: `miaotty` and `miaotty-cli`, the `miaotty-native` host, the macOS
+app bundle, a Linux `.deb`/AppImage and a Windows MSI.
+[`dist-workspace.toml`](dist-workspace.toml) is a
 [cargo-dist](https://opensource.axo.dev/cargo-dist/) scaffold. See
-[`docs/INSTALL.md`](docs/INSTALL.md).
+[`docs/INSTALL.md`](docs/INSTALL.md) and [`docs/RELEASE.md`](docs/RELEASE.md).
 
 ---
 
@@ -190,8 +210,8 @@ miaotty reads `~/.config/miaotty/config.toml` (or
 [`docs/config.example.toml`](docs/config.example.toml) for the full reference.
 
 ```toml
-font-size   = 14
-font-family = "JetBrains Mono"   # default: system monospace
+font-size   = 13                 # default 13
+font-family = "JetBrains Mono"   # default; falls back to the system monospace
 theme       = "nord"             # nord | dracula | gruvbox | solarized | tokyo-night
 
 [colors]                          # explicit colors override the named theme
@@ -310,25 +330,29 @@ Quick Terminal hotkey, i18n, and a performance gate.
 
 Still open:
 
-- **Release chain**: obtain the signing credentials and run the pipeline end to
-  end — a minisign key with its published public key, Apple notarization
-  (Developer ID certificate + app password) and Windows MSI signing (a CA
-  certificate). The workflows are already wired; only the secrets are missing
-  (`docs/RELEASE.md`).
+- **Release chain**: run the pipeline end to end with real credentials. The
+  workflows are already wired and the minisign **public** key is committed and
+  attached to every release; the missing pieces are the secrets — the minisign
+  secret key, Apple notarization (Developer ID certificate + app password) and
+  Windows MSI signing (a CA certificate). See [`docs/RELEASE.md`](docs/RELEASE.md).
 - **Platform verification**: the Linux wgpu render path runs in CI via Mesa
   software Vulkan (lavapipe); a real Linux desktop, the Wayland portal hotkey
   and Windows IME/GUI still need an interactive session.
 - **Update install**: implemented on all three platforms (macOS app bundle,
-  Windows MSI/zip helper, Linux AppImage); verified on macOS, the Windows/Linux
-  paths still need a real host to confirm.
+  Windows MSI/zip helper, Linux AppImage). The MSI and the `.deb` are verified on
+  real hosts; the AppImage install and the self-replace path still need an
+  end-to-end run (`docs/RELEASE.md`).
 - **CI performance baseline**: bound through `actions/cache` today; a durable
   baseline store would make the gate robust across cache eviction.
-- **Native parity**: URL schemes are handled from argv but the native binary is
-  not registered with the OS. `background-opacity` works only where the surface
-  offers straight alpha.
-- **Inline graphics**: anchors are exact up to the scrollback cap and
-  approximate past it (alacritty exposes no scroll counter without a patch);
-  session restore keeps no images (they would not match the restored content).
+- **Native parity** (`miaotty-native`): URL schemes are handled from argv by
+  `miaotty` only; neither host is registered with the OS yet, `miaotty-native`
+  has no single-instance forwarding, and it has no inline IME preedit (committed
+  text only). `background-opacity` works only where the surface offers straight
+  alpha.
+- **Inline graphics**: rendered by `miaotty-native` only; anchors are exact up to
+  the scrollback cap and approximate past it (alacritty exposes no scroll counter
+  without a patch), and session restore keeps no images (they would not match the
+  restored content).
 - **Markdown**: Mermaid renders a `graph`/`flowchart` subset (or fully via
   `mermaid-command`); other diagram types show a placeholder.
 - **i18n**: the main chrome is covered; a few example/hint strings stay English.
@@ -344,8 +368,9 @@ Contributions are welcome. Before opening a pull request:
 
 1. Run `cargo fmt --all`, `cargo clippy --workspace --all-targets` and
    `cargo test --workspace`.
-2. Keep documentation bilingual: when you change `doc.md`, update
-   `doc.zh-CN.md` in the same change.
+2. Keep documentation bilingual: when you change a `doc`, update its
+   `doc.zh-CN.md` counterpart in the same change (for example `README.md` /
+   `README.zh-CN.md`, or `docs/RELEASE.md` / `docs/RELEASE.zh-CN.md`).
 3. For changes to a *locked* design decision, add an ADR under
    [`docs/decisions/`](docs/decisions/README.md) rather than editing the record
    in place.

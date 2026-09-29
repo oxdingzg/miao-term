@@ -10,7 +10,7 @@ instance instead of reusing the running one.
 
 ## Decision
 
-**Agent hooks** (`miaotty-app/src/integration.rs`). The app knows a small set of
+**Agent hooks** (`crates/term-ui/src/integration.rs`). The app knows a small set of
 agents (claude, codex, opencode, miao) with their binary, launch command and
 where the hook is registered. From *Settings → Agent integrations* you can:
 - see whether each agent is on `PATH`;

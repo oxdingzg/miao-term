@@ -17,19 +17,23 @@ scripts/package-macos.sh              # release 构建 → dist/miaotty.app
 PROFILE=debug scripts/package-macos.sh
 ```
 
-产出 ad-hoc 签名的 `dist/miaotty.app`。要分发还需用 Developer ID 签名并公证(尚未做)。
+产出 ad-hoc 签名的 `dist/miaotty.app`。配置 Apple secrets 后,分发时会自动 codesign +
+公证(见[发布](#发布))。
 
 ## 发布
 
 推 `v*` tag 会触发 [`.github/workflows/release.yml`](../.github/workflows/release.yml):
-在 macOS/Linux/Windows 构建 `miaotty` + `miaotty-cli`,并把 `miaotty.app` zip / Linux tar / Windows zip
+在 macOS/Linux/Windows 构建 `miaotty` + `miaotty-cli` + `miaotty-native`,并把
+`miaotty.app` zip / Linux tar / Windows zip
 挂到 GitHub Release。
 
 macOS 默认 ad-hoc 签名;若仓库配了 `APPLE_CERT_P12`+`APPLE_CERT_PASSWORD`+`APPLE_ID`+
 `APPLE_TEAM_ID`+`APPLE_APP_PASSWORD` 这些 secrets,则改为 Developer ID 签名 + 公证 + staple。
-Linux 额外产出 `.deb`(用 `cargo-deb`),并尽力产出 AppImage(`appimagetool`);
-Windows 为 zip,并尽力产出 MSI(`cargo-wix`/WiX)。AppImage/MSI 步骤为
-`continue-on-error`,失败不影响发布。
+Linux 额外产出 `.deb`(用 `cargo-deb`,元数据在 `miaotty-app/Cargo.toml`),
+并尽力产出 AppImage(`appimagetool`);Windows 为 zip,并尽力产出 MSI
+(`cargo-wix`/WiX)。AppImage/MSI 步骤为 `continue-on-error`,失败不影响发布。
+若存在 `WINDOWS_CERT_PFX` + `WINDOWS_CERT_PASSWORD` secrets,则用 `signtool`
+签 MSI。
 
 ## 跨平台安装包
 

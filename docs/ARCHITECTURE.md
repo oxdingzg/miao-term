@@ -19,13 +19,14 @@ engine (`miao-term-*`) is separate from the app (`miaotty-app`), and the control
 - One codebase on three platforms, **including Windows (ConPTY)**.
 - Hot-path performance at Alacritty's level: input latency P95 ≤ 16 ms (target ≤ 8 ms),
   first frame ≤ 100 ms, no dropped frames while scrolling, idle CPU ≈ 0.
-- The engine is embeddable (`examples/` proves it); `miaotty-app` is its first consumer.
+- The engine is embeddable; `miaotty-app` is its first consumer (the only in-repo example is
+  `crates/term-render/examples/pipeline_probe.rs`, a render-pipeline probe).
 - Reuse the existing control plane: `mtp` types, `miaotty-cli`, plugins, agent/shell hooks.
 
 **Non-goals (for now)**
 - Matching Ghostty's rendering polish or config ecosystem; macOS-only integrations
   (AppleScript/Sparkle).
-- A plugin marketplace / "framework"-level extension system; SSH/remote access; cross-device sync.
+- A plugin marketplace / "framework"-level extension system; cross-device sync.
 
 **Constraints**
 - Permissive licenses only (Apache-2.0/MIT/BSD/ISC); **no GPL/AGPL inside the engine**
@@ -47,75 +48,67 @@ engine (`miao-term-*`) is separate from the app (`miaotty-app`), and the control
 | D7 | `term-mtp` decoupled from the engine (Unix socket / Windows named pipe) | A crash in one doesn't take down the other; reuse the protocol |
 | D8 | Build the app first, extract the library later; phase the extension points | Real needs drive the API |
 | D9 | Engine crates licensed `Apache-2.0` | Permissive; easy to embed |
+| D10 | Second host `miaotty-native` (package `miao-term-widget`): a native `winit` + `wgpu` render loop; `miaotty-app` (eframe/egui) keeps the grid via `PaintCallback` | Native input-to-photon latency; both consume the same engine (ADR 0030) |
 
 ## 3. Layering (DAG) and rules
 
 ```
-            term-config      term-mtp          (independent, no engine deps)
-                 │               │
-   term-core ──► term-render ──► term-widget
-        ▲                                ▲
-        └──────────── miaotty-app ───────┘   (depends on all)
+   term-graphics    term-config    term-mtp     (leaf crates, no engine deps)
+        │                │            │
+        ▼                │            │
+   term-core             │            │
+        │                │            │
+        ▼                │            │
+   term-render           │            │
+        │                │            │
+        ▼                ▼            │
+   term-ui ◄─────────────┘            │
+        │                             │
+        ▼                             │
+   term-widget ◄──────────────────────┘   (native host: winit + wgpu)
+        ▲
+        └── miaotty-app   (eframe/egui host; depends on every engine crate)
+   miaotty-cli ──► term-mtp
 ```
 
-**Rules (enforced in CI)**
-- Dependencies point inward only: `widget → render → core`; `core` depends on no other engine crate.
+Not every edge is drawn: `term-widget` also depends on `term-core`/`term-render`, and
+`miaotty-app` depends on all engine crates. The workspace has nine members.
+
+**Rules**
+- Dependencies point inward only: `widget → render → core`. The one exception is
+  `core → graphics` (the inline-graphics scanner/decoders); `core` still depends on no
+  GPU/windowing/egui crate.
 - `core` must not depend on `wgpu`/`winit`/`egui` (**it must build without a GPU**); `render` must not depend on `winit`.
 - `config`/`mtp` must not depend on rendering or windowing.
 - The app depends on the engine; the engine **never** depends on the app.
-- `cargo-deny` for licenses/advisories; `cargo-machete` for unused deps.
+- CI compiles the whole workspace on Linux/macOS/Windows (`cargo check --workspace`);
+  there is no `fmt`/`clippy`/`cargo-deny` job and no `deny.toml`.
 
 ## 4. Crate / module responsibilities
 
 | Crate | Does | Does not |
 |-------|------|----------|
-| `term-core` | PTY, vte parsing, grid/scrollback/cursor/modes, selection/search, OSC/CSI semantics, key/mouse→bytes encoding, events (`EventSink`) | No GPU/window/config/business logic |
+| `term-graphics` | Inline-graphics scanner + Sixel/Kitty/iTerm2 decoders | No rendering/GPU/windowing |
+| `term-core` | PTY, vte parsing, grid/scrollback/cursor/modes, selection/search, OSC/CSI semantics, key/mouse→bytes encoding, events; owns the scanner in `term-graphics` | No GPU/window/config/business logic |
 | `term-render` | Font load/shaping/atlas, grid instancing, draw passes, damage increments | No event loop/input |
-| `term-widget` | winit event loop, wgpu surface, input/IME/clipboard/drag-drop, egui composition, `Host` callbacks | No tab/panel business |
+| `term-ui` | Host-agnostic UI shared by both hosts: theme, input encoding, selection, split layout, egui chrome, palette, hints, vim, markdown, ssh, update, agent integration | No window/event loop |
+| `term-widget` | Native host (`miaotty-native` bin at `crates/term-widget/src/bin/miaotty-native.rs`): winit event loop, wgpu surface, input/IME/clipboard/drag-drop, direct grid draw (ADR 0030) | No tab/panel business |
 | `term-config` | Config model, themes, ghostty/alacritty import | No UI |
 | `term-mtp` | Protocol envelope, transport, server/client, agent/history registries, subscriptions | No engine dependency |
-| `miaotty-app` | Windows/tabs/splits, left Tabs, right Details, badges, settings, OS integration, hook install | No terminal core duplication |
+| `miaotty-app` | eframe/egui host (`miaotty` bin): Windows/tabs/splits, left Tabs, right Details, badges, settings, OS integration, hook install; grid via `PaintCallback` | No terminal core duplication |
+| `miaotty-cli` | MTP client for scripts/agents | No engine dependency |
 
-## 5. Core types and traits (Rust sketch)
+## 5. Core types and traits (design sketch — superseded)
 
-```rust
-// ---- term-core ----
-pub struct Term { /* grid + scrollback + cursor + modes */ }
-pub struct Damage { pub full: bool, pub lines: RangeSet<usize> }
+The traits/types sketched in the original draft (`Damage`, `TermEvent`, `EventSink`,
+`Pty`, `InputEncoder`, `GlyphAtlas`, `Renderer`, `Host`) were **not adopted**. The
+shipped API is:
 
-pub enum TermEvent {
-    Title(String), Cwd(PathBuf), Bell, Progress(Progress),
-    ClipboardStore(String), ClipboardLoad(u8),
-    PromptStart, CommandStart, CommandDone(i32),     // OSC 133
-    PtyWrite(Vec<u8>), PtyExit(i32, Option<i32>),
-    Wakeup,                                          // new output → needs redraw
-}
-pub trait EventSink: Send + 'static { fn send(&self, e: TermEvent); }
-
-pub trait Pty: Send {
-    fn write(&self, bytes: &[u8]) -> io::Result<()>;
-    fn resize(&self, cols: u16, rows: u16) -> io::Result<()>;
-    fn reader(&self) -> io::Result<Box<dyn Read + Send>>;  // owned by the reader thread
-}
-
-pub trait InputEncoder { fn encode(&self, ev: &InputEvent) -> Vec<u8>; }
-
-// ---- term-render ----
-pub struct GlyphAtlas { /* R8 texture + LRU */ }
-pub trait Renderer {
-    fn update(&mut self, term: &Term, damage: Damage);   // build instances (short lock)
-    fn render(&mut self, frame: &mut wgpu::RenderPass);  // submit to GPU
-}
-
-// ---- term-widget ----
-pub trait Host: Send + Sync {
-    fn set_title(&self, s: &str);
-    fn open_url(&self, url: &str);
-    fn notify(&self, title: &str, body: &str);
-    fn clipboard(&self, kind: Clipboard, data: Option<String>) -> Option<String>;
-    fn request_redraw(&self);
-}
-```
+- `term-core`: `Terminal` (PTY + parser + grid) and `ATerm` (the `alacritty_terminal`
+  screen model), in `crates/term-core`.
+- `term-render`: `TermRenderer`, `QuadRenderer`, `ImageRenderer`.
+- Hosts: `miaotty-app` drives the grid through `egui_wgpu::PaintCallback`;
+  `miaotty-native` (in `term-widget`) draws it directly with the `term-render` passes.
 
 ## 6. Threading model and lock discipline
 
@@ -170,7 +163,8 @@ Use Alacritty's proven model (`FairMutex<Term>` + `EventListener`); do not inven
   (OSC 133 A/B/C/D).
 - Selection/search: line/block, word boundaries (CJK/grapheme via `unicode-width` + grapheme
   boundaries), search highlight.
-- Graphics protocols (kitty graphics / sixel / iTerm2) are R1+ increments, not R0.
+- Graphics protocols (kitty graphics / sixel / iTerm2) are implemented by `term-graphics`,
+  wired through `term-core`/`term-render`, and on by default (`graphics = true`).
 
 ## 10. Platform abstraction layer
 
@@ -187,19 +181,24 @@ Use Alacritty's proven model (`FairMutex<Term>` + `EventListener`); do not inven
 ## 11. Config / themes
 
 - `term-config`: its own TOML; keys aligned with ghostty/alacritty for import.
-- Default look matches Otty (Nord background `#2e3440`, font size 14), overridable.
-- Themes: common built-ins + custom palettes; background image/opacity later.
+- Default look matches Otty (Nord background `#2e3440`, font size 13), overridable.
+- Built-in themes: `nord` (default), `dracula`, `gruvbox`/`gruvbox-dark`,
+  `solarized`/`solarized-dark`, `tokyo-night`/`tokyonight`; plus custom palettes.
+  Background opacity is wired; background images are later.
 
 ## 12. Control plane (MTP)
 
-- `term-mtp` implements the server; transport is Unix socket (`$TMPDIR/miaotty.sock`) / Windows named pipe.
+- `term-mtp` implements the server; the local transport is a Unix socket
+  (`$XDG_RUNTIME_DIR/miaotty.sock`, falling back to `$TMPDIR/miaotty.sock`) or a Windows named pipe.
+- Remote access: `remote-listen = addr:port` also serves the control plane over TCP; it
+  **requires** `MIAOTTY_MTP_TOKEN`, and the client sends that token on every request.
 - Reuse the existing `mtp` messages and `miaotty-cli`; **in-process UI talks to the registries directly**,
   external callers go over the socket/pipe.
 - Methods: `core.ping/health`, `agent.state.*`, `history.*`, `pane.list`, `app.view/edit`
   (open a file in the reader/editor), `file.read/write` (offset/length, base64, 2 MB cap;
   optional token via `MIAOTTY_MTP_TOKEN`); events: `agent.state`,
   `history.changed`, `cwd.changed`.
-- Transport implementation candidate: `interprocess` (pending license/maintenance review), else a thin wrapper.
+- Transport: `interprocess` (local socket / named pipe); TCP for `remote-listen`.
 
 ## 13. Application layer (miaotty-app)
 
@@ -212,7 +211,7 @@ Use Alacritty's proven model (`FairMutex<Term>` + `EventListener`); do not inven
 
 ## 14. Extension points (phased; don't front-load)
 
-- **Now**: the `Host` trait + `EventSink` (enough).
+- **Now**: the engine API (`Terminal`/`ATerm`, `term-render`) + MTP (enough).
 - **R4+**: MTP `provider.*` (custom Details components, kind=tui/web).
 - **Later (only if demanded)**: renderer/panel plugins, theme packs — only then consider "framework"-izing.
 
@@ -226,17 +225,27 @@ Use Alacritty's proven model (`FairMutex<Term>` + `EventListener`); do not inven
 
 ## 16. Testing / CI / performance gates
 
-- **Conformance**: a subset of `vttest`/`esctest` + golden grid assertions; parser fuzzing (`cargo-fuzz`).
+- **Conformance**: no `vttest`/`esctest`/`cargo-fuzz` harness has been added; parser behavior is
+  covered by the crates' own unit tests.
 - **Integration**: spawn a real shell, feed byte sequences, assert grid/events.
-- **Performance gates (three platforms; Windows separate)**: input latency P95 ≤ 16 ms, first frame ≤ 100 ms,
-  no dropped frames on a large `cat`, idle CPU ≈ 0 (`criterion` + a latency harness, results stored to catch regressions).
-- **CI**: mac/linux/windows matrix running `check`/`test`/`deny`/`fmt`/`clippy`.
+- **Performance gate (ubuntu-latest only)**: `cargo test --release -p miao-term-core -p miaotty-app -- --ignored`
+  plus `scripts/check-perf-baseline.py`. Budgets: input latency P95 ≤ 16 ms, first frame ≤ 100 ms,
+  no dropped frames on a large `cat`, idle CPU ≈ 0.
+- **CI** (`.github/workflows/ci.yml`): jobs `changes`, `privacy`, `check-linux` (`cargo check --workspace`),
+  `test-linux`, `macos`, `windows`, `render-linux`, `perf`. `check-linux` runs on pushes (macOS does a
+  compile-only check); tests/perf/render/windows run on PRs, the nightly `17 4 * * *` schedule and
+  `workflow_dispatch`.
+- **Render**: `render-linux` installs Mesa lavapipe (software Vulkan) and runs the headless smoke test
+  with `MIAO_REQUIRE_GPU=1 WGPU_BACKEND=vulkan`.
+- There is no `fmt`, `clippy` or `cargo-deny` job and no `deny.toml`.
 
 ## 17. Packaging / release / versioning
 
-- Engine crates `Apache-2.0`, internal first, published to crates.io once the API is stable.
-- App: macOS `.app` + notarize; Linux (AppImage/Flatpak/.deb); Windows MSI (`cargo-dist`/`cargo-wix`) + signing
-  (Azure Artifact Signing or self-signed).
+- Engine crates `Apache-2.0`, internal first; **not published to crates.io yet** (the API is not stable).
+- App artifacts (`.github/workflows/release.yml`): macOS `.app` zip; Linux tar.gz + `.AppImage` + `.deb`;
+  Windows zip + MSI (WiX via `cargo-wix`).
+- Signing is optional: macOS `codesign`/`notarize`, Windows `signtool` with an optional PFX, plus
+  optional `minisign` of the artifacts.
 - `wgpu` DX12 needs a bundled `dxcompiler.dll` or static `static-dxc`.
 
 ## 18. Milestones
@@ -281,9 +290,4 @@ before later milestones. egui idling, present mode, and atlas uploads are the th
 
 ## 21. ADRs (`docs/decisions/`)
 
-- 0001 Stack selection (frozen here in §2) — written
-- 0002 Concurrency and lock discipline
-- 0003 Terminal + egui co-frame rendering
-- 0004 Own tab/split model (not OS-native)
-- 0005 MTP transport (Unix socket / Windows named pipe)
-- 0006 License and dependency policy — written
+Full index: [`docs/decisions/README.md`](decisions/README.md) (ADRs 0001–0030).

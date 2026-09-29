@@ -1,5 +1,7 @@
 # ADR 0027 — ConPTY 的收尾不得阻塞
 
+> English (default): [`0027-conpty-teardown.md`](0027-conpty-teardown.md)
+
 状态:已接受。
 
 ## 背景

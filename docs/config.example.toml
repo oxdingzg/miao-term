@@ -1,11 +1,11 @@
 # miaotty config — copy to ~/.config/miaotty/config.toml
 # (or $XDG_CONFIG_HOME/miaotty/config.toml). All keys are optional.
 
-font-size = 14
-# font-family = "JetBrains Mono"   # any installed family; default follows the system monospace
+font-size = 13                   # default
+# font-family = "JetBrains Mono"   # any installed family; "JetBrains Mono" is the default
 # line-height = 1.25               # multiple of the font size
 # cursor-style = "block"           # block | bar | underline
-# background-opacity = 1.0         # 0.2–1.0; <1 needs a compositing WM (translucent window)
+# background-opacity = 1.0         # 0.1–1.0; <1 needs a compositing WM (translucent window)
 # notifications = true             # system notification when an agent needs attention
 # prevent-sleep = true             # keep the machine awake while an agent is processing
 

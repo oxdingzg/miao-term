@@ -79,7 +79,8 @@ ssh runs in a non-interactive session, so:
 
 ## CI
 
-`.github/workflows/ci.yml` runs `cargo check` + `cargo test` on
-`windows-latest` (so the `#[cfg(windows)]` ConPTY test runs there too), and a
-`perf` job on `ubuntu-latest`. Use a real Windows host when you need a GUI or an
-IME check; it does not replace CI.
+`.github/workflows/ci.yml` runs `cargo test --workspace` on `windows-latest` (so
+the `#[cfg(windows)]` ConPTY test runs there too), but only on non-push events
+(PRs, the nightly run, manual dispatch); `cargo check --workspace` runs in the
+Linux and macOS jobs. A `perf` job also runs on `ubuntu-latest`. Use a real
+Windows host when you need a GUI or an IME check; it does not replace CI.

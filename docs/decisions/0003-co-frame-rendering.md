@@ -27,3 +27,6 @@ terminal grid, in one window without fighting over the swapchain.
 - Each pane owns its own `TermRenderer` (its own glyph atlas), so a pane keeps
   its prepared glyphs; glyphs are re-shaped only when that pane's content is
   dirty (damage), and idle frames submit no text work.
+- Update: for the native host, ADR 0030 superseded this — the grid is drawn by
+  `term-widget`'s native `winit` + `wgpu` loop instead of an egui
+  `PaintCallback`. Co-frame rendering still applies to the `eframe` host.

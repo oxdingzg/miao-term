@@ -1,5 +1,7 @@
 # ADR 0028 — CI 侧性能基线
 
+> English (default): [`0028-ci-perf-baseline.md`](0028-ci-perf-baseline.md)
+
 状态:已接受。
 
 ## 背景

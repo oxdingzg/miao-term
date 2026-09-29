@@ -43,8 +43,8 @@ Details 面板与 Open Quickly(U3)共同的数据源,因此要先于它们落地
 - **标题模板**:`{alias} {cwd} {folder} {user} {host} {agent} {branch} {command}
   {title} {shell} {index} {file}`,外加 `{osc_title}` 取程序原始标题。未知变量
   渲染为空。`folder` 为路径最后一段;`cwd` 做缩写(家目录用 `~`)。
-- **图标**:可以是内置 SVG 名(由 UI 从仓库内图标集解析)、emoji,或纯色。
-  引擎只携带描述符。
+- **图标**:可以是内置图标名(由 UI 从仓库内手工绘制的图元集解析,不使用 SVG)、emoji,
+  或纯色。引擎只携带描述符。
 - **projects**:`路径 → 别名`,按最长前缀匹配;开启 `worktree_suffix` 且 cwd 位于
   `.worktrees/<name>` 检出时,别名为其加上该后缀。
 - **持久化**:启动读取、变更写入;文件缺失或格式错误时回退为空规则集
@@ -55,5 +55,5 @@ Details 面板与 Open Quickly(U3)共同的数据源,因此要先于它们落地
 - 标签 / Details / Open Quickly 都消费同一次求值得到的 `View`,因此保持一致,
   且无需渲染器即可测试。
 - `views.json` 损坏时退化为 OSC 标题,而不是让启动失败。
-- 图标集本体(约 70 个 SVG)与规则 *编辑器* UI 属后续工作;本 ADR 覆盖模型与
-  它们所依赖的匹配语义。
+- 图标集本体(29 个手工绘制的图元,位于 `miaotty-app/src/icons.rs`)与规则 *编辑器* UI
+  属后续工作;本 ADR 覆盖模型与它们所依赖的匹配语义。

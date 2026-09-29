@@ -71,6 +71,7 @@ ssh 运行在非交互会话,故:
 
 ## CI
 
-`.github/workflows/ci.yml` 在 `windows-latest` 上跑 `cargo check` + `cargo test`
-(故 `#[cfg(windows)]` 的 ConPTY 测试也会跑),并在 `ubuntu-latest` 跑 `perf` 作业。需要 GUI 或
-IME 检查时用真实 Windows 主机;它不替代 CI。
+`.github/workflows/ci.yml` 在 `windows-latest` 上跑 `cargo test --workspace`(故
+`#[cfg(windows)]` 的 ConPTY 测试也会跑),但仅在非 push 事件(PR、夜间定时、手动触发)运行;
+`cargo check --workspace` 则在 Linux 与 macOS 作业中运行。另有在 `ubuntu-latest` 上的 `perf`
+作业。需要 GUI 或 IME 检查时用真实 Windows 主机;它不替代 CI。

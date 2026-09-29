@@ -23,3 +23,5 @@
   锁在兼容 wgpu 23 的版本(0.7)。
 - 每个 pane 拥有自己的 `TermRenderer`(各自的字形图集),因此保留已 prepare 的字形;
   仅当该 pane 内容变脏(damage)时才重新 shape,空闲帧不做文字工作。
+- Update:对原生宿主,本决定已被 ADR 0030 取代 —— 网格由 `term-widget` 的原生
+  `winit` + `wgpu` 循环绘制,而非 egui `PaintCallback`。共帧渲染仍适用于 `eframe` 宿主。

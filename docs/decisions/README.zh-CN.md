@@ -10,10 +10,10 @@
 | ADR | 标题 | 状态 |
 |-----|------|------|
 | [0001](./0001-stack.zh-CN.md) | 技术栈选型(pty/vt/渲染/窗口/UI) | 已接受 |
-| 0002 | 并发与锁纪律 | 待定 |
-| 0003 | 终端 + egui 共帧渲染 | 待定 |
-| 0004 | 自研 tab/split 模型(非 OS 原生) | 待定 |
-| 0005 | MTP 传输(Unix socket / Windows 命名管道) | 待定 |
+| [0002](./0002-concurrency.zh-CN.md) | 并发与锁纪律 | 已接受 |
+| [0003](./0003-co-frame-rendering.zh-CN.md) | 终端 + egui 共帧渲染 | 已接受 |
+| [0004](./0004-tab-split-model.zh-CN.md) | 自研 tab/split 模型(非 OS 原生) | 已接受 |
+| [0005](./0005-transport.zh-CN.md) | MTP 传输(Unix socket / Windows 命名管道) | 已接受 |
 | [0006](./0006-license-policy.zh-CN.md) | 许可与依赖策略 | 已接受 |
 | [0007](./0007-view-rule-engine.zh-CN.md) | View 规则引擎 | 已接受 |
 | [0008](./0008-open-quickly.zh-CN.md) | Open Quickly / 命令面板 | 已接受 |

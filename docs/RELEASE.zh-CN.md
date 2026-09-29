@@ -87,8 +87,9 @@ update-check-url = "https://github.com/oxdingzg/miao-term/releases/latest/downlo
 (设置了 `update-pubkey` 时另校验 minisign 签名);macOS 上 *安装并重启* 会带回滚 helper 替换
 应用包(ADR 0025)。
 
-平台键与应用 `platform_key()` 一致:`macos-aarch64`、`macos-x86_64`、`linux-x86_64`
-(另含 `linux-x86_64-deb`)、`windows-x86_64`。
+平台键与应用 `platform_key()` 一致:`macos-aarch64`、`macos-x86_64`、`linux-x86_64`、
+`linux-aarch64`、`windows-x86_64`。`linux-x86_64-deb` 只是 `.deb` 产物的清单专用键
+(应用从不会请求它),而 `release.yml` 目前不产出 `linux-aarch64` 清单条目。
 
 ## MSI(Windows)——已验证
 
@@ -147,5 +148,6 @@ shasum -a 256 miaotty-macos-arm64.zip   # 与清单里的 "sha256" 比对
 ## 仍待完成
 
 - **AppImage** 路径为尽力而为,尚未在真实安装场景验证。
-- 自我替换仅 macOS;Windows/Linux 目前改为打开下载文件。
+- 自我替换现已覆盖 Windows(MSI/zip helper)与 Linux(AppImage helper);仅这些路径的
+  *安装验证*仍待完成(`.deb` 与 MSI 安装本身已验证 —— 见上文)。
 - macOS zip 名称目前带架构(`arm64`);若要做 Intel 构建,需要 `macos-x86_64` 及对应匹配。

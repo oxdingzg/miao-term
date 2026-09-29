@@ -11,7 +11,7 @@
 
 ## 决定
 
-**Agent hooks**(`miaotty-app/src/integration.rs`)。应用知道一小组 agent(claude、codex、
+**Agent hooks**(`crates/term-ui/src/integration.rs`)。应用知道一小组 agent(claude、codex、
 opencode、miao)及其二进制、启动命令与 hook 注册位置。在 *设置 → Agent 集成* 中你可以:
 - 查看各 agent 是否在 `PATH` 上;
 - **安装 hook**:写出 `~/.config/miaotty/hooks/<agent>.sh`(mode 0755,并以 `sh -n`

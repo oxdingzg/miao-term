@@ -18,14 +18,15 @@ scripts/package-macos.sh              # release build -> dist/miaotty.app
 PROFILE=debug scripts/package-macos.sh
 ```
 
-Produces an ad-hoc-signed `dist/miaotty.app`. For distribution, sign with a
-Developer ID and notarize (not done yet).
+Produces an ad-hoc-signed `dist/miaotty.app`. For distribution it is codesigned
+and notarized automatically when the Apple secrets are configured (see
+[Releases](#releases)).
 
 ## Releases
 
 Pushing a `v*` tag runs [`.github/workflows/release.yml`](../.github/workflows/release.yml):
-it builds `miaotty` + `miaotty-cli` on macOS/Linux/Windows and attaches a
-`miaotty.app` zip / Linux tarball / Windows zip to a GitHub Release.
+it builds `miaotty` + `miaotty-cli` + `miaotty-native` on macOS/Linux/Windows and
+attaches a `miaotty.app` zip / Linux tarball / Windows zip to a GitHub Release.
 
 macOS builds are ad-hoc signed by default; if the repo has `APPLE_CERT_P12` +
 `APPLE_CERT_PASSWORD` + `APPLE_ID` + `APPLE_TEAM_ID` + `APPLE_APP_PASSWORD`

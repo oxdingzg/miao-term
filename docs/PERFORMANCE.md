@@ -1,9 +1,8 @@
 # Performance
 
-Budgets and the CI gate (ADR 0018). The roadmap's budgets live in
-`docs/private/miaotty-performance.md` §2; this file maps them onto what we can
-measure deterministically in CI. Machine-readable values and measured baselines
-are in [`../benches/budgets.json`](../benches/budgets.json).
+Budgets and the CI gate (ADR 0018). This file defines the budgets we can measure
+deterministically in CI. Machine-readable values and measured baselines are in
+[`../benches/budgets.json`](../benches/budgets.json).
 
 ## The gate
 

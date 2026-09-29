@@ -25,3 +25,5 @@ cannot rely on it.
 - We own the tab bar/sidebar rendering and focus model.
 - The first cut supports one split level; a recursive split tree (N panes) is a
   later refinement with the same `Pane` abstraction.
+- Update: the recursive split tree now exists (`crates/term-ui/src/layout.rs` —
+  `Layout::Split` nests arbitrarily), so splits go beyond one level.

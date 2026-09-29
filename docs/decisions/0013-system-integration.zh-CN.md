@@ -12,7 +12,7 @@
 
 ## 决定
 
-**URL scheme**(`miaotty-app/src/launch.rs`)。可执行文件从 argv 中找出 `scheme://…`
+**URL scheme**(`crates/term-ui/src/launch.rs`)。可执行文件从 argv 中找出 `scheme://…`
 并转换为新标签里的 shell 命令:`ssh://[user@]host[:port][/path]` →
 `ssh [-p port] host`(IPv6 用 `[..]`,参数单引号包裹),`x-man-page://cmd` → `man cmd`,
 `miaotty://…` → 仅激活。注册信息位于 macOS `Info.plist`(由
@@ -22,7 +22,7 @@
 **快速终端。** ⌘⇧T(或面板动词)切换一个临时标签:首次使用时创建,之后在它与上一个活动
 标签间切换。真正的全局热键需要平台专用 API,推迟。
 
-**i18n**(`miaotty-app/src/i18n.rs`)。以英文为键的字符串表:`En` 直接返回键,`Zh` 映射
+**i18n**(`crates/term-ui/src/i18n.rs`)。以英文为键的字符串表:`En` 直接返回键,`Zh` 映射
 可见界面(设置、Details 标签、面板动词、编辑器/Composer/配方按钮、分区标题、agent 闭环
 文案)。由配置 `language` 或 `$LANG` 选择;未翻译项回退到键,即英文。
 

@@ -4,9 +4,8 @@ Status: accepted.
 
 ## Context
 
-The roadmap makes every milestone's exit condition a performance budget
-(`docs/private/miaotty-performance.md` §2) and says no hot-path code lands before
-a baseline + CI gate exists. The Swift reference measured frame time and power
+The roadmap makes every milestone's exit condition a performance budget, and
+says no hot-path code lands before a baseline + CI gate exists. The Swift reference measured frame time and power
 with Instruments; we need something a headless CI can run deterministically.
 
 ## Decision

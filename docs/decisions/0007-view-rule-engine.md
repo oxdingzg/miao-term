@@ -47,8 +47,9 @@ is user-editable and round-trippable). It lives in `miao-term-config::view`
   {command} {title} {shell} {index} {file}`, plus `{osc_title}` for the raw
   program title. Unknown variables render empty. `folder` is the last path
   component; `cwd` is abbreviated (`~` for home).
-- **Icon**: either a built-in SVG name (resolved by the UI from an in-repo icon
-  set), an emoji, or a plain color. The engine only carries the descriptor.
+- **Icon**: either a built-in icon name (resolved by the UI from a hand-authored,
+  in-repo painter-primitive set — no SVG), an emoji, or a plain color. The
+  engine only carries the descriptor.
 - **Projects**: `path → alias` with longest-prefix match; when
   `worktree_suffix` is on and cwd is a `.worktrees/<name>` checkout, the alias
   gets that suffix.
@@ -60,5 +61,6 @@ is user-editable and round-trippable). It lives in `miao-term-config::view`
 - Tabs/Details/Open Quickly all consume one `View` value per evaluation, so they
   stay consistent and are testable without a renderer.
 - A malformed `views.json` degrades to OSC titles rather than breaking startup.
-- The icon set itself (≈70 SVGs) and the rule *editor* UI are follow-ups; this
+- The icon set itself (29 hand-authored painter primitives in
+  `miaotty-app/src/icons.rs`) and the rule *editor* UI are follow-ups; this
   ADR covers the model and the matching semantics they build on.
