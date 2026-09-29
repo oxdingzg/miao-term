@@ -520,8 +520,23 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
         .exact_height(CHROME_MENU_H)
         .frame(panel_frame(&theme, egui::Margin::symmetric(6.0, 1.0)))
         .show(ctx, |ui| {
+            // Menu-bar styling: transparent idle, subtle rounded hover/active.
+            {
+                let v = ui.visuals_mut();
+                v.override_text_color = Some(fg_color(&theme));
+                v.widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
+                v.widgets.hovered.weak_bg_fill = bg_color(lighten(theme.bg, 0.16));
+                v.widgets.active.weak_bg_fill = bg_color(lighten(theme.bg, 0.22));
+                v.widgets.hovered.bg_fill = bg_color(lighten(theme.bg, 0.16));
+                v.widgets.active.bg_fill = bg_color(lighten(theme.bg, 0.22));
+                let r = egui::Rounding::same(5.0);
+                v.widgets.inactive.rounding = r;
+                v.widgets.hovered.rounding = r;
+                v.widgets.active.rounding = r;
+            }
+            ui.style_mut().spacing.button_padding = egui::vec2(8.0, 3.0);
+            ui.style_mut().spacing.item_spacing.x = 2.0;
             ui.horizontal(|ui| {
-                ui.visuals_mut().override_text_color = Some(fg_color(&theme));
                 ui.menu_button(t(lang, "File", "文件"), |ui| {
                     menu_item(
                         ui,
@@ -805,7 +820,19 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
         .frame(panel_frame(&theme, egui::Margin::symmetric(8.0, 2.0)))
         .show(ctx, |ui| {
             ui.visuals_mut().override_text_color = Some(fg_color(&theme));
-            ui.label(egui::RichText::new(status).size(11.0));
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(status).size(11.0));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "\u{2318}K  {}",
+                            t(lang, "commands", "命令")
+                        ))
+                        .size(11.0)
+                        .color(egui::Color32::from_gray(130)),
+                    );
+                });
+            });
         });
 
     // Apply.
