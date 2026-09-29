@@ -148,6 +148,10 @@ struct State {
     quick: Option<String>,
     closed: Vec<Option<std::path::PathBuf>>,
     hover_pointer: bool,
+    search: Option<String>,
+    search_idx: usize,
+    search_hits: Vec<(usize, u16)>,
+    search_key: String,
     update_url: Option<String>,
     update_rx: Option<std::sync::mpsc::Receiver<String>>,
     update_msg: Option<String>,
@@ -182,6 +186,7 @@ struct Shortcut {
     composer: bool,
     quickly: bool,
     reopen: bool,
+    search: bool,
 }
 
 fn shortcut(event: &KeyEvent, mods: ModifiersState) -> Option<Shortcut> {
@@ -203,6 +208,7 @@ fn shortcut(event: &KeyEvent, mods: ModifiersState) -> Option<Shortcut> {
         composer: false,
         quickly: false,
         reopen: false,
+        search: false,
     };
     let mut matched = true;
     match &event.logical_key {
@@ -211,6 +217,7 @@ fn shortcut(event: &KeyEvent, mods: ModifiersState) -> Option<Shortcut> {
             "t" => s.new_tab = true,
             "e" => s.composer = true,
             "o" if mods.shift_key() => s.quickly = true,
+            "f" => s.search = true,
             "k" => s.palette = true,
             "p" if mods.shift_key() => s.palette = true,
             "," => s.settings = true,
@@ -588,6 +595,7 @@ impl State {
     }
 
     fn render(&mut self) {
+        self.refresh_search();
         self.poll_details();
         self.ensure_details();
         // MTP `pane.send` / `pane.run` — inject bytes into the target pane.
@@ -630,6 +638,14 @@ impl State {
         let selection = self.selection.clone();
         let rects = self.pane_rects();
         let active_id = self.active_pane_id().unwrap_or_default();
+        let search_on = self.search.as_ref().map(|s| !s.is_empty()).unwrap_or(false);
+        let search_hits = self.search_hits.clone();
+        let search_idx = self.search_idx;
+        let search_len = self
+            .search
+            .as_ref()
+            .map(|s| s.chars().count() as u16)
+            .unwrap_or(0);
         let mut draws: Vec<PaneDraw> = Vec::new();
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
             for (id, r) in &rects {
@@ -687,6 +703,24 @@ impl State {
                         for (row, col) in sel.cells(sc) {
                             let s = theme.selection;
                             quads.push(quad(ox, oy, row, col, cw, ch, (s.0, s.1, s.2)));
+                        }
+                    }
+                }
+                if search_on && id == &active_id {
+                    let hist = pane.term.screen().history_size() as i32;
+                    let off = pane.term.screen().scroll_offset() as i32;
+                    for (k, (b, col)) in search_hits.iter().enumerate() {
+                        let row = *b as i32 - hist + off;
+                        if row < 0 || row >= sr as i32 {
+                            continue;
+                        }
+                        let color = if k == search_idx {
+                            (0x2e, 0x5b, 0x8f)
+                        } else {
+                            (0x33, 0x3d, 0x4d)
+                        };
+                        for dc in 0..search_len {
+                            quads.push(quad(ox, oy, row as u16, col + dc, cw, ch, color));
                         }
                     }
                 }
@@ -906,6 +940,7 @@ impl State {
         self.remote_dialog_window(ctx);
         self.composer_window(ctx);
         self.quick_window(ctx);
+        self.search_window(ctx);
         if let Some(i) = self.renaming {
             self.rename_window(ctx, i);
         }
@@ -1629,6 +1664,120 @@ impl State {
         }
     }
 
+    fn compute_search_hits(&self) -> Vec<(usize, u16)> {
+        let Some(q) = self.search.as_deref() else {
+            return Vec::new();
+        };
+        if q.is_empty() {
+            return Vec::new();
+        }
+        let Some(pane) = self.active_pane() else {
+            return Vec::new();
+        };
+        let screen = pane.term.screen();
+        let qb = q.as_bytes();
+        let mut out = Vec::new();
+        for b in 0..screen.total_lines() {
+            let text = screen.line_text_abs(b);
+            let tb = text.as_bytes();
+            let mut i = 0usize;
+            while i + qb.len() <= tb.len() {
+                if tb[i..i + qb.len()].eq_ignore_ascii_case(qb) {
+                    out.push((b, i as u16));
+                    i += qb.len().max(1);
+                    if out.len() >= 2000 {
+                        return out;
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+        }
+        out
+    }
+
+    fn refresh_search(&mut self) {
+        if self.search.is_none() {
+            self.search_hits.clear();
+            self.search_key.clear();
+            return;
+        }
+        let key = format!(
+            "{}\u{0}{}",
+            self.search.as_deref().unwrap_or(""),
+            self.active_pane_id().unwrap_or_default()
+        );
+        if key != self.search_key {
+            self.search_key = key;
+            self.search_hits = self.compute_search_hits();
+            self.search_idx = self
+                .search_idx
+                .min(self.search_hits.len().saturating_sub(1));
+        }
+    }
+
+    fn scroll_to_search_hit(&mut self) {
+        let Some((b, _)) = self.search_hits.get(self.search_idx).copied() else {
+            return;
+        };
+        let Some(tab) = self.tabs.get_mut(self.active_tab) else {
+            return;
+        };
+        let Some(pane) = tab.panes.iter_mut().find(|p| p.id == tab.active) else {
+            return;
+        };
+        let hist = pane.term.screen().history_size();
+        pane.scroll = if b < hist { hist - b } else { 0 };
+    }
+
+    fn search_window(&mut self, ctx: &egui::Context) {
+        if self.search.is_none() {
+            return;
+        }
+        let lang = self.lang;
+        let n = self.search_hits.len();
+        let idx = self.search_idx;
+        let Some(query) = self.search.as_mut() else {
+            return;
+        };
+        let mut step = 0i32;
+        let mut close = false;
+        egui::Window::new(miao_term_ui::i18n::t(lang, "Find", "查找"))
+            .collapsible(false)
+            .anchor(egui::Align2::CENTER_TOP, [0.0, 40.0])
+            .show(ctx, |ui| {
+                let r = ui.add(
+                    egui::TextEdit::singleline(query)
+                        .hint_text("search…")
+                        .desired_width(260.0),
+                );
+                r.request_focus();
+                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    step = if ui.input(|i| i.modifiers.shift) {
+                        -1
+                    } else {
+                        1
+                    };
+                }
+                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    close = true;
+                }
+                ui.label(format!("{} / {}", if n == 0 { 0 } else { idx + 1 }, n));
+            });
+        if close {
+            self.search = None;
+            self.search_hits.clear();
+            self.search_key.clear();
+            self.window.request_redraw();
+            return;
+        }
+        if step != 0 && n > 0 {
+            self.search_idx = ((idx as i32 + step).rem_euclid(n as i32)) as usize;
+            self.scroll_to_search_hit();
+            self.window.request_redraw();
+        }
+    }
+
     fn composer_window(&mut self, ctx: &egui::Context) {
         let target = self.active_pane().map(|p| p.id.clone()).unwrap_or_default();
         let Some(text) = self.composer.as_mut() else {
@@ -2252,6 +2401,10 @@ impl ApplicationHandler for Host {
             quick: None,
             closed: Vec::new(),
             hover_pointer: false,
+            search: None,
+            search_idx: 0,
+            search_hits: Vec::new(),
+            search_key: String::new(),
             update_url: cfg.update_check_url.clone(),
             update_rx: None,
             update_msg: None,
@@ -2340,7 +2493,9 @@ impl ApplicationHandler for Host {
                 state.window.request_redraw();
             }
             WindowEvent::Ime(winit::event::Ime::Commit(text)) => {
-                state.write_input(text.as_bytes());
+                if !state.egui_ctx.wants_keyboard_input() {
+                    state.write_input(text.as_bytes());
+                }
             }
             WindowEvent::MouseInput {
                 state: es, button, ..
@@ -2449,6 +2604,10 @@ impl ApplicationHandler for Host {
                 state.window.request_redraw();
             }
             WindowEvent::KeyboardInput { event, .. } => {
+                if state.egui_ctx.wants_keyboard_input() {
+                    state.window.request_redraw();
+                    return;
+                }
                 if let Some(s) = shortcut(&event, state.mods) {
                     if s.new_tab {
                         state.new_tab();
@@ -2503,6 +2662,11 @@ impl ApplicationHandler for Host {
                     }
                     if s.quickly {
                         state.quick = Some(String::new());
+                    }
+                    if s.search {
+                        state.search = Some(String::new());
+                        state.search_idx = 0;
+                        state.search_key.clear();
                     }
                     state.window.request_redraw();
                 } else {

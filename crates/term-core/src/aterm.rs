@@ -72,15 +72,35 @@ impl ATerm {
         (self.rows as u16, self.cols as u16)
     }
 
-    /// The character at a grid cell (space for empty cells).
+    /// The character at a viewport cell (space for empty cells).
     pub fn cell_char(&self, row: u16, col: u16) -> char {
-        self.term.grid()[Line(row as i32)][Column(col as usize)].c
+        let off = self.term.grid().display_offset() as i32;
+        self.term.grid()[Line(row as i32 - off)][Column(col as usize)].c
     }
 
     /// A row's text, right-trimmed.
     pub fn line_text(&self, row: u16) -> String {
         let text: String = (0..self.cols)
             .map(|col| self.cell_char(row, col as u16))
+            .collect();
+        text.trim_end().to_string()
+    }
+
+    /// Total buffer lines (scrollback + screen).
+    pub fn total_lines(&self) -> usize {
+        self.term.grid().total_lines()
+    }
+
+    /// Lines of history above the viewport.
+    pub fn history_size(&self) -> usize {
+        self.total_lines().saturating_sub(self.rows)
+    }
+
+    /// Text of buffer line `b` counted from the oldest (0), right-trimmed.
+    pub fn line_text_abs(&self, b: usize) -> String {
+        let line = b as i32 - self.history_size() as i32;
+        let text: String = (0..self.cols)
+            .map(|c| self.term.grid()[Line(line)][Column(c)].c)
             .collect();
         text.trim_end().to_string()
     }
@@ -103,7 +123,8 @@ impl ATerm {
         if row as usize >= self.rows || col as usize >= self.cols {
             return None;
         }
-        let cell = &self.term.grid()[Line(row as i32)][Column(col as usize)];
+        let off = self.term.grid().display_offset() as i32;
+        let cell = &self.term.grid()[Line(row as i32 - off)][Column(col as usize)];
         Some(CellView {
             ch: cell.c,
             fg: cell.fg,
@@ -207,6 +228,21 @@ mod tests {
         assert_eq!(term.line_text(0), "one");
         assert_eq!(term.line_text(1), "two");
         assert_eq!(term.cursor(), (1, 3));
+    }
+
+    #[test]
+    fn scrollback_shifts_viewport() {
+        let mut t = ATerm::new(10, 3, 100);
+        t.process(b"a\r\nb\r\nc\r\nd\r\ne");
+        assert_eq!(t.line_text(0), "c");
+        assert_eq!(t.line_text(2), "e");
+        assert_eq!(t.total_lines(), 5);
+        assert_eq!(t.history_size(), 2);
+        assert_eq!(t.line_text_abs(0), "a");
+        assert_eq!(t.line_text_abs(4), "e");
+        t.set_scrollback(2);
+        assert_eq!(t.line_text(0), "a");
+        assert_eq!(t.line_text(2), "c");
     }
 
     #[test]
