@@ -77,9 +77,9 @@ fn main() -> eframe::Result<()> {
     )
 }
 
-/// Register a system CJK font as a fallback so Chinese/Japanese glyphs render.
+/// Register the bundled Nerd Font (UI icons) and a system CJK fallback.
 fn install_fonts(ctx: &egui::Context) {
-    let candidates = [
+    let cjk_candidates = [
         "/System/Library/Fonts/PingFang.ttc",
         "/System/Library/Fonts/STHeiti Light.ttc",
         "/System/Library/Fonts/Hiragino Sans GB.ttc",
@@ -88,24 +88,57 @@ fn install_fonts(ctx: &egui::Context) {
         "C:/Windows/Fonts/msyh.ttc",
         "C:/Windows/Fonts/simhei.ttf",
     ];
-    for path in candidates {
+
+    let mut fonts = egui::FontDefinitions::default();
+    // Bundled Nerd Font gives the UI access to icon glyphs (Otty-style).
+    fonts.font_data.insert(
+        "nerd".to_owned(),
+        Arc::new(egui::FontData::from_static(include_bytes!(
+            "../../assets/fonts/SymbolsNerdFontMono-Regular.ttf"
+        ))),
+    );
+    let mut cjk_loaded = false;
+    for path in cjk_candidates {
         if let Ok(bytes) = std::fs::read(path) {
-            let mut fonts = egui::FontDefinitions::default();
             fonts.font_data.insert(
                 "cjk".to_owned(),
                 Arc::new(egui::FontData::from_owned(bytes)),
             );
-            for family in [egui::FontFamily::Monospace, egui::FontFamily::Proportional] {
-                fonts
-                    .families
-                    .entry(family)
-                    .or_default()
-                    .push("cjk".to_owned());
-            }
-            ctx.set_fonts(fonts);
-            return;
+            cjk_loaded = true;
+            break;
         }
     }
+    for family in [egui::FontFamily::Monospace, egui::FontFamily::Proportional] {
+        let list = fonts.families.entry(family).or_default();
+        if cjk_loaded {
+            list.push("cjk".to_owned());
+        }
+        list.push("nerd".to_owned());
+    }
+    ctx.set_fonts(fonts);
+}
+
+/// TEMP: wall-clock ms for latency instrumentation.
+static ECHO_SENT_MS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Nerd Font glyphs (Font Awesome subset) used across the UI.
+mod glyph {
+    pub const INFO: &str = "\u{f129}";
+    pub const AGENT: &str = "\u{f007}";
+    pub const OUTLINE: &str = "\u{f03a}";
+    pub const GIT: &str = "\u{f1d3}";
+    pub const FILES: &str = "\u{f07b}";
+    pub const PORTS: &str = "\u{f1e6}";
+    pub const QUEUE: &str = "\u{f017}";
+    pub const COG: &str = "\u{f013}";
+    pub const PLUS: &str = "\u{f067}";
+    pub const PANEL: &str = "\u{f0db}";
 }
 
 /// Active theme colors (from `term-config`).
@@ -816,7 +849,14 @@ impl MiaottyApp {
         ctx: egui::Context,
     ) -> Self {
         let opacity = cfg.background_opacity.clamp(0.1, 1.0);
-        let waker: Arc<dyn Fn() + Send + Sync> = Arc::new(move || ctx.request_repaint());
+        let waker: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static N: AtomicU64 = AtomicU64::new(0);
+            if N.fetch_add(1, Ordering::Relaxed) < 5 {
+                eprintln!("miaotty[lat]: waker fired");
+            }
+            ctx.request_repaint();
+        });
         let mut app = Self {
             tabs: Vec::new(),
             active: 0,
@@ -1203,6 +1243,39 @@ impl MiaottyApp {
 
 impl eframe::App for MiaottyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let __t0 = std::time::Instant::now();
+        // TEMP latency instrumentation.
+        {
+            use std::sync::Mutex;
+            static FT: Mutex<Option<(std::time::Instant, u32, f32, f32)>> = Mutex::new(None);
+            let now = std::time::Instant::now();
+            if let Ok(mut g) = FT.lock() {
+                match &mut *g {
+                    None => *g = Some((now, 0, 0.0, 0.0)),
+                    Some((last, n, sum, max)) => {
+                        let dt = now.duration_since(*last).as_secs_f32() * 1000.0;
+                        *last = now;
+                        *n += 1;
+                        *sum += dt;
+                        if dt > *max {
+                            *max = dt;
+                        }
+                        if *n >= 120 {
+                            eprintln!(
+                                "miaotty[lat]: frames={} avg={:.1}ms max={:.1}ms",
+                                *n,
+                                *sum / *n as f32,
+                                *max
+                            );
+                            *n = 0;
+                            *sum = 0.0;
+                            *max = 0.0;
+                        }
+                    }
+                }
+            }
+        }
+
         // Drain output for every tab (keeps channels from growing unbounded).
         let mut changed = false;
         for tab in &mut self.tabs {
@@ -1217,12 +1290,18 @@ impl eframe::App for MiaottyApp {
             // New output jumps to the bottom.
             self.scroll = 0;
             ctx.request_repaint();
+            let w = ECHO_SENT_MS.swap(0, std::sync::atomic::Ordering::Relaxed);
+            if w != 0 {
+                let d = now_ms() - w;
+                eprintln!("miaotty[lat]: write->echo {d} ms");
+            }
         }
 
         // MTP `pane.send` / `pane.run` — inject bytes into the target pane.
         let writes = self.state.take_writes();
         if !writes.is_empty() {
             for (pane_id, data) in writes {
+                ECHO_SENT_MS.store(now_ms(), std::sync::atomic::Ordering::Relaxed);
                 'outer: for tab in &mut self.tabs {
                     for pane in &mut tab.panes {
                         if pane.pane_id == pane_id {
@@ -1395,7 +1474,9 @@ impl eframe::App for MiaottyApp {
                 }
                 ctx.request_repaint();
             }
-            ctx.request_repaint_after(Duration::from_millis(530));
+            // Keep a responsive frame cadence while focused so PTY output and
+            // input echo are drawn promptly (idle CPU stays ~0 when unfocused).
+            ctx.request_repaint_after(Duration::from_millis(16));
         }
 
         self.menu_bar(ctx);
@@ -1457,6 +1538,27 @@ impl eframe::App for MiaottyApp {
         }
         if self.palette.is_some() {
             self.palette_ui(ctx);
+        }
+
+        // TEMP: measure time spent in update().
+        {
+            use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+            static SUM_US: AtomicU64 = AtomicU64::new(0);
+            static MAX_US: AtomicU64 = AtomicU64::new(0);
+            static N: AtomicU32 = AtomicU32::new(0);
+            let us = __t0.elapsed().as_micros() as u64;
+            SUM_US.fetch_add(us, Ordering::Relaxed);
+            MAX_US.fetch_max(us, Ordering::Relaxed);
+            if N.fetch_add(1, Ordering::Relaxed) + 1 >= 60 {
+                let n = N.swap(0, Ordering::Relaxed) as f64;
+                let sum = SUM_US.swap(0, Ordering::Relaxed) as f64;
+                let mx = MAX_US.swap(0, Ordering::Relaxed) as f64;
+                eprintln!(
+                    "miaotty[lat]: update avg={:.1}ms max={:.1}ms",
+                    sum / n / 1000.0,
+                    mx / 1000.0
+                );
+            }
         }
     }
 }
@@ -1978,6 +2080,7 @@ fn file_tree(
     }
 }
 
+#[cfg(target_os = "macos")]
 /// Render a small, dependency-free subset of Markdown: ATX headings, fenced
 /// code, bullet lists, block quotes. Inline emphasis markers are stripped.
 /// The `.app` bundle root containing `exe`, if it is inside one
@@ -1992,6 +2095,7 @@ fn bundle_root(exe: &std::path::Path) -> Option<PathBuf> {
     (bundle.extension().and_then(|e| e.to_str()) == Some("app")).then(|| bundle.to_path_buf())
 }
 
+#[cfg(target_os = "macos")]
 /// The shell script that swaps `bundle` for `new_app` once `pid` exits, then
 /// relaunches. Restores the old bundle if the swap fails.
 fn install_script(pid: u32, bundle: &std::path::Path, new_app: &std::path::Path) -> String {
@@ -2014,6 +2118,7 @@ fn install_script(pid: u32, bundle: &std::path::Path, new_app: &std::path::Path)
     )
 }
 
+#[cfg(target_os = "macos")]
 /// The first `.app` bundle anywhere under `dir`.
 fn find_app(dir: &std::path::Path) -> Option<PathBuf> {
     let mut stack = vec![dir.to_path_buf()];
@@ -2751,17 +2856,17 @@ impl MiaottyApp {
                 ui.horizontal(|ui| {
                     ui.label(section(&format!("{} ({})", self.t("TABS"), rows.len())));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("+").on_hover_text("New Tab").clicked() {
+                        if ui.button(glyph::PLUS).on_hover_text("New Tab").clicked() {
                             add = true;
                         }
                         if ui
-                            .button("\u{25a4}")
-                            .on_hover_text("Toggle Details")
+                            .button(glyph::PANEL)
+                            .on_hover_text("Toggle Details Panel")
                             .clicked()
                         {
                             toggle = true;
                         }
-                        if ui.button("\u{2699}").on_hover_text("Settings").clicked() {
+                        if ui.button(glyph::COG).on_hover_text("Settings").clicked() {
                             settings = true;
                         }
                     });
@@ -2945,19 +3050,17 @@ impl MiaottyApp {
             )
             .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    for (tab, label) in [
-                        (DetailsTab::Info, self.t("Info")),
-                        (DetailsTab::Agent, self.t("Agent")),
-                        (DetailsTab::Outline, self.t("Outline")),
-                        (DetailsTab::Git, self.t("Git")),
-                        (DetailsTab::Files, self.t("Files")),
-                        (DetailsTab::Ports, self.t("Ports")),
-                        (DetailsTab::Queue, self.t("Queue")),
+                    for (tab, glyph, label) in [
+                        (DetailsTab::Info, glyph::INFO, self.t("Info")),
+                        (DetailsTab::Agent, glyph::AGENT, self.t("Agent")),
+                        (DetailsTab::Outline, glyph::OUTLINE, self.t("Outline")),
+                        (DetailsTab::Git, glyph::GIT, self.t("Git")),
+                        (DetailsTab::Files, glyph::FILES, self.t("Files")),
+                        (DetailsTab::Ports, glyph::PORTS, self.t("Ports")),
+                        (DetailsTab::Queue, glyph::QUEUE, self.t("Queue")),
                     ] {
-                        if ui
-                            .selectable_label(self.details_tab == tab, label)
-                            .clicked()
-                        {
+                        let text = egui::RichText::new(format!("{glyph} {label}"));
+                        if ui.selectable_label(self.details_tab == tab, text).clicked() {
                             self.details_tab = tab;
                         }
                     }
@@ -5090,6 +5193,7 @@ impl MiaottyApp {
                 self.ime_preedit = p;
             }
             if !out.is_empty() {
+                ECHO_SENT_MS.store(now_ms(), std::sync::atomic::Ordering::Relaxed);
                 self.tabs[ti].panes[pi].term.write(&out);
                 self.ime_preedit.clear();
                 ctx.request_repaint();
@@ -5776,6 +5880,7 @@ mod session_tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn bundle_root_and_install_script() {
         let exe = std::path::Path::new("/Applications/miaotty.app/Contents/MacOS/miaotty");
         assert_eq!(

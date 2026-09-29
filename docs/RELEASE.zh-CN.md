@@ -79,8 +79,18 @@ update-check-url = "https://github.com/oxdingzg/miao-term/releases/latest/downlo
 平台键与应用 `platform_key()` 一致:`macos-aarch64`、`macos-x86_64`、`linux-x86_64`
 (另含 `linux-x86_64-deb`)、`windows-x86_64`。
 
+## MSI(Windows)——已验证
+
+WiX 模板已入库:[`miaotty-app/wix/main.wxs`](../miaotty-app/wix/main.wxs)(把 `miaotty.exe`
+**与** `miaotty-cli.exe` 安装到 `%ProgramFiles%\miaotty\bin`,把该目录加入机器 `PATH`,并注册
+卸载项)。用 `cargo wix --package miaotty-app` 构建;需要 WiX 3.x(choco `wixtoolset`),且必须
+**在 `miaotty-app/` 目录内**运行 —— 模板以相对路径引用 `wix\License.rtf`。
+
+已在真实 Windows 11 主机端到端验证(2026-09-29):构建 → `msiexec /i` → 两个二进制落盘 + PATH
+条目 + "miaotty 0.0.0" 卸载项 → 已安装的 app 能启动 → `msiexec /x` 后目录被清除。
+
 ## 仍待完成
 
-- AppImage 与 MSI 为尽力而为,尚未在真实安装场景验证。
+- **AppImage** 路径为尽力而为,尚未在真实安装场景验证。
 - 自我替换仅 macOS;Windows/Linux 目前改为打开下载文件。
 - macOS zip 名称目前带架构(`arm64`);若要做 Intel 构建,需要 `macos-x86_64` 及对应匹配。

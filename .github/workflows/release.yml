@@ -106,9 +106,15 @@ jobs:
         if: runner.os == 'Windows'
         continue-on-error: true
         run: |
+          # WiX 3.x via chocolatey (preinstalled on the runner images); cargo-wix
+          # picks it up through the WIX environment variable.
+          choco install -y wixtoolset --no-progress
           cargo install cargo-wix --locked
-          cargo wix init -p miaotty-app --force
-          cargo wix -p miaotty-app --nocapture
+          cargo build --release -p miaotty-cli
+          # The WiX template lives in miaotty-app/wix and references wix\License.rtf
+          # relative to the crate, so build from there.
+          cd miaotty-app
+          cargo wix --package miaotty-app --nocapture
 
       - name: Sign MSI (Windows, optional)
         if: runner.os == 'Windows'

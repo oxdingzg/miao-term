@@ -83,9 +83,22 @@ swaps the bundle with a rollback helper (ADR 0025).
 Platform keys match the app's `platform_key()`: `macos-aarch64`,
 `macos-x86_64`, `linux-x86_64` (+ `linux-x86_64-deb`), `windows-x86_64`.
 
+## MSI (Windows) — verified
+
+The WiX template is committed at [`miaotty-app/wix/main.wxs`](../miaotty-app/wix/main.wxs)
+(it installs `miaotty.exe` **and** `miaotty-cli.exe` into
+`%ProgramFiles%\miaotty\bin`, adds that directory to the machine `PATH`, and
+registers an uninstall entry). `cargo wix --package miaotty-app` builds it; it
+needs WiX 3.x (chocolatey `wixtoolset`), and must run **from `miaotty-app/`**
+because the template references `wix\License.rtf` relatively.
+
+Verified end to end on a real Windows 11 host (2026-09-29): build → `msiexec /i`
+→ both binaries on disk + PATH entry + "miaotty 0.0.0" uninstall entry → the
+installed app launches → `msiexec /x` removes the directory.
+
 ## Still open
 
-- AppImage and MSI are best-effort and not yet verified on a real install.
+- The **AppImage** path is best-effort and not yet verified on a real install.
 - Self-replace is macOS-only; Windows/Linux hand off to the downloaded file.
 - The macOS zip name is arch-specific today (`arm64`); an Intel build would need
   `macos-x86_64` and a matching pattern.
