@@ -4048,9 +4048,8 @@ impl ApplicationHandler for Host {
                 state.window.request_redraw();
             }
             WindowEvent::Ime(winit::event::Ime::Commit(text)) => {
-                // macOS also "commits" control characters (Enter/Tab/…) through
-                // the IME; those are sent by the key handler, so writing them
-                // here would double every newline. Only forward real text.
+                // A commit can carry a control character (Enter/Tab/…); those are
+                // already sent by the key handler, so only forward real text.
                 let control_only = !text.is_empty() && text.chars().all(char::is_control);
                 if !control_only && !state.egui_ctx.wants_keyboard_input() {
                     state.write_input(text.as_bytes());
@@ -4304,6 +4303,15 @@ impl ApplicationHandler for Host {
                     }
                     state.window.request_redraw();
                 } else {
+                    // winit emits a `KeyboardInput` for key-up as well as key-down
+                    // (macOS always does). `encode_key` returns an escape sequence
+                    // for Enter/Tab/Backspace/arrows no matter the state, so acting
+                    // on releases sent every special key twice — one Return became
+                    // a blank line. Characters were unaffected because `Char`
+                    // encodes to nothing there. Only presses carry input.
+                    if event.state != ElementState::Pressed {
+                        return;
+                    }
                     let active = state
                         .tabs
                         .get(state.active_tab)
