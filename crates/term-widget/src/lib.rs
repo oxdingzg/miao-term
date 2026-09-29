@@ -221,6 +221,7 @@ struct Shortcut {
     split_right: bool,
     split_down: bool,
     cycle: i32,
+    tab: i32,
     toggle_sidebar: bool,
     toggle_details: bool,
     palette: bool,
@@ -243,6 +244,7 @@ fn shortcut(event: &KeyEvent, mods: ModifiersState) -> Option<Shortcut> {
         split_right: false,
         split_down: false,
         cycle: 0,
+        tab: 0,
         toggle_sidebar: false,
         toggle_details: false,
         palette: false,
@@ -273,6 +275,8 @@ fn shortcut(event: &KeyEvent, mods: ModifiersState) -> Option<Shortcut> {
             }
             "l" if mods.shift_key() => s.toggle_sidebar = true,
             "r" if mods.shift_key() => s.toggle_details = true,
+            "]" if mods.shift_key() => s.tab = 1,
+            "[" if mods.shift_key() => s.tab = -1,
             "]" => s.cycle = 1,
             "[" => s.cycle = -1,
             "+" | "=" => s.font = 1.0,
@@ -461,6 +465,34 @@ impl State {
         tab.active = tab.layout.ids().first().cloned().unwrap_or_default();
         self.selection = None;
         self.publish_panes();
+    }
+
+    fn duplicate_tab(&mut self) {
+        let cwd = self.cwd();
+        let (title, ssh) = self
+            .tabs
+            .get(self.active_tab)
+            .map(|t| (t.title.clone(), t.ssh))
+            .unwrap_or_default();
+        self.new_tab_in(cwd);
+        if let Some(t) = self.tabs.last_mut() {
+            t.title = title;
+            t.ssh = ssh;
+        }
+        self.publish_panes();
+    }
+
+    fn cycle_tab(&mut self, forward: bool) {
+        let n = self.tabs.len();
+        if n > 1 {
+            let i = self.active_tab;
+            self.active_tab = if forward {
+                (i + 1) % n
+            } else {
+                (i + n - 1) % n
+            };
+            self.selection = None;
+        }
     }
 
     fn split(&mut self, dir: SplitDir) {
@@ -1446,6 +1478,10 @@ enum Cmd {
     Find,
     Fullscreen,
     ClearScreen,
+    ClearScrollback,
+    DuplicateTab,
+    ReopenClosed,
+    SelectAll,
     CopyPath,
     RevealCwd,
     Settings,
@@ -1488,6 +1524,13 @@ impl State {
             (Cmd::Find, t(l, "Find…", "查找…")),
             (Cmd::Fullscreen, t(l, "Toggle Full Screen", "全屏切换")),
             (Cmd::ClearScreen, t(l, "Clear Screen", "清屏")),
+            (Cmd::ClearScrollback, t(l, "Clear Scrollback", "清除回滚")),
+            (Cmd::DuplicateTab, t(l, "Duplicate Tab", "复制标签")),
+            (
+                Cmd::ReopenClosed,
+                t(l, "Reopen Last Closed", "重开最近关闭"),
+            ),
+            (Cmd::SelectAll, t(l, "Select All", "全选")),
             (Cmd::CopyPath, t(l, "Copy Path", "复制路径")),
             (
                 Cmd::RevealCwd,
@@ -1543,6 +1586,32 @@ impl State {
                 } else {
                     Some(winit::window::Fullscreen::Borderless(None))
                 });
+            }
+            Cmd::ClearScrollback => {
+                if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                    let active = tab.active.clone();
+                    if let Some(p) = tab.panes.iter_mut().find(|p| p.id == active) {
+                        p.term.screen_mut().process(b"\x1b[3J");
+                    }
+                }
+            }
+            Cmd::DuplicateTab => self.duplicate_tab(),
+            Cmd::ReopenClosed => self.reopen_tab(),
+            Cmd::SelectAll => {
+                if let Some(id) = self.active_pane_id() {
+                    if let Some(tab) = self.tabs.get(self.active_tab) {
+                        if let Some(p) = tab.panes.iter().find(|p| p.id == id) {
+                            let (r, c) = p.term.size();
+                            self.selection = Some((
+                                id,
+                                Selection {
+                                    start: (0, 0),
+                                    end: (r.saturating_sub(1), c.saturating_sub(1)),
+                                },
+                            ));
+                        }
+                    }
+                }
             }
             Cmd::ClearScreen => {
                 if let Some(tab) = self.tabs.get_mut(self.active_tab) {
@@ -3390,6 +3459,9 @@ impl ApplicationHandler for Host {
                     if s.cycle != 0 {
                         state.cycle_pane(s.cycle > 0);
                     }
+                    if s.tab != 0 {
+                        state.cycle_tab(s.tab > 0);
+                    }
                     if s.toggle_sidebar {
                         state.show_sidebar = !state.show_sidebar;
                     }
@@ -4136,6 +4208,10 @@ impl chrome::Chrome for State {
             Find => Cmd::Find,
             Fullscreen => Cmd::Fullscreen,
             ClearScreen => Cmd::ClearScreen,
+            ClearScrollback => Cmd::ClearScrollback,
+            DuplicateTab => Cmd::DuplicateTab,
+            ReopenClosed => Cmd::ReopenClosed,
+            SelectAll => Cmd::SelectAll,
             CopyPath => Cmd::CopyPath,
             RevealCwd => Cmd::RevealCwd,
             Settings => Cmd::Settings,

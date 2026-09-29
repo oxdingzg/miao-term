@@ -333,6 +333,10 @@ pub enum MenuId {
     Settings,
     Palette,
     Find,
+    DuplicateTab,
+    ReopenClosed,
+    ClearScrollback,
+    SelectAll,
     Fullscreen,
     ClearScreen,
     CopyPath,
@@ -473,6 +477,18 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
                     );
                     menu_item(
                         ui,
+                        t(lang, "Duplicate Tab", "复制标签"),
+                        MenuId::DuplicateTab,
+                        &mut menu,
+                    );
+                    menu_item(
+                        ui,
+                        t(lang, "Reopen Last Closed", "重开最近关闭"),
+                        MenuId::ReopenClosed,
+                        &mut menu,
+                    );
+                    menu_item(
+                        ui,
                         t(lang, "Close Pane / Tab", "关闭 Pane/标签"),
                         MenuId::ClosePane,
                         &mut menu,
@@ -517,6 +533,12 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
                 ui.menu_button(t(lang, "Edit", "编辑"), |ui| {
                     menu_item(ui, t(lang, "Copy", "复制"), MenuId::Copy, &mut menu);
                     menu_item(ui, t(lang, "Paste", "粘贴"), MenuId::Paste, &mut menu);
+                    menu_item(
+                        ui,
+                        t(lang, "Select All", "全选"),
+                        MenuId::SelectAll,
+                        &mut menu,
+                    );
                 });
                 ui.menu_button(t(lang, "View", "视图"), |ui| {
                     menu_item(
@@ -578,6 +600,12 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
                         ui,
                         t(lang, "Clear Screen", "清屏"),
                         MenuId::ClearScreen,
+                        &mut menu,
+                    );
+                    menu_item(
+                        ui,
+                        t(lang, "Clear Scrollback", "清除回滚"),
+                        MenuId::ClearScrollback,
                         &mut menu,
                     );
                     menu_item(
