@@ -185,8 +185,7 @@ struct State {
     editor_vim: bool,
     vim: Option<miao_term_ui::vim::VimRuntime>,
     vim_for: String,
-    mmd: Mermaid,
-    remote: RemoteImages,
+    cmark: egui_commonmark::CommonMarkCache,
     recent_files: Vec<String>,
     open_counts: HashMap<String, u32>,
     integration_msg: Option<String>,
@@ -3170,8 +3169,6 @@ impl State {
         });
         let mut layouter =
             miao_term_ui::syntax::layouter(lang, egui::Color32::from_rgb(0xe5, 0xe5, 0xe5), 13.0);
-        let diag_fg = miao_term_ui::chrome::fg_color(&self.theme);
-        let diag_panel = miao_term_ui::chrome::bg_color(lighten(self.theme.bg, 0.08));
         let mut open = true;
         let mut save = false;
         let mut quit = false;
@@ -3206,16 +3203,11 @@ impl State {
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            markdown_preview(
+                            egui_commonmark::CommonMarkViewer::new().show(
                                 ui,
+                                &mut self.cmark,
                                 &ed.text,
-                                ed.path.parent(),
-                                &mut self.mmd,
-                                &mut self.remote,
-                                diag_fg,
-                                diag_panel,
-                                self.lang,
-                            )
+                            );
                         });
                 } else {
                     let mut vim_effect = miao_term_ui::vim::VimEffect::Nothing;
@@ -3777,19 +3769,7 @@ impl ApplicationHandler for Host {
             editor_vim: cfg.editor_vim,
             vim: cfg.editor_vim.then(miao_term_ui::vim::VimRuntime::default),
             vim_for: String::new(),
-            mmd: Mermaid {
-                dir: window_file()
-                    .map(|p| p.with_file_name("mermaid-cache"))
-                    .unwrap_or_default(),
-                cmd: cfg.mermaid_command.clone(),
-                cache: std::collections::HashMap::new(),
-            },
-            remote: RemoteImages {
-                dir: window_file()
-                    .map(|p| p.with_file_name("image-cache"))
-                    .unwrap_or_default(),
-                cache: std::collections::HashMap::new(),
-            },
+            cmark: egui_commonmark::CommonMarkCache::default(),
             recent_files: Vec::new(),
             open_counts: HashMap::new(),
             integration_msg: None,
@@ -4337,185 +4317,6 @@ fn card_inner(r: Rect) -> Rect {
 fn lighten(c: miao_term_ui::theme::Rgb, f: f32) -> miao_term_ui::theme::Rgb {
     let l = |v: u8| (v as f32 + (255.0 - v as f32) * f).clamp(0.0, 255.0) as u8;
     miao_term_ui::theme::Rgb(l(c.0), l(c.1), l(c.2))
-}
-
-/// A naive Markdown renderer: headings, bullets, quotes and fenced code.
-/// A tiny on-disk cache for remote (http/https) Markdown images, fetched once
-/// with `curl` (no HTTP dependency).
-#[derive(Default)]
-struct RemoteImages {
-    dir: std::path::PathBuf,
-    cache: std::collections::HashMap<u64, Option<std::path::PathBuf>>,
-}
-
-impl RemoteImages {
-    fn fetch(&mut self, url: &str) -> Option<std::path::PathBuf> {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        url.hash(&mut h);
-        let key = h.finish();
-        if let Some(v) = self.cache.get(&key) {
-            return v.clone();
-        }
-        let _ = std::fs::create_dir_all(&self.dir);
-        let ext = url
-            .split(['?', '#'])
-            .next()
-            .unwrap_or("")
-            .rsplit_once('.')
-            .map(|(_, e)| e.to_ascii_lowercase())
-            .filter(|e| matches!(e.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp"))
-            .unwrap_or_else(|| "png".to_string());
-        let out = self.dir.join(format!("{key:016x}.{ext}"));
-        let ok = out.is_file()
-            || std::process::Command::new("curl")
-                .args(["-fsSL", "--max-time", "8", "-o"])
-                .arg(&out)
-                .arg(url)
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false)
-                && out.is_file();
-        let res = if ok { Some(out) } else { None };
-        self.cache.insert(key, res.clone());
-        res
-    }
-}
-
-/// Mermaid rendering for the Markdown preview: an external CLI (opt-in via
-/// `mermaid-command`) with a cache, falling back to the built-in subset.
-#[derive(Default)]
-struct Mermaid {
-    dir: std::path::PathBuf,
-    cmd: Option<String>,
-    cache: std::collections::HashMap<u64, Option<std::path::PathBuf>>,
-}
-
-impl Mermaid {
-    /// Externally-rendered PNG for `source`, or `None` (no tool configured or
-    /// it failed). Runs the command at most once per diagram.
-    fn image(&mut self, source: &str) -> Option<std::path::PathBuf> {
-        let cmd = self.cmd.clone()?;
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        source.hash(&mut h);
-        let key = h.finish();
-        if let Some(v) = self.cache.get(&key) {
-            return v.clone();
-        }
-        let img = miao_term_ui::mermaid::render_external(source, &cmd, &self.dir);
-        self.cache.insert(key, img.clone());
-        img
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn markdown_preview(
-    ui: &mut egui::Ui,
-    text: &str,
-    base: Option<&std::path::Path>,
-    mmd: &mut Mermaid,
-    remote: &mut RemoteImages,
-    fg: egui::Color32,
-    panel: egui::Color32,
-    lang: miao_term_ui::i18n::Lang,
-) {
-    let mut lines = text.lines().peekable();
-    while let Some(line) = lines.next() {
-        if let Some(info) = line.trim_start().strip_prefix("```") {
-            let info = info.trim().to_ascii_lowercase();
-            let mut body = String::new();
-            for l in lines.by_ref() {
-                if l.trim_start().starts_with("```") {
-                    break;
-                }
-                body.push_str(l);
-                body.push('\n');
-            }
-            ui.separator();
-            if info == "mermaid" {
-                if let Some(path) = mmd.image(&body) {
-                    let uri = miao_term_ui::markdown::image_uri(&path.display().to_string(), None);
-                    if let Some(uri) = uri {
-                        ui.add(
-                            egui::Image::new(uri)
-                                .max_width(ui.available_width())
-                                .max_height(400.0),
-                        );
-                    }
-                } else if let Some(g) = miao_term_ui::mermaid::parse(&body) {
-                    miao_term_ui::mermaid::show(ui, &g, fg, panel);
-                } else {
-                    ui.label(
-                        egui::RichText::new(miao_term_ui::i18n::t(
-                            lang,
-                            "Mermaid diagram (not rendered)",
-                            "Mermaid 图（未渲染）",
-                        ))
-                        .size(12.0)
-                        .color(egui::Color32::from_gray(150)),
-                    );
-                }
-            } else {
-                for l in body.lines() {
-                    ui.label(egui::RichText::new(l).monospace().size(12.0));
-                }
-            }
-            ui.separator();
-            continue;
-        }
-        if let Some((alt, url)) = miao_term_ui::markdown::parse_image(line.trim()) {
-            let uri = miao_term_ui::markdown::image_uri(url, base).or_else(|| {
-                (url.starts_with("http://") || url.starts_with("https://"))
-                    .then(|| remote.fetch(url))
-                    .flatten()
-                    .and_then(|p| miao_term_ui::markdown::image_uri(&p.display().to_string(), None))
-            });
-            match uri {
-                Some(uri) => {
-                    ui.add(
-                        egui::Image::new(uri)
-                            .max_width(ui.available_width())
-                            .max_height(400.0),
-                    );
-                }
-                None => {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(
-                            egui::RichText::new(format!("[{alt}]"))
-                                .size(12.0)
-                                .color(egui::Color32::from_gray(150)),
-                        );
-                        ui.hyperlink_to(url, url);
-                    });
-                }
-            }
-            continue;
-        }
-        let trimmed = line.trim_end();
-        if let Some(h) = trimmed.strip_prefix("### ") {
-            ui.label(egui::RichText::new(h).size(15.0).strong());
-        } else if let Some(h) = trimmed.strip_prefix("## ") {
-            ui.label(egui::RichText::new(h).size(18.0).strong());
-        } else if let Some(h) = trimmed.strip_prefix("# ") {
-            ui.label(egui::RichText::new(h).size(22.0).strong());
-        } else if let Some(b) = trimmed
-            .strip_prefix("- ")
-            .or_else(|| trimmed.strip_prefix("* "))
-        {
-            ui.label(format!("\u{2022} {b}"));
-        } else if let Some(q) = trimmed.strip_prefix("> ") {
-            ui.label(
-                egui::RichText::new(q)
-                    .italics()
-                    .color(egui::Color32::from_gray(150)),
-            );
-        } else if trimmed.is_empty() {
-            ui.add_space(6.0);
-        } else {
-            ui.label(trimmed);
-        }
-    }
 }
 
 fn git_rows(cwd: &std::path::Path) -> Vec<(String, String)> {
