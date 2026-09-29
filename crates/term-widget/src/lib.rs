@@ -196,6 +196,8 @@ struct State {
     /// Mouse button currently forwarded to the application (0/1/2), if any.
     mouse_captured: Option<u8>,
     cursor: (f64, f64),
+    /// Inline IME composition text (not yet committed to the shell).
+    preedit: String,
     show_sidebar: bool,
     show_details: bool,
     renaming: Option<usize>,
@@ -585,6 +587,23 @@ impl State {
             .into_iter()
             .find(|(pid, _)| *pid == id)
             .map(|(_, r)| card_inner(r))
+    }
+
+    /// The active pane's inner rect and cursor cell, for cursor-anchored
+    /// overlays (IME preedit). `None` while the view is scrolled back.
+    fn active_cursor(&self) -> Option<(Rect, (u16, u16))> {
+        let id = self.active_pane_id()?;
+        let pane = self
+            .tabs
+            .get(self.active_tab)?
+            .panes
+            .iter()
+            .find(|p| p.id == id)?;
+        if pane.scroll != 0 {
+            return None;
+        }
+        let inner = self.active_inner()?;
+        Some((inner, pane.term.screen().cursor_position()))
     }
 
     fn cancel_hints(&mut self) {
@@ -1662,6 +1681,38 @@ impl State {
                         egui::Color32::BLACK,
                     );
                 }
+            }
+        }
+        if !self.preedit.is_empty() {
+            if let Some((inner, (row, col))) = self.active_cursor() {
+                let painter = ctx.layer_painter(egui::LayerId::new(
+                    egui::Order::Foreground,
+                    egui::Id::new("ime_preedit"),
+                ));
+                let ch = self.theme.chrome();
+                let col_of = |c: miao_term_ui::theme::Rgb| egui::Color32::from_rgb(c.0, c.1, c.2);
+                let galley = painter.layout_no_wrap(
+                    self.preedit.clone(),
+                    egui::FontId::proportional(14.0),
+                    col_of(ch.text),
+                );
+                let pos = egui::pos2(
+                    inner.x + col as f32 * self.cw,
+                    inner.y + row as f32 * self.ch,
+                );
+                let rect = egui::Rect::from_min_size(
+                    pos,
+                    egui::vec2(galley.size().x.max(self.cw), self.ch.max(galley.size().y)),
+                );
+                painter.rect_filled(rect, egui::Rounding::same(2.0), col_of(ch.active));
+                painter.galley(pos, galley, col_of(ch.text));
+                painter.line_segment(
+                    [
+                        egui::pos2(rect.min.x, rect.max.y),
+                        egui::pos2(rect.max.x, rect.max.y),
+                    ],
+                    egui::Stroke::new(1.0_f32, col_of(ch.accent)),
+                );
             }
         }
         if let Some(h) = link {
@@ -3977,6 +4028,8 @@ impl ApplicationHandler<HostEvent> for Host {
             divider_drag: None,
             mouse_captured: None,
             cursor: (0.0, 0.0),
+            // `MIAOTTY_PREEDIT` seeds the IME overlay for captures/QA.
+            preedit: std::env::var("MIAOTTY_PREEDIT").unwrap_or_default(),
             show_sidebar: true,
             show_details: true,
             renaming: None,
@@ -4197,10 +4250,24 @@ impl ApplicationHandler<HostEvent> for Host {
                 state.mods = m.state();
                 state.window.request_redraw();
             }
+            WindowEvent::Ime(winit::event::Ime::Preedit(text, _)) => {
+                // Inline composition: drawn at the cursor until it commits.
+                if state.preedit != text {
+                    state.preedit = text;
+                    state.window.request_redraw();
+                }
+            }
+            WindowEvent::Ime(winit::event::Ime::Disabled) => {
+                if !state.preedit.is_empty() {
+                    state.preedit.clear();
+                    state.window.request_redraw();
+                }
+            }
             WindowEvent::Ime(winit::event::Ime::Commit(text)) => {
                 // A commit can carry a control character (Enter/Tab/…); those are
                 // already sent by the key handler, so only forward real text.
                 let control_only = !text.is_empty() && text.chars().all(char::is_control);
+                state.preedit.clear();
                 if !control_only && !state.egui_ctx.wants_keyboard_input() {
                     state.write_input(text.as_bytes());
                 }

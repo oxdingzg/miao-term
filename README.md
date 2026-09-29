@@ -346,12 +346,11 @@ Still open:
   end-to-end run (`docs/RELEASE.md`).
 - **CI performance baseline**: bound through `actions/cache` today; a durable
   baseline store would make the gate robust across cache eviction.
-- **Native parity** (`miaotty-native`): both hosts now parse argv intents, share
-  the forwarding inbox and implement the Quick Terminal; neither is registered
-  with the OS yet, so a link only reaches them when the launcher passes the URL
-  as an argument. `miaotty-native` has no inline IME preedit (committed text
-  only). `background-opacity` works only where the surface offers straight
-  alpha.
+- **Native parity** (`miaotty-native`): both hosts parse argv intents, share the
+  forwarding inbox, implement the Quick Terminal and render inline IME
+  composition at the cursor; neither is registered with the OS yet, so a link
+  only reaches them when the launcher passes the URL as an argument.
+  `background-opacity` works only where the surface offers straight alpha.
 - **Inline graphics**: rendered by `miaotty-native` only; anchors are exact up to
   the scrollback cap and approximate past it (alacritty exposes no scroll counter
   without a patch), and session restore keeps no images (they would not match the
