@@ -50,7 +50,8 @@
   (git 状态、目录列表、监听端口、提示队列)。
 - **Composer**(`⌘⇧E`)与**提示队列**:agent 空闲时自动投递;由 agent 状态驱动的**通知**与**防休眠**。
 - **查看器/编辑器**:只读预览带行号与跳转行高亮,编辑态带行号栏与**可选的极简 vim 模式**(`editor-vim`),*Open Externally* /
-  *Edit in Tab*,以及无依赖的 Markdown 渲染(标题、列表、引用、表格、代码、链接、图片、脚注)。
+  *Edit in Tab*,以及 CommonMark 渲染(`egui_commonmark`):标题、列表、引用、表格、代码、链接、本地与
+  远程图片,外加 `graph`/`flowchart` 的 Mermaid 子集(或经 `mermaid-command` 全量渲染)。
 - **终端内联图片**:Sixel / Kitty / iTerm2 图片直接画在字符网格上——随内容滚动、裁剪在 pane 内;
   用 `graphics` 开关(默认开)。
 - **Recipes**:保存并回放整个工作区;配置导出。

@@ -62,8 +62,9 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 - **Reader/editor** (`⌘`-open): read-only preview with line numbers and a
   jump-to-line highlight, edit mode with a gutter and an opt-in minimal vim mode
   (`editor-vim`), *Open Externally* / *Edit in
-  Tab*, and a dependency-free Markdown renderer (headings, lists, quotes, tables,
-  code, links, images, footnotes).
+  Tab*, and a CommonMark renderer (`egui_commonmark`): headings, lists, quotes,
+  tables, code, links, local and remote images, plus a `graph`/`flowchart`
+  Mermaid subset (or full Mermaid via `mermaid-command`).
 - **Inline terminal graphics**: Sixel, Kitty and iTerm2 images are drawn in the
   grid — they scroll with the content and are clipped to the pane. Toggle with
   `graphics` (on by default).
