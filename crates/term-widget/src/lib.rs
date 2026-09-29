@@ -186,6 +186,7 @@ struct State {
     vim: Option<miao_term_ui::vim::VimRuntime>,
     vim_for: String,
     cmark: egui_commonmark::CommonMarkCache,
+    mmd: Mmd,
     recent_files: Vec<String>,
     open_counts: HashMap<String, u32>,
     integration_msg: Option<String>,
@@ -3200,13 +3201,19 @@ impl State {
                 });
                 ui.separator();
                 if ed.preview {
+                    let ch = self.theme.chrome();
+                    let fg = miao_term_ui::chrome::bg_color(ch.text);
+                    let panel = miao_term_ui::chrome::bg_color(ch.card);
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            egui_commonmark::CommonMarkViewer::new().show(
+                            render_markdown(
                                 ui,
-                                &mut self.cmark,
                                 &ed.text,
+                                &mut self.cmark,
+                                &mut self.mmd,
+                                fg,
+                                panel,
                             );
                         });
                 } else {
@@ -3770,6 +3777,13 @@ impl ApplicationHandler for Host {
             vim: cfg.editor_vim.then(miao_term_ui::vim::VimRuntime::default),
             vim_for: String::new(),
             cmark: egui_commonmark::CommonMarkCache::default(),
+            mmd: Mmd {
+                dir: window_file()
+                    .map(|p| p.with_file_name("mermaid-cache"))
+                    .unwrap_or_default(),
+                cmd: cfg.mermaid_command.clone(),
+                cache: std::collections::HashMap::new(),
+            },
             recent_files: Vec::new(),
             open_counts: HashMap::new(),
             integration_msg: None,
@@ -4317,6 +4331,87 @@ fn card_inner(r: Rect) -> Rect {
 fn lighten(c: miao_term_ui::theme::Rgb, f: f32) -> miao_term_ui::theme::Rgb {
     let l = |v: u8| (v as f32 + (255.0 - v as f32) * f).clamp(0.0, 255.0) as u8;
     miao_term_ui::theme::Rgb(l(c.0), l(c.1), l(c.2))
+}
+
+/// External Mermaid rendering (opt-in via `mermaid-command`) with a cache.
+#[derive(Default)]
+struct Mmd {
+    dir: std::path::PathBuf,
+    cmd: Option<String>,
+    cache: std::collections::HashMap<u64, Option<std::path::PathBuf>>,
+}
+
+impl Mmd {
+    fn image(&mut self, source: &str) -> Option<std::path::PathBuf> {
+        let cmd = self.cmd.clone()?;
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        source.hash(&mut h);
+        let key = h.finish();
+        if let Some(v) = self.cache.get(&key) {
+            return v.clone();
+        }
+        let img = miao_term_ui::mermaid::render_external(source, &cmd, &self.dir);
+        self.cache.insert(key, img.clone());
+        img
+    }
+}
+
+fn open_commonmark(ui: &mut egui::Ui, cache: &mut egui_commonmark::CommonMarkCache, text: &str) {
+    if !text.trim().is_empty() {
+        egui_commonmark::CommonMarkViewer::new().show(ui, cache, text);
+    }
+}
+
+/// Render Markdown, drawing ```mermaid blocks (built-in subset or `mmdc`).
+fn render_markdown(
+    ui: &mut egui::Ui,
+    text: &str,
+    cache: &mut egui_commonmark::CommonMarkCache,
+    mmd: &mut Mmd,
+    fg: egui::Color32,
+    panel: egui::Color32,
+) {
+    let mut rest = text;
+    loop {
+        let Some(i) = rest.find("```mermaid") else {
+            open_commonmark(ui, cache, rest);
+            break;
+        };
+        open_commonmark(ui, cache, &rest[..i]);
+        let after = &rest[i + "```mermaid".len()..];
+        let Some(j) = after.find("```") else {
+            open_commonmark(ui, cache, after);
+            break;
+        };
+        let body = &after[..j];
+        if let Some(path) = mmd.image(body) {
+            if let Some(uri) = miao_term_ui::markdown::image_uri(&path.display().to_string(), None)
+            {
+                ui.add(
+                    egui::Image::new(uri)
+                        .max_width(ui.available_width())
+                        .max_height(400.0),
+                );
+            }
+        } else if let Some(g) = miao_term_ui::mermaid::parse(body) {
+            miao_term_ui::mermaid::show(ui, &g, fg, panel);
+        } else {
+            ui.label(
+                egui::RichText::new(miao_term_ui::i18n::t(
+                    miao_term_ui::i18n::Lang::En,
+                    "Mermaid diagram (not rendered)",
+                    "Mermaid 图（未渲染）",
+                ))
+                .size(12.0)
+                .color(egui::Color32::from_gray(150)),
+            );
+        }
+        rest = &after[j + 3..];
+        if rest.trim().is_empty() {
+            break;
+        }
+    }
 }
 
 fn git_rows(cwd: &std::path::Path) -> Vec<(String, String)> {
