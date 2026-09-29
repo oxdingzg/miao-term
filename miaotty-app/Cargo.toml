@@ -43,6 +43,7 @@ miao-term-render = { path = "../crates/term-render" }
 miao-term-widget = { path = "../crates/term-widget" }
 miao-term-config = { path = "../crates/term-config" }
 miao-term-mtp = { path = "../crates/term-mtp" }
+miao-term-ui = { path = "../crates/term-ui" }
 eframe = { version = "0.30.0", features = ["wgpu"] }
 # Raster image loading for Markdown previews (ADR 0020). `image`/`file` only;
 # no `svg`/`resvg` (MPL) per ADR 0006.

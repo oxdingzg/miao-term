@@ -90,8 +90,16 @@ struct State {
     mods: ModifiersState,
     selection: Option<(String, Selection)>,
     dragging: bool,
+    divider_drag: Option<(Vec<bool>, SplitDir, Rect)>,
+    cursor: (f64, f64),
     show_sidebar: bool,
     show_details: bool,
+    renaming: Option<usize>,
+    rename_buf: String,
+    theme_name: String,
+    show_palette: bool,
+    palette_query: String,
+    show_settings: bool,
     last_title: Option<String>,
     focused: bool,
     cursor_on: bool,
@@ -111,6 +119,8 @@ struct Shortcut {
     cycle: i32,
     toggle_sidebar: bool,
     toggle_details: bool,
+    palette: bool,
+    settings: bool,
 }
 
 fn shortcut(event: &KeyEvent, mods: ModifiersState) -> Option<Shortcut> {
@@ -127,11 +137,16 @@ fn shortcut(event: &KeyEvent, mods: ModifiersState) -> Option<Shortcut> {
         cycle: 0,
         toggle_sidebar: false,
         toggle_details: false,
+        palette: false,
+        settings: false,
     };
     let mut matched = true;
     match &event.logical_key {
         Key::Character(c) => match c.as_str() {
             "t" => s.new_tab = true,
+            "k" => s.palette = true,
+            "p" if mods.shift_key() => s.palette = true,
+            "," => s.settings = true,
             "w" => s.close = true,
             "d" => {
                 if mods.shift_key() {
@@ -624,6 +639,7 @@ impl State {
         let active = self.active_tab;
         let mut switch = None;
         let mut close = None;
+        let mut rename: Option<usize> = None;
         let mut new_tab = false;
         let mut font_delta = 0.0f32;
 
@@ -639,6 +655,7 @@ impl State {
                     let ev = chrome::tab_bar(ui, &theme, &titles, active);
                     switch = ev.switch;
                     close = ev.close;
+                    rename = ev.rename;
                     new_tab = ev.new_tab;
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("A+").clicked() {
@@ -725,6 +742,15 @@ impl State {
             self.ch = ch;
             self.resize();
         }
+        if let Some(i) = rename {
+            self.renaming = Some(i);
+            self.rename_buf = titles.get(i).cloned().unwrap_or_default();
+        }
+        self.palette_window(ctx);
+        self.settings_window(ctx);
+        if let Some(i) = self.renaming {
+            self.rename_window(ctx, i);
+        }
     }
 
     fn details_rows(&self) -> Vec<(String, String)> {
@@ -757,6 +783,211 @@ impl State {
             panes,
             self.tabs.len()
         )
+    }
+}
+
+/// A palette command.
+enum Cmd {
+    NewTab,
+    SplitRight,
+    SplitDown,
+    ClosePane,
+    ToggleSidebar,
+    ToggleDetails,
+    FontUp,
+    FontDown,
+    Settings,
+    Quit,
+}
+
+impl State {
+    fn handles(&self) -> Vec<miao_term_ui::layout::Handle> {
+        self.tabs
+            .get(self.active_tab)
+            .map(|t| t.layout.handles(self.grid_area()))
+            .unwrap_or_default()
+    }
+
+    fn commands(&self) -> Vec<(Cmd, &'static str)> {
+        vec![
+            (Cmd::NewTab, "New Tab"),
+            (Cmd::SplitRight, "Split Right"),
+            (Cmd::SplitDown, "Split Down"),
+            (Cmd::ClosePane, "Close Pane / Tab"),
+            (Cmd::ToggleSidebar, "Toggle Sidebar"),
+            (Cmd::ToggleDetails, "Toggle Details"),
+            (Cmd::FontUp, "Increase Font Size"),
+            (Cmd::FontDown, "Decrease Font Size"),
+            (Cmd::Settings, "Settings"),
+            (Cmd::Quit, "Quit"),
+        ]
+    }
+
+    fn run_command(&mut self, cmd: Cmd) {
+        match cmd {
+            Cmd::NewTab => self.new_tab(),
+            Cmd::SplitRight => self.split(SplitDir::Right),
+            Cmd::SplitDown => self.split(SplitDir::Down),
+            Cmd::ClosePane => self.close_pane(),
+            Cmd::ToggleSidebar => self.show_sidebar = !self.show_sidebar,
+            Cmd::ToggleDetails => self.show_details = !self.show_details,
+            Cmd::FontUp | Cmd::FontDown => {
+                let d = if matches!(cmd, Cmd::FontUp) {
+                    1.0
+                } else {
+                    -1.0
+                };
+                self.font_size = (self.font_size + d).clamp(6.0, 40.0);
+                let (cw, ch) = State::cell_size(self.font_size);
+                self.cw = cw;
+                self.ch = ch;
+                self.resize();
+            }
+            Cmd::Settings => self.show_settings = true,
+            Cmd::Quit => {
+                let s = self.window.inner_size();
+                save_window_size(
+                    s.width as f32 / self.window.scale_factor() as f32,
+                    s.height as f32 / self.window.scale_factor() as f32,
+                );
+                std::process::exit(0);
+            }
+        }
+        self.window.request_redraw();
+    }
+
+    fn palette_window(&mut self, ctx: &egui::Context) {
+        if !self.show_palette {
+            return;
+        }
+        let cmds = self.commands();
+        let mut query = std::mem::take(&mut self.palette_query);
+        let mut chosen: Option<usize> = None;
+        let mut open = true;
+        egui::Window::new("Command Palette")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_TOP, [0.0, 120.0])
+            .open(&mut open)
+            .show(ctx, |ui| {
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut query)
+                        .hint_text("Type a command…")
+                        .desired_width(420.0),
+                );
+                resp.request_focus();
+                let q = query.to_lowercase();
+                let filtered: Vec<usize> = (0..cmds.len())
+                    .filter(|&i| q.is_empty() || cmds[i].1.to_lowercase().contains(&q))
+                    .collect();
+                for &i in &filtered {
+                    if ui.selectable_label(false, cmds[i].1).clicked() {
+                        chosen = Some(i);
+                    }
+                }
+                if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    chosen = filtered.first().copied();
+                }
+            });
+        self.palette_query = query;
+        if let Some(i) = chosen {
+            if let Some((cmd, _)) = cmds.into_iter().nth(i) {
+                self.run_command(cmd);
+            }
+            self.show_palette = false;
+            self.palette_query.clear();
+        }
+        if !open {
+            self.show_palette = false;
+        }
+    }
+
+    fn settings_window(&mut self, ctx: &egui::Context) {
+        if !self.show_settings {
+            return;
+        }
+        let mut open = true;
+        let mut font = self.font_size;
+        let mut cursor = self.theme.cursor;
+        let current_theme = self.theme_name.clone();
+        let mut chosen_theme: Option<&'static str> = None;
+        egui::Window::new("Settings")
+            .collapsible(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label("Font size");
+                ui.add(egui::Slider::new(&mut font, 6.0..=40.0));
+                ui.separator();
+                ui.label("Cursor");
+                ui.horizontal(|ui| {
+                    for (s, n) in [
+                        (miao_term_ui::CursorStyle::Block, "Block"),
+                        (miao_term_ui::CursorStyle::Bar, "Bar"),
+                        (miao_term_ui::CursorStyle::Underline, "Underline"),
+                    ] {
+                        if ui.radio(cursor == s, n).clicked() {
+                            cursor = s;
+                        }
+                    }
+                });
+                ui.separator();
+                ui.label("Theme");
+                for name in Theme::NAMES {
+                    if ui.selectable_label(current_theme == name, name).clicked() {
+                        chosen_theme = Some(name);
+                    }
+                }
+            });
+        if (font - self.font_size).abs() > 0.01 {
+            self.font_size = font;
+            let (cw, ch) = State::cell_size(self.font_size);
+            self.cw = cw;
+            self.ch = ch;
+            self.resize();
+        }
+        self.theme.cursor = cursor;
+        if let Some(n) = chosen_theme {
+            if let Some(mut t) = Theme::named(n) {
+                t.cursor = self.theme.cursor;
+                self.theme = t;
+                self.theme_name = n.to_string();
+                self.window.request_redraw();
+            }
+        }
+        if !open {
+            self.show_settings = false;
+        }
+    }
+
+    fn rename_window(&mut self, ctx: &egui::Context, i: usize) {
+        let mut open = true;
+        let mut buf = std::mem::take(&mut self.rename_buf);
+        let mut commit = false;
+        egui::Window::new("Rename Tab")
+            .collapsible(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                let resp = ui.text_edit_singleline(&mut buf);
+                resp.request_focus();
+                if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    commit = true;
+                }
+                if ui.button("Rename").clicked() {
+                    commit = true;
+                }
+            });
+        self.rename_buf = buf;
+        if commit {
+            if let Some(tab) = self.tabs.get_mut(i) {
+                if !self.rename_buf.is_empty() {
+                    tab.title = self.rename_buf.clone();
+                }
+            }
+            self.renaming = None;
+        }
+        if !open {
+            self.renaming = None;
+        }
     }
 }
 
@@ -870,8 +1101,16 @@ impl ApplicationHandler for Host {
             mods: ModifiersState::empty(),
             selection: None,
             dragging: false,
+            divider_drag: None,
+            cursor: (0.0, 0.0),
             show_sidebar: true,
             show_details: true,
+            renaming: None,
+            rename_buf: String::new(),
+            theme_name: "Nord".to_string(),
+            show_palette: false,
+            palette_query: String::new(),
+            show_settings: false,
             last_title: None,
             focused: false,
             cursor_on: true,
@@ -938,13 +1177,29 @@ impl ApplicationHandler for Host {
                 state: es, button, ..
             } => match button {
                 MouseButton::Left => {
-                    state.dragging = es == ElementState::Pressed;
                     if es == ElementState::Pressed {
-                        state.selection = None;
+                        // Prefer a divider under the pointer, else a selection.
+                        let scale = state.window.scale_factor() as f32;
+                        let (px, py) = (state.cursor.0 as f32, state.cursor.1 as f32);
+                        let hit = state.handles().into_iter().find(|h| {
+                            px >= h.rect.x * scale
+                                && px < (h.rect.x + h.rect.w) * scale
+                                && py >= h.rect.y * scale
+                                && py < (h.rect.y + h.rect.h) * scale
+                        });
+                        match hit {
+                            Some(h) => state.divider_drag = Some((h.path, h.dir, h.area)),
+                            None => {
+                                state.dragging = true;
+                                state.selection = None;
+                            }
+                        }
                     } else {
-                        // Copy on mouse-up when a selection exists.
-                        let ctx = state.egui_ctx.clone();
-                        state.copy_selection(&ctx);
+                        if state.divider_drag.take().is_none() {
+                            let ctx = state.egui_ctx.clone();
+                            state.copy_selection(&ctx);
+                        }
+                        state.dragging = false;
                     }
                 }
                 MouseButton::Right if es == ElementState::Pressed => {
@@ -963,9 +1218,19 @@ impl ApplicationHandler for Host {
                 _ => {}
             },
             WindowEvent::CursorMoved { position, .. } => {
-                if state.dragging {
-                    let scale = state.window.scale_factor() as f32;
-                    let (px, py) = (position.x as f32, position.y as f32);
+                state.cursor = (position.x, position.y);
+                let scale = state.window.scale_factor() as f32;
+                let (px, py) = (position.x as f32, position.y as f32);
+                if let Some((path, dir, area)) = state.divider_drag.clone() {
+                    let r = match dir {
+                        SplitDir::Right => (px / scale - area.x) / area.w.max(1.0),
+                        SplitDir::Down => (py / scale - area.y) / area.h.max(1.0),
+                    };
+                    if let Some(tab) = state.tabs.get_mut(state.active_tab) {
+                        tab.layout.set_ratio(&path, r);
+                    }
+                    state.window.request_redraw();
+                } else if state.dragging {
                     let rects = state.pane_rects();
                     if let Some((id, r)) = rects.iter().find(|(_, r)| {
                         px >= r.x * scale
@@ -1039,6 +1304,13 @@ impl ApplicationHandler for Host {
                     }
                     if s.toggle_details {
                         state.show_details = !state.show_details;
+                    }
+                    if s.palette {
+                        state.show_palette = true;
+                        state.palette_query.clear();
+                    }
+                    if s.settings {
+                        state.show_settings = true;
                     }
                     state.window.request_redraw();
                 } else {

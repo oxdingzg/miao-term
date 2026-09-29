@@ -21,6 +21,18 @@ impl Rect {
     }
 }
 
+/// A draggable divider between two panes.
+#[derive(Clone)]
+pub struct Handle {
+    /// Path to the split node (`[]` = root; `true` = right/bottom child).
+    pub path: Vec<bool>,
+    pub dir: SplitDir,
+    /// The area the split divides, for computing the new ratio.
+    pub area: Rect,
+    /// The hit band for the pointer.
+    pub rect: Rect,
+}
+
 /// A split layout tree. Leaves hold pane ids.
 #[derive(Clone)]
 pub enum Layout {
@@ -93,6 +105,91 @@ impl Layout {
                         );
                     }
                 }
+            }
+        }
+    }
+
+    /// Divider handles for dragging: a thin hit band at each split boundary,
+    /// tagged with the path to that split and the area it divides.
+    pub fn handles(&self, area: Rect) -> Vec<Handle> {
+        let mut out = Vec::new();
+        self.handles_into(area, &mut Vec::new(), &mut out);
+        out
+    }
+
+    fn handles_into(&self, area: Rect, path: &mut Vec<bool>, out: &mut Vec<Handle>) {
+        if let Layout::Split { dir, ratio, a, b } = self {
+            let r = ratio.clamp(0.1, 0.9);
+            match dir {
+                SplitDir::Right => {
+                    let w = area.w * r;
+                    let x = area.x + w;
+                    out.push(Handle {
+                        path: path.clone(),
+                        dir: *dir,
+                        area,
+                        rect: Rect {
+                            x: x - 3.0,
+                            y: area.y,
+                            w: 6.0,
+                            h: area.h,
+                        },
+                    });
+                    path.push(false);
+                    a.handles_into(Rect { w, ..area }, path, out);
+                    *path.last_mut().unwrap() = true;
+                    b.handles_into(
+                        Rect {
+                            x,
+                            w: area.w - w,
+                            ..area
+                        },
+                        path,
+                        out,
+                    );
+                    path.pop();
+                }
+                SplitDir::Down => {
+                    let h = area.h * r;
+                    let y = area.y + h;
+                    out.push(Handle {
+                        path: path.clone(),
+                        dir: *dir,
+                        area,
+                        rect: Rect {
+                            x: area.x,
+                            y: y - 3.0,
+                            w: area.w,
+                            h: 6.0,
+                        },
+                    });
+                    path.push(false);
+                    a.handles_into(Rect { h, ..area }, path, out);
+                    *path.last_mut().unwrap() = true;
+                    b.handles_into(
+                        Rect {
+                            y,
+                            h: area.h - h,
+                            ..area
+                        },
+                        path,
+                        out,
+                    );
+                    path.pop();
+                }
+            }
+        }
+    }
+
+    /// Set the ratio of the split at `path` (empty path = the root split).
+    pub fn set_ratio(&mut self, path: &[bool], ratio: f32) {
+        if let Layout::Split { ratio: r, a, b, .. } = self {
+            if path.is_empty() {
+                *r = ratio.clamp(0.1, 0.9);
+            } else if path[0] {
+                b.set_ratio(&path[1..], ratio);
+            } else {
+                a.set_ratio(&path[1..], ratio);
             }
         }
     }

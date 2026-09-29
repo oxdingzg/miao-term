@@ -5900,73 +5900,20 @@ fn build_rows(
     theme: &Theme,
     cursor: Option<(u16, u16)>,
 ) -> Vec<Vec<miao_term_render::Span>> {
-    let (rows, cols) = screen.size();
-    let mut out = Vec::with_capacity(rows as usize);
-    for row in 0..rows {
-        let mut spans: Vec<miao_term_render::Span> = Vec::new();
-        // A running run of single-cell, same-colored characters, plus its start
-        // column. Wide (2-cell) characters are emitted as their own span so the
-        // renderer can pin every glyph to an exact grid cell.
-        let mut run_col: Option<u16> = None;
-        let mut run_color = (0u8, 0u8, 0u8);
-        let mut run_text = String::new();
-        let mut col = 0u16;
-        while col < cols {
-            let Some(cell) = screen.cell(row, col) else {
-                col += 1;
-                continue;
-            };
-            let ch = cell.ch;
-            let width = ch.width().unwrap_or(0).max(1) as u16;
-            let mut buf = [0u8; 4];
-            let text = ch.encode_utf8(&mut buf).to_string();
-            // The cell under a block cursor is drawn in the background color so
-            // it reads as inverted against the cursor block.
-            let color = if cell.inverse || cursor == Some((row, col)) {
-                let c = theme.bg;
-                (c.r(), c.g(), c.b())
-            } else {
-                let c = map_color(&cell.fg, true, theme);
-                (c.r(), c.g(), c.b())
-            };
-            if width >= 2 {
-                if let Some(rc) = run_col.take() {
-                    spans.push(miao_term_render::Span::new(
-                        rc,
-                        std::mem::take(&mut run_text),
-                        run_color,
-                    ));
-                }
-                spans.push(miao_term_render::Span::new(col, text, color));
-                col += 2;
-            } else {
-                if let Some(rc) = run_col {
-                    if run_color == color {
-                        run_text.push_str(&text);
-                    } else {
-                        spans.push(miao_term_render::Span::new(
-                            rc,
-                            std::mem::take(&mut run_text),
-                            run_color,
-                        ));
-                        run_col = Some(col);
-                        run_color = color;
-                        run_text = text;
-                    }
-                } else {
-                    run_col = Some(col);
-                    run_color = color;
-                    run_text = text;
-                }
-                col += 1;
-            }
-        }
-        if let Some(rc) = run_col.take() {
-            spans.push(miao_term_render::Span::new(rc, run_text, run_color));
-        }
-        out.push(spans);
+    // Shared with the native host (miao-term-ui) so both render identically.
+    miao_term_ui::build_rows(screen, &to_ui_theme(theme), cursor)
+}
+
+/// The app's egui `Theme` as the host-agnostic `miao-term-ui` palette.
+fn to_ui_theme(theme: &Theme) -> miao_term_ui::UiTheme {
+    let rgb = |c: egui::Color32| miao_term_ui::theme::Rgb(c.r(), c.g(), c.b());
+    miao_term_ui::UiTheme {
+        bg: rgb(theme.bg),
+        fg: rgb(theme.fg),
+        palette: theme.palette.map(rgb),
+        selection: miao_term_ui::theme::Rgb(0x43, 0x4c, 0x5e),
+        cursor: miao_term_ui::CursorStyle::Block,
     }
-    out
 }
 
 /// One `TermRenderer` per pane, so each pane keeps its own prepared glyphs and

@@ -105,6 +105,76 @@ impl Theme {
     }
 }
 
+impl Theme {
+    pub fn dracula() -> Self {
+        const P: [Rgb; 16] = [
+            Rgb(0x21, 0x22, 0x2c),
+            Rgb(0xff, 0x55, 0x55),
+            Rgb(0x50, 0xfa, 0x7b),
+            Rgb(0xf1, 0xfa, 0x8c),
+            Rgb(0xbd, 0x93, 0xf9),
+            Rgb(0xff, 0x79, 0xc6),
+            Rgb(0x8b, 0xe9, 0xfd),
+            Rgb(0xf8, 0xf8, 0xf2),
+            Rgb(0x62, 0x72, 0xa4),
+            Rgb(0xff, 0x6e, 0x6e),
+            Rgb(0x69, 0xff, 0x94),
+            Rgb(0xff, 0xff, 0xa5),
+            Rgb(0xd6, 0xac, 0xff),
+            Rgb(0xff, 0x92, 0xd0),
+            Rgb(0xa4, 0xff, 0xff),
+            Rgb(0xff, 0xff, 0xff),
+        ];
+        Self {
+            bg: Rgb(0x28, 0x2a, 0x36),
+            fg: Rgb(0xf8, 0xf8, 0xf2),
+            palette: P,
+            selection: Rgb(0x44, 0x47, 0x5a),
+            cursor: CursorStyle::Block,
+        }
+    }
+
+    pub fn gruvbox() -> Self {
+        const P: [Rgb; 16] = [
+            Rgb(0x28, 0x28, 0x28),
+            Rgb(0xcc, 0x24, 0x1d),
+            Rgb(0x98, 0x97, 0x1a),
+            Rgb(0xd7, 0x99, 0x21),
+            Rgb(0x45, 0x85, 0x88),
+            Rgb(0xb1, 0x62, 0x86),
+            Rgb(0x68, 0x9d, 0x6a),
+            Rgb(0xa8, 0x99, 0x84),
+            Rgb(0x92, 0x83, 0x74),
+            Rgb(0xfb, 0x49, 0x34),
+            Rgb(0xb8, 0xbb, 0x26),
+            Rgb(0xfa, 0xbd, 0x2f),
+            Rgb(0x83, 0xa5, 0x98),
+            Rgb(0xd3, 0x86, 0x9b),
+            Rgb(0x8e, 0xc0, 0x7c),
+            Rgb(0xeb, 0xdb, 0xb2),
+        ];
+        Self {
+            bg: Rgb(0x28, 0x28, 0x28),
+            fg: Rgb(0xeb, 0xdb, 0xb2),
+            palette: P,
+            selection: Rgb(0x50, 0x49, 0x45),
+            cursor: CursorStyle::Block,
+        }
+    }
+
+    /// Look up a built-in theme by display name.
+    pub fn named(name: &str) -> Option<Self> {
+        match name {
+            "Nord" => Some(Self::nord()),
+            "Dracula" => Some(Self::dracula()),
+            "Gruvbox" => Some(Self::gruvbox()),
+            _ => None,
+        }
+    }
+
+    pub const NAMES: [&'static str; 3] = ["Nord", "Dracula", "Gruvbox"];
+}
+
 impl Default for Theme {
     fn default() -> Self {
         Self::nord()

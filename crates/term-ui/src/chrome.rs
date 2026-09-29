@@ -23,6 +23,7 @@ pub fn section(text: &str) -> egui::RichText {
 pub struct TabBarEvents {
     pub switch: Option<usize>,
     pub close: Option<usize>,
+    pub rename: Option<usize>,
     pub new_tab: bool,
 }
 
@@ -37,8 +38,12 @@ pub fn tab_bar(
     ui.visuals_mut().selection.bg_fill = bg_color(theme.palette[4]);
     ui.visuals_mut().override_text_color = Some(fg_color(theme));
     for (i, title) in titles.iter().enumerate() {
-        if ui.selectable_label(i == active, title).clicked() {
+        let resp = ui.selectable_label(i == active, title);
+        if resp.clicked() {
             ev.switch = Some(i);
+        }
+        if resp.double_clicked() {
+            ev.rename = Some(i);
         }
         if titles.len() > 1 && ui.small_button("\u{00d7}").clicked() {
             ev.close = Some(i);

@@ -2131,6 +2131,7 @@ dependencies = [
  "miao-term-core",
  "miao-term-mtp",
  "miao-term-render",
+ "miao-term-ui",
  "miao-term-widget",
  "serde",
  "serde_json",
