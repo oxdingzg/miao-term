@@ -200,9 +200,14 @@ miaotty-cli history add --command "cargo test" --cwd "$PWD"
 miaotty-cli history list --pane ID
 miaotty-cli view /path/to/file            # 在应用中以只读方式打开
 miaotty-cli edit /path/to/file            # 在编辑器中打开
-miaotty-cli file read  --path /etc/hosts  # 上限 2 MB
+miaotty-cli file read  --path /etc/hosts  # 单次上限 2 MB
+miaotty-cli file read  --path app.bin --base64 --offset 0 --length 65536
 miaotty-cli file write --path /tmp/x --data "hello"
+miaotty-cli file write --path /tmp/x --data-b64 "AAECAw=="   # 二进制
 ```
+
+若 host 以 `MIAOTTY_MTP_TOKEN` 启动,请求必须携带该令牌;CLI 会从同一环境变量读取。socket 可经
+ssh 转发(`ssh -R /tmp/fwd.sock:<host socket>`),从而让远端客户端驱动 host。
 
 使用 `--socket PATH` 或设置 `MIAOTTY_SOCKET` 可指定非默认 socket。
 

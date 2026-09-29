@@ -177,7 +177,7 @@ pub trait Host: Send + Sync {
 
 - `term-mtp` 实现 server;传输:Unix socket(`$TMPDIR/miaotty.sock`)/ Windows named pipe。
 - 复用现有 `mtp` 报文与 `miaotty-cli`;**进程内 UI 直连注册表**,外部走 socket/pipe。
-- 方法面:`core.ping/health`、`agent.state.*`、`history.*`、`pane.list`、`app.view/edit`(在查看器/编辑器中打开文件)、`file.read/write`(上限 2 MB);事件:`agent.state`、`history.changed`、`cwd.changed`。
+- 方法面:`core.ping/health`、`agent.state.*`、`history.*`、`pane.list`、`app.view/edit`(在查看器/编辑器中打开文件)、`file.read/write`(offset/length、base64、上限 2 MB;可选 `MIAOTTY_MTP_TOKEN` 令牌);事件:`agent.state`、`history.changed`、`cwd.changed`。
 - 传输实现候选 `interprocess`(待评估许可/维护),否则自写薄封装。
 
 ## 13. 应用层(miaotty-app)

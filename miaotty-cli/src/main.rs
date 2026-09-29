@@ -18,7 +18,7 @@ fn usage() -> ! {
     eprintln!(
         "usage: miaotty-cli [--socket PATH] <command>\n\
          commands: ping | health | pane list|run|send|focus|close | \
-         state <agent> --state S | state list | history add|list |\n     view|edit <path> | file read|write --path P [--data D]"
+         state <agent> --state S | state list | history add|list |\n     view|edit <path> |\n     file read --path P [--offset N] [--length N] [--base64] |\n     file write --path P [--data D | --data-b64 B]"
     );
     std::process::exit(2);
 }
@@ -77,7 +77,19 @@ fn main() {
         ("file", Some(m @ ("read" | "write"))) => {
             let path = flag(&args, "--path").unwrap_or("");
             if m == "read" {
-                client.call("file", "read", json!({ "path": path }))
+                let mut params = json!({ "path": path });
+                if let Some(offset) = flag(&args, "--offset").and_then(|v| v.parse::<u64>().ok()) {
+                    params["offset"] = json!(offset);
+                }
+                if let Some(length) = flag(&args, "--length").and_then(|v| v.parse::<u64>().ok()) {
+                    params["length"] = json!(length);
+                }
+                if args.iter().any(|a| a == "--base64") {
+                    params["encoding"] = json!("base64");
+                }
+                client.call("file", "read", params)
+            } else if let Some(b64) = flag(&args, "--data-b64") {
+                client.call("file", "write", json!({ "path": path, "data_b64": b64 }))
             } else {
                 let data = flag(&args, "--data").unwrap_or("");
                 client.call("file", "write", json!({ "path": path, "data": data }))

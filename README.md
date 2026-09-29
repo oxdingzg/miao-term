@@ -229,9 +229,15 @@ miaotty-cli history add --command "cargo test" --cwd "$PWD"
 miaotty-cli history list --pane ID
 miaotty-cli view /path/to/file            # open it read-only in the app
 miaotty-cli edit /path/to/file            # open it in the editor
-miaotty-cli file read  --path /etc/hosts  # bounded to 2 MB
+miaotty-cli file read  --path /etc/hosts  # bounded to 2 MB per call
+miaotty-cli file read  --path app.bin --base64 --offset 0 --length 65536
 miaotty-cli file write --path /tmp/x --data "hello"
+miaotty-cli file write --path /tmp/x --data-b64 "AAECAw=="   # binary
 ```
+
+If the host was started with `MIAOTTY_MTP_TOKEN`, requests must carry it; the CLI
+picks it up from the same variable. The socket can be forwarded over ssh
+(`ssh -R /tmp/fwd.sock:<host socket>`) so a remote client drives the host.
 
 Pass `--socket PATH` or set `MIAOTTY_SOCKET` to target a non-default socket.
 

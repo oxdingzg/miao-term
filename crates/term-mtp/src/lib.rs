@@ -135,6 +135,8 @@ fn now_ms() -> f64 {
 /// Shared, in-memory server state: agent states + command history.
 #[derive(Default)]
 pub struct ServerState {
+    /// When set (from `MIAOTTY_MTP_TOKEN`), every request must carry it.
+    token: Option<String>,
     revision: AtomicI64,
     seq: AtomicI64,
     states: Mutex<BTreeMap<String, Value>>,
@@ -158,6 +160,18 @@ pub enum Command {
 impl ServerState {
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
+    }
+
+    /// Like [`ServerState::new`] but requires `token` on every request.
+    pub fn with_token(token: Option<String>) -> Arc<Self> {
+        Arc::new(Self {
+            token,
+            ..Default::default()
+        })
+    }
+
+    pub fn token(&self) -> Option<&str> {
+        self.token.as_deref()
     }
 
     fn bump(&self) -> i64 {
@@ -209,6 +223,63 @@ impl ServerState {
     }
 }
 
+/// Standard base64 (RFC 4648) with padding.
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        out.push(TABLE[(n >> 18) as usize & 63] as char);
+        out.push(TABLE[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            TABLE[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+/// Decode standard base64; `None` on invalid input.
+fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    let cleaned: Vec<u8> = text.bytes().filter(|c| !c.is_ascii_whitespace()).collect();
+    // A base64 length of 1 (mod 4) cannot be produced by an encoder.
+    if cleaned.len() % 4 == 1 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(cleaned.len() / 4 * 3);
+    let mut acc: u32 = 0;
+    let mut bits = 0;
+    for c in cleaned {
+        let value = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' => break,
+            _ => return None,
+        } as u32;
+        acc = (acc << 6) | value;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    Some(out)
+}
+
 fn key(pane: Option<&str>, tty: Option<&str>, extra: &str) -> String {
     if let Some(p) = pane.filter(|s| !s.is_empty()) {
         return format!("pane:{p}");
@@ -227,6 +298,11 @@ fn dispatch(state: &ServerState, req: Request) -> Response {
     let id = req.id;
     let rev = state.revision();
     let params = req.params.clone().unwrap_or(Value::Null);
+    if let Some(expected) = state.token() {
+        if params.get("token").and_then(Value::as_str) != Some(expected) {
+            return Response::err(id, rev, "unauthorized", "missing or invalid token");
+        }
+    }
     match (req.ns.as_str(), req.method.as_str()) {
         ("core", "ping") => Response::ok(
             id,
@@ -288,31 +364,56 @@ fn dispatch(state: &ServerState, req: Request) -> Response {
             if path.is_empty() {
                 return Response::err(id, rev, "no_path", "path is required");
             }
+            let offset = params.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
+            let length = params
+                .get("length")
+                .and_then(Value::as_u64)
+                .map(|n| n as usize)
+                .unwrap_or(MAX_FILE_BYTES)
+                .min(MAX_FILE_BYTES);
+            let base64 = str_field(&params, "encoding").as_deref() == Some("base64");
             match std::fs::read(&path) {
                 Ok(bytes) => {
-                    let truncated = bytes.len() > MAX_FILE_BYTES;
-                    let slice = &bytes[..bytes.len().min(MAX_FILE_BYTES)];
-                    Response::ok(
-                        id,
-                        rev,
-                        json!({
-                            "data": String::from_utf8_lossy(slice),
-                            "bytes": bytes.len(),
-                            "truncated": truncated,
-                        }),
-                    )
+                    let total = bytes.len();
+                    let end = offset.saturating_add(length).min(total);
+                    let slice = if offset <= total {
+                        &bytes[offset..end]
+                    } else {
+                        &[][..]
+                    };
+                    let mut result = json!({
+                        "bytes": total,
+                        "offset": offset,
+                        "returned": slice.len(),
+                        "eof": end >= total,
+                        "truncated": end < total,
+                    });
+                    result["data"] = if base64 {
+                        json!(base64_encode(slice))
+                    } else {
+                        json!(String::from_utf8_lossy(slice))
+                    };
+                    result["encoding"] = json!(if base64 { "base64" } else { "utf8" });
+                    Response::ok(id, rev, result)
                 }
                 Err(e) => Response::err(id, rev, "io_error", e.to_string()),
             }
         }
         ("file", "write") => {
             let path = str_field(&params, "path").unwrap_or_default();
-            let data = str_field(&params, "data").unwrap_or_default();
             if path.is_empty() {
                 return Response::err(id, rev, "no_path", "path is required");
             }
-            match std::fs::write(&path, data.as_bytes()) {
-                Ok(()) => Response::ok(id, rev, json!({ "ok": true, "bytes": data.len() })),
+            let bytes = match (str_field(&params, "data_b64"), str_field(&params, "data")) {
+                (Some(b64), _) => match base64_decode(&b64) {
+                    Some(bytes) => bytes,
+                    None => return Response::err(id, rev, "bad_encoding", "invalid base64"),
+                },
+                (None, Some(text)) => text.into_bytes(),
+                (None, None) => Vec::new(),
+            };
+            match std::fs::write(&path, &bytes) {
+                Ok(()) => Response::ok(id, rev, json!({ "ok": true, "bytes": bytes.len() })),
                 Err(e) => Response::err(id, rev, "io_error", e.to_string()),
             }
         }
@@ -489,6 +590,17 @@ pub mod client {
     impl Client {
         /// Send a request and return the result value (or an error).
         pub fn call(&mut self, ns: &str, method: &str, params: Value) -> std::io::Result<Value> {
+            // A host started with MIAOTTY_MTP_TOKEN requires it on every request.
+            let params = match std::env::var("MIAOTTY_MTP_TOKEN") {
+                Ok(token) if !token.is_empty() => match params {
+                    Value::Object(mut map) => {
+                        map.insert("token".to_string(), Value::String(token));
+                        Value::Object(map)
+                    }
+                    other => other,
+                },
+                _ => params,
+            };
             let id = self.next_id;
             self.next_id += 1;
             let req = serde_json::json!({
@@ -557,6 +669,23 @@ mod tests {
     use std::io::Cursor;
 
     #[test]
+    fn base64_round_trips() {
+        for case in [
+            &b""[..],
+            b"f",
+            b"fo",
+            b"foo",
+            b"foobar",
+            &[0u8, 255, 1, 2, 3][..],
+        ] {
+            let encoded = base64_encode(case);
+            assert_eq!(base64_decode(&encoded).unwrap(), case, "{encoded}");
+        }
+        assert!(base64_decode("A").is_none());
+        assert!(base64_decode("!!!!").is_none());
+    }
+
+    #[test]
     fn reads_a_normal_request() {
         let mut reader = BufReader::new(Cursor::new(b"{\"v\":1}\n".to_vec()));
         let mut buf = Vec::new();
@@ -603,6 +732,79 @@ mod tests {
         );
         assert!(!missing.ok);
         assert_eq!(missing.error.unwrap().code, "io_error");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn token_is_required_when_configured() {
+        let state = ServerState::with_token(Some("s3cret".to_string()));
+        let denied = dispatch(&state, request("core", "ping", json!({})));
+        assert!(!denied.ok);
+        assert_eq!(denied.error.unwrap().code, "unauthorized");
+        let allowed = dispatch(
+            &state,
+            request("core", "ping", json!({ "token": "s3cret" })),
+        );
+        assert!(allowed.ok, "{:?}", allowed.error);
+        // No token configured: nothing to check.
+        assert!(dispatch(&ServerState::new(), request("core", "ping", json!({}))).ok);
+    }
+
+    #[test]
+    fn file_read_supports_offsets_and_base64() {
+        let state = ServerState::new();
+        let path = std::env::temp_dir().join(format!("miaotty-mtp-bin-{}", std::process::id()));
+        let path_str = path.to_string_lossy().to_string();
+        // 0x00..0x03 via base64 ("AAECAw==")
+        assert!(
+            dispatch(
+                &state,
+                request(
+                    "file",
+                    "write",
+                    json!({ "path": path_str, "data_b64": "AAECAw==" })
+                )
+            )
+            .ok
+        );
+        let all = dispatch(
+            &state,
+            request(
+                "file",
+                "read",
+                json!({ "path": path_str, "encoding": "base64" }),
+            ),
+        );
+        assert!(all.ok);
+        let result = all.result.unwrap();
+        assert_eq!(result["data"], "AAECAw==");
+        assert_eq!(result["encoding"], "base64");
+        assert_eq!(result["bytes"], 4);
+        assert_eq!(result["eof"], true);
+
+        let part = dispatch(
+            &state,
+            request(
+                "file",
+                "read",
+                json!({ "path": path_str, "offset": 1, "length": 2, "encoding": "base64" }),
+            ),
+        );
+        let result = part.result.unwrap();
+        assert_eq!(result["data"], "AQI=");
+        assert_eq!(result["returned"], 2);
+        assert_eq!(result["eof"], false);
+        assert_eq!(result["truncated"], true);
+
+        let bad = dispatch(
+            &state,
+            request(
+                "file",
+                "write",
+                json!({ "path": path_str, "data_b64": "!!!not base64" }),
+            ),
+        );
+        assert_eq!(bad.error.unwrap().code, "bad_encoding");
         let _ = std::fs::remove_file(&path);
     }
 

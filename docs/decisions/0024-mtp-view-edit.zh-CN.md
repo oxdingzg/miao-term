@@ -25,6 +25,18 @@ ADR 0021 用 ssh 提供了远端 view/edit,但**被隧道的**客户端(远端 s
 CLI 增加对应子命令:`miaotty-cli view <path>`、`miaotty-cli edit <path>`、
 `miaotty-cli file read|write --path P [--data D]`。
 
+## 附记(鉴权、二进制传输、被隧道的客户端)
+
+- **令牌**:host 以 `MIAOTTY_MTP_TOKEN` 启动时,每个请求都必须携带匹配的 `token` 字段,否则返回
+  `unauthorized`。客户端读取同一环境变量并自行注入该字段。
+- **offset/length + base64**:`file.read` 接受 `offset`、`length`(上限 `MAX_FILE_BYTES`)与
+  `encoding = "base64"`,并回报 `bytes/offset/returned/eof/truncated`;`file.write` 接受
+  `data_b64`。因此二进制文件可按有界分片传输。base64 在 crate 内实现(无新依赖)。
+- **被隧道的客户端**:已端到端验证(Mac 为 host、Linux 为客户端):用
+  `ssh -R /tmp/fwd.sock:<host socket>` 转发 socket,并在远端运行
+  `miaotty-cli --socket /tmp/fwd.sock ping` —— 不带令牌被拒,带令牌 `ping` 返回能力列表,
+  且 base64 写入+读取往返得到相同字节。
+
 ## 后果
 
 - 隧道或本地客户端现在可在运行中的应用里打开文件,并经 host 读写文件,补上了 M4 的

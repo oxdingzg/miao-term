@@ -28,6 +28,22 @@ Extend the MTP surface (`crates/term-mtp`):
 The CLI gains matching subcommands: `miaotty-cli view <path>`,
 `miaotty-cli edit <path>`, `miaotty-cli file read|write --path P [--data D]`.
 
+## Addendum (auth, binary transfer, tunnelled clients)
+
+- **Token**: when the host is started with `MIAOTTY_MTP_TOKEN`, every request
+  must carry a matching `token` field; otherwise it is answered with
+  `unauthorized`. Clients read the same variable and add the field themselves.
+- **Offset/length + base64**: `file.read` accepts `offset`, `length` (capped at
+  `MAX_FILE_BYTES`) and `encoding = "base64"`, and reports
+  `bytes/offset/returned/eof/truncated`; `file.write` accepts `data_b64`. That
+  makes binary files transferable in bounded chunks. base64 is implemented in
+  the crate (no new dependency).
+- **Tunnelled client**: verified end to end (Mac host, Linux client) by
+  forwarding the socket with `ssh -R /tmp/fwd.sock:<host socket>` and running
+  `miaotty-cli --socket /tmp/fwd.sock ping` on the remote: without the token it
+  is refused, with it `ping` reports the caps, and a base64 write+read round-trip
+  returns the same bytes.
+
 ## Consequences
 
 - A tunnelled or local client can now open a file in the running app and read or
