@@ -96,6 +96,33 @@ Verified end to end on a real Windows 11 host (2026-09-29): build → `msiexec /
 → both binaries on disk + PATH entry + "miaotty 0.0.0" uninstall entry → the
 installed app launches → `msiexec /x` removes the directory.
 
+
+## Verifying installers
+
+Both installers were checked on real hardware (2026-09-29).
+
+**Windows MSI** — see the section above (build → install → PATH → run → uninstall).
+
+**Linux `.deb` and AppImage** (Ubuntu 24.04):
+
+```sh
+cargo build --release -p miaotty-app -p miaotty-cli
+cargo install cargo-deb --locked && cargo deb -p miaotty-app --no-build
+sudo dpkg -i target/debian/miaotty_*_amd64.deb     # /usr/bin/miaotty{,-cli}
+miaotty-cli ping                                   # runs; errors only because no host
+```
+
+The AppImage needs a **real 256x256 icon** — `appimagetool` refuses a 1x1
+placeholder, and the desktop file must carry an `Icon=` key — so the pipeline
+generates one with `scripts/make-icon.py` (standard library only). Result:
+`miaotty-linux-x86_64.AppImage` containing `miaotty` and `miaotty-cli`, and it
+extracts cleanly (`--appimage-extract`).
+
+**Not verified**: the GUI itself. The machine's X displays belong to the login
+screen (no auth cookie), and under `xvfb` + software Vulkan (lavapipe) `wgpu`
+fails with `Invalid surface` (a limitation of offscreen software Vulkan, not the
+app). A real desktop session or a GPU is needed for that.
+
 ## Still open
 
 - The **AppImage** path is best-effort and not yet verified on a real install.

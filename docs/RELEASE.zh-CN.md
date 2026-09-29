@@ -89,6 +89,31 @@ WiX 模板已入库:[`miaotty-app/wix/main.wxs`](../miaotty-app/wix/main.wxs)(�
 已在真实 Windows 11 主机端到端验证(2026-09-29):构建 → `msiexec /i` → 两个二进制落盘 + PATH
 条目 + "miaotty 0.0.0" 卸载项 → 已安装的 app 能启动 → `msiexec /x` 后目录被清除。
 
+
+## 验证安装包
+
+两种安装包都已在真实硬件上检查(2026-09-29)。
+
+**Windows MSI** —— 见上文(构建 → 安装 → PATH → 运行 → 卸载)。
+
+**Linux `.deb` 与 AppImage**(Ubuntu 24.04):
+
+```sh
+cargo build --release -p miaotty-app -p miaotty-cli
+cargo install cargo-deb --locked && cargo deb -p miaotty-app --no-build
+sudo dpkg -i target/debian/miaotty_*_amd64.deb     # /usr/bin/miaotty{,-cli}
+miaotty-cli ping                                   # 可运行;报错仅因无 host
+```
+
+AppImage 需要**真正的 256x256 图标** —— `appimagetool` 拒绝 1x1 占位图,且桌面文件必须带
+`Icon=` 键 —— 因此流水线用 `scripts/make-icon.py`(仅标准库)生成图标。结果:
+`miaotty-linux-x86_64.AppImage` 内含 `miaotty` 与 `miaotty-cli`,并可正常提取
+(`--appimage-extract`)。
+
+**未验证**:GUI 本体。该机器的 X 显示属于登录界面(无授权 cookie),而在 `xvfb` + 软件
+Vulkan(lavapipe)下 `wgpu` 报 `Invalid surface`(离屏软件 Vulkan 的限制,非应用问题)。这需要
+真实桌面会话或 GPU。
+
 ## 仍待完成
 
 - **AppImage** 路径为尽力而为,尚未在真实安装场景验证。

@@ -83,11 +83,8 @@ jobs:
           Terminal=false
           EOF
           cp "$AppDir/miaotty.desktop" "$AppDir/usr/share/applications/"
-          if command -v convert >/dev/null; then
-            convert -size 256x256 xc:'#2e3440' "$AppDir/miaotty.png"
-          else
-            python3 -c "import base64;open('$AppDir/miaotty.png','wb').write(base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='))"
-          fi
+          # A real 256x256 icon: appimagetool rejects a 1x1 placeholder.
+          python3 scripts/make-icon.py "$AppDir/miaotty.png" 2e3440
           cp "$AppDir/miaotty.png" "$AppDir/usr/share/icons/hicolor/256x256/apps/miaotty.png"
           wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage -O appimagetool
           chmod +x appimagetool
