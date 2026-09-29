@@ -14,5 +14,12 @@ miao-term-config = { path = "../term-config" }
 egui = "0.30"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-# System-wide Quick Terminal hotkey (MIT); only used on macOS/Windows.
+
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+# System-wide Quick Terminal hotkey (MIT). See ADR 0019.
 global-hotkey = "0.8"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Wayland/X11 global shortcut through the XDG desktop portal (MIT). See ADR 0026.
+ashpd = { version = "0.12", default-features = false, features = ["tokio"] }
+tokio = { version = "1", default-features = false, features = ["rt"] }

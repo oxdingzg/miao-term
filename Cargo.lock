@@ -2109,6 +2109,7 @@ dependencies = [
 name = "miao-term-ui"
 version = "0.0.0"
 dependencies = [
+ "ashpd",
  "egui",
  "global-hotkey",
  "miao-term-config",
@@ -2116,6 +2117,7 @@ dependencies = [
  "miao-term-render",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
