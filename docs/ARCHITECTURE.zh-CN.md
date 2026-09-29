@@ -74,8 +74,9 @@
 - `core` 不依赖 `wgpu`/`winit`/`egui`(**可无 GPU 编译**);`render` 不依赖 `winit`。
 - `config`/`mtp` 不依赖渲染与窗口。
 - 应用层依赖引擎;引擎**绝不**依赖应用层。
-- CI 在 Linux/macOS/Windows 上编译整个工作区(`cargo check --workspace`);
-  没有 `fmt`/`clippy`/`cargo-deny` job,也没有 `deny.toml`。
+- CI 编译整个工作区(`cargo check --workspace`),并运行 `cargo fmt --check` 与
+  `cargo clippy --workspace --all-targets -- -D warnings`;没有 `cargo-deny` job,也没有
+  `deny.toml`。
 
 ## 4. crate / 模块职责矩阵
 
@@ -205,12 +206,14 @@
 - **性能门(仅 ubuntu-latest)**:`cargo test --release -p miao-term-core -p miaotty-app -- --ignored`
   加 `scripts/check-perf-baseline.py`。预算:输入延迟 P95 ≤ 16ms、首帧 ≤ 100ms、
   `cat` 大文件不丢帧、空闲 CPU ≈ 0。
-- **CI**(`.github/workflows/ci.yml`):jobs 为 `changes`、`privacy`、`check-linux`(`cargo check --workspace`)、
-  `test-linux`、`macos`、`windows`、`render-linux`、`perf`。`check-linux` 在 push 时跑(macOS 只做编译检查);
-  test/perf/render/windows 在 PR、夜间 `17 4 * * *` 定时和 `workflow_dispatch` 时跑。
+- **CI**(`.github/workflows/ci.yml`):jobs 为 `changes`、`privacy`、`lint`、`check-linux`(`cargo check --workspace`)、
+  `test-linux`、`macos`、`windows`、`render-linux`、`perf`。`lint`
+  (`cargo fmt --check` 与 `cargo clippy --workspace --all-targets -- -D warnings`)和 `check-linux`
+  在 push 时跑(macOS 只做编译检查);test/perf/render/windows 在 PR、夜间 `17 4 * * *` 定时和
+  `workflow_dispatch` 时跑。
 - **渲染**:`render-linux` 装 Mesa lavapipe(软件 Vulkan),以
   `MIAO_REQUIRE_GPU=1 WGPU_BACKEND=vulkan` 跑无头冒烟测试。
-- 没有 `fmt`、`clippy`、`cargo-deny` job,也没有 `deny.toml`。
+- 没有 `cargo-deny` job,也没有 `deny.toml`。
 
 ## 17. 打包 / 发布 / 版本
 

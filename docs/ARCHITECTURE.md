@@ -81,8 +81,9 @@ Not every edge is drawn: `term-widget` also depends on `term-core`/`term-render`
 - `core` must not depend on `wgpu`/`winit`/`egui` (**it must build without a GPU**); `render` must not depend on `winit`.
 - `config`/`mtp` must not depend on rendering or windowing.
 - The app depends on the engine; the engine **never** depends on the app.
-- CI compiles the whole workspace on Linux/macOS/Windows (`cargo check --workspace`);
-  there is no `fmt`/`clippy`/`cargo-deny` job and no `deny.toml`.
+- CI compiles the whole workspace (`cargo check --workspace`) and runs `cargo fmt --check` +
+  `cargo clippy --workspace --all-targets -- -D warnings`; there is no `cargo-deny` job and no
+  `deny.toml`.
 
 ## 4. Crate / module responsibilities
 
@@ -231,13 +232,14 @@ Use Alacritty's proven model (`FairMutex<Term>` + `EventListener`); do not inven
 - **Performance gate (ubuntu-latest only)**: `cargo test --release -p miao-term-core -p miaotty-app -- --ignored`
   plus `scripts/check-perf-baseline.py`. Budgets: input latency P95 ≤ 16 ms, first frame ≤ 100 ms,
   no dropped frames on a large `cat`, idle CPU ≈ 0.
-- **CI** (`.github/workflows/ci.yml`): jobs `changes`, `privacy`, `check-linux` (`cargo check --workspace`),
-  `test-linux`, `macos`, `windows`, `render-linux`, `perf`. `check-linux` runs on pushes (macOS does a
-  compile-only check); tests/perf/render/windows run on PRs, the nightly `17 4 * * *` schedule and
-  `workflow_dispatch`.
+- **CI** (`.github/workflows/ci.yml`): jobs `changes`, `privacy`, `lint`, `check-linux`
+  (`cargo check --workspace`), `test-linux`, `macos`, `windows`, `render-linux`, `perf`. `lint`
+  (`cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings`) and
+  `check-linux` run on pushes (macOS does a compile-only check); tests/perf/render/windows run on
+  PRs, the nightly `17 4 * * *` schedule and `workflow_dispatch`.
 - **Render**: `render-linux` installs Mesa lavapipe (software Vulkan) and runs the headless smoke test
   with `MIAO_REQUIRE_GPU=1 WGPU_BACKEND=vulkan`.
-- There is no `fmt`, `clippy` or `cargo-deny` job and no `deny.toml`.
+- There is no `cargo-deny` job and no `deny.toml`.
 
 ## 17. Packaging / release / versioning
 
