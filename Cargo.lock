@@ -2111,6 +2111,7 @@ dependencies = [
  "egui",
  "egui-wgpu",
  "egui-winit",
+ "miao-term-config",
  "miao-term-core",
  "miao-term-mtp",
  "miao-term-render",

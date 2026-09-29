@@ -63,11 +63,12 @@ pub fn sidebar(
     titles: &[String],
     badges: &[Option<Rgb>],
     active: usize,
+    heading: &str,
 ) -> Option<usize> {
     let mut switch = None;
     ui.visuals_mut().selection.bg_fill = bg_color(theme.palette[4]);
     ui.visuals_mut().override_text_color = Some(fg_color(theme));
-    ui.label(section(&format!("Sessions ({})", titles.len())));
+    ui.label(section(&format!("{heading} ({})", titles.len())));
     ui.separator();
     for (i, title) in titles.iter().enumerate() {
         ui.horizontal(|ui| {
@@ -108,6 +109,57 @@ pub fn details_tabs(
         }
     });
     sel
+}
+
+/// Actions from the prompt-queue widget.
+#[derive(Default)]
+pub struct QueueEvents {
+    pub add: bool,
+    pub send: Option<usize>,
+    pub remove: Option<usize>,
+    pub send_all: bool,
+    pub clear: bool,
+}
+
+/// A minimal prompt queue: type a prompt, queue it, then send to the shell.
+pub fn queue(
+    ui: &mut egui::Ui,
+    theme: &crate::theme::Theme,
+    items: &[String],
+    input: &mut String,
+) -> QueueEvents {
+    let mut ev = QueueEvents::default();
+    ui.visuals_mut().override_text_color = Some(fg_color(theme));
+    ui.label(section(&format!("Queue ({})", items.len())));
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(input)
+                .hint_text("Prompt to run…")
+                .desired_width(160.0),
+        );
+        if ui.button("Add").clicked() {
+            ev.add = true;
+        }
+        if ui.button("Send All").clicked() {
+            ev.send_all = true;
+        }
+        if ui.button("Clear").clicked() {
+            ev.clear = true;
+        }
+    });
+    ui.separator();
+    for (i, item) in items.iter().enumerate() {
+        ui.horizontal(|ui| {
+            if ui.small_button("\u{25b6}").on_hover_text("Send").clicked() {
+                ev.send = Some(i);
+            }
+            if ui.small_button("\u{00d7}").clicked() {
+                ev.remove = Some(i);
+            }
+            ui.label(egui::RichText::new(item).monospace().size(12.0));
+        });
+    }
+    ev
 }
 
 /// A two-column label/value info list (details panel).

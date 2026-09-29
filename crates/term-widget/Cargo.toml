@@ -12,6 +12,7 @@ miao-term-core = { path = "../term-core" }
 miao-term-render = { path = "../term-render" }
 miao-term-ui = { path = "../term-ui" }
 miao-term-mtp = { path = "../term-mtp" }
+miao-term-config = { path = "../term-config" }
 serde_json = "1.0"
 winit = "0.30"
 wgpu = "23"

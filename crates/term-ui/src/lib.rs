@@ -7,6 +7,7 @@
 //! instead of duplicated (ADR 0030, step 2/4).
 
 pub mod chrome;
+pub mod i18n;
 pub mod input;
 pub mod layout;
 pub mod selection;

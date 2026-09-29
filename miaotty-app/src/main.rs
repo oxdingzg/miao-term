@@ -25,7 +25,7 @@ mod panels;
 mod ssh;
 mod update;
 
-use miao_term_core::aterm::{ATerm, Color, NamedColor};
+use miao_term_core::aterm::{ATerm, Color};
 use miao_term_core::Terminal;
 
 fn main() -> eframe::Result<()> {
@@ -202,43 +202,10 @@ fn find_matches(screen: &ATerm, query_lower: &str) -> Vec<(u16, u16, u16)> {
     out
 }
 
-fn indexed_palette(named: NamedColor) -> Option<usize> {
-    use NamedColor::*;
-    Some(match named {
-        Black => 0,
-        Red => 1,
-        Green => 2,
-        Yellow => 3,
-        Blue => 4,
-        Magenta => 5,
-        Cyan => 6,
-        White => 7,
-        BrightBlack => 8,
-        BrightRed => 9,
-        BrightGreen => 10,
-        BrightYellow => 11,
-        BrightBlue => 12,
-        BrightMagenta => 13,
-        BrightCyan => 14,
-        BrightWhite => 15,
-        _ => return None,
-    })
-}
-
 fn map_color(color: &Color, foreground: bool, theme: &Theme) -> egui::Color32 {
-    match color {
-        Color::Named(named) => {
-            if let Some(i) = indexed_palette(*named) {
-                theme.palette[i]
-            } else if foreground {
-                theme.fg
-            } else {
-                theme.bg
-            }
-        }
-        Color::Indexed(i) => theme.palette[(*i as usize) & 0x0f],
-        Color::Spec(rgb) => egui::Color32::from_rgb(rgb.r, rgb.g, rgb.b),
-    }
+    // Shared with the native host (miao-term-ui).
+    let rgb = to_ui_theme(theme).color(*color, foreground);
+    egui::Color32::from_rgb(rgb.0, rgb.1, rgb.2)
 }
 
 /// How two panes in a tab are arranged.

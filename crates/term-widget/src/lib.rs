@@ -23,8 +23,6 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy}
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
-const FONT_SIZE: f32 = 13.0;
-const LINE_RATIO: f32 = 1.3;
 const TAB_H: f32 = 30.0;
 const STATUS_H: f32 = 22.0;
 const SIDEBAR_W: f32 = 200.0;
@@ -103,6 +101,9 @@ struct State {
     cw: f32,
     ch: f32,
     font_size: f32,
+    line_ratio: f32,
+    font_family: Option<String>,
+    lang: miao_term_ui::i18n::Lang,
     mods: ModifiersState,
     selection: Option<(String, Selection)>,
     dragging: bool,
@@ -119,6 +120,9 @@ struct State {
     details_tab: usize,
     git_cache: Cache,
     files_cache: Cache,
+    ports_cache: Cache,
+    prompts: Vec<String>,
+    prompt_input: String,
     last_title: Option<String>,
     focused: bool,
     cursor_on: bool,
@@ -201,13 +205,9 @@ fn shortcut(event: &KeyEvent, mods: ModifiersState) -> Option<Shortcut> {
 }
 
 impl State {
-    fn cell_size(font_size: f32) -> (f32, f32) {
+    fn cell_size(font_size: f32, line_ratio: f32, family: Option<&str>) -> (f32, f32) {
         let mut probe = miao_term_render::MetricsProbe::new();
-        probe.cell(
-            font_size,
-            (font_size * LINE_RATIO).round(),
-            Some("JetBrains Mono"),
-        )
+        probe.cell(font_size, (font_size * line_ratio).round(), family)
     }
 
     fn window_size(&self) -> (u32, u32) {
@@ -592,12 +592,12 @@ impl State {
                 win_size,
                 scale,
                 self.font_size,
-                (self.font_size * LINE_RATIO).round(),
+                (self.font_size * self.line_ratio).round(),
                 self.cw,
                 d.rect.x + GUTTER / scale,
                 d.rect.y + GUTTER / scale,
                 (theme.fg.0, theme.fg.1, theme.fg.2),
-                Some("JetBrains Mono"),
+                self.font_family.as_deref(),
                 &d.rows,
             );
         }
@@ -680,6 +680,7 @@ impl State {
     }
 
     fn chrome(&mut self, ctx: &egui::Context) {
+        let lang = self.lang;
         let theme = self.theme.clone();
         let titles: Vec<String> = self.tabs.iter().map(|t| self.title_of(t)).collect();
         let active = self.active_tab;
@@ -734,6 +735,7 @@ impl State {
                 .iter()
                 .map(|t| self.agent_badge(&t.active))
                 .collect();
+            let heading = miao_term_ui::i18n::t(lang, "Sessions", "会话");
             let mut s = None;
             egui::SidePanel::left("sessions")
                 .exact_width(SIDEBAR_W)
@@ -743,17 +745,32 @@ impl State {
                         .inner_margin(egui::Margin::same(6.0)),
                 )
                 .show(ctx, |ui| {
-                    s = chrome::sidebar(ui, &theme, &titles, &badges, active);
+                    s = chrome::sidebar(ui, &theme, &titles, &badges, active, heading);
                 });
             if let Some(i) = s {
                 switch = Some(i);
             }
         }
         if self.show_details {
-            const TABS: [&str; 5] = ["Info", "Agent", "Outline", "Git", "Files"];
-            let active = self.details_tab.min(TABS.len() - 1);
-            let (title, rows) = self.details_content(active);
+            use miao_term_ui::i18n::t;
+            let tabs = [
+                t(lang, "Info", "信息"),
+                t(lang, "Agent", "Agent"),
+                t(lang, "Outline", "大纲"),
+                t(lang, "Git", "Git"),
+                t(lang, "Files", "文件"),
+                t(lang, "Ports", "端口"),
+                t(lang, "Queue", "队列"),
+            ];
+            let active = self.details_tab.min(tabs.len() - 1);
+            let (title, rows) = if active == 6 {
+                ("Queue".to_string(), Vec::new())
+            } else {
+                let (t, r) = self.details_content(active);
+                (t.to_string(), r)
+            };
             let mut sel = None;
+            let mut qev = chrome::QueueEvents::default();
             egui::SidePanel::right("details")
                 .exact_width(DETAILS_W)
                 .frame(
@@ -762,14 +779,40 @@ impl State {
                         .inner_margin(egui::Margin::same(8.0)),
                 )
                 .show(ctx, |ui| {
-                    if let Some(i) = chrome::details_tabs(ui, &theme, &TABS, active) {
+                    if let Some(i) = chrome::details_tabs(ui, &theme, &tabs, active) {
                         sel = Some(i);
                     }
                     ui.separator();
-                    chrome::info(ui, &theme, title, &rows);
+                    if active == 6 {
+                        qev = chrome::queue(ui, &theme, &self.prompts, &mut self.prompt_input);
+                    } else {
+                        chrome::info(ui, &theme, &title, &rows);
+                    }
                 });
             if let Some(i) = sel {
                 self.details_tab = i;
+            }
+            if qev.add && !self.prompt_input.is_empty() {
+                self.prompts.push(std::mem::take(&mut self.prompt_input));
+            }
+            if let Some(i) = qev.send {
+                if let Some(item) = self.prompts.get(i).cloned() {
+                    self.write_input(format!("{item}\r").as_bytes());
+                }
+            }
+            if qev.send_all {
+                let items = std::mem::take(&mut self.prompts);
+                for item in items {
+                    self.write_input(format!("{item}\r").as_bytes());
+                }
+            }
+            if let Some(i) = qev.remove {
+                if i < self.prompts.len() {
+                    self.prompts.remove(i);
+                }
+            }
+            if qev.clear {
+                self.prompts.clear();
             }
         }
         let status = self.status_text();
@@ -798,7 +841,8 @@ impl State {
         }
         if font_delta != 0.0 {
             self.font_size = (self.font_size + font_delta).clamp(6.0, 40.0);
-            let (cw, ch) = State::cell_size(self.font_size);
+            let (cw, ch) =
+                State::cell_size(self.font_size, self.line_ratio, self.font_family.as_deref());
             self.cw = cw;
             self.ch = ch;
             self.resize();
@@ -833,6 +877,7 @@ impl State {
             2 => ("Outline", self.outline_rows()),
             3 => ("Git", self.git_rows_cached()),
             4 => ("Files", self.files_rows_cached()),
+            5 => ("Ports", self.ports_rows_cached()),
             _ => ("Info", self.details_rows()),
         }
     }
@@ -904,6 +949,22 @@ impl State {
         }
         let rows = files_rows(&cwd);
         self.files_cache = Some((Instant::now(), cwd, rows.clone()));
+        rows
+    }
+
+    fn ports_rows_cached(&mut self) -> Vec<(String, String)> {
+        let pid = self.active_pane().and_then(|p| p.term.pid());
+        let key = std::path::PathBuf::from(pid.map(|p| p.to_string()).unwrap_or_default());
+        if let Some((t, p, rows)) = &self.ports_cache {
+            if p == &key && t.elapsed() < Duration::from_millis(1000) {
+                return rows.clone();
+            }
+        }
+        let rows = match pid {
+            Some(pid) => ports_rows(pid),
+            None => Vec::new(),
+        };
+        self.ports_cache = Some((Instant::now(), key, rows.clone()));
         rows
     }
 
@@ -992,7 +1053,8 @@ impl State {
                     -1.0
                 };
                 self.font_size = (self.font_size + d).clamp(6.0, 40.0);
-                let (cw, ch) = State::cell_size(self.font_size);
+                let (cw, ch) =
+                    State::cell_size(self.font_size, self.line_ratio, self.font_family.as_deref());
                 self.cw = cw;
                 self.ch = ch;
                 self.resize();
@@ -1018,31 +1080,35 @@ impl State {
         let mut query = std::mem::take(&mut self.palette_query);
         let mut chosen: Option<usize> = None;
         let mut open = true;
-        egui::Window::new("Command Palette")
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_TOP, [0.0, 120.0])
-            .open(&mut open)
-            .show(ctx, |ui| {
-                let resp = ui.add(
-                    egui::TextEdit::singleline(&mut query)
-                        .hint_text("Type a command…")
-                        .desired_width(420.0),
-                );
-                resp.request_focus();
-                let q = query.to_lowercase();
-                let filtered: Vec<usize> = (0..cmds.len())
-                    .filter(|&i| q.is_empty() || cmds[i].1.to_lowercase().contains(&q))
-                    .collect();
-                for &i in &filtered {
-                    if ui.selectable_label(false, cmds[i].1).clicked() {
-                        chosen = Some(i);
-                    }
+        egui::Window::new(miao_term_ui::i18n::t(
+            self.lang,
+            "Command Palette",
+            "命令面板",
+        ))
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_TOP, [0.0, 120.0])
+        .open(&mut open)
+        .show(ctx, |ui| {
+            let resp = ui.add(
+                egui::TextEdit::singleline(&mut query)
+                    .hint_text("Type a command…")
+                    .desired_width(420.0),
+            );
+            resp.request_focus();
+            let q = query.to_lowercase();
+            let filtered: Vec<usize> = (0..cmds.len())
+                .filter(|&i| q.is_empty() || cmds[i].1.to_lowercase().contains(&q))
+                .collect();
+            for &i in &filtered {
+                if ui.selectable_label(false, cmds[i].1).clicked() {
+                    chosen = Some(i);
                 }
-                if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    chosen = filtered.first().copied();
-                }
-            });
+            }
+            if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                chosen = filtered.first().copied();
+            }
+        });
         self.palette_query = query;
         if let Some(i) = chosen {
             if let Some((cmd, _)) = cmds.into_iter().nth(i) {
@@ -1065,19 +1131,28 @@ impl State {
         let mut cursor = self.theme.cursor;
         let current_theme = self.theme_name.clone();
         let mut chosen_theme: Option<&'static str> = None;
-        egui::Window::new("Settings")
+        egui::Window::new(miao_term_ui::i18n::t(self.lang, "Settings", "设置"))
             .collapsible(false)
             .open(&mut open)
             .show(ctx, |ui| {
-                ui.label("Font size");
+                ui.label(miao_term_ui::i18n::t(self.lang, "Font size", "字号"));
                 ui.add(egui::Slider::new(&mut font, 6.0..=40.0));
                 ui.separator();
-                ui.label("Cursor");
+                ui.label(miao_term_ui::i18n::t(self.lang, "Cursor", "光标"));
                 ui.horizontal(|ui| {
                     for (s, n) in [
-                        (miao_term_ui::CursorStyle::Block, "Block"),
-                        (miao_term_ui::CursorStyle::Bar, "Bar"),
-                        (miao_term_ui::CursorStyle::Underline, "Underline"),
+                        (
+                            miao_term_ui::CursorStyle::Block,
+                            miao_term_ui::i18n::t(self.lang, "Block", "方块"),
+                        ),
+                        (
+                            miao_term_ui::CursorStyle::Bar,
+                            miao_term_ui::i18n::t(self.lang, "Bar", "竖线"),
+                        ),
+                        (
+                            miao_term_ui::CursorStyle::Underline,
+                            miao_term_ui::i18n::t(self.lang, "Underline", "下划线"),
+                        ),
                     ] {
                         if ui.radio(cursor == s, n).clicked() {
                             cursor = s;
@@ -1085,7 +1160,7 @@ impl State {
                     }
                 });
                 ui.separator();
-                ui.label("Theme");
+                ui.label(miao_term_ui::i18n::t(self.lang, "Theme", "主题"));
                 for name in Theme::NAMES {
                     if ui.selectable_label(current_theme == name, name).clicked() {
                         chosen_theme = Some(name);
@@ -1094,7 +1169,8 @@ impl State {
             });
         if (font - self.font_size).abs() > 0.01 {
             self.font_size = font;
-            let (cw, ch) = State::cell_size(self.font_size);
+            let (cw, ch) =
+                State::cell_size(self.font_size, self.line_ratio, self.font_family.as_deref());
             self.cw = cw;
             self.ch = ch;
             self.resize();
@@ -1117,7 +1193,7 @@ impl State {
         let mut open = true;
         let mut buf = std::mem::take(&mut self.rename_buf);
         let mut commit = false;
-        egui::Window::new("Rename Tab")
+        egui::Window::new(miao_term_ui::i18n::t(self.lang, "Rename Tab", "重命名标签"))
             .collapsible(false)
             .open(&mut open)
             .show(ctx, |ui| {
@@ -1126,7 +1202,10 @@ impl State {
                 if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     commit = true;
                 }
-                if ui.button("Rename").clicked() {
+                if ui
+                    .button(miao_term_ui::i18n::t(self.lang, "Rename", "重命名"))
+                    .clicked()
+                {
                     commit = true;
                 }
             });
@@ -1236,7 +1315,16 @@ impl ApplicationHandler for Host {
             None,
         );
         let egui_renderer = egui_wgpu::Renderer::new(&device, format, None, 1, false);
-        let (cw, ch) = State::cell_size(FONT_SIZE);
+
+        // Config (ADR: read `~/.config/miaotty/config.toml`).
+        let cfg = miao_term_config::Config::load();
+        let font_size = cfg.font_size;
+        let line_ratio = cfg.line_height;
+        let font_family = cfg.font_family.clone();
+        let lang = miao_term_ui::i18n::Lang::parse(cfg.language.as_deref());
+        let theme = theme_from_config(&cfg.theme, cfg.cursor_style);
+        let theme_name = "Nord".to_string();
+        let (cw, ch) = State::cell_size(font_size, line_ratio, font_family.as_deref());
 
         let mut state = State {
             window,
@@ -1250,10 +1338,13 @@ impl ApplicationHandler for Host {
             mtp: self.mtp.clone(),
             tabs: Vec::new(),
             active_tab: 0,
-            theme: Theme::nord(),
+            theme,
             cw,
             ch,
-            font_size: FONT_SIZE,
+            font_size,
+            line_ratio,
+            font_family,
+            lang,
             mods: ModifiersState::empty(),
             selection: None,
             dragging: false,
@@ -1263,13 +1354,16 @@ impl ApplicationHandler for Host {
             show_details: true,
             renaming: None,
             rename_buf: String::new(),
-            theme_name: "Nord".to_string(),
+            theme_name,
             show_palette: false,
             palette_query: String::new(),
             show_settings: false,
             details_tab: 0,
             git_cache: None,
             files_cache: None,
+            ports_cache: None,
+            prompts: Vec::new(),
+            prompt_input: String::new(),
             last_title: None,
             focused: false,
             cursor_on: true,
@@ -1444,7 +1538,11 @@ impl ApplicationHandler for Host {
                     }
                     if s.font != 0.0 {
                         state.font_size = (state.font_size + s.font).clamp(6.0, 40.0);
-                        let (cw, ch) = State::cell_size(state.font_size);
+                        let (cw, ch) = State::cell_size(
+                            state.font_size,
+                            state.line_ratio,
+                            state.font_family.as_deref(),
+                        );
                         state.cw = cw;
                         state.ch = ch;
                         state.resize();
@@ -1550,6 +1648,30 @@ fn git_rows(cwd: &std::path::Path) -> Vec<(String, String)> {
     rows
 }
 
+fn ports_rows(pid: u32) -> Vec<(String, String)> {
+    let out = std::process::Command::new("lsof")
+        .args(["-nP", "-iTCP", "-sTCP:LISTEN", "-a", "-p", &pid.to_string()])
+        .output();
+    let Ok(out) = out else {
+        return vec![("ports".into(), "lsof unavailable".into())];
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut rows = Vec::new();
+    for line in text.lines().skip(1) {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        if let Some(name) = cols.get(8) {
+            rows.push((
+                cols.first().copied().unwrap_or("").to_string(),
+                name.to_string(),
+            ));
+        }
+    }
+    if rows.is_empty() {
+        rows.push(("ports".into(), "no listeners".into()));
+    }
+    rows
+}
+
 fn files_rows(cwd: &std::path::Path) -> Vec<(String, String)> {
     let Ok(read) = std::fs::read_dir(cwd) else {
         return Vec::new();
@@ -1568,6 +1690,22 @@ fn files_rows(cwd: &std::path::Path) -> Vec<(String, String)> {
         .collect();
     rows.sort_by(|a, b| a.0.cmp(&b.0));
     rows
+}
+
+fn theme_from_config(t: &miao_term_config::Theme, cursor: miao_term_config::CursorStyle) -> Theme {
+    use miao_term_ui::theme::Rgb;
+    let rgb = |c: miao_term_config::Rgb| Rgb(c.0, c.1, c.2);
+    Theme {
+        bg: rgb(t.background),
+        fg: rgb(t.foreground),
+        palette: t.palette.map(rgb),
+        selection: Rgb(0x43, 0x4c, 0x5e),
+        cursor: match cursor {
+            miao_term_config::CursorStyle::Block => miao_term_ui::CursorStyle::Block,
+            miao_term_config::CursorStyle::Bar => miao_term_ui::CursorStyle::Bar,
+            miao_term_config::CursorStyle::Underline => miao_term_ui::CursorStyle::Underline,
+        },
+    }
 }
 
 fn install_egui_fonts(ctx: &egui::Context) {
