@@ -927,9 +927,11 @@ impl State {
         if self.shot_now || std::env::var_os("MIAOTTY_NATIVE_SHOT").is_some() {
             self.capture(
                 &draws,
-                &image_quads,
-                &rects,
-                scale,
+                ImageLayer {
+                    quads: &image_quads,
+                    rects: &rects,
+                    scale,
+                },
                 window_bg,
                 &paint_jobs,
                 &screen,
