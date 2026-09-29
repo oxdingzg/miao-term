@@ -304,8 +304,14 @@ pub fn info(ui: &mut egui::Ui, ch: &ChromeColors, title: &str, rows: &[(String, 
 use crate::i18n::{t, Lang};
 
 fn panel_frame(ch: &ChromeColors, margin: egui::Margin) -> egui::Frame {
+    panel_frame_fill(ch, margin, ch.bg)
+}
+
+/// Like [`panel_frame`] but with an explicit surface colour, so the session
+/// list and the details inspector can sit above/below the terminal card.
+fn panel_frame_fill(ch: &ChromeColors, margin: egui::Margin, fill: Rgb) -> egui::Frame {
     egui::Frame::default()
-        .fill(bg_color(ch.bg))
+        .fill(bg_color(fill))
         .stroke(egui::Stroke::new(1.0_f32, bg_color(ch.hover)))
         .inner_margin(margin)
 }
@@ -809,7 +815,7 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
     if show_sidebar {
         egui::SidePanel::left("sessions")
             .exact_width(CHROME_SIDEBAR_W)
-            .frame(panel_frame(&ch, egui::Margin::same(6.0)))
+            .frame(panel_frame_fill(&ch, egui::Margin::same(6.0), ch.sidebar))
             .show(ctx, |ui| {
                 let heading = t(lang, "Sessions", "会话");
                 if let Some(i) = sidebar(ui, &ch, &titles, &icons, &badges, &metas, active, heading)
@@ -832,7 +838,7 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
         ];
         egui::SidePanel::right("details")
             .exact_width(CHROME_DETAILS_W)
-            .frame(panel_frame(&ch, egui::Margin::same(8.0)))
+            .frame(panel_frame_fill(&ch, egui::Margin::same(8.0), ch.details))
             .show(ctx, |ui| {
                 if let Some(i) = details_tabs(ui, &ch, &tabs_icons, details_tab) {
                     details_sel = Some(i);

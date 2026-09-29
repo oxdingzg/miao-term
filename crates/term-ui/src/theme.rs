@@ -187,6 +187,10 @@ pub struct Chrome {
     pub hover: Rgb,
     pub active: Rgb,
     pub accent: Rgb,
+    /// Left session list, a shade lighter than the terminal card.
+    pub sidebar: Rgb,
+    /// Right details inspector, a shade darker than the terminal card.
+    pub details: Rgb,
 }
 
 impl Chrome {
@@ -199,6 +203,8 @@ impl Chrome {
             hover: Rgb(0x2c, 0x2c, 0x2e),
             active: Rgb(0x3a, 0x3a, 0x3c),
             accent: Rgb(0x0a, 0x84, 0xff),
+            sidebar: Rgb(0x23, 0x23, 0x25),
+            details: Rgb(0x14, 0x14, 0x16),
         }
     }
 }
