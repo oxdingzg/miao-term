@@ -34,6 +34,7 @@ pub fn tab_bar(
     theme: &crate::theme::Theme,
     titles: &[String],
     active: usize,
+    lang: Lang,
 ) -> TabBarEvents {
     const DRAG_ID: &str = "miao_tab_drag";
     let mut ev = TabBarEvents::default();
@@ -92,7 +93,11 @@ pub fn tab_bar(
             }
         }
     }
-    if ui.button("+").on_hover_text("New Tab").clicked() {
+    if ui
+        .button("+")
+        .on_hover_text(t(lang, "New Tab", "新建标签"))
+        .clicked()
+    {
         ev.new_tab = true;
     }
     ev
@@ -183,30 +188,39 @@ pub fn queue(
     theme: &crate::theme::Theme,
     items: &[String],
     input: &mut String,
+    lang: Lang,
 ) -> QueueEvents {
     let mut ev = QueueEvents::default();
     ui.visuals_mut().override_text_color = Some(fg_color(theme));
-    ui.label(section(&format!("Queue ({})", items.len())));
+    ui.label(section(&format!(
+        "{} ({})",
+        t(lang, "Queue", "队列"),
+        items.len()
+    )));
     ui.horizontal(|ui| {
         ui.add(
             egui::TextEdit::singleline(input)
-                .hint_text("Prompt to run…")
+                .hint_text(t(lang, "Prompt to run…", "要执行的提示…"))
                 .desired_width(160.0),
         );
-        if ui.button("Add").clicked() {
+        if ui.button(t(lang, "Add", "添加")).clicked() {
             ev.add = true;
         }
-        if ui.button("Send All").clicked() {
+        if ui.button(t(lang, "Send All", "全部发送")).clicked() {
             ev.send_all = true;
         }
-        if ui.button("Clear").clicked() {
+        if ui.button(t(lang, "Clear", "清空")).clicked() {
             ev.clear = true;
         }
     });
     ui.separator();
     for (i, item) in items.iter().enumerate() {
         ui.horizontal(|ui| {
-            if ui.small_button("\u{25b6}").on_hover_text("Send").clicked() {
+            if ui
+                .small_button("\u{25b6}")
+                .on_hover_text(t(lang, "Send", "发送"))
+                .clicked()
+            {
                 ev.send = Some(i);
             }
             if ui.small_button("\u{00d7}").clicked() {
@@ -517,7 +531,7 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
         .frame(panel_frame(&theme, egui::Margin::symmetric(6.0, 3.0)))
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                let ev = tab_bar(ui, &theme, &titles, active);
+                let ev = tab_bar(ui, &theme, &titles, active, lang);
                 switch = ev.switch;
                 close = ev.close;
                 rename = ev.rename;
@@ -577,7 +591,7 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
                 }
                 ui.separator();
                 if details_is_queue {
-                    qev = queue(ui, &theme, &queue_items, &mut queue_input);
+                    qev = queue(ui, &theme, &queue_items, &mut queue_input, lang);
                 } else {
                     info(ui, &theme, &details_title, &details_rows);
                 }

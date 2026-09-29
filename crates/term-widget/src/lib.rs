@@ -1917,7 +1917,11 @@ impl State {
             .show(ctx, |ui| {
                 let r = ui.add(
                     egui::TextEdit::singleline(query)
-                        .hint_text("tab / file")
+                        .hint_text(miao_term_ui::i18n::t(
+                            self.lang,
+                            "tab / file",
+                            "标签 / 文件",
+                        ))
                         .desired_width(420.0),
                 );
                 r.request_focus();
@@ -2069,7 +2073,7 @@ impl State {
             .show(ctx, |ui| {
                 let r = ui.add(
                     egui::TextEdit::singleline(query)
-                        .hint_text("search…")
+                        .hint_text(miao_term_ui::i18n::t(self.lang, "search…", "搜索…"))
                         .desired_width(260.0),
                 );
                 r.request_focus();
@@ -2498,6 +2502,7 @@ impl State {
                                 &mut self.mmd,
                                 diag_fg,
                                 diag_panel,
+                                self.lang,
                             )
                         });
                 } else {
@@ -3339,6 +3344,7 @@ fn markdown_preview(
     mmd: &mut Mermaid,
     fg: egui::Color32,
     panel: egui::Color32,
+    lang: miao_term_ui::i18n::Lang,
 ) {
     let mut lines = text.lines().peekable();
     while let Some(line) = lines.next() {
@@ -3367,9 +3373,13 @@ fn markdown_preview(
                     miao_term_ui::mermaid::show(ui, &g, fg, panel);
                 } else {
                     ui.label(
-                        egui::RichText::new("Mermaid diagram (not rendered)")
-                            .size(12.0)
-                            .color(egui::Color32::from_gray(150)),
+                        egui::RichText::new(miao_term_ui::i18n::t(
+                            lang,
+                            "Mermaid diagram (not rendered)",
+                            "Mermaid 图（未渲染）",
+                        ))
+                        .size(12.0)
+                        .color(egui::Color32::from_gray(150)),
                     );
                 }
             } else {
