@@ -103,7 +103,7 @@ struct Editor {
 
 /// The inline-image layer for the debug capture (quads + the pane scissor).
 struct ImageLayer<'a> {
-    quads: &'a [(u64, i32, ImageInstance)],
+    quads: &'a [(u64, i32, u32, ImageInstance)],
     rects: &'a [(String, Rect)],
     scale: f32,
 }
@@ -678,11 +678,11 @@ impl State {
             .map(|s| s.chars().count() as u16)
             .unwrap_or(0);
         let mut draws: Vec<PaneDraw> = Vec::new();
-        let mut image_quads: Vec<(u64, i32, ImageInstance)> = Vec::new();
+        let mut image_quads: Vec<(u64, i32, u32, ImageInstance)> = Vec::new();
         let mut image_uploads: Vec<(u64, Arc<miao_term_core::graphics::PlacedImage>)> = Vec::new();
         let mut image_keep: std::collections::HashSet<u64> = std::collections::HashSet::new();
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
-            for (id, r) in &rects {
+            for (pane_idx, (id, r)) in rects.iter().enumerate() {
                 let Some(pane) = tab.panes.iter_mut().find(|p| &p.id == id) else {
                     continue;
                 };
@@ -843,6 +843,7 @@ impl State {
                         image_quads.push((
                             key,
                             im.z,
+                            pane_idx as u32,
                             ImageInstance {
                                 min: [x0, y0],
                                 max: [x1, y1],
@@ -986,10 +987,18 @@ impl State {
                 .forget_lifetime();
             self.quads.render(&mut pass);
             if !image_quads.is_empty() {
-                let (sx, sy, sw, sh) =
-                    grid_scissor(&rects, scale, self.config.width, self.config.height);
-                pass.set_scissor_rect(sx, sy, sw, sh);
-                self.images.render(&mut pass);
+                // Clip each pane's images to that pane (they are grouped by pane).
+                for (pane_idx, d) in draws.iter().enumerate() {
+                    let sx = (d.rect.x * scale).max(0.0) as u32;
+                    let sy = (d.rect.y * scale).max(0.0) as u32;
+                    let sw = ((d.rect.w * scale) as u32).min(self.config.width.saturating_sub(sx));
+                    let sh = ((d.rect.h * scale) as u32).min(self.config.height.saturating_sub(sy));
+                    if sw == 0 || sh == 0 {
+                        continue;
+                    }
+                    pass.set_scissor_rect(sx, sy, sw, sh);
+                    self.images.render(&mut pass, pane_idx as u32);
+                }
                 pass.set_scissor_rect(0, 0, self.config.width, self.config.height);
             }
             for d in &draws {
@@ -1684,7 +1693,7 @@ impl State {
             if !images.quads.is_empty() {
                 let (sx, sy, sw, sh) = grid_scissor(images.rects, images.scale, w, h);
                 pass.set_scissor_rect(sx, sy, sw, sh);
-                self.images.render(&mut pass);
+                self.images.render_all(&mut pass);
                 pass.set_scissor_rect(0, 0, w, h);
             }
             for d in draws {

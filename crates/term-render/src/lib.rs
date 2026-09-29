@@ -560,7 +560,8 @@ pub struct ImageRenderer {
     textures: std::collections::HashMap<u64, wgpu::BindGroup>,
     instances: wgpu::Buffer,
     capacity: usize,
-    runs: Vec<(u64, u32, u32)>,
+    /// (pane, texture key, instance start, instance count)
+    runs: Vec<(u32, u64, u32, u32)>,
 }
 
 impl ImageRenderer {
@@ -757,22 +758,27 @@ impl ImageRenderer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         resolution: (u32, u32),
-        quads: &[(u64, i32, ImageInstance)],
+        quads: &[(u64, i32, u32, ImageInstance)],
     ) {
         queue.write_buffer(
             &self.globals,
             0,
             bytemuck_cast(&[resolution.0 as f32, resolution.1 as f32, 0.0, 0.0]),
         );
-        let mut sorted: Vec<(u64, i32, ImageInstance)> = quads.to_vec();
-        // Lower z first (drawn underneath); ties keep stable key order.
-        sorted.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
+        let mut sorted: Vec<(u64, i32, u32, ImageInstance)> = quads.to_vec();
+        // Group by pane (so a pane can be drawn alone), then lower z first.
+        sorted.sort_by(|a, b| a.2.cmp(&b.2).then(a.1.cmp(&b.1)).then(a.0.cmp(&b.0)));
         self.runs.clear();
         let mut start = 0usize;
         for i in 1..=sorted.len() {
-            if i == sorted.len() || sorted[i].0 != sorted[start].0 {
-                self.runs
-                    .push((sorted[start].0, start as u32, (i - start) as u32));
+            if i == sorted.len() || (sorted[i].0, sorted[i].2) != (sorted[start].0, sorted[start].2)
+            {
+                self.runs.push((
+                    sorted[start].2,
+                    sorted[start].0,
+                    start as u32,
+                    (i - start) as u32,
+                ));
                 start = i;
             }
         }
@@ -785,21 +791,38 @@ impl ImageRenderer {
                 mapped_at_creation: false,
             });
         }
-        let instances: Vec<ImageInstance> = sorted.iter().map(|(_, _, q)| *q).collect();
+        let instances: Vec<ImageInstance> = sorted.iter().map(|(_, _, _, q)| *q).collect();
         if !instances.is_empty() {
             queue.write_buffer(&self.instances, 0, bytemuck_cast(&instances));
         }
     }
 
-    pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
+    /// Draw one pane's images (its runs are contiguous after `prepare`).
+    pub fn render(&self, pass: &mut wgpu::RenderPass<'_>, pane: u32) {
+        self.draw(pass, Some(pane));
+    }
+
+    /// Draw every image (used by the offscreen capture).
+    pub fn render_all(&self, pass: &mut wgpu::RenderPass<'_>) {
+        self.draw(pass, None);
+    }
+
+    fn draw(&self, pass: &mut wgpu::RenderPass<'_>, only: Option<u32>) {
         if self.runs.is_empty() {
             return;
         }
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.globals_bg, &[]);
-        pass.set_vertex_buffer(0, self.instances.slice(..));
-        for (id, start, count) in &self.runs {
+        let mut set = false;
+        for (pane, id, start, count) in &self.runs {
+            if only.is_some_and(|p| p != *pane) {
+                continue;
+            }
             if let Some(bg) = self.textures.get(id) {
+                if !set {
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, &self.globals_bg, &[]);
+                    pass.set_vertex_buffer(0, self.instances.slice(..));
+                    set = true;
+                }
                 pass.set_bind_group(1, bg, &[]);
                 pass.draw(0..6, *start..*start + *count);
             }
@@ -911,6 +934,7 @@ mod gpu_tests {
             &[(
                 1,
                 0,
+                0,
                 ImageInstance {
                     min: [36.0, 2.0],
                     max: [60.0, 20.0],
@@ -940,7 +964,7 @@ mod gpu_tests {
                 .forget_lifetime();
             quads.render(&mut pass);
             glyphs.render(&mut pass);
-            images.render(&mut pass);
+            images.render(&mut pass, 0);
         }
         let bpr = (w * 4) as usize;
         let padded = (bpr + 255) & !255;
