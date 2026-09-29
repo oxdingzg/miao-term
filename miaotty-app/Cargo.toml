@@ -15,7 +15,7 @@ path = "src/main.rs"
 [package.metadata.deb]
 name = "miaotty"
 maintainer = "miaotty"
-copyright = "MIT OR Apache-2.0"
+copyright = "Apache-2.0"
 license-file = ["../LICENSE", "0"]
 section = "utils"
 priority = "optional"

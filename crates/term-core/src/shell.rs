@@ -20,7 +20,7 @@ fi
 _miaotty_osc7() { printf '\033]7;file://%s%s\033\\' "${HOST:-localhost}" "$PWD"; }
 _miaotty_preexec() {
   command -v miaotty-cli >/dev/null 2>&1 || return 0
-  ( miaotty-cli history:add --command "$1" --cwd "$PWD" >/dev/null 2>&1 & )
+  ( miaotty-cli history add --command "$1" --cwd "$PWD" >/dev/null 2>&1 & )
 }
 autoload -Uz add-zsh-hook 2>/dev/null
 if (( $+functions[add-zsh-hook] )); then
