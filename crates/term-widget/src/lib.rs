@@ -1765,6 +1765,33 @@ impl State {
         std::process::exit(0);
     }
 
+    /// Apply a URL-scheme / argv launch intent (ADR 0013).
+    fn apply_launch(&mut self, intent: &miao_term_ui::launch::Intent) {
+        use miao_term_ui::launch::Intent;
+        match intent {
+            Intent::Activate | Intent::Quick => {}
+            Intent::Focus(id) => {
+                for (i, tab) in self.tabs.iter().enumerate() {
+                    if tab.panes.iter().any(|p| &p.id == id) {
+                        self.active_tab = i;
+                        self.selection = None;
+                        break;
+                    }
+                }
+            }
+            Intent::Run(cmd) => {
+                self.new_tab();
+                if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                    let active = tab.active.clone();
+                    if let Some(pane) = tab.panes.iter_mut().find(|p| p.id == active) {
+                        pane.term.write(format!("{cmd}\r").as_bytes());
+                    }
+                }
+                self.publish_panes();
+            }
+        }
+    }
+
     /// Notifications + sleep guard (ADR 0010), mirroring the eframe host.
     fn agent_loop(&mut self) {
         if !self.notifications && !self.prevent_sleep {
@@ -2818,6 +2845,9 @@ impl ApplicationHandler for Host {
         if !state.restore_session() {
             state.new_tab();
         }
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        let intent = miao_term_ui::launch::Intent::from_args(&args);
+        state.apply_launch(&intent);
         state.window.request_redraw();
         self.state = Some(state);
     }

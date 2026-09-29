@@ -20,7 +20,7 @@ mod hotkey;
 mod i18n;
 mod icons;
 mod integration;
-mod launch;
+use miao_term_ui::launch;
 mod panels;
 use miao_term_ui::ssh;
 use miao_term_ui::update;

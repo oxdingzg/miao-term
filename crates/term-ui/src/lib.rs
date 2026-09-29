@@ -11,6 +11,7 @@ pub mod chrome;
 pub mod i18n;
 pub mod icons;
 pub mod input;
+pub mod launch;
 pub mod layout;
 pub mod markdown;
 pub mod mermaid;
