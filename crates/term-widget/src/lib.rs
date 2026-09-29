@@ -144,6 +144,9 @@ struct State {
     recipe_list: Vec<String>,
     ssh_dialog: Option<String>,
     remote_dialog: Option<(String, String)>,
+    editor_vim: bool,
+    vim: Option<miao_term_ui::vim::VimRuntime>,
+    vim_for: String,
     composer: Option<String>,
     quick: Option<String>,
     closed: Vec<Option<std::path::PathBuf>>,
@@ -2098,6 +2101,10 @@ impl State {
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| ed.path.display().to_string()),
         };
+        if self.vim_for != title {
+            self.vim_for = title.clone();
+            self.vim = self.editor_vim.then(miao_term_ui::vim::VimRuntime::default);
+        }
         let modified = ed.text != ed.original;
         let lang = miao_term_ui::syntax::detect(&match &ed.remote {
             Some((_, p)) => p.clone(),
@@ -2107,6 +2114,7 @@ impl State {
             miao_term_ui::syntax::layouter(lang, egui::Color32::from_rgb(0xe5, 0xe5, 0xe5), 13.0);
         let mut open = true;
         let mut save = false;
+        let mut quit = false;
         egui::Window::new(title)
             .open(&mut open)
             .default_size([640.0, 480.0])
@@ -2139,6 +2147,7 @@ impl State {
                         .auto_shrink([false, false])
                         .show(ui, |ui| markdown_preview(ui, &ed.text));
                 } else {
+                    let mut vim_effect = miao_term_ui::vim::VimEffect::Nothing;
                     egui::ScrollArea::both()
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
@@ -2157,14 +2166,30 @@ impl State {
                                     )
                                     .selectable(false),
                                 );
+                                let text_id = egui::Id::new("miaotty-native-editor-text");
                                 ui.add(
                                     egui::TextEdit::multiline(&mut ed.text)
+                                        .id(text_id)
                                         .code_editor()
                                         .desired_width(f32::INFINITY)
                                         .layouter(&mut layouter),
                                 );
+                                if let Some(v) = self.vim.as_mut() {
+                                    vim_effect = miao_term_ui::vim::vim_handle(
+                                        &mut ed.text,
+                                        v,
+                                        ui.ctx(),
+                                        text_id,
+                                    );
+                                }
                             });
                         });
+                    if vim_effect == miao_term_ui::vim::VimEffect::Save {
+                        save = true;
+                    }
+                    if vim_effect == miao_term_ui::vim::VimEffect::Quit {
+                        quit = true;
+                    }
                 }
             });
         if save {
@@ -2177,6 +2202,11 @@ impl State {
                 }
             }
             ed.original = ed.text.clone();
+        }
+        if quit {
+            self.editor = None;
+            self.vim = None;
+            return;
         }
         if !open {
             self.editor = None;
@@ -2405,6 +2435,9 @@ impl ApplicationHandler for Host {
             recipe_list: Vec::new(),
             ssh_dialog: None,
             remote_dialog: None,
+            editor_vim: cfg.editor_vim,
+            vim: cfg.editor_vim.then(miao_term_ui::vim::VimRuntime::default),
+            vim_for: String::new(),
             composer: None,
             quick: None,
             closed: Vec::new(),

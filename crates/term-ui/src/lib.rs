@@ -17,6 +17,7 @@ pub mod ssh;
 pub mod syntax;
 pub mod theme;
 pub mod update;
+pub mod vim;
 
 use miao_term_core::ATerm;
 use miao_term_render::Span;
