@@ -3679,8 +3679,8 @@ impl ApplicationHandler for Host {
                 state.window.request_redraw();
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                if state.hint_mode {
-                    if event.state == ElementState::Pressed {
+                if state.hint_mode && event.state == ElementState::Pressed {
+                    {
                         let key = match &event.logical_key {
                             Key::Character(c) => c.chars().next(),
                             Key::Named(NamedKey::Escape) => Some('\u{1b}'),
