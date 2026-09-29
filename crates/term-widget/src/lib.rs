@@ -2011,7 +2011,7 @@ impl State {
                         ));
                     }
                 }
-                rows.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+                rows.sort_by_key(|r| (r.0, r.1));
                 let clone_pick = |p: &Pick| match p {
                     Pick::Tab(i) => Pick::Tab(*i),
                     Pick::File(n) => Pick::File(n.clone()),
