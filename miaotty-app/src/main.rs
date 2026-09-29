@@ -5759,29 +5759,11 @@ impl MiaottyApp {
 }
 
 fn word_selection(screen: &ATerm, row: u16, col: u16, cols: u16) -> Selection {
-    let is_word = |c: u16| -> bool {
-        screen
-            .cell(row, c)
-            .map(|cell| cell.ch.is_alphanumeric() || "_-./~".contains(cell.ch))
-            .unwrap_or(false)
-    };
-    if !is_word(col) {
-        return Selection {
-            start: (row, col),
-            end: (row, col),
-        };
-    }
-    let mut l = col;
-    while l > 0 && is_word(l - 1) {
-        l -= 1;
-    }
-    let mut r = col;
-    while r + 1 < cols && is_word(r + 1) {
-        r += 1;
-    }
+    // Shared with the native host (miao-term-ui).
+    let s = miao_term_ui::selection::word_selection(screen, row, col, cols);
     Selection {
-        start: (row, l),
-        end: (row, r),
+        start: s.start,
+        end: s.end,
     }
 }
 

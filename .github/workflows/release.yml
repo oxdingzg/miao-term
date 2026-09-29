@@ -20,11 +20,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Build
-        run: cargo build --release -p miaotty-app -p miaotty-cli
+        run: cargo build --release -p miaotty-app -p miaotty-cli -p miao-term-widget
 
       - name: Package (macOS)
         if: runner.os == 'macOS'
         run: PROFILE=release scripts/package-macos.sh
+
+      - name: Package native (macOS)
+        if: runner.os == 'macOS'
+        run: zip -j miaotty-native-macos-arm64.zip target/release/miaotty-native
 
       - name: Sign & notarize (macOS, optional)
         if: runner.os == 'macOS'
@@ -58,7 +62,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           mkdir -p dist
-          cp target/release/miaotty target/release/miaotty-cli dist/
+          cp target/release/miaotty target/release/miaotty-cli target/release/miaotty-native dist/
           tar -C dist -czf miaotty-linux-x86_64.tar.gz .
           cargo install cargo-deb --locked
           cargo deb -p miaotty-app --no-build
@@ -72,7 +76,7 @@ jobs:
           AppDir=AppDir
           mkdir -p "$AppDir/usr/bin" "$AppDir/usr/share/applications" \
                    "$AppDir/usr/share/icons/hicolor/256x256/apps"
-          cp target/release/miaotty target/release/miaotty-cli "$AppDir/usr/bin/"
+          cp target/release/miaotty target/release/miaotty-cli target/release/miaotty-native "$AppDir/usr/bin/"
           cat > "$AppDir/miaotty.desktop" <<'EOF'
           [Desktop Entry]
           Type=Application
@@ -97,6 +101,7 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item target/release/miaotty.exe dist/
           Copy-Item target/release/miaotty-cli.exe dist/
+          Copy-Item target/release/miaotty-native.exe dist/
           Compress-Archive -Path dist/* -DestinationPath miaotty-windows-x86_64.zip
 
       - name: MSI (Windows, best-effort)

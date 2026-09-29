@@ -34,12 +34,23 @@ const BLINK: Duration = Duration::from_millis(530);
 
 /// Run a native terminal window until it is closed.
 pub fn run(title: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
+    // MTP control plane (ADR 0005): the shell inherits `MIAOTTY_SOCKET`, so
+    // `miaotty-cli`, plugins and agent hooks work exactly as with the eframe app.
+    let socket = miao_term_mtp::default_socket();
+    std::env::set_var("MIAOTTY_SOCKET", &socket);
+    let mtp = miao_term_mtp::ServerState::new();
+    match miao_term_mtp::serve(&socket, mtp.clone()) {
+        Ok(()) => eprintln!("miaotty-native: MTP host on {}", socket.display()),
+        Err(e) => eprintln!("miaotty-native: MTP host failed: {e}"),
+    }
+
     let event_loop = EventLoop::<()>::with_user_event().build()?;
     event_loop.set_control_flow(ControlFlow::Wait);
     let proxy = event_loop.create_proxy();
     let mut host = Host {
         title: title.to_string(),
         proxy,
+        mtp,
         state: None,
     };
     event_loop.run_app(&mut host)?;
@@ -49,8 +60,12 @@ pub fn run(title: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
 struct Host {
     title: String,
     proxy: EventLoopProxy<()>,
+    mtp: Arc<miao_term_mtp::ServerState>,
     state: Option<State>,
 }
+
+/// A time-stamped, path-keyed details cache (git status / directory listing).
+type Cache = Option<(Instant, std::path::PathBuf, Vec<(String, String)>)>;
 
 struct Pane {
     id: String,
@@ -81,6 +96,7 @@ struct State {
     config: wgpu::SurfaceConfiguration,
     quads: QuadRenderer,
     renderers: HashMap<String, TermRenderer>,
+    mtp: Arc<miao_term_mtp::ServerState>,
     tabs: Vec<Tab>,
     active_tab: usize,
     theme: Theme,
@@ -100,6 +116,9 @@ struct State {
     show_palette: bool,
     palette_query: String,
     show_settings: bool,
+    details_tab: usize,
+    git_cache: Cache,
+    files_cache: Cache,
     last_title: Option<String>,
     focused: bool,
     cursor_on: bool,
@@ -240,13 +259,30 @@ impl State {
         let waker: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
             let _ = proxy.send_event(());
         });
-        Terminal::new(None, cols, rows, 10_000, None, &[], waker)
+        let env = vec![("MIAOTTY_PANE_ID".to_string(), id.clone())];
+        Terminal::new(None, cols, rows, 10_000, None, &env, waker)
             .ok()
             .map(|term| Pane {
                 id,
                 term,
                 scroll: 0,
             })
+    }
+
+    /// Advertise the panes to the MTP control plane.
+    fn publish_panes(&self) {
+        let mut panes = Vec::new();
+        for tab in &self.tabs {
+            for p in &tab.panes {
+                let title = p
+                    .term
+                    .title()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| tab.title.clone());
+                panes.push(serde_json::json!({ "id": p.id, "title": title }));
+            }
+        }
+        self.mtp.set_panes(panes);
     }
 
     fn new_tab(&mut self) {
@@ -263,6 +299,7 @@ impl State {
         });
         self.active_tab = self.tabs.len() - 1;
         self.selection = None;
+        self.publish_panes();
     }
 
     fn close_pane(&mut self) {
@@ -276,16 +313,15 @@ impl State {
                 self.tabs.remove(self.active_tab);
                 self.active_tab = self.active_tab.min(self.tabs.len() - 1);
                 self.selection = None;
+                self.publish_panes();
             }
             return;
         }
         tab.panes.retain(|p| p.id != target);
-        let single = tab.layout.remove(&target);
-        if single {
-            // collapse handled by remove
-        }
+        let _ = tab.layout.remove(&target);
         tab.active = tab.layout.ids().first().cloned().unwrap_or_default();
         self.selection = None;
+        self.publish_panes();
     }
 
     fn split(&mut self, dir: SplitDir) {
@@ -302,6 +338,7 @@ impl State {
             }
         }
         self.resize();
+        self.publish_panes();
     }
 
     fn cycle_pane(&mut self, forward: bool) {
@@ -397,6 +434,15 @@ impl State {
     }
 
     fn render(&mut self) {
+        // MTP `pane.send` / `pane.run` — inject bytes into the target pane.
+        for (pane_id, data) in self.mtp.take_writes() {
+            for tab in &mut self.tabs {
+                if let Some(p) = tab.panes.iter_mut().find(|p| p.id == pane_id) {
+                    p.term.write(&data);
+                    p.scroll = 0;
+                }
+            }
+        }
         // Drain every pane.
         for tab in &mut self.tabs {
             for pane in &mut tab.panes {
@@ -683,6 +729,11 @@ impl State {
             });
 
         if self.show_sidebar {
+            let badges: Vec<Option<miao_term_ui::theme::Rgb>> = self
+                .tabs
+                .iter()
+                .map(|t| self.agent_badge(&t.active))
+                .collect();
             let mut s = None;
             egui::SidePanel::left("sessions")
                 .exact_width(SIDEBAR_W)
@@ -692,14 +743,17 @@ impl State {
                         .inner_margin(egui::Margin::same(6.0)),
                 )
                 .show(ctx, |ui| {
-                    s = chrome::sidebar(ui, &theme, &titles, active);
+                    s = chrome::sidebar(ui, &theme, &titles, &badges, active);
                 });
             if let Some(i) = s {
                 switch = Some(i);
             }
         }
         if self.show_details {
-            let rows = self.details_rows();
+            const TABS: [&str; 5] = ["Info", "Agent", "Outline", "Git", "Files"];
+            let active = self.details_tab.min(TABS.len() - 1);
+            let (title, rows) = self.details_content(active);
+            let mut sel = None;
             egui::SidePanel::right("details")
                 .exact_width(DETAILS_W)
                 .frame(
@@ -708,8 +762,15 @@ impl State {
                         .inner_margin(egui::Margin::same(8.0)),
                 )
                 .show(ctx, |ui| {
-                    chrome::info(ui, &theme, "Info", &rows);
+                    if let Some(i) = chrome::details_tabs(ui, &theme, &TABS, active) {
+                        sel = Some(i);
+                    }
+                    ui.separator();
+                    chrome::info(ui, &theme, title, &rows);
                 });
+            if let Some(i) = sel {
+                self.details_tab = i;
+            }
         }
         let status = self.status_text();
         egui::TopBottomPanel::bottom("status")
@@ -751,6 +812,99 @@ impl State {
         if let Some(i) = self.renaming {
             self.rename_window(ctx, i);
         }
+    }
+
+    fn agent_badge(&self, pane_id: &str) -> Option<miao_term_ui::theme::Rgb> {
+        use miao_term_ui::theme::Rgb;
+        let a = self.mtp.agent_for(pane_id)?;
+        let state = a.get("state").and_then(|v| v.as_str())?;
+        Some(match state {
+            "processing" => Rgb(0x81, 0xa1, 0xc1),
+            "idle" => Rgb(0xa3, 0xbe, 0x8c),
+            "awaiting" => Rgb(0xeb, 0xcb, 0x8b),
+            "error" => Rgb(0xbf, 0x61, 0x6a),
+            _ => Rgb(0x88, 0x88, 0x88),
+        })
+    }
+
+    fn details_content(&mut self, tab: usize) -> (&'static str, Vec<(String, String)>) {
+        match tab {
+            1 => ("Agent", self.agent_rows()),
+            2 => ("Outline", self.outline_rows()),
+            3 => ("Git", self.git_rows_cached()),
+            4 => ("Files", self.files_rows_cached()),
+            _ => ("Info", self.details_rows()),
+        }
+    }
+
+    fn active_pane(&self) -> Option<&Pane> {
+        let tab = self.tabs.get(self.active_tab)?;
+        tab.panes.iter().find(|p| p.id == tab.active)
+    }
+
+    fn cwd(&self) -> Option<std::path::PathBuf> {
+        self.active_pane()
+            .and_then(|p| p.term.cwd().map(std::path::PathBuf::from))
+    }
+
+    fn agent_rows(&self) -> Vec<(String, String)> {
+        let mut rows = Vec::new();
+        if let Some(p) = self.active_pane() {
+            match self.mtp.agent_for(&p.id) {
+                Some(a) => {
+                    for k in ["agent", "state", "session_id", "tty"] {
+                        if let Some(v) = a.get(k).and_then(|v| v.as_str()) {
+                            rows.push((k.to_string(), v.to_string()));
+                        }
+                    }
+                    if rows.is_empty() {
+                        rows.push(("state".into(), a.to_string()));
+                    }
+                }
+                None => rows.push(("agent".into(), "—".into())),
+            }
+        }
+        rows
+    }
+
+    fn outline_rows(&self) -> Vec<(String, String)> {
+        let mut rows = Vec::new();
+        if let Some(p) = self.active_pane() {
+            for e in self.mtp.history_for(&p.id).iter().rev().take(200) {
+                let cmd = e.get("command").and_then(|v| v.as_str()).unwrap_or("");
+                let cwd = e.get("cwd").and_then(|v| v.as_str()).unwrap_or("");
+                rows.push((cwd.to_string(), cmd.to_string()));
+            }
+        }
+        rows
+    }
+
+    fn git_rows_cached(&mut self) -> Vec<(String, String)> {
+        let Some(cwd) = self.cwd() else {
+            return Vec::new();
+        };
+        if let Some((t, p, rows)) = &self.git_cache {
+            if p == &cwd && t.elapsed() < Duration::from_millis(1000) {
+                return rows.clone();
+            }
+        }
+        let rows = git_rows(&cwd);
+        self.git_cache = Some((Instant::now(), cwd, rows.clone()));
+        rows
+    }
+
+    fn files_rows_cached(&mut self) -> Vec<(String, String)> {
+        let Some(cwd) = self.cwd() else {
+            return Vec::new();
+        };
+        if let Some((t, p, rows)) = &self.files_cache {
+            if p == &cwd && t.elapsed() < Duration::from_millis(1000) {
+                return rows.clone();
+            }
+        }
+        let rows = files_rows(&cwd);
+        self.files_cache = Some((Instant::now(), cwd, rows.clone()));
+        rows
     }
 
     fn details_rows(&self) -> Vec<(String, String)> {
@@ -984,6 +1138,7 @@ impl State {
                 }
             }
             self.renaming = None;
+            self.publish_panes();
         }
         if !open {
             self.renaming = None;
@@ -1092,6 +1247,7 @@ impl ApplicationHandler for Host {
             config,
             quads,
             renderers: HashMap::new(),
+            mtp: self.mtp.clone(),
             tabs: Vec::new(),
             active_tab: 0,
             theme: Theme::nord(),
@@ -1111,6 +1267,9 @@ impl ApplicationHandler for Host {
             show_palette: false,
             palette_query: String::new(),
             show_settings: false,
+            details_tab: 0,
+            git_cache: None,
+            files_cache: None,
             last_title: None,
             focused: false,
             cursor_on: true,
@@ -1366,6 +1525,50 @@ fn key_input(event: &KeyEvent) -> input::KeyInput {
 }
 
 // ---- helpers ---------------------------------------------------------------
+
+fn git_rows(cwd: &std::path::Path) -> Vec<(String, String)> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(["status", "--porcelain=v1", "-b"])
+        .output();
+    let Ok(out) = out else {
+        return vec![("git".into(), "unavailable".into())];
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut rows = Vec::new();
+    for line in text.lines().take(200) {
+        if let Some(branch) = line.strip_prefix("## ") {
+            rows.push(("branch".into(), branch.to_string()));
+        } else if line.len() > 3 {
+            rows.push((line[..2].to_string(), line[3..].to_string()));
+        }
+    }
+    if rows.is_empty() {
+        rows.push(("status".into(), "clean".into()));
+    }
+    rows
+}
+
+fn files_rows(cwd: &std::path::Path) -> Vec<(String, String)> {
+    let Ok(read) = std::fs::read_dir(cwd) else {
+        return Vec::new();
+    };
+    let mut rows: Vec<(String, String)> = read
+        .flatten()
+        .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+        .take(200)
+        .map(|e| {
+            let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            (
+                e.file_name().to_string_lossy().to_string(),
+                if is_dir { "dir".into() } else { "file".into() },
+            )
+        })
+        .collect();
+    rows.sort_by(|a, b| a.0.cmp(&b.0));
+    rows
+}
 
 fn install_egui_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();

@@ -2112,9 +2112,11 @@ dependencies = [
  "egui-wgpu",
  "egui-winit",
  "miao-term-core",
+ "miao-term-mtp",
  "miao-term-render",
  "miao-term-ui",
  "pollster",
+ "serde_json",
  "wgpu",
  "winit",
 ]

@@ -61,6 +61,7 @@ pub fn sidebar(
     ui: &mut egui::Ui,
     theme: &crate::theme::Theme,
     titles: &[String],
+    badges: &[Option<Rgb>],
     active: usize,
 ) -> Option<usize> {
     let mut switch = None;
@@ -69,14 +70,44 @@ pub fn sidebar(
     ui.label(section(&format!("Sessions ({})", titles.len())));
     ui.separator();
     for (i, title) in titles.iter().enumerate() {
-        if ui
-            .selectable_label(i == active, egui::RichText::new(title).size(13.0))
-            .clicked()
-        {
-            switch = Some(i);
-        }
+        ui.horizontal(|ui| {
+            match badges.get(i).copied().flatten() {
+                Some(c) => {
+                    ui.colored_label(bg_color(c), "\u{25cf}");
+                }
+                None => {
+                    ui.label("  ");
+                }
+            }
+            if ui
+                .selectable_label(i == active, egui::RichText::new(title).size(13.0))
+                .clicked()
+            {
+                switch = Some(i);
+            }
+        });
     }
     switch
+}
+
+/// A row of selectable details tabs; returns the newly selected index.
+pub fn details_tabs(
+    ui: &mut egui::Ui,
+    theme: &crate::theme::Theme,
+    labels: &[&str],
+    active: usize,
+) -> Option<usize> {
+    let mut sel = None;
+    ui.visuals_mut().selection.bg_fill = bg_color(theme.palette[4]);
+    ui.visuals_mut().override_text_color = Some(fg_color(theme));
+    ui.horizontal_wrapped(|ui| {
+        for (i, l) in labels.iter().enumerate() {
+            if ui.selectable_label(i == active, *l).clicked() {
+                sel = Some(i);
+            }
+        }
+    });
+    sel
 }
 
 /// A two-column label/value info list (details panel).
