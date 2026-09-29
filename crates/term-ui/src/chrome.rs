@@ -343,6 +343,8 @@ pub enum MenuId {
     ReopenClosed,
     ClearScrollback,
     SelectAll,
+    CopyAnsi,
+    PasteEscaped,
     FindNext,
     FindPrev,
     UseSelForFind,

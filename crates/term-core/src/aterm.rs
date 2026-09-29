@@ -159,6 +159,44 @@ impl ATerm {
         out
     }
 
+    /// Selection text with SGR colour codes (for "Copy as ANSI Sequence").
+    pub fn contents_ansi_between(&self, r1: u16, c1: u16, r2: u16, c2: u16) -> String {
+        let mut out = String::new();
+        for row in r1..=r2 {
+            let (start, end) = if row == r1 {
+                (c1, self.cols as u16)
+            } else if row == r2 {
+                (0, c2)
+            } else {
+                (0, self.cols as u16)
+            };
+            let mut line = String::new();
+            let (mut cur_fg, mut cur_bg) = (None, None);
+            for col in start..end.max(start) {
+                let Some(cell) = self.cell(row, col) else {
+                    continue;
+                };
+                if cell.fg != Color::Named(NamedColor::Foreground) && Some(cell.fg) != cur_fg {
+                    line.push_str(&sgr(cell.fg, false));
+                    cur_fg = Some(cell.fg);
+                }
+                if cell.bg != Color::Named(NamedColor::Background) && Some(cell.bg) != cur_bg {
+                    line.push_str(&sgr(cell.bg, true));
+                    cur_bg = Some(cell.bg);
+                }
+                line.push(cell.ch);
+            }
+            if cur_fg.is_some() || cur_bg.is_some() {
+                line.push_str("\x1b[0m");
+            }
+            out.push_str(line.trim_end());
+            if row != r2 {
+                out.push('\n');
+            }
+        }
+        out
+    }
+
     /// Current scrollback offset (lines scrolled up from the bottom).
     pub fn scroll_offset(&self) -> usize {
         self.term.grid().display_offset()
@@ -209,6 +247,34 @@ impl ATerm {
     }
 }
 
+/// An SGR fragment for a colour (`bg` selects 48/49 instead of 38/39).
+fn sgr(c: Color, bg: bool) -> String {
+    match c {
+        Color::Named(NamedColor::Foreground) => "\x1b[39m".into(),
+        Color::Named(NamedColor::Background) => "\x1b[49m".into(),
+        Color::Named(n) if (n as usize) < 16 => {
+            let base = if bg { 40 } else { 30 };
+            let idx = n as usize;
+            // Bright colours use the 90/100 range.
+            let code = if idx >= 8 {
+                base + 60 + (idx - 8)
+            } else {
+                base + idx
+            };
+            format!("\x1b[{code}m")
+        }
+        Color::Indexed(i) => {
+            let sel = if bg { 48 } else { 38 };
+            format!("\x1b[{sel};5;{i}m")
+        }
+        Color::Spec(rgb) => {
+            let sel = if bg { 48 } else { 38 };
+            format!("\x1b[{sel};2;{};{};{}m", rgb.r, rgb.g, rgb.b)
+        }
+        _ => String::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,6 +309,15 @@ mod tests {
         t.set_scrollback(2);
         assert_eq!(t.line_text(0), "a");
         assert_eq!(t.line_text(2), "c");
+    }
+
+    #[test]
+    fn ansi_copy_carries_colours() {
+        let mut t = ATerm::new(10, 2, 10);
+        t.process(b"\x1b[31mred\x1b[0m");
+        let s = t.contents_ansi_between(0, 0, 0, 2);
+        assert!(s.contains("\x1b[31m"), "{s:?}");
+        assert!(s.contains("red"), "{s:?}");
     }
 
     #[test]

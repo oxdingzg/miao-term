@@ -615,6 +615,15 @@ impl State {
         Some(pane.term.screen().contents_between(r1, c1, r2, c2))
     }
 
+    /// The selection with SGR colour codes.
+    fn selection_ansi(&self) -> Option<String> {
+        let (pane_id, sel) = self.selection.as_ref()?;
+        let tab = self.tabs.get(self.active_tab)?;
+        let pane = tab.panes.iter().find(|p| &p.id == pane_id)?;
+        let (r1, c1, r2, c2) = sel.ordered();
+        Some(pane.term.screen().contents_ansi_between(r1, c1, r2, c2))
+    }
+
     fn copy_selection(&self, ctx: &egui::Context) {
         if let Some(text) = self.selection_text() {
             if !text.is_empty() {
@@ -1526,6 +1535,8 @@ enum Cmd {
     FontDown,
     FontReset,
     Palette,
+    CopyAnsi,
+    PasteEscaped,
     Find,
     FindNext,
     FindPrev,
@@ -1577,6 +1588,14 @@ impl State {
             (Cmd::FontDown, t(l, "Decrease Font Size", "减小字号")),
             (Cmd::FontReset, t(l, "Reset Font Size", "重置字号")),
             (Cmd::Palette, t(l, "Command Palette", "命令面板")),
+            (
+                Cmd::CopyAnsi,
+                t(l, "Copy as ANSI Sequence", "复制为 ANSI 序列"),
+            ),
+            (
+                Cmd::PasteEscaped,
+                t(l, "Paste Escaping Special Characters", "转义粘贴"),
+            ),
             (Cmd::Find, t(l, "Find…", "查找…")),
             (Cmd::FindNext, t(l, "Find Next", "查找下一个")),
             (Cmd::FindPrev, t(l, "Find Previous", "查找上一个")),
@@ -1645,6 +1664,20 @@ impl State {
                 self.search = Some(String::new());
                 self.search_idx = 0;
                 self.search_key.clear();
+            }
+            Cmd::CopyAnsi => {
+                if let Some(t) = self.selection_ansi() {
+                    if !t.is_empty() {
+                        self.egui_ctx.copy_text(t);
+                    }
+                }
+            }
+            Cmd::PasteEscaped => {
+                let text = self.egui_state.clipboard_text().unwrap_or_default();
+                if !text.is_empty() {
+                    let escaped = shell_escape_text(&text);
+                    self.paste(&escaped);
+                }
             }
             Cmd::FindNext | Cmd::FindPrev => {
                 let step = if matches!(cmd, Cmd::FindNext) { 1 } else { -1 };
@@ -3071,6 +3104,23 @@ fn link_at(line: &str, col: u16) -> Option<(String, u16, u16)> {
     }
 }
 
+/// Escape shell metacharacters in pasted text (single-quote problem tokens).
+fn shell_escape_text(s: &str) -> String {
+    s.split_whitespace()
+        .map(|tok| {
+            if tok
+                .chars()
+                .all(|c| c.is_alphanumeric() || "/._-@%+=:,~".contains(c))
+            {
+                tok.to_string()
+            } else {
+                format!("'{}'", tok.replace('\'', "'\\''"))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Quote a path for the shell (single quotes when it contains anything
 /// unusual), so a dropped file can be pasted into the terminal.
 fn shell_quote(s: &str) -> String {
@@ -4384,6 +4434,8 @@ impl chrome::Chrome for State {
             FontDown => Cmd::FontDown,
             FontReset => Cmd::FontReset,
             Palette => Cmd::Palette,
+            CopyAnsi => Cmd::CopyAnsi,
+            PasteEscaped => Cmd::PasteEscaped,
             Find => Cmd::Find,
             FindNext => Cmd::FindNext,
             FindPrev => Cmd::FindPrev,
