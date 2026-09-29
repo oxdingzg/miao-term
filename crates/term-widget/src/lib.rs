@@ -242,7 +242,7 @@ impl State {
         self.tabs.get(self.active_tab).map(|t| t.active.clone())
     }
 
-    fn spawn_pane(&self) -> Option<Pane> {
+    fn spawn_pane(&self, cwd: Option<std::path::PathBuf>) -> Option<Pane> {
         let (cw, ch) = (
             self.cw * self.window.scale_factor() as f32,
             self.ch * self.window.scale_factor() as f32,
@@ -260,7 +260,7 @@ impl State {
             let _ = proxy.send_event(());
         });
         let env = vec![("MIAOTTY_PANE_ID".to_string(), id.clone())];
-        Terminal::new(None, cols, rows, 10_000, None, &env, waker)
+        Terminal::new(None, cols, rows, 10_000, cwd, &env, waker)
             .ok()
             .map(|term| Pane {
                 id,
@@ -283,10 +283,11 @@ impl State {
             }
         }
         self.mtp.set_panes(panes);
+        self.save_session();
     }
 
     fn new_tab(&mut self) {
-        let Some(pane) = self.spawn_pane() else {
+        let Some(pane) = self.spawn_pane(None) else {
             return;
         };
         let id = pane.id.clone();
@@ -325,7 +326,7 @@ impl State {
     }
 
     fn split(&mut self, dir: SplitDir) {
-        let Some(pane) = self.spawn_pane() else {
+        let Some(pane) = self.spawn_pane(None) else {
             return;
         };
         let new_id = pane.id.clone();
@@ -882,6 +883,96 @@ impl State {
         }
     }
 
+    /// Persist tabs/panes/cwd/layout so the next launch restores the session.
+    fn save_session(&self) {
+        let mut tabs = Vec::new();
+        for tab in &self.tabs {
+            let panes: Vec<serde_json::Value> = tab
+                .panes
+                .iter()
+                .map(|p| serde_json::json!({ "id": p.id, "cwd": p.term.cwd() }))
+                .collect();
+            tabs.push(serde_json::json!({
+                "title": tab.title,
+                "active": tab.active,
+                "layout": layout_to_json(&tab.layout),
+                "panes": panes,
+            }));
+        }
+        let v = serde_json::json!({ "active_tab": self.active_tab, "tabs": tabs });
+        if let Some(path) = session_file() {
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let _ = std::fs::write(path, serde_json::to_vec(&v).unwrap_or_default());
+        }
+    }
+
+    /// Restore a saved session; returns false if there is nothing to restore.
+    fn restore_session(&mut self) -> bool {
+        let Some(path) = session_file() else {
+            return false;
+        };
+        let Ok(bytes) = std::fs::read(&path) else {
+            return false;
+        };
+        let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            return false;
+        };
+        let Some(tabs) = v.get("tabs").and_then(|t| t.as_array()) else {
+            return false;
+        };
+        for t in tabs {
+            let title = t
+                .get("title")
+                .and_then(|x| x.as_str())
+                .unwrap_or("shell")
+                .to_string();
+            let mut panes = Vec::new();
+            let mut map = std::collections::HashMap::new();
+            if let Some(arr) = t.get("panes").and_then(|p| p.as_array()) {
+                for p in arr {
+                    let cwd = p
+                        .get("cwd")
+                        .and_then(|x| x.as_str())
+                        .map(std::path::PathBuf::from);
+                    if let Some(pane) = self.spawn_pane(cwd) {
+                        if let Some(old) = p.get("id").and_then(|x| x.as_str()) {
+                            map.insert(old.to_string(), pane.id.clone());
+                        }
+                        panes.push(pane);
+                    }
+                }
+            }
+            if panes.is_empty() {
+                continue;
+            }
+            let layout = t
+                .get("layout")
+                .and_then(|l| json_to_layout(l, &map))
+                .unwrap_or_else(|| Layout::leaf(panes[0].id.clone()));
+            let active = t
+                .get("active")
+                .and_then(|x| x.as_str())
+                .map(|old| map.get(old).cloned().unwrap_or_else(|| old.to_string()))
+                .filter(|id| panes.iter().any(|p| &p.id == id))
+                .unwrap_or_else(|| panes[0].id.clone());
+            self.tabs.push(Tab {
+                layout,
+                panes,
+                active,
+                title,
+            });
+        }
+        if self.tabs.is_empty() {
+            return false;
+        }
+        self.active_tab = v.get("active_tab").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+        self.active_tab = self.active_tab.min(self.tabs.len() - 1);
+        self.publish_panes();
+        true
+    }
+
     fn active_pane(&self) -> Option<&Pane> {
         let tab = self.tabs.get(self.active_tab)?;
         tab.panes.iter().find(|p| p.id == tab.active)
@@ -1372,7 +1463,9 @@ impl ApplicationHandler for Host {
             egui_state,
             egui_renderer,
         };
-        state.new_tab();
+        if !state.restore_session() {
+            state.new_tab();
+        }
         state.window.request_redraw();
         self.state = Some(state);
     }
@@ -1415,6 +1508,7 @@ impl ApplicationHandler for Host {
                     s.width as f32 / state.window.scale_factor() as f32,
                     s.height as f32 / state.window.scale_factor() as f32,
                 );
+                state.save_session();
                 event_loop.exit();
             }
             WindowEvent::Focused(f) => state.focused = f,
@@ -1639,6 +1733,45 @@ fn winit_key_kind(event: &KeyEvent) -> input::KeyKind {
 
 // ---- helpers ---------------------------------------------------------------
 
+fn layout_to_json(l: &Layout) -> serde_json::Value {
+    match l {
+        Layout::Leaf(id) => serde_json::json!({ "leaf": id }),
+        Layout::Split { dir, ratio, a, b } => serde_json::json!({
+            "dir": match dir {
+                SplitDir::Right => "right",
+                SplitDir::Down => "down",
+            },
+            "ratio": ratio,
+            "a": layout_to_json(a),
+            "b": layout_to_json(b),
+        }),
+    }
+}
+
+fn json_to_layout(
+    v: &serde_json::Value,
+    map: &std::collections::HashMap<String, String>,
+) -> Option<Layout> {
+    if let Some(id) = v.get("leaf").and_then(|x| x.as_str()) {
+        return Some(Layout::leaf(
+            map.get(id).cloned().unwrap_or_else(|| id.to_string()),
+        ));
+    }
+    let dir = match v.get("dir").and_then(|x| x.as_str())? {
+        "right" => SplitDir::Right,
+        _ => SplitDir::Down,
+    };
+    let ratio = v.get("ratio").and_then(|x| x.as_f64()).unwrap_or(0.5) as f32;
+    let a = json_to_layout(v.get("a")?, map)?;
+    let b = json_to_layout(v.get("b")?, map)?;
+    Some(Layout::Split {
+        dir,
+        ratio,
+        a: Box::new(a),
+        b: Box::new(b),
+    })
+}
+
 fn git_rows(cwd: &std::path::Path) -> Vec<(String, String)> {
     let out = std::process::Command::new("git")
         .arg("-C")
@@ -1752,6 +1885,10 @@ fn install_egui_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
+fn session_file() -> Option<std::path::PathBuf> {
+    window_file().map(|p| p.with_file_name("native-session.json"))
+}
+
 fn window_file() -> Option<std::path::PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(std::path::PathBuf::from)
@@ -1775,5 +1912,25 @@ fn save_window_size(w: f32, h: f32) {
             let _ = std::fs::create_dir_all(dir);
         }
         let _ = std::fs::write(path, format!("{w:.0} {h:.0}\n"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn layout_json_round_trip() {
+        let mut l = Layout::leaf("a");
+        assert!(l.split("a", "b", SplitDir::Right));
+        assert!(l.split("b", "c", SplitDir::Down));
+        let map: std::collections::HashMap<String, String> = [("a", "x"), ("b", "y"), ("c", "z")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let back = json_to_layout(&layout_to_json(&l), &map).unwrap();
+        let mut ids = back.ids();
+        ids.sort();
+        assert_eq!(ids, vec!["x".to_string(), "y".to_string(), "z".to_string()]);
     }
 }
