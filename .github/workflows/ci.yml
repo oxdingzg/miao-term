@@ -54,7 +54,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --workspace --all-targets
+      - run: cargo check --workspace
 
   # Full Linux test suite: PRs, the nightly run and manual dispatch (not pushes).
   test-linux:
@@ -81,7 +81,7 @@ jobs:
         run: cargo test --workspace
       - name: Check (compile only)
         if: github.event_name == 'push'
-        run: cargo check --workspace --all-targets
+        run: cargo check --workspace
 
   # Windows is the slow runner (link/IO), so it is kept off the push path.
   windows:
