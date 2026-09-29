@@ -22,6 +22,11 @@ Guardrails:
 - Your own identifiers go in `~/.config/miao-term/privacy-denylist` (one string
   per line) or the CI secret `PRIVACY_DENYLIST` — never in the tree.
 
+  Do **not** denylist your public GitHub handle (`oxdingzg` is fine in repo
+  URLs) or other strings that legitimately appear in the tree — the scanner
+  matches substrings, so `dingzg` hits every `github.com/oxdingzg` link. Local
+  home paths are already covered by the generic pattern.
+
 If something sensitive is committed, treat it as an incident: rewrite history
 (`git filter-repo --replace-text`), force-push with owner approval, tell
 everyone to re-sync, and rotate any credentials involved.
