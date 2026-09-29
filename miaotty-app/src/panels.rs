@@ -148,7 +148,38 @@ fn list_dir(cwd: &str) -> Vec<FileEntry> {
     read_dir_entries(Path::new(cwd))
 }
 
+/// Cached directory listings, refreshed at most once per [`DIR_TTL`]. The
+/// sidebar renders the file tree every frame, so without this we would
+/// `read_dir` + `stat` the whole tree on every frame (60x/second).
+const DIR_TTL: std::time::Duration = std::time::Duration::from_millis(1000);
+static DIR_CACHE: std::sync::Mutex<
+    Option<(
+        std::time::Instant,
+        std::collections::HashMap<std::path::PathBuf, Vec<FileEntry>>,
+    )>,
+> = std::sync::Mutex::new(None);
+
 pub fn read_dir_entries(dir: &Path) -> Vec<FileEntry> {
+    let now = std::time::Instant::now();
+    let mut cache = DIR_CACHE.lock().unwrap();
+    let cache = cache.get_or_insert_with(|| {
+        (
+            now.checked_sub(DIR_TTL).unwrap_or(now),
+            std::collections::HashMap::new(),
+        )
+    });
+    if now.duration_since(cache.0) < DIR_TTL {
+        if let Some(entries) = cache.1.get(dir) {
+            return entries.clone();
+        }
+    }
+    let entries = read_dir_uncached(dir);
+    cache.0 = now;
+    cache.1.insert(dir.to_path_buf(), entries.clone());
+    entries
+}
+
+fn read_dir_uncached(dir: &Path) -> Vec<FileEntry> {
     let Ok(read) = std::fs::read_dir(dir) else {
         return Vec::new();
     };

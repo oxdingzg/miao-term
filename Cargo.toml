@@ -13,3 +13,8 @@ authors = ["miaotty contributors"]
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# egui/wgpu/glyphon are unusably slow unoptimized and dominate frame time, so
+# optimize dependencies even in dev builds (our own crate stays debuggable).
+[profile.dev.package."*"]
+opt-level = 3
