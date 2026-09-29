@@ -2185,7 +2185,7 @@ impl State {
                 if ed.preview {
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
-                        .show(ui, |ui| markdown_preview(ui, &ed.text));
+                        .show(ui, |ui| markdown_preview(ui, &ed.text, ed.path.parent()));
                 } else {
                     let mut vim_effect = miao_term_ui::vim::VimEffect::Nothing;
                     egui::ScrollArea::both()
@@ -2427,6 +2427,7 @@ impl ApplicationHandler for Host {
 
         let quads = QuadRenderer::new(&device, format);
         let egui_ctx = egui::Context::default();
+        egui_extras::install_image_loaders(&egui_ctx);
         install_egui_fonts(&egui_ctx);
         configure_egui(&egui_ctx);
         let egui_state = egui_winit::State::new(
@@ -2921,7 +2922,7 @@ fn lighten(c: miao_term_ui::theme::Rgb, f: f32) -> miao_term_ui::theme::Rgb {
 }
 
 /// A naive Markdown renderer: headings, bullets, quotes and fenced code.
-fn markdown_preview(ui: &mut egui::Ui, text: &str) {
+fn markdown_preview(ui: &mut egui::Ui, text: &str, base: Option<&std::path::Path>) {
     let mut in_code = false;
     for line in text.lines() {
         if line.trim_start().starts_with("```") {
@@ -2931,6 +2932,28 @@ fn markdown_preview(ui: &mut egui::Ui, text: &str) {
         }
         if in_code {
             ui.label(egui::RichText::new(line).monospace().size(12.0));
+            continue;
+        }
+        if let Some((alt, url)) = miao_term_ui::markdown::parse_image(line.trim()) {
+            match miao_term_ui::markdown::image_uri(url, base) {
+                Some(uri) => {
+                    ui.add(
+                        egui::Image::new(uri)
+                            .max_width(ui.available_width())
+                            .max_height(400.0),
+                    );
+                }
+                None => {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!("[{alt}]"))
+                                .size(12.0)
+                                .color(egui::Color32::from_gray(150)),
+                        );
+                        ui.hyperlink_to(url, url);
+                    });
+                }
+            }
             continue;
         }
         let trimmed = line.trim_end();

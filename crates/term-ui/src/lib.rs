@@ -11,6 +11,7 @@ pub mod i18n;
 pub mod icons;
 pub mod input;
 pub mod layout;
+pub mod markdown;
 pub mod palette;
 pub mod selection;
 pub mod ssh;
