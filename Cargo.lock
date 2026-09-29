@@ -2099,6 +2099,9 @@ dependencies = [
 name = "miao-term-widget"
 version = "0.0.0"
 dependencies = [
+ "egui",
+ "egui-wgpu",
+ "egui-winit",
  "miao-term-core",
  "miao-term-render",
  "pollster",

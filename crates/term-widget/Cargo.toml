@@ -13,3 +13,6 @@ miao-term-render = { path = "../term-render" }
 winit = "0.30"
 wgpu = "23"
 pollster = "0.4"
+egui = "0.30"
+egui-winit = "0.30"
+egui-wgpu = "0.30"

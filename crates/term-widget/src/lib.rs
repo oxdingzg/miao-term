@@ -1,10 +1,11 @@
 //! `miao-term-widget` — a native `winit` + `wgpu` render loop for the engine.
 //!
-//! Unlike the eframe/egui bootstrap in `miaotty-app`, the terminal grid here is
-//! **self-drawn**: `term-widget` owns the window and surface, and the PTY reader
-//! thread wakes the loop the moment output arrives (via an `EventLoopProxy`), so
-//! echo is drawn on the next frame. Nothing goes through egui's immediate-mode
-//! frame flow. See `docs/decisions/0011-native-render-loop.md`.
+//! The terminal grid is **self-drawn** (no egui immediate-mode frame flow):
+//! `term-widget` owns the window and surface, and the PTY reader thread wakes
+//! the loop (`EventLoopProxy` → `request_redraw`) the moment output arrives, so
+//! echo is drawn on the next frame. The surrounding UI (step 1 of ADR 0030) is
+//! composed as an **egui overlay in the same wgpu frame**: the grid is drawn
+//! first, then egui's meshes on top.
 
 use std::error::Error;
 use std::sync::Arc;
@@ -14,7 +15,7 @@ use miao_term_core::{ATerm, Terminal};
 use miao_term_render::{MetricsProbe, Quad, QuadRenderer, Span, TermRenderer};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::{ElementState, KeyEvent, WindowEvent};
+use winit::event::{ElementState, KeyEvent, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
@@ -40,8 +41,11 @@ const PALETTE: [(u8, u8, u8); 16] = [
     (0x8f, 0xbc, 0xbb),
     (0xec, 0xef, 0xf4),
 ];
+const SEL_BG: (u8, u8, u8) = (0x43, 0x4c, 0x5e);
 const FONT_SIZE: f32 = 13.0;
 const LINE_RATIO: f32 = 1.3;
+/// Height of the egui chrome bar (logical points), reserved above the grid.
+const BAR_H: f32 = 28.0;
 
 /// Run a native terminal window until it is closed.
 pub fn run(title: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -74,17 +78,35 @@ struct State {
     term: Terminal,
     cw: f32,
     ch: f32,
+    font_size: f32,
     mods: ModifiersState,
+    scroll: usize,
+    selection: Option<((u16, u16), (u16, u16))>,
+    dragging: bool,
+    last_title: Option<String>,
+    // egui overlay (chrome).
+    egui_ctx: egui::Context,
+    egui_state: egui_winit::State,
+    egui_renderer: egui_wgpu::Renderer,
 }
 
 impl State {
-    fn cell_size() -> (f32, f32) {
+    fn cell_size(font_size: f32) -> (f32, f32) {
         let mut probe = MetricsProbe::new();
         probe.cell(
-            FONT_SIZE,
-            (FONT_SIZE * LINE_RATIO).round(),
+            font_size,
+            (font_size * LINE_RATIO).round(),
             Some("JetBrains Mono"),
         )
+    }
+
+    fn grid_size(&self) -> (u16, u16) {
+        let size = self.window.inner_size();
+        let cols = (size.width as f32 / self.cw).floor().max(1.0) as u16;
+        let rows = ((size.height as f32 - BAR_H * self.window.scale_factor() as f32) / self.ch)
+            .floor()
+            .max(1.0) as u16;
+        (rows, cols)
     }
 
     fn resize(&mut self) {
@@ -95,30 +117,106 @@ impl State {
         self.config.width = size.width;
         self.config.height = size.height;
         self.surface.configure(&self.device, &self.config);
-        let cols = (size.width as f32 / self.cw).floor().max(1.0) as u16;
-        let rows = (size.height as f32 / self.ch).floor().max(1.0) as u16;
+        let (rows, cols) = self.grid_size();
         self.term.resize(rows, cols);
     }
 
     fn write_input(&mut self, bytes: &[u8]) {
         if !bytes.is_empty() {
             self.term.write(bytes);
+            self.scroll = 0;
             self.window.request_redraw();
+        }
+    }
+
+    fn cell_at(&self, pos: (f64, f64)) -> (u16, u16) {
+        let scale = self.window.scale_factor() as f32;
+        let cw = self.cw * scale;
+        let ch = self.ch * scale;
+        let (rows, cols) = self.term.screen().size();
+        let col = ((pos.0 as f32) / cw).floor().clamp(0.0, cols as f32 - 1.0) as u16;
+        let row = (((pos.1 as f32) - BAR_H * scale) / ch)
+            .floor()
+            .clamp(0.0, rows as f32 - 1.0) as u16;
+        (row, col)
+    }
+
+    fn copy_selection(&self, ctx: &egui::Context) {
+        if let Some((a, b)) = self.selection {
+            let (r1, c1, r2, c2) = ordered(a, b);
+            let text = self.term.screen().contents_between(r1, c1, r2, c2);
+            if !text.is_empty() {
+                ctx.copy_text(text);
+            }
+        }
+    }
+
+    /// The egui chrome overlay (step 1): a slim bar above the grid.
+    fn chrome(&mut self, ctx: &egui::Context) {
+        let mut font_delta = 0.0f32;
+        let osc_title = self.term.title().map(str::to_string).unwrap_or_default();
+        let title = if osc_title.is_empty() {
+            self.window.title()
+        } else {
+            osc_title
+        };
+        let cwd = self.term.cwd().map(str::to_string).unwrap_or_default();
+        let fg = egui::Color32::from_rgb(FG.0, FG.1, FG.2);
+        let bg = egui::Color32::from_rgb(0x24, 0x29, 0x33);
+        egui::TopBottomPanel::top("bar")
+            .exact_height(BAR_H)
+            .frame(
+                egui::Frame::default()
+                    .fill(bg)
+                    .inner_margin(egui::Margin::symmetric(8.0, 2.0)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.visuals_mut().override_text_color = Some(fg);
+                    ui.label(egui::RichText::new(title.clone()));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("A+").clicked() {
+                            font_delta = 1.0;
+                        }
+                        if ui.button("A-").clicked() {
+                            font_delta = -1.0;
+                        }
+                        if !cwd.is_empty() && ui.button("Reveal").clicked() {
+                            reveal(&cwd);
+                        }
+                    });
+                });
+            });
+        if font_delta != 0.0 {
+            self.font_size = (self.font_size + font_delta).clamp(6.0, 40.0);
+            let (cw, ch) = State::cell_size(self.font_size);
+            self.cw = cw;
+            self.ch = ch;
+            self.resize();
         }
     }
 
     fn render(&mut self) {
         let _ = self.term.process_pending();
+        self.term.screen_mut().set_scrollback(self.scroll);
+
+        // Sync the window title from OSC 0/2.
+        let title = self.term.title().map(str::to_string);
+        if title != self.last_title {
+            if let Some(t) = &title {
+                self.window.set_title(t);
+            }
+            self.last_title = title;
+        }
 
         let (rows, cols) = self.term.screen().size();
         let scale = self.window.scale_factor() as f32;
         let cw = self.cw * scale;
         let ch = self.ch * scale;
+        let top = BAR_H * scale;
 
         // Backgrounds / selection / cursor as instanced quads (physical px).
         let mut quads: Vec<Quad> = Vec::new();
-        let cursor = self.term.screen().cursor_position();
-        let show_cursor = !self.term.screen().hide_cursor();
         for row in 0..rows {
             for col in 0..cols {
                 let Some(cell) = self.term.screen().cell(row, col) else {
@@ -126,12 +224,27 @@ impl State {
                 };
                 let bg = map_color(cell.bg, false);
                 if bg != BG {
-                    quads.push(cell_quad(row, col, cw, ch, bg));
+                    quads.push(cell_quad(row, col, cw, ch, top, bg));
                 }
             }
         }
-        if show_cursor && cursor.0 < rows && cursor.1 < cols {
-            quads.push(cell_quad(cursor.0, cursor.1, cw, ch, FG));
+        if let Some((a, b)) = self.selection {
+            let (r1, c1, r2, c2) = ordered(a, b);
+            let start = r1 as usize * cols as usize + c1 as usize;
+            let end = r2 as usize * cols as usize + c2 as usize;
+            for i in start..=end {
+                let r = (i / cols as usize) as u16;
+                let c = (i % cols as usize) as u16;
+                quads.push(cell_quad(r, c, cw, ch, top, SEL_BG));
+            }
+        }
+        let cursor = self.term.screen().cursor_position();
+        let show_cursor = self.scroll == 0
+            && !self.term.screen().hide_cursor()
+            && cursor.0 < rows
+            && cursor.1 < cols;
+        if show_cursor {
+            quads.push(cell_quad(cursor.0, cursor.1, cw, ch, top, FG));
         }
 
         let rows_data = build_rows(self.term.screen());
@@ -146,48 +259,97 @@ impl State {
             &self.queue,
             (self.config.width, self.config.height),
             scale,
-            FONT_SIZE,
-            (FONT_SIZE * LINE_RATIO).round(),
+            self.font_size,
+            (self.font_size * LINE_RATIO).round(),
             self.cw,
             0.0,
-            0.0,
+            BAR_H,
             FG,
             Some("JetBrains Mono"),
             &rows_data,
+        );
+
+        // egui overlay: run the chrome, then tessellate and upload.
+        let raw = self.egui_state.take_egui_input(&self.window);
+        let events = raw.events.clone();
+        let egui_ctx = self.egui_ctx.clone();
+        let output = egui_ctx.run(raw, |ctx| self.chrome(ctx));
+        self.egui_state
+            .handle_platform_output(&self.window, output.platform_output);
+        let ppp = self.egui_ctx.pixels_per_point();
+        let paint_jobs = self.egui_ctx.tessellate(output.shapes, ppp);
+        let screen = egui_wgpu::ScreenDescriptor {
+            size_in_pixels: [self.config.width, self.config.height],
+            pixels_per_point: ppp,
+        };
+        for (id, delta) in &output.textures_delta.set {
+            self.egui_renderer
+                .update_texture(&self.device, &self.queue, *id, delta);
+        }
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        self.egui_renderer.update_buffers(
+            &self.device,
+            &self.queue,
+            &mut encoder,
+            &paint_jobs,
+            &screen,
         );
 
         let Ok(frame) = self.surface.get_current_texture() else {
             return;
         };
         let view = frame.texture.create_view(&Default::default());
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("terminal"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: BG.0 as f64 / 255.0,
-                            g: BG.1 as f64 / 255.0,
-                            b: BG.2 as f64 / 255.0,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                occlusion_query_set: None,
-                timestamp_writes: None,
-            });
+            let mut pass = encoder
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("terminal"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: BG.0 as f64 / 255.0,
+                                g: BG.1 as f64 / 255.0,
+                                b: BG.2 as f64 / 255.0,
+                                a: 1.0,
+                            }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    occlusion_query_set: None,
+                    timestamp_writes: None,
+                })
+                .forget_lifetime();
             self.quads.render(&mut pass);
             self.glyphs.render(&mut pass);
+            self.egui_renderer.render(&mut pass, &paint_jobs, &screen);
         }
         self.queue.submit(Some(encoder.finish()));
         frame.present();
+        for id in &output.textures_delta.free {
+            self.egui_renderer.free_texture(id);
+        }
+
+        // Handle copy/paste delivered by egui-winit.
+        for ev in &events {
+            match ev {
+                egui::Event::Copy => self.copy_selection(&self.egui_ctx),
+                egui::Event::Paste(text) => {
+                    let body = text.replace('\n', "\r");
+                    let bytes = if self.term.screen().bracketed_paste() {
+                        format!("\x1b[200~{body}\x1b[201~")
+                    } else {
+                        body
+                    };
+                    self.term.write(bytes.as_bytes());
+                    self.window.request_redraw();
+                }
+                _ => {}
+            }
+        }
     }
 }
 
@@ -207,16 +369,19 @@ impl ApplicationHandler for Host {
                 return;
             }
         };
+        window.set_ime_allowed(true);
 
         let proxy = self.proxy.clone();
         let waker: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
             let _ = proxy.send_event(());
         });
 
-        let (cw, ch) = State::cell_size();
+        let (cw, ch) = State::cell_size(FONT_SIZE);
         let size = window.inner_size();
         let cols = (size.width as f32 / cw).floor().max(1.0) as u16;
-        let rows = (size.height as f32 / ch).floor().max(1.0) as u16;
+        let rows = ((size.height as f32 - BAR_H * window.scale_factor() as f32) / ch)
+            .floor()
+            .max(1.0) as u16;
         let term = match Terminal::new(None, cols, rows, 10_000, None, &[], waker) {
             Ok(t) => t,
             Err(e) => {
@@ -263,7 +428,6 @@ impl ApplicationHandler for Host {
             format,
             width: size.width.max(1),
             height: size.height.max(1),
-            // Lowest-latency present the display allows (falls back internally).
             present_mode: wgpu::PresentMode::AutoNoVsync,
             alpha_mode: caps.alpha_modes[0],
             view_formats: vec![],
@@ -273,6 +437,18 @@ impl ApplicationHandler for Host {
 
         let glyphs = TermRenderer::new(&device, &queue, format);
         let quads = QuadRenderer::new(&device, format);
+
+        let egui_ctx = egui::Context::default();
+        install_egui_fonts(&egui_ctx);
+        let egui_state = egui_winit::State::new(
+            egui_ctx.clone(),
+            egui::ViewportId::ROOT,
+            &window,
+            Some(window.scale_factor() as f32),
+            None,
+            None,
+        );
+        let egui_renderer = egui_wgpu::Renderer::new(&device, format, None, 1, false);
 
         self.state = Some(State {
             window,
@@ -285,7 +461,15 @@ impl ApplicationHandler for Host {
             term,
             cw,
             ch,
+            font_size: FONT_SIZE,
             mods: ModifiersState::empty(),
+            scroll: 0,
+            selection: None,
+            dragging: false,
+            last_title: None,
+            egui_ctx,
+            egui_state,
+            egui_renderer,
         });
         self.state.as_ref().unwrap().window.request_redraw();
     }
@@ -300,6 +484,15 @@ impl ApplicationHandler for Host {
         let Some(state) = self.state.as_mut() else {
             return;
         };
+        // Let egui see input events (it drives the overlay + clipboard). Do not
+        // forward `RedrawRequested`: egui answers it with "repaint again", which
+        // would spin the loop at 100% CPU.
+        if !matches!(event, WindowEvent::RedrawRequested) {
+            let resp = state.egui_state.on_window_event(&state.window, &event);
+            if resp.repaint {
+                state.window.request_redraw();
+            }
+        }
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(_) => {
@@ -307,6 +500,43 @@ impl ApplicationHandler for Host {
                 state.window.request_redraw();
             }
             WindowEvent::ModifiersChanged(m) => state.mods = m.state(),
+            WindowEvent::Ime(winit::event::Ime::Commit(text)) => {
+                state.write_input(text.as_bytes());
+            }
+            WindowEvent::MouseInput {
+                state: es, button, ..
+            } => {
+                if button == MouseButton::Left {
+                    state.dragging = es == ElementState::Pressed;
+                    if es == ElementState::Pressed {
+                        state.selection = None;
+                    }
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                state.window.request_redraw();
+                if state.dragging {
+                    let cell = state.cell_at((position.x, position.y));
+                    match &mut state.selection {
+                        Some((_, end)) => *end = cell,
+                        None => state.selection = Some((cell, cell)),
+                    }
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                use winit::event::MouseScrollDelta;
+                let lines = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y as i32,
+                    MouseScrollDelta::PixelDelta(p) => (p.y / 12.0) as i32,
+                };
+                let max = state.term.screen().scrollback_len();
+                if lines > 0 {
+                    state.scroll = (state.scroll + lines as usize).min(max);
+                } else {
+                    state.scroll = state.scroll.saturating_sub((-lines) as usize);
+                }
+                state.window.request_redraw();
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 let app_cursor = state.term.screen().application_cursor();
                 let bytes = encode_key(&event, state.mods, app_cursor);
@@ -318,15 +548,66 @@ impl ApplicationHandler for Host {
     }
 }
 
-/// Map an alacritty color to RGB using the default theme.
+fn ordered(a: (u16, u16), b: (u16, u16)) -> (u16, u16, u16, u16) {
+    if b < a {
+        (b.0, b.1, a.0, a.1)
+    } else {
+        (a.0, a.1, b.0, b.1)
+    }
+}
+
+fn reveal(path: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open")
+            .arg("-R")
+            .arg(path)
+            .spawn();
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(path).spawn();
+    }
+}
+
+fn install_egui_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        "nerd".to_owned(),
+        Arc::new(egui::FontData::from_static(include_bytes!(
+            "../../../assets/fonts/SymbolsNerdFontMono-Regular.ttf"
+        ))),
+    );
+    for path in [
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/STHeiti Light.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    ] {
+        if let Ok(bytes) = std::fs::read(path) {
+            fonts.font_data.insert(
+                "cjk".to_owned(),
+                Arc::new(egui::FontData::from_owned(bytes)),
+            );
+            break;
+        }
+    }
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        let list = fonts.families.entry(family).or_default();
+        list.push("cjk".to_owned());
+        list.push("nerd".to_owned());
+    }
+    ctx.set_fonts(fonts);
+}
+
 fn map_color(c: TermColor, foreground: bool) -> (u8, u8, u8) {
     use miao_term_core::aterm::NamedColor;
     match c {
         TermColor::Spec(rgb) => (rgb.r, rgb.g, rgb.b),
         TermColor::Indexed(i) => indexed(i),
         TermColor::Named(n) => match n {
-            NamedColor::Foreground | NamedColor::BrightForeground => FG,
+            NamedColor::Foreground | NamedColor::BrightForeground | NamedColor::Cursor => FG,
             NamedColor::Background => BG,
+            NamedColor::DimForeground => (0x7a, 0x82, 0x8e),
             NamedColor::Black => PALETTE[0],
             NamedColor::Red => PALETTE[1],
             NamedColor::Green => PALETTE[2],
@@ -343,8 +624,6 @@ fn map_color(c: TermColor, foreground: bool) -> (u8, u8, u8) {
             NamedColor::BrightMagenta => PALETTE[13],
             NamedColor::BrightCyan => PALETTE[14],
             NamedColor::BrightWhite => PALETTE[15],
-            NamedColor::DimForeground => (0x7a, 0x82, 0x8e),
-            NamedColor::Cursor => FG,
             _ => {
                 if foreground {
                     FG
@@ -360,30 +639,25 @@ fn indexed(i: u8) -> (u8, u8, u8) {
     match i {
         0..=15 => PALETTE[i as usize],
         16..=231 => {
-            // 6x6x6 color cube.
             let i = i as u16 - 16;
-            let r = (i / 36) % 6;
-            let g = (i / 6) % 6;
-            let b = i % 6;
-            let v = |x: u16| (x as u8) * 40 + if x > 0 { 55 } else { 0 };
-            (v(r), v(g), v(b))
+            let f = |x: u16| (x as u8) * 40 + if x > 0 { 55 } else { 0 };
+            (f(i / 36), f((i / 6) % 6), f(i % 6))
         }
-        232..=255 => {
-            let v = (i as u16 - 232) * 10 + 8;
-            (v as u8, v as u8, v as u8)
+        _ => {
+            let v = ((i as u16 - 232) * 10 + 8) as u8;
+            (v, v, v)
         }
     }
 }
 
-fn cell_quad(row: u16, col: u16, cw: f32, ch: f32, color: (u8, u8, u8)) -> Quad {
+fn cell_quad(row: u16, col: u16, cw: f32, ch: f32, top: f32, color: (u8, u8, u8)) -> Quad {
     Quad::new(
-        (col as f32 * cw, row as f32 * ch),
-        ((col as f32 + 1.0) * cw, (row as f32 + 1.0) * ch),
+        (col as f32 * cw, top + row as f32 * ch),
+        ((col as f32 + 1.0) * cw, top + (row as f32 + 1.0) * ch),
         (color.0, color.1, color.2, 255),
     )
 }
 
-/// Build per-row, cell-pinned spans (wide chars get their own span).
 fn build_rows(screen: &ATerm) -> Vec<Vec<Span>> {
     let (rows, cols) = screen.size();
     let mut out = Vec::with_capacity(rows as usize);
@@ -439,16 +713,17 @@ fn build_rows(screen: &ATerm) -> Vec<Vec<Span>> {
 }
 
 fn unicode_width_of(c: char) -> u16 {
-    if (c as u32) >= 0x1100
-        && ((c as u32) <= 0x115f
-            || (0x2e80..=0xa4cf).contains(&(c as u32))
-            || (0xac00..=0xd7a3).contains(&(c as u32))
-            || (0xf900..=0xfaff).contains(&(c as u32))
-            || (0xfe30..=0xfe4f).contains(&(c as u32))
-            || (0xff00..=0xff60).contains(&(c as u32))
-            || (0xffe0..=0xffe6).contains(&(c as u32))
-            || (0x1f300..=0x1faff).contains(&(c as u32))
-            || (0x20000..=0x3fffd).contains(&(c as u32)))
+    let u = c as u32;
+    if u >= 0x1100
+        && (u <= 0x115f
+            || (0x2e80..=0xa4cf).contains(&u)
+            || (0xac00..=0xd7a3).contains(&u)
+            || (0xf900..=0xfaff).contains(&u)
+            || (0xfe30..=0xfe4f).contains(&u)
+            || (0xff00..=0xff60).contains(&u)
+            || (0xffe0..=0xffe6).contains(&u)
+            || (0x1f300..=0x1faff).contains(&u)
+            || (0x20000..=0x3fffd).contains(&u))
     {
         2
     } else {
@@ -456,9 +731,12 @@ fn unicode_width_of(c: char) -> u16 {
     }
 }
 
-/// Minimal key encoder (text, control bytes, navigation, editing keys).
 fn encode_key(event: &KeyEvent, mods: ModifiersState, app_cursor: bool) -> Vec<u8> {
     if event.state != ElementState::Pressed {
+        return Vec::new();
+    }
+    // Cmd (super) is reserved for app shortcuts (copy/paste, font size).
+    if mods.super_key() {
         return Vec::new();
     }
     let ctrl = mods.control_key();
