@@ -538,7 +538,7 @@ impl State {
         let cw = self.cw * scale;
         let ch = self.ch * scale;
         let theme = self.theme.clone();
-        let window_bg = darken(theme.bg, 0.82);
+        let window_bg = theme.bg;
         let selection = self.selection.clone();
         let rects = self.pane_rects();
         let active_id = self.active_pane_id().unwrap_or_default();
@@ -780,7 +780,11 @@ impl State {
             .exact_height(MENU_H)
             .frame(
                 egui::Frame::default()
-                    .fill(chrome::bg_color(darken(theme.bg, 0.92)))
+                    .fill(chrome::bg_color(theme.bg))
+                    .stroke(egui::Stroke::new(
+                        1.0_f32,
+                        chrome::bg_color(lighten(theme.bg, 0.10)),
+                    ))
                     .inner_margin(egui::Margin::symmetric(6.0, 1.0)),
             )
             .show(ctx, |ui| {
@@ -882,7 +886,11 @@ impl State {
             .exact_height(TAB_H)
             .frame(
                 egui::Frame::default()
-                    .fill(chrome::bg_color(darken(theme.bg, 0.88)))
+                    .fill(chrome::bg_color(theme.bg))
+                    .stroke(egui::Stroke::new(
+                        1.0_f32,
+                        chrome::bg_color(lighten(theme.bg, 0.10)),
+                    ))
                     .inner_margin(egui::Margin::symmetric(6.0, 3.0)),
             )
             .show(ctx, |ui| {
@@ -929,7 +937,11 @@ impl State {
                 .exact_width(SIDEBAR_W)
                 .frame(
                     egui::Frame::default()
-                        .fill(chrome::bg_color(darken(theme.bg, 0.88)))
+                        .fill(chrome::bg_color(theme.bg))
+                        .stroke(egui::Stroke::new(
+                            1.0_f32,
+                            chrome::bg_color(lighten(theme.bg, 0.10)),
+                        ))
                         .inner_margin(egui::Margin::same(6.0)),
                 )
                 .show(ctx, |ui| {
@@ -963,7 +975,11 @@ impl State {
                 .exact_width(DETAILS_W)
                 .frame(
                     egui::Frame::default()
-                        .fill(chrome::bg_color(darken(theme.bg, 0.88)))
+                        .fill(chrome::bg_color(theme.bg))
+                        .stroke(egui::Stroke::new(
+                            1.0_f32,
+                            chrome::bg_color(lighten(theme.bg, 0.10)),
+                        ))
                         .inner_margin(egui::Margin::same(8.0)),
                 )
                 .show(ctx, |ui| {
@@ -1008,7 +1024,11 @@ impl State {
             .exact_height(STATUS_H)
             .frame(
                 egui::Frame::default()
-                    .fill(chrome::bg_color(darken(theme.bg, 0.75)))
+                    .fill(chrome::bg_color(theme.bg))
+                    .stroke(egui::Stroke::new(
+                        1.0_f32,
+                        chrome::bg_color(lighten(theme.bg, 0.10)),
+                    ))
                     .inner_margin(egui::Margin::symmetric(8.0, 2.0)),
             )
             .show(ctx, |ui| {
@@ -2272,13 +2292,20 @@ impl ApplicationHandler for Host {
                             .unwrap_or(false),
                         has_selection: state.selection.is_some(),
                     };
+                    let kind = winit_key_kind(&event);
+                    // Special keys are encoded below; only plain text keys (letters,
+                    // space, symbols) carry a `text` payload to send here — otherwise
+                    // Enter/Tab/etc. would be sent twice.
+                    let special = !matches!(kind, input::KeyKind::Char(_) | input::KeyKind::Other);
                     let mut bytes = Vec::new();
-                    if let Some(text) = &event.text {
-                        if !mods.ctrl && !mods.sup && !text.is_empty() {
-                            bytes.extend_from_slice(&input::encode_text(text));
+                    if !special {
+                        if let Some(text) = &event.text {
+                            if !mods.ctrl && !mods.sup && !text.is_empty() {
+                                bytes.extend_from_slice(&input::encode_text(text));
+                            }
                         }
                     }
-                    bytes.extend_from_slice(&input::encode_key(winit_key_kind(&event), mods, opts));
+                    bytes.extend_from_slice(&input::encode_key(kind, mods, opts));
                     state.write_input(&bytes);
                 }
             }
@@ -2370,11 +2397,6 @@ fn card_inner(r: Rect) -> Rect {
         w: (card.w - CARD_PAD * 2.0).max(1.0),
         h: (card.h - CARD_PAD * 2.0).max(1.0),
     }
-}
-
-fn darken(c: miao_term_ui::theme::Rgb, f: f32) -> miao_term_ui::theme::Rgb {
-    let d = |v: u8| ((v as f32) * f).clamp(0.0, 255.0) as u8;
-    miao_term_ui::theme::Rgb(d(c.0), d(c.1), d(c.2))
 }
 
 fn lighten(c: miao_term_ui::theme::Rgb, f: f32) -> miao_term_ui::theme::Rgb {
