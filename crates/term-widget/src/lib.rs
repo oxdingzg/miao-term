@@ -1727,7 +1727,7 @@ impl State {
             return;
         };
         let hist = pane.term.screen().history_size();
-        pane.scroll = if b < hist { hist - b } else { 0 };
+        pane.scroll = hist.saturating_sub(b);
     }
 
     fn search_window(&mut self, ctx: &egui::Context) {
