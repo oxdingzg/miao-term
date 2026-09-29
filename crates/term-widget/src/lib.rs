@@ -145,6 +145,7 @@ struct State {
     cw: f32,
     ch: f32,
     font_size: f32,
+    default_font_size: f32,
     line_ratio: f32,
     font_family: Option<String>,
     lang: miao_term_ui::i18n::Lang,
@@ -1440,6 +1441,13 @@ enum Cmd {
     ToggleDetails,
     FontUp,
     FontDown,
+    FontReset,
+    Palette,
+    Find,
+    Fullscreen,
+    ClearScreen,
+    CopyPath,
+    RevealCwd,
     Settings,
     Quit,
 }
@@ -1475,6 +1483,16 @@ impl State {
             (Cmd::ToggleDetails, t(l, "Toggle Details", "开关详情")),
             (Cmd::FontUp, t(l, "Increase Font Size", "增大字号")),
             (Cmd::FontDown, t(l, "Decrease Font Size", "减小字号")),
+            (Cmd::FontReset, t(l, "Reset Font Size", "重置字号")),
+            (Cmd::Palette, t(l, "Command Palette", "命令面板")),
+            (Cmd::Find, t(l, "Find…", "查找…")),
+            (Cmd::Fullscreen, t(l, "Toggle Full Screen", "全屏切换")),
+            (Cmd::ClearScreen, t(l, "Clear Screen", "清屏")),
+            (Cmd::CopyPath, t(l, "Copy Path", "复制路径")),
+            (
+                Cmd::RevealCwd,
+                t(l, "Reveal in File Manager", "在文件管理器中显示"),
+            ),
             (Cmd::Settings, t(l, "Settings", "设置")),
             (Cmd::Quit, t(l, "Quit", "退出")),
         ]
@@ -1500,6 +1518,50 @@ impl State {
                 self.cw = cw;
                 self.ch = ch;
                 self.resize();
+            }
+            Cmd::FontReset => {
+                self.font_size = self.default_font_size;
+                let (cw, ch) =
+                    State::cell_size(self.font_size, self.line_ratio, self.font_family.as_deref());
+                self.cw = cw;
+                self.ch = ch;
+                self.resize();
+            }
+            Cmd::Palette => {
+                self.show_palette = true;
+                self.palette_query.clear();
+            }
+            Cmd::Find => {
+                self.search = Some(String::new());
+                self.search_idx = 0;
+                self.search_key.clear();
+            }
+            Cmd::Fullscreen => {
+                let full = self.window.fullscreen().is_some();
+                self.window.set_fullscreen(if full {
+                    None
+                } else {
+                    Some(winit::window::Fullscreen::Borderless(None))
+                });
+            }
+            Cmd::ClearScreen => {
+                if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                    let active = tab.active.clone();
+                    if let Some(p) = tab.panes.iter_mut().find(|p| p.id == active) {
+                        p.term.screen_mut().process(b"\x1b[2J\x1b[H");
+                        p.scroll = 0;
+                    }
+                }
+            }
+            Cmd::CopyPath => {
+                if let Some(cwd) = self.cwd() {
+                    self.egui_ctx.copy_text(cwd.display().to_string());
+                }
+            }
+            Cmd::RevealCwd => {
+                if let Some(cwd) = self.cwd() {
+                    open_external(&cwd.display().to_string());
+                }
             }
             Cmd::Composer => self.composer = Some(String::new()),
             Cmd::OpenQuickly => self.quick = Some(String::new()),
@@ -2967,6 +3029,7 @@ impl ApplicationHandler for Host {
             cw,
             ch,
             font_size,
+            default_font_size: font_size,
             line_ratio,
             font_family,
             lang,
@@ -4068,6 +4131,13 @@ impl chrome::Chrome for State {
             ToggleDetails => Cmd::ToggleDetails,
             FontUp => Cmd::FontUp,
             FontDown => Cmd::FontDown,
+            FontReset => Cmd::FontReset,
+            Palette => Cmd::Palette,
+            Find => Cmd::Find,
+            Fullscreen => Cmd::Fullscreen,
+            ClearScreen => Cmd::ClearScreen,
+            CopyPath => Cmd::CopyPath,
+            RevealCwd => Cmd::RevealCwd,
             Settings => Cmd::Settings,
             Quit => Cmd::Quit,
         };

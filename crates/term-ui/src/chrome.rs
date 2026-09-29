@@ -329,7 +329,14 @@ pub enum MenuId {
     ToggleDetails,
     FontUp,
     FontDown,
+    FontReset,
     Settings,
+    Palette,
+    Find,
+    Fullscreen,
+    ClearScreen,
+    CopyPath,
+    RevealCwd,
     Quit,
 }
 
@@ -538,6 +545,20 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
                         &mut menu,
                     );
                     menu_item(ui, t(lang, "Settings", "设置"), MenuId::Settings, &mut menu);
+                    ui.separator();
+                    menu_item(
+                        ui,
+                        t(lang, "Command Palette", "命令面板"),
+                        MenuId::Palette,
+                        &mut menu,
+                    );
+                    menu_item(ui, t(lang, "Find…", "查找…"), MenuId::Find, &mut menu);
+                    menu_item(
+                        ui,
+                        t(lang, "Toggle Full Screen", "全屏切换"),
+                        MenuId::Fullscreen,
+                        &mut menu,
+                    );
                 });
                 ui.menu_button(t(lang, "Shell", "终端"), |ui| {
                     menu_item(
@@ -550,6 +571,31 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
                         ui,
                         t(lang, "Split Down", "向下分屏"),
                         MenuId::SplitDown,
+                        &mut menu,
+                    );
+                    ui.separator();
+                    menu_item(
+                        ui,
+                        t(lang, "Clear Screen", "清屏"),
+                        MenuId::ClearScreen,
+                        &mut menu,
+                    );
+                    menu_item(
+                        ui,
+                        t(lang, "Copy Path", "复制路径"),
+                        MenuId::CopyPath,
+                        &mut menu,
+                    );
+                    menu_item(
+                        ui,
+                        t(lang, "Reveal in File Manager", "在文件管理器中显示"),
+                        MenuId::RevealCwd,
+                        &mut menu,
+                    );
+                    menu_item(
+                        ui,
+                        t(lang, "Reset Font Size", "重置字号"),
+                        MenuId::FontReset,
                         &mut menu,
                     );
                 });
