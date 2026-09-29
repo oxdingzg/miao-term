@@ -34,7 +34,7 @@ The engine and the application are deliberately decoupled: the hosts are the
 engine's first consumers, and the engine is designed to be embedded by others.
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 
-> **Project status — pre-release.** The version is `0.0.0` and the API is not yet
+> **Project status — pre-release.** The version is `0.0.1` and the API is not yet
 > stable. macOS is the primary platform. Windows is built, tested and driven over
 > MTP on real hardware (see [`docs/WINDOWS-DEV.md`](docs/WINDOWS-DEV.md)); Linux
 > builds and passes tests in CI.
@@ -182,11 +182,11 @@ cargo fmt --all -- --check
 ```
 
 CI (`.github/workflows/ci.yml`) runs on every push, PR and nightly. On pushes it
-runs `cargo check` on Linux and macOS plus the privacy scan; the full three-OS
+runs `cargo fmt --check`, `cargo clippy --workspace --all-targets -D warnings`,
+`cargo check` on Linux and macOS, and the privacy scan; the full three-OS
 `cargo test --workspace`, the Linux software-Vulkan render test, the Windows job
 and the release-mode performance gate run on pull requests, the nightly schedule
-and manual dispatches. `cargo fmt` and `cargo clippy` are local checks, not CI
-jobs.
+and manual dispatches. Docs-only pushes skip the compile and lint jobs.
 
 ### Packaging
 

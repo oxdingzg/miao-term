@@ -30,7 +30,7 @@
 引擎与应用被刻意解耦:hosts 是引擎的第一批消费者,而引擎本身设计为可被第三方嵌入。
 完整设计见 [`docs/ARCHITECTURE.zh-CN.md`](docs/ARCHITECTURE.zh-CN.md)。
 
-> **项目状态 —— 预发布。** 当前版本为 `0.0.0`,API 尚未稳定。macOS 是主要平台;
+> **项目状态 —— 预发布。** 当前版本为 `0.0.1`,API 尚未稳定。macOS 是主要平台;
 > Windows 已在真实硬件上构建、测试并经 MTP 驱动(见 [`docs/WINDOWS-DEV.zh-CN.md`](docs/WINDOWS-DEV.zh-CN.md));
 > Linux 在 CI 中构建并通过测试。
 
@@ -153,10 +153,10 @@ cargo fmt --all -- --check
 ```
 
 CI([`.github/workflows/ci.yml`](.github/workflows/ci.yml))在每次 push、PR 与 nightly 上运行。
-push 时执行 Linux 与 macOS 的 `cargo check` 以及隐私扫描;完整的三平台
+push 时执行 `cargo fmt --check`、`cargo clippy --workspace --all-targets -D warnings`、
+Linux 与 macOS 的 `cargo check` 以及隐私扫描;完整的三平台
 `cargo test --workspace`、Linux 软件 Vulkan 渲染测试、Windows job 与 release 模式性能门,
-则在 pull request、nightly 计划与手动触发时运行。`cargo fmt` 与 `cargo clippy` 是本地检查,
-不是 CI job。
+则在 pull request、nightly 计划与手动触发时运行。仅文档变更的 push 会跳过编译与 lint job。
 
 ### 打包
 
