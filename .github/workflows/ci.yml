@@ -17,7 +17,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       # Cache the registry + target so a push does not recompile ~450 crates.
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --workspace --all-targets
+      # `cargo test` compiles the whole workspace, so a separate `cargo check`
+      # only doubled the compile time.
       - run: cargo test --workspace
 
   render-linux:
