@@ -164,6 +164,7 @@ struct State {
     mmd: Mermaid,
     recent_files: Vec<String>,
     integration_msg: Option<String>,
+    hotkeys: Option<miao_term_ui::hotkey::Hotkeys>,
     notifications: bool,
     prevent_sleep: bool,
     sleep: miao_term_ui::agentloop::SleepGuard,
@@ -2858,6 +2859,7 @@ impl ApplicationHandler for Host {
             },
             recent_files: Vec::new(),
             integration_msg: None,
+            hotkeys: None,
             notifications: cfg.notifications,
             prevent_sleep: cfg.prevent_sleep,
             sleep: miao_term_ui::agentloop::SleepGuard::new(),
@@ -2896,6 +2898,15 @@ impl ApplicationHandler for Host {
         let args: Vec<String> = std::env::args().skip(1).collect();
         let intent = miao_term_ui::launch::Intent::from_args(&args);
         state.apply_launch(&intent);
+        if let Some(spec) = cfg.quick_terminal_hotkey.clone() {
+            let proxy = self.proxy.clone();
+            state.hotkeys = miao_term_ui::hotkey::Hotkeys::register(&spec, move || {
+                let _ = proxy.send_event(());
+            });
+            if state.hotkeys.is_none() {
+                eprintln!("miaotty-native: could not register hotkey {spec}");
+            }
+        }
         state.window.request_redraw();
         self.state = Some(state);
     }
@@ -2920,6 +2931,18 @@ impl ApplicationHandler for Host {
             }
             state.poll_details();
             state.ensure_details();
+            if state
+                .hotkeys
+                .as_ref()
+                .is_some_and(miao_term_ui::hotkey::Hotkeys::take_pending)
+            {
+                let visible = state.window.is_visible().unwrap_or(true);
+                state.window.set_visible(!visible);
+                if !visible {
+                    state.window.focus_window();
+                }
+                state.window.request_redraw();
+            }
             if !state.shot_now {
                 if let Ok(v) = std::env::var("MIAOTTY_NATIVE_SHOT_AFTER") {
                     let secs = v.parse::<f64>().unwrap_or(-1.0);

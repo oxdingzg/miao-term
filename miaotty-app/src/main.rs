@@ -16,7 +16,7 @@ use eframe::egui_wgpu;
 use unicode_width::UnicodeWidthChar;
 
 use miao_term_ui::agentloop;
-mod hotkey;
+use miao_term_ui::hotkey;
 mod i18n;
 mod icons;
 use miao_term_ui::integration;
