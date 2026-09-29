@@ -101,6 +101,13 @@ struct Editor {
     remote: Option<(String, String)>,
 }
 
+/// The inline-image layer for the debug capture (quads + the pane scissor).
+struct ImageLayer<'a> {
+    quads: &'a [(u64, ImageInstance)],
+    rects: &'a [(String, Rect)],
+    scale: f32,
+}
+
 struct PaneDraw {
     id: String,
     rect: Rect,
@@ -1573,9 +1580,7 @@ impl State {
     fn capture(
         &self,
         draws: &[PaneDraw],
-        image_quads: &[(u64, ImageInstance)],
-        rects: &[(String, Rect)],
-        scale: f32,
+        images: ImageLayer<'_>,
         window_bg: miao_term_ui::theme::Rgb,
         paint_jobs: &[egui::ClippedPrimitive],
         screen: &egui_wgpu::ScreenDescriptor,
@@ -1622,8 +1627,8 @@ impl State {
                 })
                 .forget_lifetime();
             self.quads.render(&mut pass);
-            if !image_quads.is_empty() {
-                let (sx, sy, sw, sh) = grid_scissor(rects, scale, w, h);
+            if !images.quads.is_empty() {
+                let (sx, sy, sw, sh) = grid_scissor(images.rects, images.scale, w, h);
                 pass.set_scissor_rect(sx, sy, sw, sh);
                 self.images.render(&mut pass);
                 pass.set_scissor_rect(0, 0, w, h);
