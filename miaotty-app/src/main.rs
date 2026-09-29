@@ -1186,7 +1186,7 @@ impl MiaottyApp {
             .show(ctx, |ui| {
                 let resp = ui.text_edit_singleline(&mut self.rename_buf);
                 let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if enter || ui.button("OK").clicked() {
+                if enter || ui.button(self.t("OK")).clicked() {
                     let value = self.rename_buf.trim().to_string();
                     let value = (!value.is_empty()).then_some(value);
                     if let Some(tab) = self.tabs.get_mut(i) {
@@ -1757,7 +1757,7 @@ impl MiaottyApp {
             .show(ctx, |ui| {
                 let edit = ui.add(
                     egui::TextEdit::singleline(&mut pal.query)
-                        .hint_text("Open quickly\u{2026}")
+                        .hint_text(self.t("Open quickly\u{2026}"))
                         .desired_width(f32::INFINITY),
                 );
                 if self.palette_focus {
@@ -2048,7 +2048,60 @@ fn install_script(pid: u32, bundle: &std::path::Path, new_app: &std::path::Path)
     )
 }
 
+#[cfg_attr(not(any(target_os = "windows", target_os = "linux")), allow(dead_code))]
 #[cfg(target_os = "macos")]
+/// The helper `.cmd` Windows runs after we exit: wait for our PID, then either
+/// run the MSI or unpack the zip over the current executable, and relaunch.
+fn windows_install_script(pid: u32, artifact: &std::path::Path, exe: &std::path::Path) -> String {
+    let artifact = artifact.display();
+    let exe = exe.display();
+    let dir = exe_parent(&exe.to_string());
+    format!(
+        "@echo off\r\n\
+         :wait\r\n\
+         tasklist /FI \"PID eq {pid}\" 2>nul | find \"{pid}\" >nul && (timeout /t 1 /nobreak >nul & goto wait)\r\n\
+         echo \"{artifact}\" | find /I \".msi\" >nul\r\n\
+         if not errorlevel 1 (\r\n\
+         \x20 msiexec /i \"{artifact}\" /passive /norestart\r\n\
+         \x20 start \"\" \"%ProgramFiles%\\miaotty\\bin\\miaotty.exe\"\r\n\
+         ) else (\r\n\
+         \x20 rmdir /s /q \"%TEMP%\\miaotty-update\" 2>nul\r\n\
+         \x20 mkdir \"%TEMP%\\miaotty-update\" 2>nul\r\n\
+         \x20 tar -xf \"{artifact}\" -C \"%TEMP%\\miaotty-update\"\r\n\
+         \x20 copy /y \"%TEMP%\\miaotty-update\\miaotty.exe\" \"{exe}\" >nul\r\n\
+         \x20 if exist \"%TEMP%\\miaotty-update\\miaotty-cli.exe\" copy /y \"%TEMP%\\miaotty-update\\miaotty-cli.exe\" \"{dir}\\miaotty-cli.exe\" >nul\r\n\
+         \x20 start \"\" \"{exe}\"\r\n\
+         )\r\n"
+    )
+}
+
+#[cfg_attr(not(any(target_os = "windows", target_os = "linux")), allow(dead_code))]
+/// The directory part of a Windows path (either separator).
+fn exe_parent(path: &str) -> String {
+    match path.rfind(['\\', '/']) {
+        Some(i) => path[..i].to_string(),
+        None => String::new(),
+    }
+}
+
+#[cfg_attr(not(any(target_os = "windows", target_os = "linux")), allow(dead_code))]
+/// The helper `sh` Linux runs after we exit: wait for our PID, replace the
+/// running AppImage and start it again.
+fn linux_install_script(
+    pid: u32,
+    appimage: &std::path::Path,
+    downloaded: &std::path::Path,
+) -> String {
+    format!(
+        "#!/bin/sh\n\
+         while kill -0 {pid} 2>/dev/null; do sleep 0.3; done\n\
+         cp \"{downloaded}\" \"{appimage}\" && chmod +x \"{appimage}\" && exec \"{appimage}\"\n",
+        pid = pid,
+        appimage = appimage.display(),
+        downloaded = downloaded.display()
+    )
+}
+
 /// The first `.app` bundle anywhere under `dir`.
 fn find_app(dir: &std::path::Path) -> Option<PathBuf> {
     let mut stack = vec![dir.to_path_buf()];
@@ -2298,7 +2351,13 @@ fn link_segments(line: &str) -> Vec<(String, Option<String>)> {
     out
 }
 
-fn markdown_ui(ui: &mut egui::Ui, text: &str, fg: egui::Color32, base: Option<&std::path::Path>) {
+fn markdown_ui(
+    ui: &mut egui::Ui,
+    text: &str,
+    fg: egui::Color32,
+    base: Option<&std::path::Path>,
+    lang: i18n::Lang,
+) {
     let muted = egui::Color32::from_gray(150);
     let all: Vec<&str> = text.lines().collect();
     let (lines, footnotes) = take_footnotes(&all);
@@ -2309,7 +2368,16 @@ fn markdown_ui(ui: &mut egui::Ui, text: &str, fg: egui::Color32, base: Option<&s
         let line = lines[i];
         let trimmed = line.trim_start();
         if trimmed.starts_with("```") {
+            let info = trimmed.trim_start_matches('`').trim().to_ascii_lowercase();
             in_code = !in_code;
+            if in_code && info == "mermaid" {
+                // Mermaid layout is out of scope; say so instead of pretending.
+                ui.label(
+                    egui::RichText::new(i18n::t(lang, "Mermaid diagram (not rendered)"))
+                        .small()
+                        .color(muted),
+                );
+            }
             ui.label(egui::RichText::new(line).monospace().color(muted));
             i += 1;
             continue;
@@ -2801,9 +2869,10 @@ impl MiaottyApp {
                         }
                     });
                 });
+                let l_search = self.t("Search sessions…");
                 ui.add(
                     egui::TextEdit::singleline(&mut self.tab_filter)
-                        .hint_text("Search sessions…")
+                        .hint_text(l_search)
                         .desired_width(f32::INFINITY)
                         .margin(egui::Margin::symmetric(6.0, 3.0)),
                 );
@@ -2845,11 +2914,11 @@ impl MiaottyApp {
                             self.tabs[i].group.clone(),
                         );
                         resp.context_menu(|ui| {
-                            if ui.button("Rename\u{2026}").clicked() {
+                            if ui.button(self.t("Rename\u{2026}")).clicked() {
                                 edit = Some((i, TabField::Title, fields.0.clone()));
                                 ui.close_menu();
                             }
-                            if ui.button("Prefix\u{2026}").clicked() {
+                            if ui.button(self.t("Prefix\u{2026}")).clicked() {
                                 edit = Some((
                                     i,
                                     TabField::Prefix,
@@ -2857,12 +2926,12 @@ impl MiaottyApp {
                                 ));
                                 ui.close_menu();
                             }
-                            if ui.button("Mark\u{2026}").clicked() {
+                            if ui.button(self.t("Mark\u{2026}")).clicked() {
                                 edit =
                                     Some((i, TabField::Mark, fields.2.clone().unwrap_or_default()));
                                 ui.close_menu();
                             }
-                            if ui.button("Group\u{2026}").clicked() {
+                            if ui.button(self.t("Group\u{2026}")).clicked() {
                                 edit = Some((
                                     i,
                                     TabField::Group,
@@ -2870,24 +2939,26 @@ impl MiaottyApp {
                                 ));
                                 ui.close_menu();
                             }
-                            if fields.3.is_some() && ui.button("Remove from Group").clicked() {
+                            if fields.3.is_some()
+                                && ui.button(self.t("Remove from Group")).clicked()
+                            {
                                 ungroup = Some(i);
                                 ui.close_menu();
                             }
-                            if ui.button("Duplicate").clicked() {
+                            if ui.button(self.t("Duplicate")).clicked() {
                                 duplicate = Some(i);
                                 ui.close_menu();
                             }
-                            if ui.button("New Tab").clicked() {
+                            if ui.button(self.t("New Tab")).clicked() {
                                 add = true;
                                 ui.close_menu();
                             }
                             ui.separator();
-                            if ui.button("Close Tab").clicked() {
+                            if ui.button(self.t("Close Tab")).clicked() {
                                 close = Some(i);
                                 ui.close_menu();
                             }
-                            if ui.button("Close Other Tabs").clicked() {
+                            if ui.button(self.t("Close Other Tabs")).clicked() {
                                 close_others = Some(i);
                                 ui.close_menu();
                             }
@@ -3066,7 +3137,7 @@ impl MiaottyApp {
                                 ui.label(egui::RichText::new(text).small().color(muted));
                             }
                             if let Some(cmd) = resume_command(a, name) {
-                                if ui.button("Resume").on_hover_text(&cmd).clicked() {
+                                if ui.button(self.t("Resume")).on_hover_text(&cmd).clicked() {
                                     resume = Some(cmd);
                                 }
                             }
@@ -3310,7 +3381,7 @@ impl MiaottyApp {
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label("user@host:port");
+                    ui.label(self.t("user@host:port"));
                     ui.text_edit_singleline(&mut dialog.target);
                 });
                 ui.horizontal(|ui| {
@@ -3393,7 +3464,7 @@ impl MiaottyApp {
         let mut open = true;
         let mut send = false;
         let mut queue = false;
-        egui::Window::new("Composer")
+        egui::Window::new(self.t("Composer"))
             .open(&mut open)
             .default_size([520.0, 280.0])
             .show(ctx, |ui| {
@@ -3404,7 +3475,7 @@ impl MiaottyApp {
                 );
                 ui.add(
                     egui::TextEdit::multiline(&mut composer.text)
-                        .hint_text("Prompt\u{2026}")
+                        .hint_text(self.t("Prompt\u{2026}"))
                         .desired_width(f32::INFINITY)
                         .desired_rows(8),
                 );
@@ -3686,7 +3757,7 @@ impl MiaottyApp {
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            markdown_ui(ui, &editor.text, fg, base.as_deref());
+                            markdown_ui(ui, &editor.text, fg, base.as_deref(), self.lang);
                         });
                 } else if editor.readonly {
                     source_ui(ui, &editor.text, editor.target, &mut editor.jumped, fg);
@@ -3852,7 +3923,68 @@ impl MiaottyApp {
             self.update_msg = Some(self.t("Installing and relaunching\u{2026}").to_string());
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            let exe = std::env::current_exe().unwrap_or_else(|_| artifact.clone());
+            let script =
+                std::env::temp_dir().join(format!("miaotty-install-{}.cmd", std::process::id()));
+            if std::fs::write(
+                &script,
+                windows_install_script(std::process::id(), &artifact, &exe),
+            )
+            .is_err()
+            {
+                self.update_msg = Some(self.t("Could not stage the installer").to_string());
+                return;
+            }
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            let _ = std::process::Command::new("cmd")
+                .args(["/c", "start", "", "/b"])
+                .arg(&script)
+                .creation_flags(CREATE_NO_WINDOW)
+                .spawn();
+            self.update_msg = Some(self.t("Installing and relaunching\u{2026}").to_string());
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        #[cfg(target_os = "linux")]
+        {
+            // Only an AppImage is a single file we can swap; anything else (.deb,
+            // tarball) is the user's package manager's job.
+            if let Ok(appimage) = std::env::var("APPIMAGE") {
+                let script =
+                    std::env::temp_dir().join(format!("miaotty-install-{}.sh", std::process::id()));
+                if std::fs::write(
+                    &script,
+                    linux_install_script(
+                        std::process::id(),
+                        std::path::Path::new(&appimage),
+                        &artifact,
+                    ),
+                )
+                .is_err()
+                {
+                    self.update_msg = Some(self.t("Could not stage the installer").to_string());
+                    return;
+                }
+                let _ = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(format!(
+                        "setsid nohup sh '{}' >/dev/null 2>&1 &",
+                        script.display()
+                    ))
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+                self.update_msg = Some(self.t("Installing and relaunching\u{2026}").to_string());
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            } else {
+                self.update_msg = Some(self.t("Open the download to install").to_string());
+                open_path_externally(&artifact);
+            }
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
         {
             self.update_msg = Some(self.t("Open the download to install").to_string());
             open_path_externally(&artifact);
@@ -4221,14 +4353,14 @@ impl MiaottyApp {
         }
 
         ui.horizontal(|ui| {
-            if ui.button("+ Rule").clicked() {
+            if ui.button(self.t("+ Rule")).clicked() {
                 self.rules.rules.push(miao_term_config::view::Rule {
                     title: Some("{folder}".to_string()),
                     ..Default::default()
                 });
                 self.view_edit = Some(self.rules.rules.len() - 1);
             }
-            if ui.button("Save views.json").clicked() {
+            if ui.button(self.t("Save views.json")).clicked() {
                 match self.rules.save() {
                     Ok(()) => eprintln!("miaotty: wrote views.json"),
                     Err(e) => eprintln!("miaotty: failed to write views.json: {e}"),
@@ -5808,6 +5940,27 @@ mod session_tests {
         let back: TabSession = serde_json::from_str(&json).unwrap();
         assert_eq!(back.prefix.as_deref(), Some("[w]"));
         assert_eq!(back.group.as_deref(), Some("g"));
+    }
+
+    #[test]
+    fn platform_install_scripts() {
+        let win = windows_install_script(
+            4242,
+            std::path::Path::new(r"C:\Users\me\Downloads\miaotty-0.1.0-x86_64.msi"),
+            std::path::Path::new(r"C:\Program Files\miaotty\bin\miaotty.exe"),
+        );
+        assert!(win.contains("PID eq 4242"), "waits for our pid");
+        assert!(win.contains("msiexec /i"), "runs the installer");
+        assert!(win.contains("miaotty-cli.exe"), "replaces the CLI too");
+
+        let lin = linux_install_script(
+            4242,
+            std::path::Path::new("/opt/miaotty.AppImage"),
+            std::path::Path::new("/tmp/downloaded.AppImage"),
+        );
+        assert!(lin.starts_with("#!/bin/sh"));
+        assert!(lin.contains("kill -0 4242"), "waits for our pid");
+        assert!(lin.contains("exec \"/opt/miaotty.AppImage\""), "relaunches");
     }
 
     #[test]

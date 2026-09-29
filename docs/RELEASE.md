@@ -126,6 +126,8 @@ app). A real desktop session or a GPU is needed for that.
 ## Still open
 
 - The **AppImage** path is best-effort and not yet verified on a real install.
-- Self-replace is macOS-only; Windows/Linux hand off to the downloaded file.
+- Self-replace now covers Windows (MSI/zip helper) and Linux (AppImage helper);
+only the *installation verification* of those paths is still pending (the .deb
+and MSI installs themselves are verified — see above).
 - The macOS zip name is arch-specific today (`arm64`); an Intel build would need
   `macos-x86_64` and a matching pattern.

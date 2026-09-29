@@ -24,6 +24,18 @@ macOS 上 `install_update` 用一个分离的 helper 完成替换:
 其它平台该按钮降级为*打开下载文件*加状态提示,因为就地替换(Windows 占用中的 `.exe`、
 Linux AppImage/deb)是另一份工作。
 
+## 附记(Windows 与 Linux)
+
+`install_update` 现在三平台都覆盖:用一个分离的 helper 等待我们的 PID 退出,再替换应用:
+
+- **Windows**:`.cmd` 对 MSI 执行 `msiexec /i`(随后启动
+  `%ProgramFiles%\miaotty\bin\miaotty.exe`),或对 zip 用 `tar` 解包并把 `miaotty.exe` /
+  `miaotty-cli.exe` 覆盖到当前安装位置,然后重启。以 `CREATE_NO_WINDOW` 启动。
+- **Linux**:当从 **AppImage** 运行(设置了 `$APPIMAGE`)时,`sh` helper 把下载文件覆盖到该
+  AppImage、`chmod +x` 并重新执行;其它格式交给包管理器。
+
+生成器是纯函数,在每个平台都有单测。
+
 ## 后果
 
 - macOS 上更新路径端到端可用:检查 → 下载 → 校验 → 安装 → 重启,且替换失败可回滚。

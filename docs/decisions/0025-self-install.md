@@ -29,6 +29,21 @@ Elsewhere the button degrades to *open the download* and a status message, since
 per-platform in-place replacement (Windows locked `.exe`, Linux AppImage/deb) is
 different work.
 
+## Addendum (Windows and Linux)
+
+`install_update` now covers all three platforms with a detached helper that
+waits for our PID and then swaps the app:
+
+- **Windows**: a `.cmd` runs `msiexec /i` for an MSI (then starts
+  `%ProgramFiles%\miaotty\bin\miaotty.exe`), or unpacks a zip with `tar` and
+  copies `miaotty.exe` / `miaotty-cli.exe` over the current install, then
+  relaunches. It is spawned with `CREATE_NO_WINDOW`.
+- **Linux**: when running from an **AppImage** (`$APPIMAGE` is set) an `sh`
+  helper copies the download over the AppImage, `chmod +x` and re-execs it;
+  other formats hand off to the package manager.
+
+The generators are pure functions and unit-tested on every platform.
+
 ## Consequences
 
 - The update path is end-to-end on macOS: check → download → verify → install →
