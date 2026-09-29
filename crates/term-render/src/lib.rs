@@ -1007,5 +1007,19 @@ mod gpu_tests {
         device.poll(wgpu::Maintain::Wait);
         let data = slice.get_mapped_range();
         assert!(data.iter().any(|&b| b > 0), "renderer produced no output");
+        // Diagnostic: sample the image rect (36..60 x 2..20) and the quad (2..30 x 2..20).
+        let px = |x: usize, y: usize| -> (u8, u8, u8) {
+            let o = y * padded + x * 4;
+            (data[o], data[o + 1], data[o + 2])
+        };
+        // The image quad (36..60 x 2..20) must actually paint: sample near its
+        // top-left texel (red) and just outside it (still the white quad).
+        let (r, g, b) = px(38, 4);
+        assert!(r > g && r > b, "image did not paint red: {r},{g},{b}");
+        let (qr, qg, qb) = px(10, 10);
+        assert!(
+            qr > 200 && qg > 200 && qb > 200,
+            "quad lost: {qr},{qg},{qb}"
+        );
     }
 }

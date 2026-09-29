@@ -310,17 +310,12 @@ fn panel_frame(ch: &ChromeColors, margin: egui::Margin) -> egui::Frame {
 /// Like [`panel_frame`] but with an explicit surface colour, so the session
 /// list and the details inspector can sit above/below the terminal card.
 fn panel_frame_fill(ch: &ChromeColors, margin: egui::Margin, fill: Rgb) -> egui::Frame {
-    panel_frame_stroke(ch, margin, fill, ch.hover)
+    panel_frame_stroke(margin, fill, ch.hover)
 }
 
 /// A panel frame with an explicit fill and stroke (the side panels use Otty's
 /// border colour so their edge reads as a separator, like `[sidebar]`).
-fn panel_frame_stroke(
-    ch: &ChromeColors,
-    margin: egui::Margin,
-    fill: Rgb,
-    stroke: Rgb,
-) -> egui::Frame {
+fn panel_frame_stroke(margin: egui::Margin, fill: Rgb, stroke: Rgb) -> egui::Frame {
     egui::Frame::default()
         .fill(bg_color(fill))
         .stroke(egui::Stroke::new(1.0_f32, bg_color(stroke)))
@@ -826,7 +821,11 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
     if show_sidebar {
         egui::SidePanel::left("sessions")
             .exact_width(CHROME_SIDEBAR_W)
-            .frame(panel_frame_stroke(&ch, egui::Margin::same(6.0), ch.sidebar, ch.border))
+            .frame(panel_frame_stroke(
+                egui::Margin::same(6.0),
+                ch.sidebar,
+                ch.border,
+            ))
             .show(ctx, |ui| {
                 let heading = t(lang, "Sessions", "会话");
                 if let Some(i) = sidebar(ui, &ch, &titles, &icons, &badges, &metas, active, heading)
@@ -849,7 +848,11 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
         ];
         egui::SidePanel::right("details")
             .exact_width(CHROME_DETAILS_W)
-            .frame(panel_frame_stroke(&ch, egui::Margin::same(8.0), ch.details, ch.border))
+            .frame(panel_frame_stroke(
+                egui::Margin::same(8.0),
+                ch.details,
+                ch.border,
+            ))
             .show(ctx, |ui| {
                 if let Some(i) = details_tabs(ui, &ch, &tabs_icons, details_tab) {
                     details_sel = Some(i);

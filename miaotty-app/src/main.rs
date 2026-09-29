@@ -631,12 +631,21 @@ struct MiaottyApp {
     update_msg: Option<String>,
     /// In-progress IME composition (e.g. Pinyin), shown inline near the cursor.
     ime_preedit: String,
+    /// Inline terminal graphics: whether they are drawn, and the egui texture
+    /// cache keyed by (pane, image, frame).
+    graphics_enabled: bool,
+    image_textures: std::collections::HashMap<u64, ImageTex>,
     /// Whether to enable the OS input method at all. Can be turned off with
     /// `MIAOTTY_IME=0` to isolate IME-related input latency.
     ime_enabled: bool,
     /// Whether IME has been enabled on the window (avoid re-sending every frame,
     /// which resets the input method and makes it flicker).
     ime_allowed: bool,
+    /// Debug capture (`MIAOTTY_SHOT_AFTER=<secs>`): a deadline after which we
+    /// ask egui for a screenshot and then exit — used for QA screenshots.
+    shot_after: Option<std::time::Instant>,
+    /// A screenshot was requested; repaint until it arrives.
+    shot_pending: bool,
     /// Last IME candidate-window rect sent, so we only send it when it moves.
     ime_rect: Option<egui::Rect>,
     /// Sidebar session search filter.
@@ -855,6 +864,13 @@ impl MiaottyApp {
             update_rx: None,
             update_msg: None,
             ime_preedit: String::new(),
+            shot_after: std::env::var("MIAOTTY_SHOT_AFTER")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .map(|s| std::time::Instant::now() + std::time::Duration::from_secs(s)),
+            shot_pending: false,
+            graphics_enabled: cfg.graphics,
+            image_textures: std::collections::HashMap::new(),
             ime_enabled: std::env::var("MIAOTTY_IME")
                 .map(|v| v != "0")
                 .unwrap_or(true),
@@ -1170,6 +1186,32 @@ impl MiaottyApp {
 
 impl eframe::App for MiaottyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Debug capture: ask for a screenshot once the deadline passes, save it
+        // to /tmp/eframe_shot.ppm and quit (QA / visual regression aid).
+        if let Some(at) = self.shot_after {
+            if std::time::Instant::now() >= at {
+                self.shot_after = None;
+                self.shot_pending = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(50));
+            }
+        }
+        if self.shot_pending {
+            // The image arrives in a later frame's input events.
+            ctx.request_repaint();
+        }
+        let shot = ctx.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::Screenshot { image, .. } => Some(image.clone()),
+                _ => None,
+            })
+        });
+        if let Some(image) = shot {
+            write_ppm("/tmp/eframe_shot.ppm", &image);
+            eprintln!("miaotty: wrote /tmp/eframe_shot.ppm");
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
         // Drain output for every tab (keeps channels from growing unbounded).
         let mut changed = false;
         for tab in &mut self.tabs {
@@ -5003,6 +5045,105 @@ impl MiaottyApp {
             });
     }
 
+    /// Draw the pane's inline images as egui textures, clipped to `rect`.
+    fn draw_inline_images(
+        &mut self,
+        ui: &egui::Ui,
+        pane_id: &str,
+        rect: egui::Rect,
+        cw: f32,
+        ch: f32,
+    ) {
+        let Some(ti) = self
+            .tabs
+            .iter()
+            .position(|t| t.panes.iter().any(|p| p.pane_id == pane_id))
+        else {
+            return;
+        };
+        let Some(pi) = self.tabs[ti]
+            .panes
+            .iter()
+            .position(|p| p.pane_id == pane_id)
+        else {
+            return;
+        };
+        let offset = self.tabs[ti].panes[pi].term.screen().scroll_offset() as i32;
+        let mut keep = std::collections::HashSet::new();
+        let mut animating = false;
+        let mut draws: Vec<(egui::TextureId, egui::Rect)> = Vec::new();
+        for im in self.tabs[ti].panes[pi].term.graphics().images.iter() {
+            if im.frames.is_empty() {
+                continue;
+            }
+            let fi = if im.animating && im.frames.len() > 1 {
+                animating = true;
+                (im.anim_start.elapsed().as_millis() / 100) as usize % im.frames.len()
+            } else {
+                0
+            };
+            let frame = &im.frames[fi.min(im.frames.len() - 1)];
+            let key = miao_term_core::graphics::image_key(pane_id, im.id, fi);
+            keep.insert(key);
+            let tex = match self.image_textures.get(&key) {
+                Some(t) => t.tex.clone(),
+                None => {
+                    let img = egui::ColorImage::from_rgba_unmultiplied(
+                        [frame.width as usize, frame.height as usize],
+                        &frame.rgba,
+                    );
+                    let handle = ui.ctx().load_texture(
+                        format!("miao-img-{key:x}"),
+                        img,
+                        egui::TextureOptions::LINEAR,
+                    );
+                    self.image_textures.insert(
+                        key,
+                        ImageTex {
+                            pane: pane_id.to_string(),
+                            tex: handle.clone(),
+                        },
+                    );
+                    handle
+                }
+            };
+            let (w, h) = (frame.width as f32, frame.height as f32);
+            if w <= 0.0 || h <= 0.0 {
+                continue;
+            }
+            let bx = rect.left() + im.col as f32 * cw;
+            let by = rect.top() + (im.anchor + offset) as f32 * ch;
+            let (x0, y0, x1, y1) = if let (Some(c), Some(r)) = (im.cols, im.rows) {
+                let (tw, th) = (c as f32 * cw, r as f32 * ch);
+                let s = (tw / w).min(th / h);
+                let (dw, dh) = (w * s, h * s);
+                let (x, y) = (bx + (tw - dw) / 2.0, by + (th - dh) / 2.0);
+                (x, y, x + dw, y + dh)
+            } else {
+                let (x, y) = (bx + im.x_off as f32, by + im.y_off as f32);
+                (x, y, x + w, y + h)
+            };
+            let r = egui::Rect::from_min_max(egui::pos2(x0, y0), egui::pos2(x1, y1));
+            if r.intersects(rect) {
+                draws.push((tex.id(), r.intersect(rect)));
+            }
+        }
+        let painter = ui.painter_at(rect);
+        for (id, r) in draws {
+            painter.image(
+                id,
+                r,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+        }
+        self.image_textures
+            .retain(|k, v| v.pane != pane_id || keep.contains(k));
+        if animating {
+            ui.ctx().request_repaint();
+        }
+    }
+
     /// Draw and handle one pane at `rect`.
     #[allow(clippy::too_many_arguments)]
     fn draw_pane(
@@ -5303,6 +5444,11 @@ impl MiaottyApp {
         let rows = Arc::clone(&self.tabs[ti].panes[pi].rows);
         let scale = ctx.pixels_per_point();
         let fg = self.theme.fg;
+        // Inline images (Sixel/Kitty/iTerm2) under the glyph layer, clipped to
+        // the pane. Kitty z-index is not modelled: images paint over the grid.
+        if self.graphics_enabled {
+            self.draw_inline_images(ui, &pane_id, rect, cw, ch);
+        }
         ui.painter().add(egui::Shape::Callback(
             egui_wgpu::Callback::new_paint_callback(
                 rect,
@@ -5321,6 +5467,25 @@ impl MiaottyApp {
             ),
         ));
     }
+}
+
+/// Write a colour image as a binary PPM (no image-crate dependency).
+fn write_ppm(path: &str, image: &egui::ColorImage) {
+    let (w, h) = (image.width(), image.height());
+    let mut out = Vec::with_capacity(w * h * 3 + 32);
+    out.extend_from_slice(format!("P6\n{w} {h}\n255\n").as_bytes());
+    for px in &image.pixels {
+        out.extend_from_slice(&[px.r(), px.g(), px.b()]);
+    }
+    if let Err(e) = std::fs::write(path, out) {
+        eprintln!("miaotty: screenshot write failed: {e}");
+    }
+}
+
+/// One cached egui texture for an inline terminal image (or animation frame).
+struct ImageTex {
+    pane: String,
+    tex: egui::TextureHandle,
 }
 
 fn word_selection(screen: &ATerm, row: u16, col: u16, cols: u16) -> Selection {

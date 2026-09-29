@@ -1403,7 +1403,7 @@ impl State {
                             0
                         };
                         let frame = &im.frames[fi.min(im.frames.len().saturating_sub(1))];
-                        let key = image_key(id, im.id, fi);
+                        let key = miao_term_core::graphics::image_key(id, im.id, fi);
                         image_keep.insert(key);
                         image_uploads.push((key, Arc::new(im.clone()), fi));
                         let w = frame.width as f32;
@@ -3777,15 +3777,6 @@ fn pick_alpha_mode(
         }
     }
     modes.first().copied().unwrap_or(M::Opaque)
-}
-
-fn image_key(pane: &str, id: u64, frame: usize) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    pane.hash(&mut h);
-    id.hash(&mut h);
-    frame.hash(&mut h);
-    h.finish()
 }
 
 /// Scissor rectangle (physical px) covering all panes, clamped to the surface.

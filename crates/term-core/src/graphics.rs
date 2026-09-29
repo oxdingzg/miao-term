@@ -242,6 +242,16 @@ impl GraphicsLayer {
     }
 }
 
+/// Stable cache key for one rendered image: pane + image id + animation frame.
+pub fn image_key(pane: &str, id: u64, frame: usize) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    pane.hash(&mut h);
+    id.hash(&mut h);
+    frame.hash(&mut h);
+    h.finish()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,6 +299,24 @@ mod tests {
         assert!(l.kitty(c2, 0, 0, 0), "second chunk decodes");
         assert_eq!(l.images.len(), 1);
         assert_eq!((l.images[0].image.width, l.images[0].image.height), (1, 1));
+    }
+
+    #[test]
+    fn kitty_rgba_transmit_and_display_places() {
+        let mut l = GraphicsLayer::new();
+        // 2x2 RGBA (f=32): four opaque red pixels.
+        let placed = l.kitty(
+            gfx::kitty::parse(b"a=T,f=32,s=2x2,i=1,c=8,r=8;/wAA//8AAP//AAD//wAA/w=="),
+            0,
+            0,
+            0,
+        );
+        assert!(placed, "decodes");
+        assert_eq!(l.images.len(), 1);
+        let im = &l.images[0];
+        assert_eq!((im.image.width, im.image.height), (2, 2));
+        assert_eq!(&im.image.rgba[..4], &[255, 0, 0, 255]);
+        assert_eq!((im.cols, im.rows), (Some(8), Some(8)));
     }
 
     #[test]

@@ -48,3 +48,17 @@ Another session may share this directory.
 - Do not rewrite or discard someone else's uncommitted work.
 - History rewrites require the owner's explicit approval; afterwards every clone
   must re-sync (`git fetch && git reset --hard origin/main`).
+
+## Screenshots for verification
+
+Both hosts can capture themselves without screen-recording permission — useful
+for QA and visual diffs when the fix is a rendering change:
+
+- native host: `MIAOTTY_NATIVE_SHOT_AFTER=<secs> ./target/release/miaotty-native`
+  writes `/tmp/native_shot.ppm` and exits.
+- eframe host: `MIAOTTY_SHOT_AFTER=<secs> ./target/release/miaotty` writes
+  `/tmp/eframe_shot.ppm` and exits.
+
+PPM is written as binary RGB (the native host swaps channels from its BGRA
+target), so a plain reader can sample pixels directly. Drive the running app with
+`miaotty-cli pane run --pane <id> --data ...` while the capture deadline runs.

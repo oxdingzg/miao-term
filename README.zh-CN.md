@@ -61,8 +61,8 @@
 - **查看器/编辑器**:只读预览带行号与跳转行高亮,编辑态带行号栏与**可选的极简 vim 模式**(`editor-vim`),*Open Externally* /
   *Edit in Tab*,以及 CommonMark 渲染(`egui_commonmark`):标题、列表、引用、表格、代码、链接、本地与
   远程图片,外加 `graph`/`flowchart` 的 Mermaid 子集(或经 `mermaid-command` 全量渲染)。
-- **终端内联图片**:Sixel / Kitty / iTerm2 图片直接画在字符网格上——随内容滚动、裁剪在 pane 内;
-  用 `graphics` 开关(默认开)。
+- **终端内联图片**:Sixel / Kitty / iTerm2 图片由两个 host 直接画在字符网格上——随内容滚动、
+  裁剪在 pane 内;用 `graphics` 开关(默认开)。
 - **Recipes**:保存并回放整个工作区;配置导出。
 - 设置窗口(`⌘,`):字号/字体族、透明度、行高、光标样式、主题、agent 徽章、通知、防休眠、
   agent 集成、View 规则 —— 写入 `config.toml` / `views.json`。
@@ -306,8 +306,8 @@ view/edit、更新下载/校验/安装、URL scheme、全局快速终端热键�
   实现快速终端,并在光标处渲染内联 IME 拼写;二者都还未在系统注册,只有 launcher 把 URL
   作为参数传入时链接才会到达。`background-opacity` 仅在 surface 支持 straight alpha
   时生效。
-- **终端内联图片**:仅由 `miaotty-native` 渲染;回滚容量内锚定精确,超出后为近似(alacritty
-  不暴露滚动计数,除非打补丁);会话恢复不保留图像(会与恢复的内容不一致)。
+- **终端内联图片**:不模拟 Kitty 的 z-index(图片绘制在网格之上);回滚容量内锚定精确,超出后
+  为近似(alacritty 不暴露滚动计数,除非打补丁);会话恢复不保留图像(会与恢复的内容不一致)。
 - **Markdown**:Mermaid 支持 `graph`/`flowchart` 子集(或经 `mermaid-command` 全量渲染);
   其它图类型显示占位。
 - **i18n**:主要界面已覆盖;少量示例/提示串仍为英文。

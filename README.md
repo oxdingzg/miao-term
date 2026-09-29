@@ -76,8 +76,8 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
   tables, code, links, local and remote images, plus a `graph`/`flowchart`
   Mermaid subset (or full Mermaid via `mermaid-command`).
 - **Inline terminal graphics**: Sixel, Kitty and iTerm2 images are drawn in the
-  grid — they scroll with the content and are clipped to the pane. Toggle with
-  `graphics` (on by default).
+  grid by both hosts — they scroll with the content and are clipped to the pane.
+  Toggle with `graphics` (on by default).
 - **Recipes**: save and replay a whole workspace; config export.
 - A settings window (`⌘,`): font size/family, opacity, line height, cursor
   style, theme, agent badges, notifications, sleep guard, agent integrations,
@@ -354,10 +354,10 @@ Still open:
   composition at the cursor; neither is registered with the OS yet, so a link
   only reaches them when the launcher passes the URL as an argument.
   `background-opacity` works only where the surface offers straight alpha.
-- **Inline graphics**: rendered by `miaotty-native` only; anchors are exact up to
-  the scrollback cap and approximate past it (alacritty exposes no scroll counter
-  without a patch), and session restore keeps no images (they would not match the
-  restored content).
+- **Inline graphics**: Kitty z-index is not modelled (images paint over the
+  grid); anchors are exact up to the scrollback cap and approximate past it
+  (alacritty exposes no scroll counter without a patch), and session restore
+  keeps no images (they would not match the restored content).
 - **Markdown**: Mermaid renders a `graph`/`flowchart` subset (or fully via
   `mermaid-command`); other diagram types show a placeholder.
 - **i18n**: the main chrome is covered; a few example/hint strings stay English.

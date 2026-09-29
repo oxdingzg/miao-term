@@ -518,6 +518,18 @@ mod tests {
     }
 
     #[test]
+    fn kitty_rgba_reaches_the_graphics_layer() {
+        let mut t = make();
+        // 2x2 RGBA (f=32) transmit+display with an explicit 8x8 cell footprint.
+        t.feed_for_test(b"\x1b_Ga=T,f=32,s=2x2,i=1,c=8,r=8;/wAA//8AAP//AAD//wAA/w==\x1b\\");
+        let imgs = &t.graphics().images;
+        assert_eq!(imgs.len(), 1, "one image placed");
+        assert_eq!((imgs[0].image.width, imgs[0].image.height), (2, 2));
+        assert_eq!(&imgs[0].image.rgba[..4], &[255, 0, 0, 255]);
+        assert_eq!((imgs[0].cols, imgs[0].rows), (Some(8), Some(8)));
+    }
+
+    #[test]
     fn kitty_put_uses_cell_coordinates() {
         let mut t = make();
         // a=p at x=5,y=2 with a 1x1 raw RGB pixel (base64 "AAAA").
