@@ -1013,6 +1013,17 @@ impl State {
         }
     }
 
+    /// Persist the prompt queue so it survives a restart.
+    fn save_queue(&self) {
+        if let Some(path) = queue_file() {
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let body = serde_json::json!({ "prompts": self.prompts });
+            let _ = std::fs::write(path, serde_json::to_vec(&body).unwrap_or_default());
+        }
+    }
+
     /// Drop every tab (and its panes/shells), e.g. before opening a recipe.
     fn clear_tabs(&mut self) {
         self.tabs.clear();
@@ -1825,6 +1836,7 @@ impl State {
             self.write_input(format!("{draft}\r").as_bytes());
         } else if queue {
             self.prompts.push(draft);
+            self.save_queue();
             self.composer = None;
         } else if !open {
             self.composer = None;
@@ -2486,7 +2498,7 @@ impl ApplicationHandler for Host {
             details_data: None,
             details_rx: None,
             details_at: Instant::now(),
-            prompts: Vec::new(),
+            prompts: load_queue(),
             prompt_input: String::new(),
             last_title: None,
             focused: false,
@@ -3073,6 +3085,30 @@ fn session_file() -> Option<std::path::PathBuf> {
     window_file().map(|p| p.with_file_name("native-session.json"))
 }
 
+fn queue_file() -> Option<std::path::PathBuf> {
+    window_file().map(|p| p.with_file_name("native-queue.json"))
+}
+
+/// Load the persisted prompt queue (agent Composer drafts).
+fn load_queue() -> Vec<String> {
+    let Some(path) = queue_file() else {
+        return Vec::new();
+    };
+    let Ok(bytes) = std::fs::read(&path) else {
+        return Vec::new();
+    };
+    serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()
+        .and_then(|v| {
+            v.get("prompts").and_then(|p| p.as_array()).map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(str::to_string))
+                    .collect()
+            })
+        })
+        .unwrap_or_default()
+}
+
 fn window_file() -> Option<std::path::PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(std::path::PathBuf::from)
@@ -3199,6 +3235,7 @@ impl chrome::Chrome for State {
         if !self.prompt_input.is_empty() {
             let p = std::mem::take(&mut self.prompt_input);
             self.prompts.push(p);
+            self.save_queue();
         }
     }
     fn on_queue_send(&mut self, i: usize) {
@@ -3209,6 +3246,7 @@ impl chrome::Chrome for State {
     fn on_queue_remove(&mut self, i: usize) {
         if i < self.prompts.len() {
             self.prompts.remove(i);
+            self.save_queue();
         }
     }
     fn on_queue_send_all(&mut self) {
@@ -3216,9 +3254,11 @@ impl chrome::Chrome for State {
         for item in items {
             self.write_input(format!("{item}\r").as_bytes());
         }
+        self.save_queue();
     }
     fn on_queue_clear(&mut self) {
         self.prompts.clear();
+        self.save_queue();
     }
     fn on_menu(&mut self, id: chrome::MenuId) {
         use chrome::MenuId::*;
