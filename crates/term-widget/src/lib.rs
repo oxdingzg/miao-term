@@ -4526,7 +4526,26 @@ fn files_rows(cwd: &std::path::Path) -> Vec<FileEntry> {
 }
 
 fn configure_egui(ctx: &egui::Context) {
+    let ch = miao_term_ui::theme::Chrome::dark();
+    let col = |c: miao_term_ui::theme::Rgb| egui::Color32::from_rgb(c.0, c.1, c.2);
     let mut style = (*ctx.style()).clone();
+    {
+        let v = &mut style.visuals;
+        v.dark_mode = true;
+        v.window_fill = col(ch.bg);
+        v.panel_fill = col(ch.card);
+        v.extreme_bg_color = col(ch.bg);
+        v.faint_bg_color = col(ch.hover);
+        v.override_text_color = Some(col(ch.text));
+        v.hyperlink_color = col(ch.accent);
+        v.selection.bg_fill = col(ch.active);
+        v.widgets.inactive.weak_bg_fill = col(ch.hover);
+        v.widgets.hovered.weak_bg_fill = col(ch.active);
+        v.widgets.active.weak_bg_fill = col(ch.active);
+        v.widgets.inactive.bg_fill = col(ch.hover);
+        v.widgets.hovered.bg_fill = col(ch.active);
+        v.widgets.active.bg_fill = col(ch.active);
+    }
     let r = egui::Rounding::same(6.0);
     style.visuals.widgets.inactive.rounding = r;
     style.visuals.widgets.hovered.rounding = r;
