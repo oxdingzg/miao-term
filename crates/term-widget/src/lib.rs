@@ -65,9 +65,6 @@ struct Host {
     state: Option<State>,
 }
 
-/// A time-stamped, path-keyed details cache (git status / directory listing).
-type Cache = Option<(Instant, std::path::PathBuf, Vec<(String, String)>)>;
-
 struct Pane {
     id: String,
     term: Terminal,
@@ -79,6 +76,14 @@ struct Tab {
     panes: Vec<Pane>,
     active: String,
     title: String,
+}
+
+/// Background-computed details (git status / directory listing / ports).
+#[derive(Default, Clone)]
+struct DetailsData {
+    git: Vec<(String, String)>,
+    files: Vec<(String, String)>,
+    ports: Vec<(String, String)>,
 }
 
 /// A simple built-in text file editor (with a naive Markdown preview).
@@ -144,9 +149,10 @@ struct State {
     update_rx: Option<std::sync::mpsc::Receiver<String>>,
     update_msg: Option<String>,
     details_tab: usize,
-    git_cache: Cache,
-    files_cache: Cache,
-    ports_cache: Cache,
+    details_cwd: Option<std::path::PathBuf>,
+    details_data: Option<DetailsData>,
+    details_rx: Option<std::sync::mpsc::Receiver<(std::path::PathBuf, DetailsData)>>,
+    details_at: Instant,
     prompts: Vec<String>,
     prompt_input: String,
     last_title: Option<String>,
@@ -510,6 +516,8 @@ impl State {
     }
 
     fn render(&mut self) {
+        self.poll_details();
+        self.ensure_details();
         // MTP `pane.send` / `pane.run` — inject bytes into the target pane.
         for (pane_id, data) in self.mtp.take_writes() {
             for tab in &mut self.tabs {
@@ -1123,9 +1131,27 @@ impl State {
         match tab {
             1 => ("Agent", self.agent_rows()),
             2 => ("Outline", self.outline_rows()),
-            3 => ("Git", self.git_rows_cached()),
-            4 => ("Files", self.files_rows_cached()),
-            5 => ("Ports", self.ports_rows_cached()),
+            3 => (
+                "Git",
+                self.details_data
+                    .as_ref()
+                    .map(|d| d.git.clone())
+                    .unwrap_or_default(),
+            ),
+            4 => (
+                "Files",
+                self.details_data
+                    .as_ref()
+                    .map(|d| d.files.clone())
+                    .unwrap_or_default(),
+            ),
+            5 => (
+                "Ports",
+                self.details_data
+                    .as_ref()
+                    .map(|d| d.ports.clone())
+                    .unwrap_or_default(),
+            ),
             _ => ("Info", self.details_rows()),
         }
     }
@@ -1279,48 +1305,45 @@ impl State {
         rows
     }
 
-    fn git_rows_cached(&mut self) -> Vec<(String, String)> {
+    /// Kick off a background refresh of git/files/ports for the active cwd.
+    fn ensure_details(&mut self) {
         let Some(cwd) = self.cwd() else {
-            return Vec::new();
+            return;
         };
-        if let Some((t, p, rows)) = &self.git_cache {
-            if p == &cwd && t.elapsed() < Duration::from_millis(1000) {
-                return rows.clone();
-            }
+        let fresh = self.details_cwd.as_deref() == Some(cwd.as_path())
+            && self.details_at.elapsed() < Duration::from_secs(2);
+        if fresh || self.details_rx.is_some() {
+            return;
         }
-        let rows = git_rows(&cwd);
-        self.git_cache = Some((Instant::now(), cwd, rows.clone()));
-        rows
-    }
-
-    fn files_rows_cached(&mut self) -> Vec<(String, String)> {
-        let Some(cwd) = self.cwd() else {
-            return Vec::new();
-        };
-        if let Some((t, p, rows)) = &self.files_cache {
-            if p == &cwd && t.elapsed() < Duration::from_millis(1000) {
-                return rows.clone();
-            }
-        }
-        let rows = files_rows(&cwd);
-        self.files_cache = Some((Instant::now(), cwd, rows.clone()));
-        rows
-    }
-
-    fn ports_rows_cached(&mut self) -> Vec<(String, String)> {
         let pid = self.active_pane().and_then(|p| p.term.pid());
-        let key = std::path::PathBuf::from(pid.map(|p| p.to_string()).unwrap_or_default());
-        if let Some((t, p, rows)) = &self.ports_cache {
-            if p == &key && t.elapsed() < Duration::from_millis(1000) {
-                return rows.clone();
-            }
-        }
-        let rows = match pid {
-            Some(pid) => ports_rows(pid),
-            None => Vec::new(),
+        let proxy = self.proxy.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cwd2 = cwd.clone();
+        std::thread::spawn(move || {
+            let data = DetailsData {
+                git: git_rows(&cwd2),
+                files: files_rows(&cwd2),
+                ports: pid.map(ports_rows).unwrap_or_default(),
+            };
+            let _ = tx.send((cwd2, data));
+            let _ = proxy.send_event(());
+        });
+        self.details_rx = Some(rx);
+    }
+
+    fn poll_details(&mut self) {
+        let Some(rx) = self.details_rx.take() else {
+            return;
         };
-        self.ports_cache = Some((Instant::now(), key, rows.clone()));
-        rows
+        match rx.try_recv() {
+            Ok((cwd, data)) => {
+                self.details_cwd = Some(cwd);
+                self.details_data = Some(data);
+                self.details_at = Instant::now();
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => self.details_rx = Some(rx),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+        }
     }
 
     fn details_rows(&self) -> Vec<(String, String)> {
@@ -2298,9 +2321,10 @@ impl ApplicationHandler for Host {
             update_rx: None,
             update_msg: None,
             details_tab: 0,
-            git_cache: None,
-            files_cache: None,
-            ports_cache: None,
+            details_cwd: None,
+            details_data: None,
+            details_rx: None,
+            details_at: Instant::now(),
             prompts: Vec::new(),
             prompt_input: String::new(),
             last_title: None,
@@ -2336,6 +2360,8 @@ impl ApplicationHandler for Host {
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
                 }
             }
+            state.poll_details();
+            state.ensure_details();
             if state.focused {
                 if state.last_blink.elapsed() >= BLINK {
                     state.cursor_on = !state.cursor_on;
