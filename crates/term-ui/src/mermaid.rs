@@ -589,6 +589,23 @@ mod tests {
     }
 
     #[test]
+    fn show_emits_shapes_headless() {
+        let g = parse("flowchart TD\n A[One] --> B(Two)\n B -->|x| C{Three}").unwrap();
+        let ctx = egui::Context::default();
+        let mut input = egui::RawInput::default();
+        input.screen_rect = Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(640.0, 480.0),
+        ));
+        let out = ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                show(ui, &g, egui::Color32::WHITE, egui::Color32::BLACK);
+            });
+        });
+        assert!(!out.shapes.is_empty(), "mermaid::show produced no shapes");
+    }
+
+    #[test]
     fn external_tool_detection() {
         assert!(!on_path("definitely-not-a-real-tool-xyz"));
         assert!(on_path("/bin/sh") || cfg!(windows));
