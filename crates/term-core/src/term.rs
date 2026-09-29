@@ -88,6 +88,7 @@ impl Terminal {
         scrollback: usize,
         cwd: Option<std::path::PathBuf>,
         extra_env: &[(String, String)],
+        waker: std::sync::Arc<dyn Fn() + Send + Sync>,
     ) -> Fallible<Self> {
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(PtySize {
@@ -124,6 +125,7 @@ impl Terminal {
         let writer = pair.master.take_writer()?;
 
         let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        let waker_thread = waker.clone();
         thread::spawn(move || {
             let mut buf = [0u8; 8192];
             loop {
@@ -133,6 +135,9 @@ impl Terminal {
                         if tx.send(buf[..n].to_vec()).is_err() {
                             break;
                         }
+                        // Wake the UI so output (e.g. echo of a keystroke) is
+                        // drawn promptly instead of on the next blink tick.
+                        waker_thread();
                     }
                     Err(_) => break,
                 }

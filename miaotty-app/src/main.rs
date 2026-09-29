@@ -70,7 +70,7 @@ fn main() -> eframe::Result<()> {
                         map: std::collections::HashMap::new(),
                     });
             }
-            let mut app = MiaottyApp::new(state, cfg);
+            let mut app = MiaottyApp::new(state, cfg, cc.egui_ctx.clone());
             app.pending = intent;
             Ok(Box::new(app))
         }),
@@ -608,7 +608,10 @@ struct MiaottyApp {
     cursor_on: bool,
     last_blink: Instant,
     show_details: bool,
+    show_sidebar: bool,
     state: Arc<miao_term_mtp::ServerState>,
+    /// Wakes the UI from the PTY reader threads so output is drawn promptly.
+    waker: Arc<dyn Fn() + Send + Sync>,
     theme: Theme,
     metrics: miao_term_render::MetricsProbe,
     renaming: Option<(usize, TabField)>,
@@ -668,6 +671,11 @@ struct MiaottyApp {
     update_msg: Option<String>,
     /// In-progress IME composition (e.g. Pinyin), shown inline near the cursor.
     ime_preedit: String,
+    /// Whether IME has been enabled on the window (avoid re-sending every frame,
+    /// which resets the input method and makes it flicker).
+    ime_allowed: bool,
+    /// Last IME candidate-window rect sent, so we only send it when it moves.
+    ime_rect: Option<egui::Rect>,
     /// Sidebar session search filter.
     tab_filter: String,
 }
@@ -776,6 +784,13 @@ enum Verb {
     SplitDown,
     CloseTab,
     ToggleDetails,
+    ToggleSidebar,
+    IncreaseFont,
+    DecreaseFont,
+    ResetFont,
+    ClearScreen,
+    CopyPath,
+    RevealInFinder,
     Find,
     Settings,
     NextTab,
@@ -795,8 +810,13 @@ struct Palette {
 }
 
 impl MiaottyApp {
-    fn new(state: Arc<miao_term_mtp::ServerState>, cfg: miao_term_config::Config) -> Self {
+    fn new(
+        state: Arc<miao_term_mtp::ServerState>,
+        cfg: miao_term_config::Config,
+        ctx: egui::Context,
+    ) -> Self {
         let opacity = cfg.background_opacity.clamp(0.1, 1.0);
+        let waker: Arc<dyn Fn() + Send + Sync> = Arc::new(move || ctx.request_repaint());
         let mut app = Self {
             tabs: Vec::new(),
             active: 0,
@@ -806,7 +826,9 @@ impl MiaottyApp {
             cursor_on: true,
             last_blink: Instant::now(),
             show_details: true,
+            show_sidebar: true,
             state,
+            waker,
             theme: Theme::from_config(&cfg.theme),
             metrics: miao_term_render::MetricsProbe::new(),
             renaming: None,
@@ -869,6 +891,8 @@ impl MiaottyApp {
             update_rx: None,
             update_msg: None,
             ime_preedit: String::new(),
+            ime_allowed: false,
+            ime_rect: None,
             tab_filter: String::new(),
         };
         if let Some(session) = Session::load() {
@@ -925,7 +949,7 @@ impl MiaottyApp {
             for ps in &ts.panes {
                 let pane_id = gen_pane_id();
                 let cwd = ps.cwd.clone().map(PathBuf::from);
-                match Self::spawn_terminal(100, 30, &pane_id, cwd) {
+                match Self::spawn_terminal(100, 30, &pane_id, cwd, self.waker.clone()) {
                     Some(term) => {
                         panes.push(Pane {
                             term,
@@ -970,9 +994,10 @@ impl MiaottyApp {
         rows: u16,
         pane_id: &str,
         cwd: Option<PathBuf>,
+        waker: Arc<dyn Fn() + Send + Sync>,
     ) -> Option<Terminal> {
         let env = vec![("MIAOTTY_PANE_ID".to_owned(), pane_id.to_owned())];
-        match Terminal::new(None, cols, rows, 10_000, cwd, &env) {
+        match Terminal::new(None, cols, rows, 10_000, cwd, &env, waker) {
             Ok(term) => Some(term),
             Err(e) => {
                 eprintln!("failed to spawn shell: {e}");
@@ -983,7 +1008,7 @@ impl MiaottyApp {
 
     fn push_tab(&mut self, title: String, cols: u16, rows: u16, cwd: Option<PathBuf>) {
         let pane_id = gen_pane_id();
-        if let Some(term) = Self::spawn_terminal(cols, rows, &pane_id, cwd) {
+        if let Some(term) = Self::spawn_terminal(cols, rows, &pane_id, cwd, self.waker.clone()) {
             self.tabs.push(Tab {
                 panes: vec![Pane {
                     term,
@@ -1065,7 +1090,7 @@ impl MiaottyApp {
             return;
         };
         let pane_id = gen_pane_id();
-        if let Some(term) = Self::spawn_terminal(cols, rows, &pane_id, cwd) {
+        if let Some(term) = Self::spawn_terminal(cols, rows, &pane_id, cwd, self.waker.clone()) {
             let target = tab.active.clone();
             tab.panes.push(Pane {
                 term,
@@ -1373,11 +1398,14 @@ impl eframe::App for MiaottyApp {
             ctx.request_repaint_after(Duration::from_millis(530));
         }
 
+        self.menu_bar(ctx);
         self.tab_bar(ctx);
         if self.find_open {
             self.find_bar(ctx);
         }
-        self.sidebar(ctx);
+        if self.show_sidebar {
+            self.sidebar(ctx);
+        }
         if self.show_details {
             self.details_panel(ctx);
         }
@@ -1520,7 +1548,14 @@ impl MiaottyApp {
             ("Split Right", Verb::SplitRight),
             ("Split Down", Verb::SplitDown),
             ("Close Tab", Verb::CloseTab),
-            ("Toggle Details", Verb::ToggleDetails),
+            ("Toggle Details Panel", Verb::ToggleDetails),
+            ("Toggle Tabs Panel", Verb::ToggleSidebar),
+            ("Increase Font Size", Verb::IncreaseFont),
+            ("Decrease Font Size", Verb::DecreaseFont),
+            ("Reset Font Size", Verb::ResetFont),
+            ("Clear Screen", Verb::ClearScreen),
+            ("Copy Path", Verb::CopyPath),
+            ("Reveal in Finder", Verb::RevealInFinder),
             ("Find", Verb::Find),
             ("Settings", Verb::Settings),
             ("Next Tab", Verb::NextTab),
@@ -1591,6 +1626,44 @@ impl MiaottyApp {
                 Verb::SplitDown => self.split_active(SplitDir::Down),
                 Verb::CloseTab => self.close_active(),
                 Verb::ToggleDetails => self.show_details = !self.show_details,
+                Verb::ToggleSidebar => self.show_sidebar = !self.show_sidebar,
+                Verb::IncreaseFont => self.font_size = (self.font_size + 1.0).min(40.0),
+                Verb::DecreaseFont => self.font_size = (self.font_size - 1.0).max(6.0),
+                Verb::ResetFont => self.font_size = 13.0,
+                Verb::ClearScreen => {
+                    let id = self
+                        .tabs
+                        .get(self.active)
+                        .and_then(|t| t.focused())
+                        .map(|p| p.pane_id.clone());
+                    if let (Some(id), Some(tab)) = (id, self.tabs.get_mut(self.active)) {
+                        if let Some(pane) = tab.panes.iter_mut().find(|p| p.pane_id == id) {
+                            pane.term.write(b"\x0c");
+                        }
+                    }
+                }
+                Verb::CopyPath => {
+                    let cwd = self
+                        .tabs
+                        .get(self.active)
+                        .and_then(|t| t.focused())
+                        .and_then(|p| p.term.cwd())
+                        .map(str::to_string);
+                    if let Some(cwd) = cwd {
+                        self.pending_copy = Some(cwd);
+                    }
+                }
+                Verb::RevealInFinder => {
+                    let cwd = self
+                        .tabs
+                        .get(self.active)
+                        .and_then(|t| t.focused())
+                        .and_then(|p| p.term.cwd())
+                        .map(str::to_string);
+                    if let Some(cwd) = cwd {
+                        reveal_in_finder(&cwd);
+                    }
+                }
                 Verb::Find => self.find_open = true,
                 Verb::Settings => {
                     self.show_settings = true;
@@ -4365,6 +4438,130 @@ impl MiaottyApp {
         }
     }
 
+    fn menu_bar(&mut self, ctx: &egui::Context) {
+        let mut verb: Option<Verb> = None;
+        let mut open_palette = false;
+        let bg = self.window_bg();
+        let fg = self.theme.fg;
+        egui::TopBottomPanel::top("menubar")
+            .frame(
+                egui::Frame::default()
+                    .fill(bg)
+                    .inner_margin(egui::Margin::symmetric(6.0, 1.0)),
+            )
+            .show(ctx, |ui| {
+                ui.visuals_mut().override_text_color = Some(fg);
+                ui.horizontal(|ui| {
+                    ui.menu_button("File", |ui| {
+                        if ui.button("New Tab").clicked() {
+                            verb = Some(Verb::NewTab);
+                            ui.close_menu();
+                        }
+                        if ui.button("Close Tab").clicked() {
+                            verb = Some(Verb::CloseTab);
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button("Save Recipe…").clicked() {
+                            verb = Some(Verb::SaveRecipe);
+                            ui.close_menu();
+                        }
+                        if ui.button("Open Recipe…").clicked() {
+                            verb = Some(Verb::OpenRecipe);
+                            ui.close_menu();
+                        }
+                    });
+                    ui.menu_button("Edit", |ui| {
+                        if ui.button("Find…").clicked() {
+                            verb = Some(Verb::Find);
+                            ui.close_menu();
+                        }
+                        if ui.button("Copy Path").clicked() {
+                            verb = Some(Verb::CopyPath);
+                            ui.close_menu();
+                        }
+                    });
+                    ui.menu_button("View", |ui| {
+                        if ui.button("Command Palette…").clicked() {
+                            open_palette = true;
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button("Toggle Tabs Panel").clicked() {
+                            verb = Some(Verb::ToggleSidebar);
+                            ui.close_menu();
+                        }
+                        if ui.button("Toggle Details Panel").clicked() {
+                            verb = Some(Verb::ToggleDetails);
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button("Increase Font Size").clicked() {
+                            verb = Some(Verb::IncreaseFont);
+                            ui.close_menu();
+                        }
+                        if ui.button("Decrease Font Size").clicked() {
+                            verb = Some(Verb::DecreaseFont);
+                            ui.close_menu();
+                        }
+                        if ui.button("Reset Font Size").clicked() {
+                            verb = Some(Verb::ResetFont);
+                            ui.close_menu();
+                        }
+                    });
+                    ui.menu_button("Shell", |ui| {
+                        if ui.button("Split Right").clicked() {
+                            verb = Some(Verb::SplitRight);
+                            ui.close_menu();
+                        }
+                        if ui.button("Split Down").clicked() {
+                            verb = Some(Verb::SplitDown);
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button("Clear Screen").clicked() {
+                            verb = Some(Verb::ClearScreen);
+                            ui.close_menu();
+                        }
+                        if ui.button("Reveal in Finder").clicked() {
+                            verb = Some(Verb::RevealInFinder);
+                            ui.close_menu();
+                        }
+                    });
+                    ui.menu_button("Window", |ui| {
+                        if ui.button("Settings…").clicked() {
+                            verb = Some(Verb::Settings);
+                            ui.close_menu();
+                        }
+                        if ui.button("New SSH Session…").clicked() {
+                            verb = Some(Verb::NewSsh);
+                            ui.close_menu();
+                        }
+                    });
+                    ui.menu_button("Help", |ui| {
+                        ui.hyperlink_to(
+                            "Documentation",
+                            "https://github.com/oxdingzg/miao-term#readme",
+                        );
+                        if ui.button("Check for Updates").clicked() {
+                            verb = Some(Verb::CheckUpdates);
+                            ui.close_menu();
+                        }
+                    });
+                });
+            });
+        if open_palette {
+            self.palette = Some(Palette {
+                query: String::new(),
+                selected: 0,
+            });
+            self.palette_focus = true;
+        }
+        if let Some(v) = verb {
+            self.run_palette(PaletteAction::Run(v));
+        }
+    }
+
     fn tab_bar(&mut self, ctx: &egui::Context) {
         let fg = self.theme.fg;
         let active = self.active;
@@ -4590,7 +4787,7 @@ impl MiaottyApp {
                                     (egui::Key::Minus, _, _) => {
                                         self.font_size = (self.font_size - 1.0).max(6.0)
                                     }
-                                    (egui::Key::Num0, _, _) => self.font_size = 14.0,
+                                    (egui::Key::Num0, _, _) => self.font_size = 13.0,
                                     (egui::Key::Comma, _, _) => {
                                         self.show_settings = true;
                                         self.settings_family =
@@ -4598,12 +4795,50 @@ impl MiaottyApp {
                                     }
                                     (egui::Key::E, true, _) => self.open_composer(),
                                     (egui::Key::T, true, _) => self.toggle_quick_terminal(),
-                                    (egui::Key::K, _, _) => {
+                                    // Command palette — Otty uses ⌘⇧P (we also keep ⌘K).
+                                    (egui::Key::K, _, _)
+                                    | (egui::Key::P, true, _)
+                                    | (egui::Key::O, true, _) => {
                                         self.palette = Some(Palette {
                                             query: String::new(),
                                             selected: 0,
                                         });
                                         self.palette_focus = true;
+                                    }
+                                    // Otty-style panel toggles.
+                                    (egui::Key::L, true, _) => {
+                                        self.show_sidebar = !self.show_sidebar
+                                    }
+                                    (egui::Key::R, true, _) => {
+                                        self.show_details = !self.show_details
+                                    }
+                                    // ⌘1–9 switch tabs (Otty).
+                                    (egui::Key::Num1, _, _) => {
+                                        self.run_palette(PaletteAction::SwitchTab(0))
+                                    }
+                                    (egui::Key::Num2, _, _) => {
+                                        self.run_palette(PaletteAction::SwitchTab(1))
+                                    }
+                                    (egui::Key::Num3, _, _) => {
+                                        self.run_palette(PaletteAction::SwitchTab(2))
+                                    }
+                                    (egui::Key::Num4, _, _) => {
+                                        self.run_palette(PaletteAction::SwitchTab(3))
+                                    }
+                                    (egui::Key::Num5, _, _) => {
+                                        self.run_palette(PaletteAction::SwitchTab(4))
+                                    }
+                                    (egui::Key::Num6, _, _) => {
+                                        self.run_palette(PaletteAction::SwitchTab(5))
+                                    }
+                                    (egui::Key::Num7, _, _) => {
+                                        self.run_palette(PaletteAction::SwitchTab(6))
+                                    }
+                                    (egui::Key::Num8, _, _) => {
+                                        self.run_palette(PaletteAction::SwitchTab(7))
+                                    }
+                                    (egui::Key::Num9, _, _) => {
+                                        self.run_palette(PaletteAction::SwitchTab(8))
                                     }
                                     _ => {}
                                 }
@@ -4810,8 +5045,14 @@ impl MiaottyApp {
             };
             // Enable the OS input method while the terminal is focused (and no
             // other widget is capturing text), anchoring the candidate window at
-            // the cursor cell, so CJK / IME input works.
+            // the cursor cell. Each command is sent only when it changes:
+            // re-sending `IMEAllowed(true)` every frame resets the input method
+            // and makes it flicker.
             if ctx.memory(|m| m.focused().is_none()) {
+                if !self.ime_allowed {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::IMEAllowed(true));
+                    self.ime_allowed = true;
+                }
                 let (crow, ccol) = self.tabs[ti].panes[pi].term.screen().cursor_position();
                 let ime_rect = egui::Rect::from_min_size(
                     egui::pos2(
@@ -4820,24 +5061,34 @@ impl MiaottyApp {
                     ),
                     egui::vec2(cw, ch),
                 );
-                ctx.send_viewport_cmd(egui::ViewportCommand::IMEAllowed(true));
-                ctx.send_viewport_cmd(egui::ViewportCommand::IMERect(ime_rect));
+                if self.ime_rect != Some(ime_rect) {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::IMERect(ime_rect));
+                    self.ime_rect = Some(ime_rect);
+                }
+            } else if self.ime_allowed {
+                ctx.send_viewport_cmd(egui::ViewportCommand::IMEAllowed(false));
+                self.ime_allowed = false;
+                self.ime_rect = None;
             }
 
             let mut out = Vec::new();
-            let mut preedit = String::new();
+            // `Preedit` is only emitted when it changes, so persist the last one
+            // instead of clearing it every frame (which would flash).
+            let mut preedit: Option<String> = None;
             let has_selection = self.selection.is_some();
             if self.palette.is_none() {
                 ctx.input(|i| {
                     for ev in &i.events {
                         if let egui::Event::Ime(egui::ImeEvent::Preedit(t)) = ev {
-                            preedit = t.clone();
+                            preedit = Some(t.clone());
                         }
                         encode_input(ev, app_cursor, bracketed, kitty, has_selection, &mut out);
                     }
                 });
             }
-            self.ime_preedit = preedit;
+            if let Some(p) = preedit {
+                self.ime_preedit = p;
+            }
             if !out.is_empty() {
                 self.tabs[ti].panes[pi].term.write(&out);
                 self.ime_preedit.clear();
@@ -4879,7 +5130,11 @@ impl MiaottyApp {
         {
             let pane = &mut self.tabs[ti].panes[pi];
             let screen = pane.term.screen();
-            draw_cursor = focused && self.scroll == 0 && self.cursor_on && !screen.hide_cursor();
+            draw_cursor = focused
+                && self.scroll == 0
+                && self.cursor_on
+                && !screen.hide_cursor()
+                && self.ime_preedit.is_empty();
             draw_screen(
                 ui,
                 screen,
