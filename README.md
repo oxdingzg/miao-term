@@ -311,9 +311,11 @@ Still open:
 - **Platform verification**: the Linux wgpu render path runs in CI via Mesa
   software Vulkan (lavapipe); a real Linux desktop, the Wayland portal hotkey
   and Windows IME/GUI still need an interactive session.
-- **Update install** on Windows and Linux (macOS only today).
-- **CI performance baseline**: the regression gate compares against a recorded
-  baseline, so it needs a CI-side baseline store to bind there.
+- **Update install**: implemented on all three platforms (macOS app bundle,
+  Windows MSI/zip helper, Linux AppImage); verified on macOS, the Windows/Linux
+  paths still need a real host to confirm.
+- **CI performance baseline**: bound through `actions/cache` today; a durable
+  baseline store would make the gate robust across cache eviction.
 - **Native parity**: the native host still lacks window opacity, the global
   Quick Terminal hotkey, URL schemes and the shell/agent integration
   installers; its Settings window is a subset.

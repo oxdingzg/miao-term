@@ -271,8 +271,9 @@ view/edit、更新下载/校验/安装、URL scheme、全局快速终端热键�
   (见 `docs/RELEASE.md`)。
 - **平台验证**:Linux 的 wgpu 渲染路径现已在 CI 中通过 Mesa 软件 Vulkan(lavapipe)覆盖;
   真实 Linux 桌面、Wayland 门户热键、以及 Windows 的 IME/GUI 仍需交互式会话。
-- **更新安装**:Windows 与 Linux(目前仅 macOS)。
-- **CI 性能基线**:回归门对比记录的基线,需 CI 侧基线存储才能在 CI 生效。
+- **更新安装**:三端均已实现(macOS app bundle、Windows MSI/zip helper、Linux AppImage);
+  已在 macOS 验证,Windows/Linux 路径仍需真机确认。
+- **CI 性能基线**:目前用 `actions/cache` 绑定;更持久的基线存储能让门更稳(缓存会被淘汰)。
 - **原生版对齐**:native 宿主仍缺窗口透明度、全局快速终端热键、URL scheme、以及 shell/agent
   集成安装;其设置窗口是子集。
 - **终端内联图片**:超过回滚容量后的锚定是近似;按整个网格区裁剪而非按 pane;Kitty 按区域
