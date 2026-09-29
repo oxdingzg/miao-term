@@ -5944,84 +5944,6 @@ impl egui_wgpu::CallbackTrait for TermCallback {
     }
 }
 
-fn ctrl_byte(key: egui::Key) -> Option<u8> {
-    use egui::Key::*;
-    Some(match key {
-        A => 0x01,
-        B => 0x02,
-        C => 0x03,
-        D => 0x04,
-        E => 0x05,
-        F => 0x06,
-        G => 0x07,
-        H => 0x08,
-        I => 0x09,
-        J => 0x0a,
-        K => 0x0b,
-        L => 0x0c,
-        M => 0x0d,
-        N => 0x0e,
-        O => 0x0f,
-        P => 0x10,
-        Q => 0x11,
-        R => 0x12,
-        S => 0x13,
-        T => 0x14,
-        U => 0x15,
-        V => 0x16,
-        W => 0x17,
-        X => 0x18,
-        Y => 0x19,
-        Z => 0x1a,
-        _ => return None,
-    })
-}
-
-/// Base codepoint for a printable key (lowercase), for kitty CSI-u encoding.
-fn key_codepoint(key: egui::Key) -> Option<u32> {
-    use egui::Key::*;
-    Some(match key {
-        A => 'a' as u32,
-        B => 'b' as u32,
-        C => 'c' as u32,
-        D => 'd' as u32,
-        E => 'e' as u32,
-        F => 'f' as u32,
-        G => 'g' as u32,
-        H => 'h' as u32,
-        I => 'i' as u32,
-        J => 'j' as u32,
-        K => 'k' as u32,
-        L => 'l' as u32,
-        M => 'm' as u32,
-        N => 'n' as u32,
-        O => 'o' as u32,
-        P => 'p' as u32,
-        Q => 'q' as u32,
-        R => 'r' as u32,
-        S => 's' as u32,
-        T => 't' as u32,
-        U => 'u' as u32,
-        V => 'v' as u32,
-        W => 'w' as u32,
-        X => 'x' as u32,
-        Y => 'y' as u32,
-        Z => 'z' as u32,
-        Num0 => '0' as u32,
-        Num1 => '1' as u32,
-        Num2 => '2' as u32,
-        Num3 => '3' as u32,
-        Num4 => '4' as u32,
-        Num5 => '5' as u32,
-        Num6 => '6' as u32,
-        Num7 => '7' as u32,
-        Num8 => '8' as u32,
-        Num9 => '9' as u32,
-        Space => ' ' as u32,
-        _ => return None,
-    })
-}
-
 fn encode_input(
     ev: &egui::Event,
     app_cursor: bool,
@@ -6030,154 +5952,96 @@ fn encode_input(
     has_selection: bool,
     out: &mut Vec<u8>,
 ) {
+    // Shared with the native host (miao-term-ui::input).
+    use miao_term_ui::input::{self, EncodeOpts, Modifiers};
+    let opts = EncodeOpts {
+        app_cursor,
+        bracketed,
+        kitty,
+        has_selection,
+    };
     match ev {
-        egui::Event::Text(t) => {
-            out.extend_from_slice(t.as_bytes());
-        }
-        // OS input method (e.g. Pinyin / Kotoeri): send the committed text to the
-        // shell. Pre-edit text is shown by the IME overlay, not sent.
+        egui::Event::Text(t) => out.extend_from_slice(&input::encode_text(t)),
         egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
-            out.extend_from_slice(text.as_bytes());
+            out.extend_from_slice(&input::encode_text(text))
         }
-        egui::Event::Paste(text) => {
-            // Normalize newlines to CR; shells expect carriage returns for Enter.
-            let body = text.replace('\n', "\r");
-            if bracketed {
-                out.extend_from_slice(b"\x1b[200~");
-                out.extend_from_slice(body.as_bytes());
-                out.extend_from_slice(b"\x1b[201~");
-            } else {
-                out.extend_from_slice(body.as_bytes());
-            }
-        }
+        egui::Event::Paste(text) => out.extend_from_slice(&input::encode_paste(text, bracketed)),
         egui::Event::Key {
             key,
             pressed: true,
             modifiers,
             ..
         } => {
-            // Consumed by the viewport scroller.
             if modifiers.shift && matches!(key, egui::Key::PageUp | egui::Key::PageDown) {
                 return;
             }
-            // Kitty keyboard protocol: disambiguate special keys and Ctrl+keys
-            // as CSI-u (`ESC [ code ; mods u`).
-            if kitty && !modifiers.mac_cmd {
-                let mut n: u8 = 1;
-                if modifiers.shift {
-                    n += 1;
-                }
-                if modifiers.alt {
-                    n += 2;
-                }
-                if modifiers.ctrl {
-                    n += 4;
-                }
-                let special = match key {
-                    egui::Key::Escape => Some(27u32),
-                    egui::Key::Enter => Some(13),
-                    egui::Key::Tab => Some(9),
-                    egui::Key::Backspace => Some(127),
-                    _ => None,
-                };
-                if let Some(cp) = special {
-                    if n > 1 {
-                        out.extend_from_slice(format!("\x1b[{cp};{n}u").as_bytes());
-                        return;
-                    }
-                }
-                if modifiers.ctrl {
-                    if let Some(cp) = key_codepoint(*key) {
-                        out.extend_from_slice(format!("\x1b[{cp};{n}u").as_bytes());
-                        return;
-                    }
-                }
-            }
-
-            // Ctrl combos (Unix control bytes). On macOS, Cmd is reserved for copy/paste etc.
-            if modifiers.ctrl && !modifiers.mac_cmd {
-                if let Some(b) = ctrl_byte(*key) {
-                    // Ctrl+C with a selection is a copy (handled by the caller).
-                    if *key == egui::Key::C && has_selection {
-                        return;
-                    }
-                    out.push(b);
-                    return;
-                }
-            }
-
-            // Backspace variants: Ctrl+Backspace = ^W (delete word), Alt+Backspace = ESC DEL.
-            if *key == egui::Key::Backspace {
-                if modifiers.ctrl && !modifiers.alt {
-                    out.push(0x17);
-                    return;
-                }
-                if modifiers.alt && !modifiers.ctrl {
-                    out.extend_from_slice(b"\x1b\x7f");
-                    return;
-                }
-            }
-
-            // Modifier-aware navigation (word movement, selection, etc.).
-            if modifiers.shift || modifiers.alt || modifiers.ctrl {
-                let mut n: u8 = 1;
-                if modifiers.shift {
-                    n += 1;
-                }
-                if modifiers.alt {
-                    n += 2;
-                }
-                if modifiers.ctrl {
-                    n += 4;
-                }
-                let seq = match key {
-                    egui::Key::ArrowUp => Some(format!("\x1b[1;{n}A")),
-                    egui::Key::ArrowDown => Some(format!("\x1b[1;{n}B")),
-                    egui::Key::ArrowRight => Some(format!("\x1b[1;{n}C")),
-                    egui::Key::ArrowLeft => Some(format!("\x1b[1;{n}D")),
-                    egui::Key::Home => Some(format!("\x1b[1;{n}H")),
-                    egui::Key::End => Some(format!("\x1b[1;{n}F")),
-                    egui::Key::Delete => Some(format!("\x1b[3;{n}~")),
-                    egui::Key::PageUp => Some(format!("\x1b[5;{n}~")),
-                    egui::Key::PageDown => Some(format!("\x1b[6;{n}~")),
-                    _ => None,
-                };
-                if let Some(seq) = seq {
-                    out.extend_from_slice(seq.as_bytes());
-                    return;
-                }
-            }
-            let mut arrow = |c: u8| {
-                if app_cursor {
-                    out.extend_from_slice(&[0x1b, b'O', c]);
-                } else {
-                    out.extend_from_slice(&[0x1b, b'[', c]);
-                }
+            let mods = Modifiers {
+                ctrl: modifiers.ctrl,
+                alt: modifiers.alt,
+                shift: modifiers.shift,
+                sup: modifiers.mac_cmd,
             };
-            match key {
-                egui::Key::Enter => out.push(b'\r'),
-                egui::Key::Backspace => out.push(0x7f),
-                egui::Key::Tab => {
-                    if modifiers.shift {
-                        out.extend_from_slice(b"\x1b[Z");
-                    } else {
-                        out.push(b'\t');
-                    }
-                }
-                egui::Key::Escape => out.push(0x1b),
-                egui::Key::ArrowUp => arrow(b'A'),
-                egui::Key::ArrowDown => arrow(b'B'),
-                egui::Key::ArrowRight => arrow(b'C'),
-                egui::Key::ArrowLeft => arrow(b'D'),
-                egui::Key::Home => out.extend_from_slice(b"\x1b[H"),
-                egui::Key::End => out.extend_from_slice(b"\x1b[F"),
-                egui::Key::Delete => out.extend_from_slice(b"\x1b[3~"),
-                egui::Key::PageUp => out.extend_from_slice(b"\x1b[5~"),
-                egui::Key::PageDown => out.extend_from_slice(b"\x1b[6~"),
-                _ => {}
-            }
+            out.extend_from_slice(&input::encode_key(egui_key_kind(*key), mods, opts));
         }
         _ => {}
+    }
+}
+
+fn egui_key_kind(key: egui::Key) -> miao_term_ui::input::KeyKind {
+    use egui::Key;
+    use miao_term_ui::input::KeyKind::*;
+    match key {
+        Key::A => Char('a'),
+        Key::B => Char('b'),
+        Key::C => Char('c'),
+        Key::D => Char('d'),
+        Key::E => Char('e'),
+        Key::F => Char('f'),
+        Key::G => Char('g'),
+        Key::H => Char('h'),
+        Key::I => Char('i'),
+        Key::J => Char('j'),
+        Key::K => Char('k'),
+        Key::L => Char('l'),
+        Key::M => Char('m'),
+        Key::N => Char('n'),
+        Key::O => Char('o'),
+        Key::P => Char('p'),
+        Key::Q => Char('q'),
+        Key::R => Char('r'),
+        Key::S => Char('s'),
+        Key::T => Char('t'),
+        Key::U => Char('u'),
+        Key::V => Char('v'),
+        Key::W => Char('w'),
+        Key::X => Char('x'),
+        Key::Y => Char('y'),
+        Key::Z => Char('z'),
+        Key::Num0 => Char('0'),
+        Key::Num1 => Char('1'),
+        Key::Num2 => Char('2'),
+        Key::Num3 => Char('3'),
+        Key::Num4 => Char('4'),
+        Key::Num5 => Char('5'),
+        Key::Num6 => Char('6'),
+        Key::Num7 => Char('7'),
+        Key::Num8 => Char('8'),
+        Key::Num9 => Char('9'),
+        Key::Space => Char(' '),
+        Key::Enter => Enter,
+        Key::Backspace => Backspace,
+        Key::Tab => Tab,
+        Key::Escape => Escape,
+        Key::ArrowUp => Up,
+        Key::ArrowDown => Down,
+        Key::ArrowLeft => Left,
+        Key::ArrowRight => Right,
+        Key::Home => Home,
+        Key::End => End,
+        Key::Delete => Delete,
+        Key::PageUp => PageUp,
+        Key::PageDown => PageDown,
+        _ => Other,
     }
 }
 

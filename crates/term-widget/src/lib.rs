@@ -1571,20 +1571,35 @@ impl ApplicationHandler for Host {
                     }
                     state.window.request_redraw();
                 } else {
-                    let app_cursor = state
+                    let active = state
                         .tabs
                         .get(state.active_tab)
-                        .and_then(|t| t.panes.iter().find(|p| p.id == t.active))
-                        .map(|p| p.term.screen().application_cursor())
-                        .unwrap_or(false);
-                    let key = key_input(&event);
+                        .and_then(|t| t.panes.iter().find(|p| p.id == t.active));
                     let mods = input::Modifiers {
                         ctrl: state.mods.control_key(),
                         alt: state.mods.alt_key(),
                         shift: state.mods.shift_key(),
                         sup: state.mods.super_key(),
                     };
-                    let bytes = input::encode(&key, mods, app_cursor);
+                    let opts = input::EncodeOpts {
+                        app_cursor: active
+                            .map(|p| p.term.screen().application_cursor())
+                            .unwrap_or(false),
+                        bracketed: active
+                            .map(|p| p.term.screen().bracketed_paste())
+                            .unwrap_or(false),
+                        kitty: active
+                            .map(|p| p.term.screen().kitty_disambiguate())
+                            .unwrap_or(false),
+                        has_selection: state.selection.is_some(),
+                    };
+                    let mut bytes = Vec::new();
+                    if let Some(text) = &event.text {
+                        if !mods.ctrl && !mods.sup && !text.is_empty() {
+                            bytes.extend_from_slice(&input::encode_text(text));
+                        }
+                    }
+                    bytes.extend_from_slice(&input::encode_key(winit_key_kind(&event), mods, opts));
                     state.write_input(&bytes);
                 }
             }
@@ -1594,31 +1609,31 @@ impl ApplicationHandler for Host {
     }
 }
 
-fn key_input(event: &KeyEvent) -> input::KeyInput {
-    let kind = match &event.logical_key {
-        Key::Character(s) => s.chars().next().map(input::KeyKind::Char),
-        Key::Named(n) => Some(match n {
-            NamedKey::Enter => input::KeyKind::Enter,
-            NamedKey::Backspace => input::KeyKind::Backspace,
-            NamedKey::Tab => input::KeyKind::Tab,
-            NamedKey::Escape => input::KeyKind::Escape,
-            NamedKey::ArrowUp => input::KeyKind::Up,
-            NamedKey::ArrowDown => input::KeyKind::Down,
-            NamedKey::ArrowLeft => input::KeyKind::Left,
-            NamedKey::ArrowRight => input::KeyKind::Right,
-            NamedKey::Home => input::KeyKind::Home,
-            NamedKey::End => input::KeyKind::End,
-            NamedKey::Delete => input::KeyKind::Delete,
-            NamedKey::PageUp => input::KeyKind::PageUp,
-            NamedKey::PageDown => input::KeyKind::PageDown,
-            _ => input::KeyKind::Other,
-        }),
-        _ => Some(input::KeyKind::Other),
-    }
-    .unwrap_or(input::KeyKind::Other);
-    input::KeyInput {
-        kind,
-        text: event.text.as_ref().map(|t| t.to_string()),
+fn winit_key_kind(event: &KeyEvent) -> input::KeyKind {
+    use input::KeyKind;
+    match &event.logical_key {
+        Key::Character(s) => s
+            .chars()
+            .next()
+            .map(KeyKind::Char)
+            .unwrap_or(KeyKind::Other),
+        Key::Named(n) => match n {
+            NamedKey::Enter => KeyKind::Enter,
+            NamedKey::Backspace => KeyKind::Backspace,
+            NamedKey::Tab => KeyKind::Tab,
+            NamedKey::Escape => KeyKind::Escape,
+            NamedKey::ArrowUp => KeyKind::Up,
+            NamedKey::ArrowDown => KeyKind::Down,
+            NamedKey::ArrowLeft => KeyKind::Left,
+            NamedKey::ArrowRight => KeyKind::Right,
+            NamedKey::Home => KeyKind::Home,
+            NamedKey::End => KeyKind::End,
+            NamedKey::Delete => KeyKind::Delete,
+            NamedKey::PageUp => KeyKind::PageUp,
+            NamedKey::PageDown => KeyKind::PageDown,
+            _ => KeyKind::Other,
+        },
+        _ => KeyKind::Other,
     }
 }
 
