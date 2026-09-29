@@ -15,6 +15,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # Cache the registry + target so a push does not recompile ~450 crates.
+      - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace --all-targets
       - run: cargo test --workspace
 
@@ -23,6 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       # Real Linux wgpu coverage (ADR 0030) without a GPU: install Mesa's
       # software Vulkan (lavapipe) and require the headless smoke test to run.
       - name: Install software Vulkan (lavapipe)
@@ -44,6 +47,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       # Performance gate (ADR 0018/0028): release-mode budgets plus a baseline
       # comparison against this runner's own previous measurements.
       - uses: actions/cache@v4
