@@ -987,6 +987,69 @@ impl State {
         self.window.request_redraw();
     }
 
+    /// Forward a mouse event to the pane under the pointer when the running
+    /// application enabled mouse reporting. Returns true when it was consumed.
+    ///
+    /// `button`: 0 left, 1 middle, 2 right, 64 wheel-up, 65 wheel-down.
+    /// `motion` marks a drag/hover report (bit 5 set, no press/release).
+    fn forward_mouse(&mut self, px: f32, py: f32, button: u8, pressed: bool, motion: bool) -> bool {
+        let scale = self.window.scale_factor() as f32;
+        let Some((id, r)) = self.pane_rects().into_iter().find(|(_, r)| {
+            px >= r.x * scale
+                && px < (r.x + r.w) * scale
+                && py >= r.y * scale
+                && py < (r.y + r.h) * scale
+        }) else {
+            return false;
+        };
+        let Some(tab) = self.tabs.get_mut(self.active_tab) else {
+            return false;
+        };
+        let Some(pane) = tab.panes.iter_mut().find(|p| p.id == id) else {
+            return false;
+        };
+        let Some((clicks, motion_mode, drag_mode, sgr)) = pane.term.screen().mouse_reporting()
+        else {
+            return false;
+        };
+        let wheel = button >= 64;
+        if motion && !(motion_mode || drag_mode) {
+            return false;
+        }
+        if !motion && !clicks && !wheel {
+            return false;
+        }
+        let cw = self.cw * scale;
+        let ch = self.ch * scale;
+        let inner = card_inner(r);
+        let col = ((px - inner.x * scale) / cw).floor().max(0.0) as u16 + 1;
+        let row = ((py - inner.y * scale) / ch).floor().max(0.0) as u16 + 1;
+        let code = if motion && !wheel {
+            button + 32
+        } else {
+            button
+        };
+        let seq = if sgr {
+            let end = if pressed || wheel { 'M' } else { 'm' };
+            format!("\x1b[<{code};{col};{row}{end}")
+        } else if col > 223 || row > 223 {
+            return false;
+        } else {
+            let bytes = [
+                0x1b,
+                b'[',
+                b'M',
+                32u8.saturating_add(code),
+                32u8.saturating_add(col as u8),
+                32u8.saturating_add(row as u8),
+            ];
+            String::from_utf8_lossy(&bytes).into_owned()
+        };
+        pane.term.write(seq.as_bytes());
+        self.window.request_redraw();
+        true
+    }
+
     /// Evaluate the view rule engine (ADR 0007) for a tab's active pane.
     fn view_for(&self, tab: &Tab) -> Option<miao_term_config::view::Resolved> {
         let pane = tab.panes.iter().find(|p| p.id == tab.active)?;
@@ -1124,23 +1187,13 @@ impl State {
                     w: (r.w - CARD_MARGIN * 2.0).max(1.0),
                     h: (r.h - CARD_MARGIN * 2.0).max(1.0),
                 };
-                let border = lighten(panel_bg, 0.12);
                 let bg = panel_bg;
                 let radius = CARD_RADIUS * scale;
                 quads.push(Quad::rounded(
                     (card.x * scale, card.y * scale),
                     ((card.x + card.w) * scale, (card.y + card.h) * scale),
-                    (border.0, border.1, border.2, 255),
-                    radius,
-                ));
-                quads.push(Quad::rounded(
-                    (card.x * scale + 1.0, card.y * scale + 1.0),
-                    (
-                        (card.x + card.w) * scale - 1.0,
-                        (card.y + card.h) * scale - 1.0,
-                    ),
                     (bg.0, bg.1, bg.2, 255),
-                    (radius - 1.0).max(0.0),
+                    radius,
                 ));
                 for row in 0..sr {
                     for col in 0..sc {
@@ -4117,13 +4170,25 @@ impl ApplicationHandler for Host {
                     MouseScrollDelta::LineDelta(_, y) => y as i32,
                     MouseScrollDelta::PixelDelta(p) => (p.y / 12.0) as i32,
                 };
-                if let Some(tab) = state.tabs.get_mut(state.active_tab) {
-                    if let Some(pane) = tab.panes.iter_mut().find(|p| p.id == tab.active) {
-                        let max = pane.term.screen().scrollback_len();
-                        if lines > 0 {
-                            pane.scroll = (pane.scroll + lines as usize).min(max);
-                        } else {
-                            pane.scroll = pane.scroll.saturating_sub((-lines) as usize);
+                if lines != 0 {
+                    // Full-screen apps that grabbed the mouse (TUIs like miao)
+                    // expect wheel events instead of scrollback navigation.
+                    let (px, py) = (state.cursor.0 as f32, state.cursor.1 as f32);
+                    let button = if lines > 0 { 64 } else { 65 };
+                    let mut consumed = false;
+                    for _ in 0..lines.unsigned_abs().min(16) {
+                        consumed |= state.forward_mouse(px, py, button, true, false);
+                    }
+                    if !consumed {
+                        if let Some(tab) = state.tabs.get_mut(state.active_tab) {
+                            if let Some(pane) = tab.panes.iter_mut().find(|p| p.id == tab.active) {
+                                let max = pane.term.screen().scrollback_len();
+                                if lines > 0 {
+                                    pane.scroll = (pane.scroll + lines as usize).min(max);
+                                } else {
+                                    pane.scroll = pane.scroll.saturating_sub((-lines) as usize);
+                                }
+                            }
                         }
                     }
                 }
@@ -4366,11 +4431,6 @@ fn card_inner(r: Rect) -> Rect {
         w: (card.w - CARD_PAD * 2.0).max(1.0),
         h: (card.h - CARD_PAD * 2.0).max(1.0),
     }
-}
-
-fn lighten(c: miao_term_ui::theme::Rgb, f: f32) -> miao_term_ui::theme::Rgb {
-    let l = |v: u8| (v as f32 + (255.0 - v as f32) * f).clamp(0.0, 255.0) as u8;
-    miao_term_ui::theme::Rgb(l(c.0), l(c.1), l(c.2))
 }
 
 /// External Mermaid rendering (opt-in via `mermaid-command`) with a cache.

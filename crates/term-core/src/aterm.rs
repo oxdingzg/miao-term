@@ -245,6 +245,22 @@ impl ATerm {
     pub fn kitty_report_event_types(&self) -> bool {
         self.term.mode().contains(TermMode::REPORT_EVENT_TYPES)
     }
+
+    /// Mouse reporting mode the application asked for, if any.
+    ///
+    /// Returns `(report_clicks, report_motion, report_drag, sgr_encoding)`.
+    pub fn mouse_reporting(&self) -> Option<(bool, bool, bool, bool)> {
+        let mode = self.term.mode();
+        if !mode.intersects(TermMode::MOUSE_MODE) {
+            return None;
+        }
+        Some((
+            mode.contains(TermMode::MOUSE_REPORT_CLICK),
+            mode.contains(TermMode::MOUSE_MOTION),
+            mode.contains(TermMode::MOUSE_DRAG),
+            mode.contains(TermMode::SGR_MOUSE),
+        ))
+    }
 }
 
 /// An SGR fragment for a colour (`bg` selects 48/49 instead of 38/39).
