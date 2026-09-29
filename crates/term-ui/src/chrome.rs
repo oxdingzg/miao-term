@@ -352,6 +352,8 @@ pub enum MenuId {
     FindInAllTabs,
     Fullscreen,
     ClearScreen,
+    ReadOnly,
+    HintMode,
     CopyPath,
     RevealCwd,
     Quit,
@@ -393,6 +395,9 @@ pub trait Chrome {
         Vec::new()
     }
     fn details_is_queue(&self) -> bool {
+        false
+    }
+    fn read_only(&self) -> bool {
         false
     }
     /// A single-line list view for list-like tabs; `None` falls back to k/v.
@@ -456,6 +461,7 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
     let details_title = host.details_title();
     let details_rows = host.details_rows();
     let details_is_queue = host.details_is_queue();
+    let host_read_only = host.read_only();
     let details_list = host.details_list();
     let status = host.status();
     let queue_items = host.queue();
@@ -630,6 +636,18 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
                         ui,
                         t(lang, "Clear Scrollback", "清除回滚"),
                         MenuId::ClearScrollback,
+                        &mut menu,
+                    );
+                    let ro = if host_read_only {
+                        format!("{}  \u{2713}", t(lang, "Read Only", "只读"))
+                    } else {
+                        t(lang, "Read Only", "只读").to_string()
+                    };
+                    menu_item(ui, &ro, MenuId::ReadOnly, &mut menu);
+                    menu_item(
+                        ui,
+                        t(lang, "Open Link (Hint Mode)", "打开链接（提示模式）"),
+                        MenuId::HintMode,
                         &mut menu,
                     );
                     menu_item(

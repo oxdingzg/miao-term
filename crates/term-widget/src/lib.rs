@@ -180,6 +180,9 @@ struct State {
     recent_files: Vec<String>,
     open_counts: HashMap<String, u32>,
     integration_msg: Option<String>,
+    read_only: bool,
+    hint_mode: bool,
+    hints: Vec<miao_term_ui::hints::Hint>,
     prefix_renaming: Option<usize>,
     prefix_buf: String,
     hotkeys: Option<miao_term_ui::hotkey::Hotkeys>,
@@ -227,6 +230,7 @@ struct Shortcut {
     cycle: i32,
     tab: i32,
     find: i32,
+    hint: bool,
     toggle_sidebar: bool,
     toggle_details: bool,
     palette: bool,
@@ -251,6 +255,7 @@ fn shortcut(event: &KeyEvent, mods: ModifiersState) -> Option<Shortcut> {
         cycle: 0,
         tab: 0,
         find: 0,
+        hint: false,
         toggle_sidebar: false,
         toggle_details: false,
         palette: false,
@@ -266,6 +271,7 @@ fn shortcut(event: &KeyEvent, mods: ModifiersState) -> Option<Shortcut> {
             "t" if mods.shift_key() => s.reopen = true,
             "t" => s.new_tab = true,
             "e" => s.composer = true,
+            "h" if mods.shift_key() => s.hint = true,
             "g" if mods.shift_key() => s.find = -1,
             "g" => s.find = 1,
             "o" if mods.shift_key() => s.quickly = true,
@@ -477,6 +483,39 @@ impl State {
         self.publish_panes();
     }
 
+    /// The active pane's inner (terminal) rect in logical points.
+    fn active_inner(&self) -> Option<Rect> {
+        let id = self.active_pane_id()?;
+        self.pane_rects()
+            .into_iter()
+            .find(|(pid, _)| *pid == id)
+            .map(|(_, r)| card_inner(r))
+    }
+
+    fn cancel_hints(&mut self) {
+        self.hint_mode = false;
+        self.hints.clear();
+    }
+
+    /// Collect Hint-Mode labels over visible URLs / absolute paths.
+    fn build_hints(&mut self) {
+        self.hints.clear();
+        let Some(id) = self.active_pane_id() else {
+            return;
+        };
+        let Some(tab) = self.tabs.get(self.active_tab) else {
+            return;
+        };
+        let Some(pane) = tab.panes.iter().find(|p| p.id == id) else {
+            return;
+        };
+        let screen = pane.term.screen();
+        let (rows, _) = screen.size();
+        let lines: Vec<String> = (0..rows).map(|r| screen.line_text(r)).collect();
+        self.hints = miao_term_ui::hints::scan(&lines);
+        self.hint_mode = !self.hints.is_empty();
+    }
+
     fn duplicate_tab(&mut self) {
         let cwd = self.cwd();
         let (title, ssh, prefix) = self
@@ -565,7 +604,7 @@ impl State {
     }
 
     fn write_input(&mut self, bytes: &[u8]) {
-        if bytes.is_empty() {
+        if bytes.is_empty() || self.read_only {
             return;
         }
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
@@ -1166,6 +1205,34 @@ impl State {
                 winit::window::CursorIcon::Default
             });
         }
+        if self.hint_mode && !self.hints.is_empty() {
+            if let Some(inner) = self.active_inner() {
+                let painter = ctx.layer_painter(egui::LayerId::new(
+                    egui::Order::Foreground,
+                    egui::Id::new("hints"),
+                ));
+                for h in &self.hints {
+                    let x = inner.x + h.col as f32 * self.cw;
+                    let y = inner.y + h.row as f32 * self.ch;
+                    let rect = egui::Rect::from_min_size(
+                        egui::pos2(x, y),
+                        egui::vec2(self.cw * 1.6, self.ch),
+                    );
+                    painter.rect_filled(
+                        rect,
+                        egui::Rounding::same(3.0),
+                        egui::Color32::from_rgb(0xeb, 0xcb, 0x8b),
+                    );
+                    painter.text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        &h.label,
+                        egui::FontId::monospace(11.0),
+                        egui::Color32::BLACK,
+                    );
+                }
+            }
+        }
         if let Some(h) = link {
             let y = h.inner.y + (h.row as f32 + 1.0) * self.ch - 1.5;
             let x0 = h.inner.x + h.start as f32 * self.cw;
@@ -1504,6 +1571,9 @@ impl State {
         if panes > 1 {
             s.push_str(&format!("   {} {panes}", t(l, "panes", "分屏")));
         }
+        if self.read_only {
+            s.push_str("   RO");
+        }
         if let Some(m) = &self.update_msg {
             s.push_str("   \u{00b7}   ");
             s.push_str(m);
@@ -1544,6 +1614,8 @@ enum Cmd {
     JumpToSel,
     FindInAllTabs,
     Fullscreen,
+    ReadOnly,
+    HintMode,
     ClearScreen,
     ClearScrollback,
     DuplicateTab,
@@ -1609,6 +1681,11 @@ impl State {
                 t(l, "Find in All Tabs", "在所有标签中查找"),
             ),
             (Cmd::Fullscreen, t(l, "Toggle Full Screen", "全屏切换")),
+            (Cmd::ReadOnly, t(l, "Read Only", "只读")),
+            (
+                Cmd::HintMode,
+                t(l, "Open Link (Hint Mode)", "打开链接（提示模式）"),
+            ),
             (Cmd::ClearScreen, t(l, "Clear Screen", "清屏")),
             (Cmd::ClearScrollback, t(l, "Clear Scrollback", "清除回滚")),
             (Cmd::DuplicateTab, t(l, "Duplicate Tab", "复制标签")),
@@ -1704,6 +1781,8 @@ impl State {
                 }
             }
             Cmd::FindInAllTabs => self.find_in_all_tabs(),
+            Cmd::ReadOnly => self.read_only = !self.read_only,
+            Cmd::HintMode => self.build_hints(),
             Cmd::Fullscreen => {
                 let full = self.window.fullscreen().is_some();
                 self.window.set_fullscreen(if full {
@@ -3318,6 +3397,9 @@ impl ApplicationHandler for Host {
             recent_files: Vec::new(),
             open_counts: HashMap::new(),
             integration_msg: None,
+            read_only: false,
+            hint_mode: false,
+            hints: Vec::new(),
             prefix_renaming: None,
             prefix_buf: String::new(),
             hotkeys: None,
@@ -3597,6 +3679,34 @@ impl ApplicationHandler for Host {
                 state.window.request_redraw();
             }
             WindowEvent::KeyboardInput { event, .. } => {
+                if state.hint_mode {
+                    if event.state == ElementState::Pressed {
+                        let key = match &event.logical_key {
+                            Key::Character(c) => c.chars().next(),
+                            Key::Named(NamedKey::Escape) => Some('\u{1b}'),
+                            _ => None,
+                        };
+                        if let Some(ch) = key {
+                            if ch == '\u{1b}' {
+                                state.cancel_hints();
+                            } else if let Some(h) = state
+                                .hints
+                                .iter()
+                                .find(|h| h.label.starts_with(ch))
+                                .cloned()
+                            {
+                                state.cancel_hints();
+                                if h.is_path {
+                                    state.open_editor(std::path::PathBuf::from(&h.target));
+                                } else {
+                                    open_external(&h.target);
+                                }
+                            }
+                            state.window.request_redraw();
+                            return;
+                        }
+                    }
+                }
                 if state.egui_ctx.wants_keyboard_input() {
                     state.window.request_redraw();
                     return;
@@ -3639,6 +3749,9 @@ impl ApplicationHandler for Host {
                     }
                     if s.tab != 0 {
                         state.cycle_tab(s.tab > 0);
+                    }
+                    if s.hint {
+                        state.build_hints();
                     }
                     if s.find != 0 {
                         let n = state.search_hits.len();
@@ -4219,6 +4332,9 @@ impl chrome::Chrome for State {
     fn details_rows(&self) -> Vec<(String, String)> {
         self.details_content(self.details_tab.min(6)).1
     }
+    fn read_only(&self) -> bool {
+        self.read_only
+    }
     fn details_is_queue(&self) -> bool {
         self.details_tab == 6
     }
@@ -4443,6 +4559,8 @@ impl chrome::Chrome for State {
             JumpToSel => Cmd::JumpToSel,
             FindInAllTabs => Cmd::FindInAllTabs,
             Fullscreen => Cmd::Fullscreen,
+            ReadOnly => Cmd::ReadOnly,
+            HintMode => Cmd::HintMode,
             ClearScreen => Cmd::ClearScreen,
             ClearScrollback => Cmd::ClearScrollback,
             DuplicateTab => Cmd::DuplicateTab,

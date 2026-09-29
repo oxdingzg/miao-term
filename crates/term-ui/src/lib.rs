@@ -8,6 +8,7 @@
 
 pub mod agentloop;
 pub mod chrome;
+pub mod hints;
 pub mod hotkey;
 pub mod i18n;
 pub mod icons;
