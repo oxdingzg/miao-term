@@ -434,6 +434,28 @@ impl State {
         self.window.request_redraw();
     }
 
+    /// The URL under the pointer in the active pane, if any.
+    fn link_at_pointer(&self) -> Option<String> {
+        let scale = self.window.scale_factor() as f32;
+        let (px, py) = (self.cursor.0 as f32, self.cursor.1 as f32);
+        let (id, r) = self.pane_rects().into_iter().find(|(_, r)| {
+            px >= r.x * scale
+                && px < (r.x + r.w) * scale
+                && py >= r.y * scale
+                && py < (r.y + r.h) * scale
+        })?;
+        let inner = card_inner(r);
+        let col = ((px - inner.x * scale) / (self.cw * scale))
+            .floor()
+            .max(0.0) as u16;
+        let row = ((py - inner.y * scale) / (self.ch * scale))
+            .floor()
+            .max(0.0) as u16;
+        let tab = self.tabs.get(self.active_tab)?;
+        let pane = tab.panes.iter().find(|p| p.id == id)?;
+        link_at(&pane.term.screen().line_text(row), col)
+    }
+
     fn copy_selection(&self, ctx: &egui::Context) {
         let Some((pane_id, sel)) = &self.selection else {
             return;
@@ -1966,6 +1988,48 @@ impl State {
     }
 }
 
+/// The URL token under `col` in a line, if any.
+fn link_at(line: &str, col: u16) -> Option<String> {
+    let chars: Vec<char> = line.chars().collect();
+    let col = col as usize;
+    if col >= chars.len() || chars[col].is_whitespace() {
+        return None;
+    }
+    fn is_break(c: char) -> bool {
+        c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '(' | ')' | '<' | '>' | '[' | ']')
+    }
+    let mut start = col;
+    while start > 0 && !is_break(chars[start - 1]) {
+        start -= 1;
+    }
+    let mut end = col;
+    while end + 1 < chars.len() && !is_break(chars[end + 1]) {
+        end += 1;
+    }
+    let token: String = chars[start..=end].iter().collect();
+    let token = token.trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']']);
+    if token.starts_with("http://")
+        || token.starts_with("https://")
+        || token.starts_with("ftp://")
+        || token.starts_with("file://")
+    {
+        Some(token.to_string())
+    } else {
+        None
+    }
+}
+
+/// Open a URL in the OS default browser.
+fn open_external(target: &str) {
+    #[cfg(target_os = "macos")]
+    let cmd = ("open", vec![target]);
+    #[cfg(target_os = "windows")]
+    let cmd = ("cmd", vec!["/C", "start", "", target]);
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let cmd = ("xdg-open", vec![target]);
+    let _ = std::process::Command::new(cmd.0).args(cmd.1).spawn();
+}
+
 fn quad(ox: f32, oy: f32, row: u16, col: u16, cw: f32, ch: f32, color: (u8, u8, u8)) -> Quad {
     Quad::new(
         (ox + col as f32 * cw, oy + row as f32 * ch),
@@ -2202,7 +2266,13 @@ impl ApplicationHandler for Host {
                 state: es, button, ..
             } => match button {
                 MouseButton::Left => {
-                    if es == ElementState::Pressed {
+                    if es == ElementState::Pressed
+                        && (state.mods.super_key() || state.mods.control_key())
+                    {
+                        if let Some(url) = state.link_at_pointer() {
+                            open_external(&url);
+                        }
+                    } else if es == ElementState::Pressed {
                         // Prefer a divider under the pointer, else a selection.
                         let scale = state.window.scale_factor() as f32;
                         let (px, py) = (state.cursor.0 as f32, state.cursor.1 as f32);
@@ -2827,6 +2897,20 @@ impl chrome::Chrome for State {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn link_detection() {
+        let line = "see https://example.com/a?b=1 now";
+        assert_eq!(
+            super::link_at(line, 8).as_deref(),
+            Some("https://example.com/a?b=1")
+        );
+        assert_eq!(super::link_at(line, 0), None);
+        assert_eq!(
+            super::link_at("(https://x.io).", 2).as_deref(),
+            Some("https://x.io")
+        );
+    }
+
     use super::*;
 
     #[test]
