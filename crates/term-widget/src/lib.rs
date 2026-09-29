@@ -4706,9 +4706,9 @@ fn configure_egui(ctx: &egui::Context) {
         v.widgets.hovered.bg_fill = col(ch.active);
         v.widgets.active.bg_fill = col(ch.active);
         // Panel separators and dialog outlines (egui defaults to a flat grey).
-        v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, col(ch.border));
-        v.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, col(ch.muted));
-        v.window_stroke = egui::Stroke::new(1.0, col(ch.border));
+        v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, col(ch.border));
+        v.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0_f32, col(ch.muted));
+        v.window_stroke = egui::Stroke::new(1.0_f32, col(ch.border));
     }
     let r = egui::Rounding::same(6.0);
     style.visuals.widgets.inactive.rounding = r;
