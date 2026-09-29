@@ -27,7 +27,8 @@ const TAB_H: f32 = 30.0;
 const STATUS_H: f32 = 22.0;
 const SIDEBAR_W: f32 = 200.0;
 const DETAILS_W: f32 = 300.0;
-const GUTTER: f32 = 4.0;
+const CARD_MARGIN: f32 = 6.0;
+const CARD_PAD: f32 = 8.0;
 const BLINK: Duration = Duration::from_millis(530);
 
 /// Run a native terminal window until it is closed.
@@ -374,8 +375,9 @@ impl State {
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
             for (id, r) in &rects {
                 if let Some(pane) = tab.panes.iter_mut().find(|p| &p.id == id) {
-                    let cols = ((r.w * scale - GUTTER * 2.0) / cw).floor().max(1.0) as u16;
-                    let rows = ((r.h * scale - GUTTER * 2.0) / ch).floor().max(1.0) as u16;
+                    let inner = card_inner(*r);
+                    let cols = ((inner.w * scale) / cw).floor().max(1.0) as u16;
+                    let rows = ((inner.h * scale) / ch).floor().max(1.0) as u16;
                     pane.term.resize(rows, cols);
                 }
             }
@@ -517,6 +519,7 @@ impl State {
         let cw = self.cw * scale;
         let ch = self.ch * scale;
         let theme = self.theme.clone();
+        let window_bg = darken(theme.bg, 0.82);
         let selection = self.selection.clone();
         let rects = self.pane_rects();
         let active_id = self.active_pane_id().unwrap_or_default();
@@ -526,15 +529,38 @@ impl State {
                 let Some(pane) = tab.panes.iter_mut().find(|p| &p.id == id) else {
                     continue;
                 };
-                let cols = ((r.w * scale - GUTTER * 2.0) / cw).floor().max(1.0) as u16;
-                let rows = ((r.h * scale - GUTTER * 2.0) / ch).floor().max(1.0) as u16;
+                let inner = card_inner(*r);
+                let cols = ((inner.w * scale) / cw).floor().max(1.0) as u16;
+                let rows = ((inner.h * scale) / ch).floor().max(1.0) as u16;
                 pane.term.resize(rows, cols);
                 pane.term.screen_mut().set_scrollback(pane.scroll);
-                let (sr, sc) = pane.term.screen().size();
-                let ox = (r.x * scale) + GUTTER;
-                let oy = (r.y * scale) + GUTTER;
+                let (sr, sc) = pane.term.size();
+                let ox = inner.x * scale;
+                let oy = inner.y * scale;
 
                 let mut quads: Vec<Quad> = Vec::new();
+                // Container card (border + terminal background), Otty-style.
+                let card = Rect {
+                    x: r.x + CARD_MARGIN,
+                    y: r.y + CARD_MARGIN,
+                    w: (r.w - CARD_MARGIN * 2.0).max(1.0),
+                    h: (r.h - CARD_MARGIN * 2.0).max(1.0),
+                };
+                let border = lighten(theme.bg, 0.12);
+                let bg = theme.bg;
+                quads.push(Quad::new(
+                    (card.x * scale, card.y * scale),
+                    ((card.x + card.w) * scale, (card.y + card.h) * scale),
+                    (border.0, border.1, border.2, 255),
+                ));
+                quads.push(Quad::new(
+                    (card.x * scale + 1.0, card.y * scale + 1.0),
+                    (
+                        (card.x + card.w) * scale - 1.0,
+                        (card.y + card.h) * scale - 1.0,
+                    ),
+                    (bg.0, bg.1, bg.2, 255),
+                ));
                 for row in 0..sr {
                     for col in 0..sc {
                         let Some(cell) = pane.term.screen().cell(row, col) else {
@@ -611,7 +637,7 @@ impl State {
                 // viewer origin at 0 for the glyph renderer.
                 draws.push(PaneDraw {
                     id: id.clone(),
-                    rect: *r,
+                    rect: inner,
                     quads,
                     rows: rows_data,
                 });
@@ -641,8 +667,8 @@ impl State {
                 self.font_size,
                 (self.font_size * self.line_ratio).round(),
                 self.cw,
-                d.rect.x + GUTTER / scale,
-                d.rect.y + GUTTER / scale,
+                d.rect.x,
+                d.rect.y,
                 (theme.fg.0, theme.fg.1, theme.fg.2),
                 self.font_family.as_deref(),
                 &d.rows,
@@ -690,9 +716,9 @@ impl State {
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color {
-                                r: theme.bg.0 as f64 / 255.0,
-                                g: theme.bg.1 as f64 / 255.0,
-                                b: theme.bg.2 as f64 / 255.0,
+                                r: window_bg.0 as f64 / 255.0,
+                                g: window_bg.1 as f64 / 255.0,
+                                b: window_bg.2 as f64 / 255.0,
                                 a: 1.0,
                             }),
                             store: wgpu::StoreOp::Store,
@@ -741,7 +767,7 @@ impl State {
             .exact_height(TAB_H)
             .frame(
                 egui::Frame::default()
-                    .fill(chrome::bg_color(miao_term_ui::theme::Rgb(0x24, 0x29, 0x33)))
+                    .fill(chrome::bg_color(darken(theme.bg, 0.88)))
                     .inner_margin(egui::Margin::symmetric(6.0, 3.0)),
             )
             .show(ctx, |ui| {
@@ -788,7 +814,7 @@ impl State {
                 .exact_width(SIDEBAR_W)
                 .frame(
                     egui::Frame::default()
-                        .fill(chrome::bg_color(miao_term_ui::theme::Rgb(0x24, 0x29, 0x33)))
+                        .fill(chrome::bg_color(darken(theme.bg, 0.88)))
                         .inner_margin(egui::Margin::same(6.0)),
                 )
                 .show(ctx, |ui| {
@@ -822,7 +848,7 @@ impl State {
                 .exact_width(DETAILS_W)
                 .frame(
                     egui::Frame::default()
-                        .fill(chrome::bg_color(miao_term_ui::theme::Rgb(0x24, 0x29, 0x33)))
+                        .fill(chrome::bg_color(darken(theme.bg, 0.88)))
                         .inner_margin(egui::Margin::same(8.0)),
                 )
                 .show(ctx, |ui| {
@@ -867,7 +893,7 @@ impl State {
             .exact_height(STATUS_H)
             .frame(
                 egui::Frame::default()
-                    .fill(chrome::bg_color(miao_term_ui::theme::Rgb(0x1f, 0x23, 0x2b)))
+                    .fill(chrome::bg_color(darken(theme.bg, 0.75)))
                     .inner_margin(egui::Margin::symmetric(8.0, 2.0)),
             )
             .show(ctx, |ui| {
@@ -1634,8 +1660,9 @@ impl ApplicationHandler for Host {
                     }) {
                         let cw = state.cw * scale;
                         let ch = state.ch * scale;
-                        let col = ((px - r.x * scale - GUTTER) / cw).floor().max(0.0) as u16;
-                        let row = ((py - r.y * scale - GUTTER) / ch).floor().max(0.0) as u16;
+                        let inner = card_inner(*r);
+                        let col = ((px - inner.x * scale) / cw).floor().max(0.0) as u16;
+                        let row = ((py - inner.y * scale) / ch).floor().max(0.0) as u16;
                         let cell = (row, col);
                         match &mut state.selection {
                             Some((sid, sel)) if sid == id => sel.end = cell,
@@ -1817,6 +1844,31 @@ fn json_to_layout(
         a: Box::new(a),
         b: Box::new(b),
     })
+}
+
+fn card_inner(r: Rect) -> Rect {
+    let card = Rect {
+        x: r.x + CARD_MARGIN,
+        y: r.y + CARD_MARGIN,
+        w: (r.w - CARD_MARGIN * 2.0).max(1.0),
+        h: (r.h - CARD_MARGIN * 2.0).max(1.0),
+    };
+    Rect {
+        x: card.x + CARD_PAD,
+        y: card.y + CARD_PAD,
+        w: (card.w - CARD_PAD * 2.0).max(1.0),
+        h: (card.h - CARD_PAD * 2.0).max(1.0),
+    }
+}
+
+fn darken(c: miao_term_ui::theme::Rgb, f: f32) -> miao_term_ui::theme::Rgb {
+    let d = |v: u8| ((v as f32) * f).clamp(0.0, 255.0) as u8;
+    miao_term_ui::theme::Rgb(d(c.0), d(c.1), d(c.2))
+}
+
+fn lighten(c: miao_term_ui::theme::Rgb, f: f32) -> miao_term_ui::theme::Rgb {
+    let l = |v: u8| (v as f32 + (255.0 - v as f32) * f).clamp(0.0, 255.0) as u8;
+    miao_term_ui::theme::Rgb(l(c.0), l(c.1), l(c.2))
 }
 
 fn git_rows(cwd: &std::path::Path) -> Vec<(String, String)> {
