@@ -53,8 +53,9 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\miao-term\scripts\win
 它会构建 `miaotty` + `miaotty-cli`,跑引擎/MTP 测试,然后启动应用并经 MTP 驱动它
 (`ping`、`file write`、`file read`、`view`)。
 
-本项目的 Windows 机器上最近一次:构建成功、`conpty_spawns_shell_and_echoes` 通过、`ping`
-广告 `app.view.write` / `file.read` / `file.write`,文件往返正常。
+本项目 Windows 机器最近一次(2026-09-29):构建成功、引擎/MTP 测试通过、应用能启动,`ping`
+广告 `app.view.write` / `file.read` / `file.write`(以及 agent/history 能力),`file write` →
+`file read` → `view` 往返正常。这是在无桌面会话的 ssh 下完成的;IME/GUI 仍需交互式桌面。
 
 ## 经 ssh 且无桌面会话时
 

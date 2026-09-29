@@ -55,9 +55,11 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\miao-term\scripts\win
 It builds `miaotty` + `miaotty-cli`, runs the engine/MTP tests, then starts the
 app and drives it over MTP (`ping`, `file write`, `file read`, `view`).
 
-Last run (this project's Windows box): build OK, `conpty_spawns_shell_and_echoes`
-passes, `ping` advertises `app.view.write` / `file.read` / `file.write`, and the
-file round-trip works.
+Last run (this project's Windows box, 2026-09-29): build OK, the engine/MTP
+tests pass, the app starts, `ping` advertises `app.view.write` / `file.read` /
+`file.write` (plus the agent/history caps), and the `file write` → `file read` →
+`view` round-trip works. This runs over ssh without a desktop session; IME/GUI
+still need an interactive desktop.
 
 ## Over ssh, without a desktop session
 
