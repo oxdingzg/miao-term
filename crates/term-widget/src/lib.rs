@@ -165,6 +165,7 @@ struct State {
     recent_files: Vec<String>,
     integration_msg: Option<String>,
     hotkeys: Option<miao_term_ui::hotkey::Hotkeys>,
+    opacity: f32,
     notifications: bool,
     prevent_sleep: bool,
     sleep: miao_term_ui::agentloop::SleepGuard,
@@ -978,7 +979,7 @@ impl State {
                                 r: window_bg.0 as f64 / 255.0,
                                 g: window_bg.1 as f64 / 255.0,
                                 b: window_bg.2 as f64 / 255.0,
-                                a: 1.0,
+                                a: self.opacity as f64,
                             }),
                             store: wgpu::StoreOp::Store,
                         },
@@ -1736,7 +1737,7 @@ impl State {
                                 r: window_bg.0 as f64 / 255.0,
                                 g: window_bg.1 as f64 / 255.0,
                                 b: window_bg.2 as f64 / 255.0,
-                                a: 1.0,
+                                a: self.opacity as f64,
                             }),
                             store: wgpu::StoreOp::Store,
                         },
@@ -2610,6 +2611,23 @@ impl State {
 }
 
 /// A stable texture key for an image: unique across panes.
+/// Pick a transparency-capable surface alpha mode when `transparent`, else the
+/// first (usually Opaque). Falls back to Opaque if none is suitable.
+fn pick_alpha_mode(
+    modes: &[wgpu::CompositeAlphaMode],
+    transparent: bool,
+) -> wgpu::CompositeAlphaMode {
+    use wgpu::CompositeAlphaMode as M;
+    if transparent {
+        // Only straight (post-multiplied) alpha matches our renderer, which
+        // outputs non-premultiplied colours. If unsupported, stay opaque.
+        if let Some(m) = modes.iter().copied().find(|m| *m == M::PostMultiplied) {
+            return m;
+        }
+    }
+    modes.first().copied().unwrap_or(M::Opaque)
+}
+
 fn image_key(pane: &str, id: u64) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -2720,9 +2738,13 @@ impl ApplicationHandler for Host {
             return;
         }
         let (init_w, init_h) = load_window_size().unwrap_or((1100.0, 720.0));
+        let opacity = miao_term_config::Config::load()
+            .background_opacity
+            .clamp(0.1, 1.0);
         let attrs = Window::default_attributes()
             .with_title(&self.title)
-            .with_inner_size(LogicalSize::new(init_w, init_h));
+            .with_inner_size(LogicalSize::new(init_w, init_h))
+            .with_transparent(opacity < 1.0);
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
@@ -2772,7 +2794,7 @@ impl ApplicationHandler for Host {
             width: size.width.max(1),
             height: size.height.max(1),
             present_mode: wgpu::PresentMode::AutoNoVsync,
-            alpha_mode: caps.alpha_modes[0],
+            alpha_mode: pick_alpha_mode(&caps.alpha_modes, opacity < 1.0),
             view_formats: vec![],
             desired_maximum_frame_latency: 1,
         };
@@ -2860,6 +2882,7 @@ impl ApplicationHandler for Host {
             recent_files: Vec::new(),
             integration_msg: None,
             hotkeys: None,
+            opacity,
             notifications: cfg.notifications,
             prevent_sleep: cfg.prevent_sleep,
             sleep: miao_term_ui::agentloop::SleepGuard::new(),
