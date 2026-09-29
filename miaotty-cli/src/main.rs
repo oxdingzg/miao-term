@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 fn usage() -> ! {
     eprintln!(
         "usage: miaotty-cli [--socket PATH|tcp://host:port] <command>\n\
-         commands: ping | health | pane list|run|send|focus|close | \
+         commands: ping | health | wait [--since N] | pane list|run|send|focus|close | \
          state <agent> --state S | state list | history add|list |\n     view|edit <path> |\n     file read --path P [--offset N] [--length N] [--base64] |\n     file write --path P [--data D | --data-b64 B]"
     );
     std::process::exit(2);
@@ -59,6 +59,20 @@ fn main() {
     let result: std::io::Result<Value> = match (cmd, args.get(1).map(String::as_str)) {
         ("ping", _) => client.call("core", "ping", json!({})),
         ("health", _) => client.call("core", "health", json!({})),
+        ("wait", _) => {
+            // Block until the host's revision moves past `--since` (default 0).
+            let since = flag(&args, "--since")
+                .and_then(|v| v.parse::<i64>().ok())
+                .unwrap_or(0);
+            let timeout_ms = flag(&args, "--timeout")
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(25_000);
+            client.call(
+                "core",
+                "wait",
+                json!({ "since": since, "timeout_ms": timeout_ms }),
+            )
+        }
         ("pane", Some("list")) => client.call("pane", "list", json!({})),
         ("pane", Some(m @ ("run" | "send" | "focus" | "close"))) => {
             let pane = flag(&args, "--pane")

@@ -95,7 +95,7 @@ Not every edge is drawn: `term-widget` also depends on `term-core`/`term-render`
 | `term-ui` | Host-agnostic UI shared by both hosts: theme, input encoding, selection, split layout, egui chrome, palette, hints, vim, markdown, ssh, update, agent integration | No window/event loop |
 | `term-widget` | Native host (`miaotty-native` bin at `crates/term-widget/src/bin/miaotty-native.rs`): winit event loop, wgpu surface, input/IME/clipboard/drag-drop, direct grid draw (ADR 0030) | No tab/panel business |
 | `term-config` | Config model, themes, ghostty/alacritty import | No UI |
-| `term-mtp` | Protocol envelope, transport, server/client, agent/history registries, subscriptions | No engine dependency |
+| `term-mtp` | Protocol envelope, transport, server/client, agent/history registries, revision + `core.wait` long-poll | No engine dependency |
 | `miaotty-app` | eframe/egui host (`miaotty` bin): Windows/tabs/splits, left Tabs, right Details, badges, settings, OS integration, hook install; grid via `PaintCallback` | No terminal core duplication |
 | `miaotty-cli` | MTP client for scripts/agents | No engine dependency |
 
@@ -195,10 +195,13 @@ Use Alacritty's proven model (`FairMutex<Term>` + `EventListener`); do not inven
   **requires** `MIAOTTY_MTP_TOKEN`, and the client sends that token on every request.
 - Reuse the existing `mtp` messages and `miaotty-cli`; **in-process UI talks to the registries directly**,
   external callers go over the socket/pipe.
-- Methods: `core.ping/health`, `agent.state.*`, `history.*`, `pane.list`, `app.view/edit`
-  (open a file in the reader/editor), `file.read/write` (offset/length, base64, 2 MB cap;
-  optional token via `MIAOTTY_MTP_TOKEN`); events: `agent.state`,
-  `history.changed`, `cwd.changed`.
+- Methods: `core.ping/health/wait`, `agent.state.*`, `history.*`, `pane.list/send/run/focus/close`,
+  `app.view/edit` (open a file in the reader/editor), `file.read/write` (offset/length, base64,
+  2 MB cap; optional token via `MIAOTTY_MTP_TOKEN`).
+- Change notification is a **revision counter** plus the `core.wait` long-poll: it returns as
+  soon as the revision moves past the caller's value. True server-push event streaming is not
+  implemented (the earlier `agent.state` / `history.changed` / `cwd.changed` event sketch was
+  dropped in favour of this).
 - Transport: `interprocess` (local socket / named pipe); TCP for `remote-listen`.
 
 ## 13. Application layer (miaotty-app)

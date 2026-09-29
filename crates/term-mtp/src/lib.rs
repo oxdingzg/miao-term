@@ -19,8 +19,9 @@ use interprocess::TryClone;
 /// are treated as hostile and the connection is dropped.
 const MAX_LINE: usize = 1 << 20;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -139,7 +140,8 @@ pub struct ServerState {
     token: Option<String>,
     /// When set (from `MIAOTTY_MTP_ALLOW`), only these capabilities are allowed.
     allow: Option<Vec<String>>,
-    revision: AtomicI64,
+    revision: Mutex<i64>,
+    revision_cv: Condvar,
     seq: AtomicI64,
     states: Mutex<BTreeMap<String, Value>>,
     history: Mutex<BTreeMap<String, Vec<Value>>>,
@@ -224,11 +226,25 @@ impl ServerState {
     }
 
     fn bump(&self) -> i64 {
-        self.revision.fetch_add(1, Ordering::SeqCst) + 1
+        let mut rev = self.revision.lock().unwrap();
+        *rev += 1;
+        self.revision_cv.notify_all();
+        *rev
     }
 
     fn revision(&self) -> i64 {
-        self.revision.load(Ordering::SeqCst)
+        *self.revision.lock().unwrap()
+    }
+
+    /// Block until the revision is greater than `since`, or `timeout` elapses.
+    /// Lets a client follow state changes without busy-polling.
+    pub fn wait_for_revision(&self, since: i64, timeout: Duration) -> i64 {
+        let rev = self.revision.lock().unwrap();
+        if *rev > since {
+            return *rev;
+        }
+        let (rev, _) = self.revision_cv.wait_timeout(rev, timeout).unwrap();
+        *rev
     }
 
     /// Replace the advertised pane list (called by the app on tab changes).
@@ -362,7 +378,7 @@ fn str_field(v: &Value, key: &str) -> Option<String> {
 /// The capability a method requires ("" when the method is unknown).
 fn method_cap(ns: &str, method: &str) -> &'static str {
     match (ns, method) {
-        ("core", "ping" | "health") => "core.basic",
+        ("core", "ping" | "health" | "wait") => "core.basic",
         ("pane", _) | ("app", _) => "app.view.write",
         ("file", "read") => "file.read",
         ("file", "write") => "file.write",
@@ -408,6 +424,17 @@ fn dispatch(state: &ServerState, req: Request) -> Response {
             }),
         ),
         ("core", "health") => Response::ok(id, rev, json!({ "ok": true, "revision": rev })),
+        ("core", "wait") => {
+            // Long-poll: return as soon as the revision moves past `since`.
+            let since = params.get("since").and_then(Value::as_i64).unwrap_or(0);
+            let timeout_ms = params
+                .get("timeout_ms")
+                .and_then(Value::as_u64)
+                .unwrap_or(25_000)
+                .min(120_000);
+            let now = state.wait_for_revision(since, Duration::from_millis(timeout_ms));
+            Response::ok(id, now, json!({ "revision": now, "changed": now > since }))
+        }
         ("pane", "list") => {
             let panes = state.panes.lock().unwrap().clone();
             Response::ok(id, rev, json!({ "panes": panes }))
@@ -1028,5 +1055,48 @@ mod tests {
         let mut reader = BufReader::new(Cursor::new(input));
         let mut buf = Vec::new();
         assert!(matches!(read_request(&mut reader, &mut buf), Ok(false)));
+    }
+
+    #[test]
+    fn wait_returns_immediately_when_already_changed() {
+        let st = ServerState::new();
+        st.bump();
+        let t0 = std::time::Instant::now();
+        assert_eq!(st.wait_for_revision(0, Duration::from_secs(5)), 1);
+        assert!(t0.elapsed() < Duration::from_millis(200));
+    }
+
+    #[test]
+    fn wait_wakes_on_a_later_change() {
+        let st = ServerState::new();
+        let bumping = st.clone();
+        let handle = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(150));
+            bumping.bump();
+        });
+        let t0 = std::time::Instant::now();
+        let rev = st.wait_for_revision(0, Duration::from_secs(5));
+        assert_eq!(rev, 1);
+        assert!(t0.elapsed() < Duration::from_secs(2), "woke promptly");
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn wait_times_out_without_changes() {
+        let st = ServerState::new();
+        let t0 = std::time::Instant::now();
+        assert_eq!(st.wait_for_revision(0, Duration::from_millis(120)), 0);
+        assert!(t0.elapsed() >= Duration::from_millis(100));
+    }
+
+    #[test]
+    fn wait_is_dispatched() {
+        let st = ServerState::new();
+        let r = dispatch(
+            &st,
+            request("core", "wait", json!({ "since": 0, "timeout_ms": 10 })),
+        );
+        assert!(r.ok);
+        assert_eq!(r.result.unwrap()["changed"], json!(false));
     }
 }

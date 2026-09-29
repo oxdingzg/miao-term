@@ -58,3 +58,8 @@ The CLI gains matching subcommands: `miaotty-cli view <path>`,
   `MIAOTTY_MTP_ALLOW` capability allowlist were added later, so auth is no longer
   only "whoever can reach the socket"; the local socket stays user-private
   (0600).
+
+- Update: the protocol also gained `core.wait`, a long-poll that returns when the
+  state revision moves past a caller's value, so external clients can follow
+  agent/history/panes without busy-polling (true server-push is still not
+  implemented).

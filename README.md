@@ -241,12 +241,15 @@ are left untouched. No manual setup is required.
 The **MTP** (miaotty terminal protocol) control plane speaks newline-delimited
 JSON over `$XDG_RUNTIME_DIR/miaotty.sock` (falling back to `$TMPDIR`), and the
 socket is created with owner-only permissions. The shell inherits
-`MIAOTTY_SOCKET` and `MIAOTTY_PANE_ID`.
+`MIAOTTY_SOCKET` and `MIAOTTY_PANE_ID`. Every response carries a state
+`revision`; `core.wait` blocks until it moves past a given value, so a client
+can follow agent state, panes or history without polling in a loop.
 
 `miaotty-cli` is the reference client:
 
 ```sh
 miaotty-cli ping
+miaotty-cli wait --since 42               # block until the state revision moves
 miaotty-cli pane list
 miaotty-cli pane run --pane ID --data "echo hello"
 miaotty-cli pane focus --pane ID
@@ -359,8 +362,10 @@ Still open:
   `mermaid-command`); other diagram types show a placeholder.
 - **i18n**: the main chrome is covered; a few example/hint strings stay English.
 - **MTP**: `file.read/write` support binary (base64) with `offset`/`length`
-  chunking; there is no server-push streaming. Per-capability authorization is
-  available via `MIAOTTY_MTP_ALLOW`.
+  chunking. Clients follow changes without busy-polling via the `core.wait`
+  long-poll, which returns as soon as the state revision moves; true server-push
+  streaming is not implemented. Per-capability authorization is available via
+  `MIAOTTY_MTP_ALLOW`.
 
 ---
 

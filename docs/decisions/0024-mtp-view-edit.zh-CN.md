@@ -47,3 +47,6 @@ CLI 增加对应子命令:`miaotty-cli view <path>`、`miaotty-cli edit <path>`�
   属后续。
 - Update:随后加入了 `remote-listen` TCP 监听(要求 `MIAOTTY_MTP_TOKEN`)与 `MIAOTTY_MTP_ALLOW`
   能力白名单,故鉴权不再只是"能连到 socket 即可";本地 socket 仍为用户私有(0600)。
+
+- Update:协议另外加入了 `core.wait` 长轮询:当状态 revision 超过调用方给的值时返回,外部
+  客户端因此可以跟踪 agent/history/pane 变化而无需忙轮询(真正的服务端推送仍未实现)。

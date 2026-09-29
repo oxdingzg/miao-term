@@ -88,7 +88,7 @@
 | `term-ui` | 两个宿主共用的无宿主 UI:主题、输入编码、选区、分屏布局、egui chrome、调色板、hints、vim、markdown、ssh、update、agent 集成 | 不含窗口/事件循环 |
 | `term-widget` | 原生宿主(`miaotty-native` bin,`crates/term-widget/src/bin/miaotty-native.rs`):winit 事件循环、wgpu surface、输入/IME/剪贴板/拖放、直接自绘网格(ADR 0030) | 不含 tab/面板业务 |
 | `term-config` | 配置模型、主题、ghostty/alacritty 导入 | 不依赖 UI |
-| `term-mtp` | 协议信封、传输、server/client、agent/history 注册表、事件订阅 | 不依赖引擎 |
+| `term-mtp` | 协议信封、传输、server/client、agent/history 注册表、revision + `core.wait` 长轮询 | 不依赖引擎 |
 | `miaotty-app` | eframe/egui 宿主(`miaotty` bin):窗口/tab/split、左 Tabs、右 Details、徽章、设置、系统集成、hook 安装;网格经 `PaintCallback` | 不重复实现终端内核 |
 | `miaotty-cli` | 供脚本/agent 使用的 MTP 客户端 | 不依赖引擎 |
 
@@ -176,7 +176,12 @@
 - 远程访问:`remote-listen = addr:port` 会额外用 TCP 提供控制面;它**要求**设置
   `MIAOTTY_MTP_TOKEN`,客户端每个请求都要带上该令牌。
 - 复用现有 `mtp` 报文与 `miaotty-cli`;**进程内 UI 直连注册表**,外部走 socket/pipe。
-- 方法面:`core.ping/health`、`agent.state.*`、`history.*`、`pane.list`、`app.view/edit`(在查看器/编辑器中打开文件)、`file.read/write`(offset/length、base64、上限 2 MB;可选 `MIAOTTY_MTP_TOKEN` 令牌);事件:`agent.state`、`history.changed`、`cwd.changed`。
+- 方法面:`core.ping/health/wait`、`agent.state.*`、`history.*`、`pane.list/send/run/focus/close`、
+  `app.view/edit`(在查看器/编辑器中打开文件)、`file.read/write`(offset/length、base64、
+  上限 2 MB;可选 `MIAOTTY_MTP_TOKEN` 令牌)。
+- 变更通知用**revision 计数**加 `core.wait` 长轮询:一旦 revision 超过调用方给的值就返回。
+  真正的服务端推送式流未实现(早期设想的 `agent.state`/`history.changed`/`cwd.changed`
+  事件已弃用)。
 - 传输:`interprocess`(本地 socket / named pipe);`remote-listen` 走 TCP。
 
 ## 13. 应用层(miaotty-app)
