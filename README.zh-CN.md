@@ -274,7 +274,7 @@ view/edit、更新下载/校验/安装、URL scheme、全局快速终端热键�
 - **更新安装**:三端均已实现(macOS app bundle、Windows MSI/zip helper、Linux AppImage);
   已在 macOS 验证,Windows/Linux 路径仍需真机确认。
 - **CI 性能基线**:目前用 `actions/cache` 绑定;更持久的基线存储能让门更稳(缓存会被淘汰)。
-- **原生版对齐**:native 宿主仍缺窗口透明度与全局快速终端热键,且其 URL scheme 未在系统注册;
+- **原生版对齐**:native 宿主仍缺窗口透明度;其 URL scheme 可从 argv 处理但未在系统注册。
   设置窗口是 eframe 版的子集。
 - **终端内联图片**:超过回滚容量后的锚定是近似;会话恢复不保留图像;Kitty 动画(`a=f`)未实现。
 - **Markdown**:Mermaid 支持 `graph`/`flowchart` 子集(或经 `mermaid-command` 全量渲染);

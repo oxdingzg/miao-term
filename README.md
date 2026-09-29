@@ -316,9 +316,9 @@ Still open:
   paths still need a real host to confirm.
 - **CI performance baseline**: bound through `actions/cache` today; a durable
   baseline store would make the gate robust across cache eviction.
-- **Native parity**: the native host still lacks window opacity and the global
-  Quick Terminal hotkey, and its URL schemes are not registered with the OS; its
-  Settings window is a subset of the eframe app's.
+- **Native parity**: the native host still lacks window opacity, and its URL
+  schemes are handled from argv but not registered with the OS. Its Settings
+  window is a subset of the eframe app's.
 - **Inline graphics**: anchoring is approximate past the scrollback cap, and
   session restore keeps no images; Kitty animation (`a=f`) is not implemented.
 - **Markdown**: Mermaid renders a `graph`/`flowchart` subset (or fully via
