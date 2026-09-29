@@ -83,6 +83,8 @@ struct Tab {
     title: String,
     /// Opened as an ssh session (shows a server icon).
     ssh: bool,
+    /// Optional short prefix shown before the tab title.
+    prefix: Option<String>,
 }
 
 /// Background-computed details (git status / directory listing / ports).
@@ -178,6 +180,8 @@ struct State {
     recent_files: Vec<String>,
     open_counts: HashMap<String, u32>,
     integration_msg: Option<String>,
+    prefix_renaming: Option<usize>,
+    prefix_buf: String,
     hotkeys: Option<miao_term_ui::hotkey::Hotkeys>,
     opacity: f32,
     notifications: bool,
@@ -413,6 +417,7 @@ impl State {
             active: id,
             title: format!("shell {n}"),
             ssh: false,
+            prefix: None,
         });
         self.active_tab = self.tabs.len() - 1;
         self.selection = None;
@@ -435,6 +440,7 @@ impl State {
             active: id,
             title: format!("shell {n}"),
             ssh: false,
+            prefix: None,
         });
         self.active_tab = self.tabs.len() - 1;
         self.selection = None;
@@ -469,15 +475,16 @@ impl State {
 
     fn duplicate_tab(&mut self) {
         let cwd = self.cwd();
-        let (title, ssh) = self
+        let (title, ssh, prefix) = self
             .tabs
             .get(self.active_tab)
-            .map(|t| (t.title.clone(), t.ssh))
+            .map(|t| (t.title.clone(), t.ssh, t.prefix.clone()))
             .unwrap_or_default();
         self.new_tab_in(cwd);
         if let Some(t) = self.tabs.last_mut() {
             t.title = title;
             t.ssh = ssh;
+            t.prefix = prefix;
         }
         self.publish_panes();
     }
@@ -1141,6 +1148,9 @@ impl State {
         if let Some(i) = self.renaming {
             self.rename_window(ctx, i);
         }
+        if let Some(i) = self.prefix_renaming {
+            self.prefix_window(ctx, i);
+        }
     }
     fn details_content(&self, tab: usize) -> (&'static str, Vec<(String, String)>) {
         match tab {
@@ -1179,6 +1189,8 @@ impl State {
                 "active": tab.active,
                 "layout": layout_to_json(&tab.layout),
                 "panes": panes,
+                "prefix": tab.prefix,
+                "ssh": tab.ssh,
             }));
         }
         serde_json::json!({
@@ -1229,6 +1241,8 @@ impl State {
                 .and_then(|x| x.as_str())
                 .unwrap_or("shell")
                 .to_string();
+            let prefix = t.get("prefix").and_then(|x| x.as_str()).map(str::to_string);
+            let ssh = t.get("ssh").and_then(|x| x.as_bool()).unwrap_or(false);
             let mut panes = Vec::new();
             let mut map = std::collections::HashMap::new();
             if let Some(arr) = t.get("panes").and_then(|p| p.as_array()) {
@@ -1263,7 +1277,8 @@ impl State {
                 panes,
                 active,
                 title,
-                ssh: false,
+                ssh,
+                prefix,
             });
         }
         if self.tabs.is_empty() {
@@ -2810,6 +2825,40 @@ impl State {
         }
     }
 
+    fn prefix_window(&mut self, ctx: &egui::Context, i: usize) {
+        let mut open = true;
+        let mut buf = std::mem::take(&mut self.prefix_buf);
+        let mut commit = false;
+        egui::Window::new(miao_term_ui::i18n::t(self.lang, "Tab Prefix", "标签前缀"))
+            .collapsible(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                let r = ui.text_edit_singleline(&mut buf);
+                r.request_focus();
+                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    commit = true;
+                }
+                if ui
+                    .button(miao_term_ui::i18n::t(self.lang, "Set", "设置"))
+                    .clicked()
+                {
+                    commit = true;
+                }
+            });
+        self.prefix_buf = buf;
+        if commit {
+            if let Some(t) = self.tabs.get_mut(i) {
+                let p = self.prefix_buf.trim().to_string();
+                t.prefix = if p.is_empty() { None } else { Some(p) };
+            }
+            self.prefix_renaming = None;
+            self.publish_panes();
+        }
+        if !open {
+            self.prefix_renaming = None;
+        }
+    }
+
     fn rename_window(&mut self, ctx: &egui::Context, i: usize) {
         let mut open = true;
         let mut buf = std::mem::take(&mut self.rename_buf);
@@ -3142,6 +3191,8 @@ impl ApplicationHandler for Host {
             recent_files: Vec::new(),
             open_counts: HashMap::new(),
             integration_msg: None,
+            prefix_renaming: None,
+            prefix_buf: String::new(),
             hotkeys: None,
             opacity,
             notifications: cfg.notifications,
@@ -4007,11 +4058,11 @@ impl chrome::Chrome for State {
                 } else {
                     miao_term_ui::icons::Icon::Terminal
                 };
-                chrome::ChromeTab {
-                    title: self.title_of(t),
-                    badge,
-                    icon,
+                let mut title = self.title_of(t);
+                if let Some(p) = &t.prefix {
+                    title = format!("[{p}] {title}");
                 }
+                chrome::ChromeTab { title, badge, icon }
             })
             .collect()
     }
@@ -4124,6 +4175,49 @@ impl chrome::Chrome for State {
             .unwrap_or_default();
         self.renaming = Some(i);
         self.rename_buf = title;
+    }
+    fn on_duplicate_tab(&mut self, i: usize) {
+        if i < self.tabs.len() {
+            self.active_tab = i;
+            self.duplicate_tab();
+        }
+    }
+    fn on_close_others(&mut self, i: usize) {
+        if i < self.tabs.len() {
+            let keep = self.tabs.remove(i);
+            self.tabs = vec![keep];
+            self.active_tab = 0;
+            self.selection = None;
+            self.publish_panes();
+        }
+    }
+    fn on_close_below(&mut self, i: usize) {
+        if i < self.tabs.len() {
+            self.tabs.truncate(i + 1);
+            self.active_tab = self.active_tab.min(self.tabs.len() - 1);
+            self.selection = None;
+            self.publish_panes();
+        }
+    }
+    fn on_move_tab(&mut self, i: usize, delta: i32) {
+        let j = i as i32 + delta;
+        if i < self.tabs.len() && j >= 0 && (j as usize) < self.tabs.len() {
+            self.tabs.swap(i, j as usize);
+            if self.active_tab == i {
+                self.active_tab = j as usize;
+            } else if self.active_tab == j as usize {
+                self.active_tab = i;
+            }
+            self.publish_panes();
+        }
+    }
+    fn on_set_prefix(&mut self, i: usize) {
+        self.prefix_buf = self
+            .tabs
+            .get(i)
+            .and_then(|t| t.prefix.clone())
+            .unwrap_or_default();
+        self.prefix_renaming = Some(i);
     }
     fn on_reorder_tab(&mut self, from: usize, to: usize) {
         if from < self.tabs.len() && to < self.tabs.len() && from != to {

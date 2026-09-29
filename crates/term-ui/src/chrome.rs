@@ -25,6 +25,12 @@ pub struct TabBarEvents {
     pub close: Option<usize>,
     pub rename: Option<usize>,
     pub reorder: Option<(usize, usize)>,
+    pub duplicate: Option<usize>,
+    pub close_others: Option<usize>,
+    pub close_below: Option<usize>,
+    pub move_up: Option<usize>,
+    pub move_down: Option<usize>,
+    pub set_prefix: Option<usize>,
     pub new_tab: bool,
 }
 
@@ -402,6 +408,11 @@ pub trait Chrome {
     fn on_close_tab(&mut self, i: usize) {}
     fn on_rename_tab(&mut self, i: usize) {}
     fn on_reorder_tab(&mut self, from: usize, to: usize) {}
+    fn on_duplicate_tab(&mut self, i: usize) {}
+    fn on_close_others(&mut self, i: usize) {}
+    fn on_close_below(&mut self, i: usize) {}
+    fn on_move_tab(&mut self, i: usize, delta: i32) {}
+    fn on_set_prefix(&mut self, i: usize) {}
     fn on_font_delta(&mut self, delta: f32) {}
     fn on_toggle_sidebar(&mut self) {}
     fn on_toggle_details(&mut self) {}
@@ -448,6 +459,12 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
     let mut close = None;
     let mut rename = None;
     let mut reorder = None;
+    let mut duplicate = None;
+    let mut close_others = None;
+    let mut close_below = None;
+    let mut move_up = None;
+    let mut move_down = None;
+    let mut set_prefix = None;
     let mut new_tab = false;
     let mut font_delta = 0.0f32;
     let mut toggle_sidebar = false;
@@ -655,6 +672,12 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
                 close = ev.close;
                 rename = ev.rename;
                 reorder = ev.reorder;
+                duplicate = ev.duplicate;
+                close_others = ev.close_others;
+                close_below = ev.close_below;
+                move_up = ev.move_up;
+                move_down = ev.move_down;
+                set_prefix = ev.set_prefix;
                 new_tab = ev.new_tab;
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("A+").clicked() {
@@ -747,6 +770,24 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
     }
     if let Some((from, to)) = reorder {
         host.on_reorder_tab(from, to);
+    }
+    if let Some(i) = duplicate {
+        host.on_duplicate_tab(i);
+    }
+    if let Some(i) = close_others {
+        host.on_close_others(i);
+    }
+    if let Some(i) = close_below {
+        host.on_close_below(i);
+    }
+    if let Some(i) = move_up {
+        host.on_move_tab(i, -1);
+    }
+    if let Some(i) = move_down {
+        host.on_move_tab(i, 1);
+    }
+    if let Some(i) = set_prefix {
+        host.on_set_prefix(i);
     }
     if new_tab {
         host.on_new_tab();
