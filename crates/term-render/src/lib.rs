@@ -509,3 +509,130 @@ fn bytemuck_cast<T: Copy>(data: &[T]) -> &[u8] {
 
 /// Renderer crate version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[cfg(test)]
+mod gpu_tests {
+    use super::*;
+
+    /// Headless smoke test: render a quad + a glyph row offscreen and assert the
+    /// pipeline produces output. Skips itself when no GPU adapter is available
+    /// (e.g. a CI runner without a driver), so it is safe to run in CI.
+    #[test]
+    fn offscreen_render_smoke() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+        let Some(adapter) =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+        else {
+            return;
+        };
+        let Ok((device, queue)) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None))
+        else {
+            return;
+        };
+
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let (w, h) = (64u32, 40u32);
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut quads = QuadRenderer::new(&device, format);
+        quads.prepare(
+            &device,
+            &queue,
+            (w, h),
+            &[Quad::rounded(
+                (2.0, 2.0),
+                (30.0, 20.0),
+                (0xff, 0xff, 0xff, 255),
+                4.0,
+            )],
+        );
+        let mut glyphs = TermRenderer::new(&device, &queue, format);
+        let rows = vec![vec![Span::new(0, "Hi", (255, 255, 255))]];
+        glyphs.prepare(
+            &device,
+            &queue,
+            (w, h),
+            1.0,
+            12.0,
+            14.0,
+            7.0,
+            0.0,
+            0.0,
+            (255, 255, 255),
+            Some("JetBrains Mono"),
+            &rows,
+        );
+
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        {
+            let mut pass = enc
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: None,
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    occlusion_query_set: None,
+                    timestamp_writes: None,
+                })
+                .forget_lifetime();
+            quads.render(&mut pass);
+            glyphs.render(&mut pass);
+        }
+        let bpr = (w * 4) as usize;
+        let padded = (bpr + 255) & !255;
+        let buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: (padded * h as usize) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        enc.copy_texture_to_buffer(
+            wgpu::ImageCopyTexture {
+                texture: &tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::ImageCopyBuffer {
+                buffer: &buf,
+                layout: wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded as u32),
+                    rows_per_image: Some(h),
+                },
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(Some(enc.finish()));
+        let slice = buf.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        device.poll(wgpu::Maintain::Wait);
+        let data = slice.get_mapped_range();
+        assert!(data.iter().any(|&b| b > 0), "renderer produced no output");
+    }
+}
