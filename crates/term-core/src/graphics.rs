@@ -96,6 +96,15 @@ impl GraphicsLayer {
         self.partial.clear();
     }
 
+    /// Shift every anchor up by `lines` (content scrolled past the ring cap,
+    /// where `total_lines()` no longer grows).
+    pub fn shift(&mut self, lines: usize) {
+        let d = lines.min(i32::MAX as usize) as i32;
+        for img in &mut self.images {
+            img.anchor -= d;
+        }
+    }
+
     /// Keep anchors aligned with buffer growth (call with `total_lines()`).
     pub fn sync_total(&mut self, total: usize) {
         let d = total as i64 - self.last_total as i64;
@@ -183,6 +192,14 @@ mod tests {
         assert_eq!(l.images[0].anchor, 5);
         l.sync_total(13); // three new lines
         assert_eq!(l.images[0].anchor, 2);
+    }
+
+    #[test]
+    fn shift_moves_all_anchors() {
+        let mut l = GraphicsLayer::new();
+        l.place(img(1, 1), 3, 0, None, None, 0);
+        l.shift(5);
+        assert_eq!(l.images[0].anchor, -2);
     }
 
     #[test]

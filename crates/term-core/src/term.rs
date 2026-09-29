@@ -39,6 +39,7 @@ pub struct Terminal {
     scanner: miao_term_graphics::Scanner,
     graphics: crate::graphics::GraphicsLayer,
     graphics_enabled: bool,
+    scrollback: usize,
     /// Pending bytes scanned for a ConPTY cursor-position query (DSR, `ESC[6n`),
     /// which must be answered or the Windows shell stalls before it runs anything.
     dsr_buf: Vec<u8>,
@@ -167,6 +168,7 @@ impl Terminal {
             scanner: miao_term_graphics::Scanner::new(),
             graphics: crate::graphics::GraphicsLayer::new(),
             graphics_enabled: true,
+            scrollback,
             dsr_buf: Vec::new(),
         })
     }
@@ -192,12 +194,14 @@ impl Terminal {
     /// graphics payloads to the image layer.
     fn feed(&mut self, bytes: &[u8]) -> bool {
         let mut changed = false;
+        let mut line_feeds = 0usize;
         self.scan_osc(bytes);
         self.answer_dsr(bytes);
         for seg in self.scanner.feed(bytes) {
             match seg {
                 miao_term_graphics::Segment::Text(t) => {
                     if !t.is_empty() {
+                        line_feeds += count_line_feeds(&t);
                         self.screen.process(&t);
                         changed = true;
                     }
@@ -208,6 +212,19 @@ impl Terminal {
                     }
                 }
             }
+        }
+        // Keep image anchors aligned with content. Up to the ring cap this is
+        // exact (the buffer grows); past it the grid rotates without growing, so
+        // approximate with the line feeds seen in this chunk.
+        let total = self.screen.total_lines();
+        let cap = self.scrollback + self.rows as usize;
+        if total < cap {
+            self.graphics.sync_total(total);
+        } else {
+            if line_feeds > 0 {
+                self.graphics.shift(line_feeds);
+            }
+            self.graphics.sync_total(total);
         }
         changed
     }
@@ -385,6 +402,26 @@ impl Terminal {
             }
         }
     }
+}
+
+/// Count line-advancing controls in a chunk (`\n`, IND `ESC D`, NEL `ESC E`).
+fn count_line_feeds(bytes: &[u8]) -> usize {
+    let mut n = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\n' => {
+                n += 1;
+                i += 1;
+            }
+            0x1b if i + 1 < bytes.len() && (bytes[i + 1] == b'D' || bytes[i + 1] == b'E') => {
+                n += 1;
+                i += 2;
+            }
+            _ => i += 1,
+        }
+    }
+    n
 }
 
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {

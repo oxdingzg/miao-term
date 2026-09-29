@@ -177,6 +177,8 @@ struct State {
     focused: bool,
     cursor_on: bool,
     last_blink: Instant,
+    start: Instant,
+    shot_now: bool,
     egui_ctx: egui::Context,
     egui_state: egui_winit::State,
     egui_renderer: egui_wgpu::Renderer,
@@ -915,7 +917,7 @@ impl State {
             &paint_jobs,
             &screen,
         );
-        if std::env::var_os("MIAOTTY_NATIVE_SHOT").is_some() {
+        if self.shot_now || std::env::var_os("MIAOTTY_NATIVE_SHOT").is_some() {
             self.capture(&draws, window_bg, &paint_jobs, &screen);
         }
 
@@ -2630,6 +2632,8 @@ impl ApplicationHandler for Host {
             focused: false,
             cursor_on: true,
             last_blink: Instant::now(),
+            start: Instant::now(),
+            shot_now: false,
             egui_ctx,
             egui_state,
             egui_renderer,
@@ -2661,6 +2665,21 @@ impl ApplicationHandler for Host {
             }
             state.poll_details();
             state.ensure_details();
+            if !state.shot_now {
+                if let Ok(v) = std::env::var("MIAOTTY_NATIVE_SHOT_AFTER") {
+                    let secs = v.parse::<f64>().unwrap_or(-1.0);
+                    if secs >= 0.0 {
+                        let at = state.start + Duration::from_secs_f64(secs);
+                        if Instant::now() >= at {
+                            state.shot_now = true;
+                            state.window.request_redraw();
+                        } else {
+                            // Ensure we wake even without focus/blink events.
+                            event_loop.set_control_flow(ControlFlow::WaitUntil(at));
+                        }
+                    }
+                }
+            }
             if state.focused {
                 if state.last_blink.elapsed() >= BLINK {
                     state.cursor_on = !state.cursor_on;
