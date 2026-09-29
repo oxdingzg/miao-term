@@ -162,6 +162,7 @@ struct State {
     vim: Option<miao_term_ui::vim::VimRuntime>,
     vim_for: String,
     mmd: Mermaid,
+    remote: RemoteImages,
     recent_files: Vec<String>,
     open_counts: HashMap<String, u32>,
     integration_msg: Option<String>,
@@ -2583,6 +2584,7 @@ impl State {
                                 &ed.text,
                                 ed.path.parent(),
                                 &mut self.mmd,
+                                &mut self.remote,
                                 diag_fg,
                                 diag_panel,
                                 self.lang,
@@ -2959,6 +2961,12 @@ impl ApplicationHandler for Host {
                     .map(|p| p.with_file_name("mermaid-cache"))
                     .unwrap_or_default(),
                 cmd: cfg.mermaid_command.clone(),
+                cache: std::collections::HashMap::new(),
+            },
+            remote: RemoteImages {
+                dir: window_file()
+                    .map(|p| p.with_file_name("image-cache"))
+                    .unwrap_or_default(),
                 cache: std::collections::HashMap::new(),
             },
             recent_files: Vec::new(),
@@ -3439,6 +3447,48 @@ fn lighten(c: miao_term_ui::theme::Rgb, f: f32) -> miao_term_ui::theme::Rgb {
 }
 
 /// A naive Markdown renderer: headings, bullets, quotes and fenced code.
+/// A tiny on-disk cache for remote (http/https) Markdown images, fetched once
+/// with `curl` (no HTTP dependency).
+#[derive(Default)]
+struct RemoteImages {
+    dir: std::path::PathBuf,
+    cache: std::collections::HashMap<u64, Option<std::path::PathBuf>>,
+}
+
+impl RemoteImages {
+    fn fetch(&mut self, url: &str) -> Option<std::path::PathBuf> {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        url.hash(&mut h);
+        let key = h.finish();
+        if let Some(v) = self.cache.get(&key) {
+            return v.clone();
+        }
+        let _ = std::fs::create_dir_all(&self.dir);
+        let ext = url
+            .split(['?', '#'])
+            .next()
+            .unwrap_or("")
+            .rsplit_once('.')
+            .map(|(_, e)| e.to_ascii_lowercase())
+            .filter(|e| matches!(e.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp"))
+            .unwrap_or_else(|| "png".to_string());
+        let out = self.dir.join(format!("{key:016x}.{ext}"));
+        let ok = out.is_file()
+            || std::process::Command::new("curl")
+                .args(["-fsSL", "--max-time", "8", "-o"])
+                .arg(&out)
+                .arg(url)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+                && out.is_file();
+        let res = if ok { Some(out) } else { None };
+        self.cache.insert(key, res.clone());
+        res
+    }
+}
+
 /// Mermaid rendering for the Markdown preview: an external CLI (opt-in via
 /// `mermaid-command`) with a cache, falling back to the built-in subset.
 #[derive(Default)]
@@ -3471,6 +3521,7 @@ fn markdown_preview(
     text: &str,
     base: Option<&std::path::Path>,
     mmd: &mut Mermaid,
+    remote: &mut RemoteImages,
     fg: egui::Color32,
     panel: egui::Color32,
     lang: miao_term_ui::i18n::Lang,
@@ -3520,7 +3571,13 @@ fn markdown_preview(
             continue;
         }
         if let Some((alt, url)) = miao_term_ui::markdown::parse_image(line.trim()) {
-            match miao_term_ui::markdown::image_uri(url, base) {
+            let uri = miao_term_ui::markdown::image_uri(url, base).or_else(|| {
+                (url.starts_with("http://") || url.starts_with("https://"))
+                    .then(|| remote.fetch(url))
+                    .flatten()
+                    .and_then(|p| miao_term_ui::markdown::image_uri(&p.display().to_string(), None))
+            });
+            match uri {
                 Some(uri) => {
                     ui.add(
                         egui::Image::new(uri)
