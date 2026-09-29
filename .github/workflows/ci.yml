@@ -45,10 +45,21 @@ jobs:
             echo "code=false" >> "$GITHUB_OUTPUT"
           fi
 
-  # Linux is the fast runner: full test suite on every code change.
-  test-linux:
+  # Fast compile check on every push (Linux). Catches broken builds in seconds.
+  check-linux:
     needs: changes
     if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --all-targets
+
+  # Full Linux test suite: PRs, the nightly run and manual dispatch (not pushes).
+  test-linux:
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && github.event_name != 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -85,7 +96,7 @@ jobs:
 
   render-linux:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && github.event_name != 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
