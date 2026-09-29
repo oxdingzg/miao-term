@@ -49,6 +49,12 @@ fn main() -> eframe::Result<()> {
         std::env::var("MIAOTTY_MTP_TOKEN").ok(),
         miao_term_mtp::ServerState::parse_allow(std::env::var("MIAOTTY_MTP_ALLOW").ok()),
     );
+    if let Some(addr) = miao_term_config::Config::load().remote_listen {
+        match miao_term_mtp::serve_tcp(&addr, state.clone()) {
+            Ok(()) => eprintln!("miaotty: remote MTP access on {addr}"),
+            Err(e) => eprintln!("miaotty: remote access disabled: {e}"),
+        }
+    }
     match miao_term_mtp::serve(&socket, state.clone()) {
         Ok(()) => eprintln!("miaotty: MTP host listening on {}", socket.display()),
         Err(e) => eprintln!("miaotty: failed to start MTP host: {e}"),

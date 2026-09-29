@@ -580,14 +580,9 @@ fn write_response(writer: &mut impl Write, response: &Response) -> bool {
     }
 }
 
-fn handle(stream: LocalSocketStream, state: Arc<ServerState>) {
-    let mut reader = match stream.try_clone() {
-        Ok(s) => BufReader::new(s),
-        Err(_) => return,
-    };
-    let mut writer = stream;
+fn handle<R: BufRead, W: Write>(reader: &mut R, writer: &mut W, state: &ServerState) {
     let mut buf = Vec::new();
-    while let Ok(true) = read_request(&mut reader, &mut buf) {
+    while let Ok(true) = read_request(reader, &mut buf) {
         let response = match std::str::from_utf8(&buf) {
             Ok(line) => {
                 let line = line.trim();
@@ -595,7 +590,7 @@ fn handle(stream: LocalSocketStream, state: Arc<ServerState>) {
                     continue;
                 }
                 match serde_json::from_str::<Request>(line) {
-                    Ok(req) => dispatch(&state, req),
+                    Ok(req) => dispatch(state, req),
                     Err(e) => Response::err(0, state.revision(), "bad_request", e.to_string()),
                 }
             }
@@ -606,7 +601,7 @@ fn handle(stream: LocalSocketStream, state: Arc<ServerState>) {
                 "request must be valid UTF-8",
             ),
         };
-        if !write_response(&mut writer, &response) {
+        if !write_response(writer, &response) {
             break;
         }
     }
@@ -615,7 +610,7 @@ fn handle(stream: LocalSocketStream, state: Arc<ServerState>) {
 /// A minimal MTP client (cross-platform via `interprocess`).
 pub mod client {
     use super::{ErrorInfo, PROTO_VERSION};
-    use std::io::{BufRead, BufReader, Write};
+    use std::io::{BufRead, BufReader, Read, Write};
     use std::path::Path;
 
     #[cfg(unix)]
@@ -635,8 +630,8 @@ pub mod client {
     }
 
     pub struct Client {
-        reader: BufReader<LocalSocketStream>,
-        writer: LocalSocketStream,
+        reader: BufReader<Box<dyn Read + Send>>,
+        writer: Box<dyn Write + Send>,
         next_id: i64,
     }
 
@@ -653,10 +648,29 @@ pub mod client {
         let stream = ConnectOptions::new().name(name).connect_sync()?;
         let writer = stream.try_clone()?;
         Ok(Client {
-            reader: BufReader::new(stream),
-            writer,
+            reader: BufReader::new(Box::new(stream)),
+            writer: Box::new(writer),
             next_id: 1,
         })
+    }
+
+    /// Connect over TCP (`host:port`), for a host serving `remote-listen`.
+    pub fn connect_tcp(addr: &str) -> std::io::Result<Client> {
+        let stream = std::net::TcpStream::connect(addr)?;
+        let writer = stream.try_clone()?;
+        Ok(Client {
+            reader: BufReader::new(Box::new(stream)),
+            writer: Box::new(writer),
+            next_id: 1,
+        })
+    }
+
+    /// Connect to `tcp://host:port` or a local socket path.
+    pub fn connect_any(addr: &str) -> std::io::Result<Client> {
+        match addr.strip_prefix("tcp://") {
+            Some(rest) => connect_tcp(rest),
+            None => connect(Path::new(addr)),
+        }
     }
 
     impl Client {
@@ -729,7 +743,41 @@ pub fn serve(path: &Path, state: Arc<ServerState>) -> std::io::Result<()> {
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let state = state.clone();
-            thread::spawn(move || handle(stream, state));
+            thread::spawn(move || {
+                let Ok(clone) = stream.try_clone() else {
+                    return;
+                };
+                let mut reader = BufReader::new(clone);
+                let mut writer = stream;
+                handle(&mut reader, &mut writer, &state);
+            });
+        }
+    });
+    Ok(())
+}
+
+/// Serve the control plane over TCP (for remote access). Requires a token: the
+/// control plane runs commands in the user's shell, so it must be authenticated.
+pub fn serve_tcp(addr: &str, state: Arc<ServerState>) -> std::io::Result<()> {
+    use std::net::TcpListener;
+    if state.token().is_none() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "remote access requires MIAOTTY_MTP_TOKEN",
+        ));
+    }
+    let listener = TcpListener::bind(addr)?;
+    thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let state = state.clone();
+            thread::spawn(move || {
+                let Ok(clone) = stream.try_clone() else {
+                    return;
+                };
+                let mut reader = BufReader::new(clone);
+                let mut writer = stream;
+                handle(&mut reader, &mut writer, &state);
+            });
         }
     });
     Ok(())
@@ -943,6 +991,13 @@ mod tests {
         let bad = dispatch(&state, request("app", "view", json!({})));
         assert!(!bad.ok);
         assert_eq!(bad.error.unwrap().code, "no_path");
+    }
+
+    #[test]
+    fn tcp_requires_a_token() {
+        assert!(serve_tcp("127.0.0.1:0", ServerState::new()).is_err());
+        let st = ServerState::with_token(Some("t".into()));
+        assert!(serve_tcp("127.0.0.1:0", st).is_ok());
     }
 
     #[test]

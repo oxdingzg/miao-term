@@ -14,6 +14,7 @@ font-size = 14
 # editor = "code --wait"            # command used by "Edit in Tab"
 # mermaid-command = "mmdc"          # render ```mermaid blocks with mermaid-cli (else a built-in subset)
 # graphics = true                  # inline terminal graphics (Sixel / Kitty / iTerm2)
+# remote-listen = "127.0.0.1:7273"   # serve the MTP control plane over TCP (needs MIAOTTY_MTP_TOKEN)
 # language = "zh"                  # UI language ("en" default; also reads $LANG)
 # update-pubkey = "RW…"            # minisign public key; enables signature checks
 # update-check-url = "https://example.com/miaotty/latest.json"

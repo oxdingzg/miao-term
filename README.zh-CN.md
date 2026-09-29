@@ -209,6 +209,10 @@ miaotty-cli file write --path /tmp/x --data "hello"
 miaotty-cli file write --path /tmp/x --data-b64 "AAECAw=="   # 二进制
 ```
 
+**远程访问**:设 `remote-listen = "127.0.0.1:7273"`(并设 `MIAOTTY_MTP_TOKEN`)即可用 TCP 暴露控制
+平面,客户端 `miaotty-cli --socket tcp://host:7273` 连接;**没令牌时 TCP 监听会拒绝启动**。注意控制平面
+能在你的 shell 里执行命令,令牌务必保密(并尽量只监听 loopback 或走 ssh 隧道)。
+
 若 host 以 `MIAOTTY_MTP_TOKEN` 启动,请求必须携带该令牌;CLI 会从同一环境变量读取。
 `MIAOTTY_MTP_ALLOW`(逗号分隔,如 `core.basic,file.read,history.read`)限定允许的能力,其余返回
 `forbidden`;不设=全允许,`core.basic`(ping/health)始终允许以便客户端发现 host,`ping` 会在

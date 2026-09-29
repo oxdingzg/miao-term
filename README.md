@@ -240,6 +240,12 @@ miaotty-cli file write --path /tmp/x --data "hello"
 miaotty-cli file write --path /tmp/x --data-b64 "AAECAw=="   # binary
 ```
 
+**Remote access**: set `remote-listen = "127.0.0.1:7273"` (and
+`MIAOTTY_MTP_TOKEN`) to serve the control plane over TCP; connect with
+`miaotty-cli --socket tcp://host:7273`. Without a token the TCP listener refuses
+to start. Note the control plane runs commands in your shell, so keep the token
+secret (and prefer a loopback/listen address you trust, or an ssh tunnel).
+
 If the host was started with `MIAOTTY_MTP_TOKEN`, requests must carry it; the CLI
 picks it up from the same variable. `MIAOTTY_MTP_ALLOW` (comma-separated, e.g.
 `core.basic,file.read,history.read`) restricts which capabilities are accepted —

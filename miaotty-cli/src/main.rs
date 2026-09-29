@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 
 fn usage() -> ! {
     eprintln!(
-        "usage: miaotty-cli [--socket PATH] <command>\n\
+        "usage: miaotty-cli [--socket PATH|tcp://host:port] <command>\n\
          commands: ping | health | pane list|run|send|focus|close | \
          state <agent> --state S | state list | history add|list |\n     view|edit <path> |\n     file read --path P [--offset N] [--length N] [--base64] |\n     file write --path P [--data D | --data-b64 B]"
     );
@@ -48,7 +48,7 @@ fn main() {
     let pane_default = || std::env::var("MIAOTTY_PANE_ID").ok();
     let cmd = args.first().map(String::as_str).unwrap_or("");
 
-    let mut client = match miao_term_mtp::client::connect(&socket) {
+    let mut client = match miao_term_mtp::client::connect_any(&socket.to_string_lossy()) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("miaotty-cli: cannot connect to {}: {e}", socket.display());

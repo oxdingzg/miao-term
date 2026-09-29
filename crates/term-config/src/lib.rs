@@ -119,6 +119,8 @@ struct RawConfig {
     #[serde(rename = "mermaid-command")]
     mermaid_command: Option<String>,
     graphics: Option<bool>,
+    #[serde(rename = "remote-listen")]
+    remote_listen: Option<String>,
     #[serde(rename = "quick-terminal-hotkey")]
     quick_terminal_hotkey: Option<String>,
     #[serde(rename = "update-pubkey")]
@@ -213,6 +215,9 @@ pub struct Config {
     pub mermaid_command: Option<String>,
     /// Inline terminal graphics (Sixel / Kitty / iTerm2). On by default.
     pub graphics: bool,
+    /// `addr:port` to serve the MTP control plane over TCP (remote access).
+    /// Requires `MIAOTTY_MTP_TOKEN`; `None` (default) is unix-socket only.
+    pub remote_listen: Option<String>,
     /// System-wide accelerator that toggles the Quick Terminal, e.g.
     /// `cmd+shift+t` (see ADR 0019). `None` disables it.
     pub quick_terminal_hotkey: Option<String>,
@@ -270,6 +275,7 @@ impl Default for Config {
             editor_vim: false,
             mermaid_command: None,
             graphics: true,
+            remote_listen: None,
             quick_terminal_hotkey: None,
             update_pubkey: None,
             theme: Theme::default(),
@@ -548,6 +554,12 @@ impl Config {
         }
         if let Some(g) = raw.graphics {
             cfg.graphics = g;
+        }
+        if let Some(addr) = raw.remote_listen {
+            let addr = addr.trim();
+            if !addr.is_empty() {
+                cfg.remote_listen = Some(addr.to_string());
+            }
         }
         if let Some(editor) = raw.editor {
             let editor = editor.trim();

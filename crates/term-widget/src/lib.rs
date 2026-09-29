@@ -49,6 +49,12 @@ pub fn run(title: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
         Ok(()) => eprintln!("miaotty-native: MTP host on {}", socket.display()),
         Err(e) => eprintln!("miaotty-native: MTP host failed: {e}"),
     }
+    if let Some(addr) = miao_term_config::Config::load().remote_listen {
+        match miao_term_mtp::serve_tcp(&addr, mtp.clone()) {
+            Ok(()) => eprintln!("miaotty-native: remote MTP access on {addr}"),
+            Err(e) => eprintln!("miaotty-native: remote access disabled: {e}"),
+        }
+    }
 
     let event_loop = EventLoop::<()>::with_user_event().build()?;
     event_loop.set_control_flow(ControlFlow::Wait);
