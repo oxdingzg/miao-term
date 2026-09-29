@@ -363,6 +363,7 @@ pub enum MenuId {
     ClearScreen,
     ReadOnly,
     HintMode,
+    Pip,
     CopyPath,
     RevealCwd,
     Quit,
@@ -691,6 +692,12 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
                     );
                     menu_item(
                         ui,
+                        t(lang, "Picture in Picture", "画中画"),
+                        MenuId::Pip,
+                        &mut menu,
+                    );
+                    menu_item(
+                        ui,
                         t(lang, "Copy Path", "复制路径"),
                         MenuId::CopyPath,
                         &mut menu,
@@ -824,12 +831,9 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
                 ui.label(egui::RichText::new(status).size(11.0));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
-                        egui::RichText::new(format!(
-                            "\u{2318}K  {}",
-                            t(lang, "commands", "命令")
-                        ))
-                        .size(11.0)
-                        .color(egui::Color32::from_gray(130)),
+                        egui::RichText::new(format!("\u{2318}K  {}", t(lang, "commands", "命令")))
+                            .size(11.0)
+                            .color(egui::Color32::from_gray(130)),
                     );
                 });
             });

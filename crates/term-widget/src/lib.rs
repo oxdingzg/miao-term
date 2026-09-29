@@ -143,6 +143,10 @@ struct State {
     config: wgpu::SurfaceConfiguration,
     quads: QuadRenderer,
     images: ImageRenderer,
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
+    pip: Option<Pip>,
+    pip_request: bool,
     graphics_enabled: bool,
     renderers: HashMap<String, TermRenderer>,
     mtp: Arc<miao_term_mtp::ServerState>,
@@ -227,6 +231,15 @@ struct State {
     egui_ctx: egui::Context,
     egui_state: egui_winit::State,
     egui_renderer: egui_wgpu::Renderer,
+}
+
+/// An always-on-top window mirroring the active pane (read-only).
+struct Pip {
+    window: Arc<Window>,
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
+    quads: QuadRenderer,
+    renderer: TermRenderer,
 }
 
 struct Shortcut {
@@ -588,6 +601,144 @@ impl State {
         if let Some(f) = open_file {
             self.open_editor(f);
         }
+    }
+
+    /// Create the PiP window (called from the event loop when requested).
+    fn create_pip(&mut self, event_loop: &ActiveEventLoop) {
+        if self.pip.is_some() {
+            return;
+        }
+        let attrs = Window::default_attributes()
+            .with_title("miaotty \u{00b7} picture-in-picture")
+            .with_inner_size(LogicalSize::new(720.0, 400.0))
+            .with_window_level(winit::window::WindowLevel::AlwaysOnTop);
+        let window = match event_loop.create_window(attrs) {
+            Ok(w) => Arc::new(w),
+            Err(e) => {
+                eprintln!("miaotty-native: picture-in-picture window failed: {e}");
+                return;
+            }
+        };
+        let surface = match self.instance.create_surface(window.clone()) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("miaotty-native: pip surface failed: {e}");
+                return;
+            }
+        };
+        let caps = surface.get_capabilities(&self.adapter);
+        let format = caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| f.is_srgb())
+            .unwrap_or(caps.formats[0]);
+        let size = window.inner_size();
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width: size.width.max(1),
+            height: size.height.max(1),
+            present_mode: wgpu::PresentMode::AutoNoVsync,
+            alpha_mode: caps.alpha_modes[0],
+            view_formats: vec![],
+            desired_maximum_frame_latency: 1,
+        };
+        surface.configure(&self.device, &config);
+        let quads = QuadRenderer::new(&self.device, format);
+        let renderer = TermRenderer::new(&self.device, &self.queue, format);
+        self.pip = Some(Pip {
+            window,
+            surface,
+            config,
+            quads,
+            renderer,
+        });
+        self.window.request_redraw();
+    }
+
+    fn resize_pip(&mut self) {
+        let (device, w, h) = (
+            &self.device,
+            self.pip.as_ref().map(|p| p.window.inner_size().width),
+            self.pip.as_ref().map(|p| p.window.inner_size().height),
+        );
+        if let (Some(w), Some(h)) = (w, h) {
+            if w > 0 && h > 0 {
+                if let Some(pip) = self.pip.as_mut() {
+                    pip.config.width = w;
+                    pip.config.height = h;
+                    pip.surface.configure(device, &pip.config);
+                }
+            }
+        }
+    }
+
+    /// Render the active pane into the PiP window.
+    fn render_pip(&mut self) {
+        let Some(pip) = self.pip.as_mut() else {
+            return;
+        };
+        let theme = self.theme.clone();
+        let scale = pip.window.scale_factor() as f32;
+        let win_size = (pip.config.width, pip.config.height);
+        let rows = match self.tabs.get(self.active_tab) {
+            Some(tab) => match tab.panes.iter().find(|p| p.id == tab.active) {
+                Some(pane) => build_rows(pane.term.screen(), &theme, None),
+                None => return,
+            },
+            None => return,
+        };
+        let Ok(frame) = pip.surface.get_current_texture() else {
+            return;
+        };
+        let view = frame.texture.create_view(&Default::default());
+        let full = Quad::new(
+            (0.0, 0.0),
+            (win_size.0 as f32, win_size.1 as f32),
+            (theme.bg.0, theme.bg.1, theme.bg.2, 255),
+        );
+        pip.quads
+            .prepare(&self.device, &self.queue, win_size, &[full]);
+        pip.renderer.prepare(
+            &self.device,
+            &self.queue,
+            win_size,
+            scale,
+            self.font_size,
+            (self.font_size * self.line_ratio).round(),
+            self.cw,
+            0.0,
+            0.0,
+            (theme.fg.0, theme.fg.1, theme.fg.2),
+            self.font_family.as_deref(),
+            &rows,
+        );
+        let mut enc = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        {
+            let mut pass = enc
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("pip"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    occlusion_query_set: None,
+                    timestamp_writes: None,
+                })
+                .forget_lifetime();
+            pip.quads.render(&mut pass);
+            pip.renderer.render(&mut pass);
+        }
+        self.queue.submit(Some(enc.finish()));
+        frame.present();
     }
 
     fn duplicate_tab(&mut self) {
@@ -1259,6 +1410,7 @@ impl State {
         if repaint_now {
             self.window.request_redraw();
         }
+        self.render_pip();
     }
 
     fn chrome(&mut self, ctx: &egui::Context) {
@@ -1690,6 +1842,7 @@ enum Cmd {
     Fullscreen,
     ReadOnly,
     HintMode,
+    Pip,
     ClearScreen,
     ClearScrollback,
     DuplicateTab,
@@ -1857,6 +2010,13 @@ impl State {
             Cmd::FindInAllTabs => self.find_in_all_tabs(),
             Cmd::ReadOnly => self.read_only = !self.read_only,
             Cmd::HintMode => self.build_hints(),
+            Cmd::Pip => {
+                if self.pip.is_some() {
+                    self.pip = None;
+                } else {
+                    self.pip_request = true;
+                }
+            }
             Cmd::Fullscreen => {
                 let full = self.window.fullscreen().is_some();
                 self.window.set_fullscreen(if full {
@@ -3507,6 +3667,10 @@ impl ApplicationHandler for Host {
             config,
             quads,
             images,
+            instance,
+            adapter,
+            pip: None,
+            pip_request: std::env::var_os("MIAOTTY_PIP").is_some(),
             graphics_enabled: cfg.graphics,
             renderers: HashMap::new(),
             mtp: self.mtp.clone(),
@@ -3685,10 +3849,29 @@ impl ApplicationHandler for Host {
         }
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         let Some(state) = self.state.as_mut() else {
             return;
         };
+        if state.pip_request {
+            state.pip_request = false;
+            state.create_pip(event_loop);
+        }
+        // Route events for the picture-in-picture window.
+        if state
+            .pip
+            .as_ref()
+            .map(|p| p.window.id() == id)
+            .unwrap_or(false)
+        {
+            match event {
+                WindowEvent::CloseRequested => state.pip = None,
+                WindowEvent::Resized(_) => state.resize_pip(),
+                WindowEvent::RedrawRequested => state.render_pip(),
+                _ => {}
+            }
+            return;
+        }
         if !matches!(event, WindowEvent::RedrawRequested) {
             let resp = state.egui_state.on_window_event(&state.window, &event);
             if resp.repaint {
@@ -4736,6 +4919,7 @@ impl chrome::Chrome for State {
             Fullscreen => Cmd::Fullscreen,
             ReadOnly => Cmd::ReadOnly,
             HintMode => Cmd::HintMode,
+            Pip => Cmd::Pip,
             ClearScreen => Cmd::ClearScreen,
             ClearScrollback => Cmd::ClearScrollback,
             DuplicateTab => Cmd::DuplicateTab,
