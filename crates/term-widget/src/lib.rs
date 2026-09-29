@@ -1567,6 +1567,9 @@ impl State {
         }
         let mut open = true;
         let mut font = self.font_size;
+        let mut family = self.font_family.clone().unwrap_or_default();
+        let mut line_ratio = self.line_ratio;
+        let mut opacity = self.opacity;
         let mut cursor = self.theme.cursor;
         let mut graphics = self.graphics_enabled;
         let mut notifications = self.notifications;
@@ -1580,6 +1583,22 @@ impl State {
             .show(ctx, |ui| {
                 ui.label(miao_term_ui::i18n::t(self.lang, "Font size", "字号"));
                 ui.add(egui::Slider::new(&mut font, 6.0..=40.0));
+                ui.horizontal(|ui| {
+                    ui.label(miao_term_ui::i18n::t(self.lang, "Font family", "字体"));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut family)
+                            .hint_text(miao_term_ui::i18n::t(
+                                self.lang,
+                                "system default",
+                                "系统默认",
+                            ))
+                            .desired_width(170.0),
+                    );
+                });
+                ui.label(miao_term_ui::i18n::t(self.lang, "Line height", "行高"));
+                ui.add(egui::Slider::new(&mut line_ratio, 1.0..=2.0));
+                ui.label(miao_term_ui::i18n::t(self.lang, "Opacity", "不透明度"));
+                ui.add(egui::Slider::new(&mut opacity, 0.1..=1.0));
                 ui.separator();
                 ui.label(miao_term_ui::i18n::t(self.lang, "Cursor", "光标"));
                 ui.horizontal(|ui| {
@@ -1652,14 +1671,25 @@ impl State {
                     }
                 }
             });
-        if (font - self.font_size).abs() > 0.01 {
+        let family_opt = if family.trim().is_empty() {
+            None
+        } else {
+            Some(family.trim().to_string())
+        };
+        if (font - self.font_size).abs() > 0.01
+            || (line_ratio - self.line_ratio).abs() > 0.001
+            || family_opt != self.font_family
+        {
             self.font_size = font;
+            self.line_ratio = line_ratio;
+            self.font_family = family_opt;
             let (cw, ch) =
                 State::cell_size(self.font_size, self.line_ratio, self.font_family.as_deref());
             self.cw = cw;
             self.ch = ch;
             self.resize();
         }
+        self.opacity = opacity;
         self.theme.cursor = cursor;
         if let Some(name) = install_agent {
             let msg = match miao_term_ui::integration::install(name) {
