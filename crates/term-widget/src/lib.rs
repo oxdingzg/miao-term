@@ -3960,7 +3960,11 @@ impl ApplicationHandler for Host {
                 state.window.request_redraw();
             }
             WindowEvent::Ime(winit::event::Ime::Commit(text)) => {
-                if !state.egui_ctx.wants_keyboard_input() {
+                // macOS also "commits" control characters (Enter/Tab/…) through
+                // the IME; those are sent by the key handler, so writing them
+                // here would double every newline. Only forward real text.
+                let control_only = !text.is_empty() && text.chars().all(char::is_control);
+                if !control_only && !state.egui_ctx.wants_keyboard_input() {
                     state.write_input(text.as_bytes());
                 }
             }
