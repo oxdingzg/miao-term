@@ -4664,6 +4664,21 @@ impl chrome::Chrome for State {
     fn read_only(&self) -> bool {
         self.read_only
     }
+    fn status_right(&self) -> String {
+        if let Some(p) = self.active_pane() {
+            if let Some(a) = self
+                .mtp
+                .agent_for(&p.id)
+                .and_then(|v| v.get("agent").and_then(|x| x.as_str()).map(str::to_string))
+            {
+                return a;
+            }
+        }
+        std::env::var("SHELL")
+            .ok()
+            .and_then(|s| s.rsplit('/').next().map(str::to_string))
+            .unwrap_or_default()
+    }
     fn theme(&self) -> Theme {
         self.theme.clone()
     }

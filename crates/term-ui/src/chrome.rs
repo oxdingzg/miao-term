@@ -55,7 +55,9 @@ pub fn tab_bar(
         let galley = ui
             .painter()
             .layout_no_wrap(title.clone(), font.clone(), text_color);
-        let desired = egui::vec2(galley.size().x + 26.0, 22.0);
+        let closable = titles.len() > 1;
+        let extra = if closable { 46.0 } else { 30.0 };
+        let desired = egui::vec2(galley.size().x + extra, 22.0);
         let (rect, resp) = ui.allocate_exact_size(desired, egui::Sense::click_and_drag());
         let bg = if i == active {
             bg_color(ch.active)
@@ -72,7 +74,29 @@ pub fn tab_bar(
         crate::icons::draw(ui.painter(), ir, icon, text_color);
         let pos = rect.min + egui::vec2(22.0, (rect.height() - galley.size().y) * 0.5);
         ui.painter().galley(pos, galley, text_color);
-        if resp.clicked() {
+        // Close affordance, inside the chip.
+        if closable {
+            let xr = egui::Rect::from_center_size(
+                egui::pos2(rect.right() - 11.0, rect.center().y),
+                egui::Vec2::splat(14.0),
+            );
+            let x_resp = ui.interact(xr, ui.id().with(("tabclose", i)), egui::Sense::click());
+            let ccol = if x_resp.hovered() {
+                text_color
+            } else {
+                egui::Color32::from_gray(150)
+            };
+            let (a, b) = (xr.shrink(4.0), xr.shrink(4.0));
+            let stroke = egui::Stroke::new(1.4_f32, ccol);
+            ui.painter()
+                .line_segment([a.left_top(), b.right_bottom()], stroke);
+            ui.painter()
+                .line_segment([a.right_top(), b.left_bottom()], stroke);
+            if x_resp.clicked() {
+                ev.close = Some(i);
+            }
+        }
+        if ev.close.is_none() && resp.clicked() {
             ev.switch = Some(i);
         }
         if resp.double_clicked() {
@@ -83,9 +107,6 @@ pub fn tab_bar(
                 .memory_mut(|m| m.data.insert_temp(egui::Id::new(DRAG_ID), i));
         }
         rects.push(rect);
-        if titles.len() > 1 && ui.small_button("\u{00d7}").clicked() {
-            ev.close = Some(i);
-        }
         ui.add_space(2.0);
     }
     // Resolve a finished drag against the collected chip rects.
@@ -403,6 +424,10 @@ pub trait Chrome {
     fn read_only(&self) -> bool {
         false
     }
+    /// A short right-side status chip (running program / agent), if any.
+    fn status_right(&self) -> String {
+        String::new()
+    }
     /// The host's active theme (colours for the whole chrome).
     fn theme(&self) -> crate::theme::Theme {
         crate::theme::Theme::default()
@@ -487,6 +512,7 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
     let host_read_only = host.read_only();
     let details_list = host.details_list();
     let status = host.status();
+    let status_right = host.status_right();
     let queue_items = host.queue();
     let mut queue_input = host.take_queue_input();
 
@@ -832,6 +858,14 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
                             .size(11.0)
                             .color(egui::Color32::from_gray(130)),
                     );
+                    if !status_right.is_empty() {
+                        ui.label(
+                            egui::RichText::new(format!("\u{25cf} {status_right}"))
+                                .size(11.0)
+                                .color(egui::Color32::from_rgb(0xa3, 0xbe, 0x8c)),
+                        );
+                        ui.add_space(10.0);
+                    }
                 });
             });
         });
