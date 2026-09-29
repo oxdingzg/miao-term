@@ -1655,15 +1655,7 @@ impl State {
                 }
                 Pick::File(name) => {
                     if let Some(path) = cwd.map(|c| c.join(&name)) {
-                        if let Ok(text) = std::fs::read_to_string(&path) {
-                            self.editor = Some(Editor {
-                                path,
-                                original: text.clone(),
-                                text,
-                                preview: name.ends_with(".md"),
-                                remote: None,
-                            });
-                        }
+                        self.open_editor(path);
                     }
                 }
             }
@@ -2048,6 +2040,33 @@ impl State {
         }
     }
 
+    /// Open a local file in the built-in editor. Returns false if it can't be
+    /// read. Resets the vim runtime so a new file starts in Normal mode.
+    fn open_editor(&mut self, path: std::path::PathBuf) -> bool {
+        match std::fs::read_to_string(&path) {
+            Ok(text) => {
+                let name = path
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let preview = name.ends_with(".md") || name.ends_with(".markdown");
+                self.editor = Some(Editor {
+                    path,
+                    original: text.clone(),
+                    text,
+                    preview,
+                    remote: None,
+                });
+                self.vim_for.clear();
+                true
+            }
+            Err(e) => {
+                eprintln!("miaotty-native: open failed: {e}");
+                false
+            }
+        }
+    }
+
     fn open_dialog_window(&mut self, ctx: &egui::Context) {
         if !self.show_open {
             return;
@@ -2078,14 +2097,7 @@ impl State {
         self.open_path = path;
         if do_open && !self.open_path.is_empty() {
             let p = std::path::PathBuf::from(&self.open_path);
-            if let Ok(text) = std::fs::read_to_string(&p) {
-                self.editor = Some(Editor {
-                    path: p,
-                    original: text.clone(),
-                    text,
-                    preview: false,
-                    remote: None,
-                });
+            if self.open_editor(p) {
                 self.show_open = false;
             }
         }
@@ -2283,6 +2295,21 @@ fn link_at(line: &str, col: u16) -> Option<(String, u16, u16)> {
         Some((token.to_string(), start as u16, end as u16))
     } else {
         None
+    }
+}
+
+/// Quote a path for the shell (single quotes when it contains anything
+/// unusual), so a dropped file can be pasted into the terminal.
+fn shell_quote(s: &str) -> String {
+    if s.is_empty() {
+        return "''".to_string();
+    }
+    if s.chars()
+        .all(|c| c.is_alphanumeric() || "/._-@%+=:,~".contains(c))
+    {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', "'\\''"))
     }
 }
 
@@ -2543,6 +2570,26 @@ impl ApplicationHandler for Host {
                     state.write_input(text.as_bytes());
                 }
             }
+            WindowEvent::DroppedFile(path) => {
+                let scale = state.window.scale_factor() as f32;
+                let (px, py) = (state.cursor.0 as f32, state.cursor.1 as f32);
+                let over_pane = state.pane_rects().iter().any(|(_, r)| {
+                    px >= r.x * scale
+                        && px < (r.x + r.w) * scale
+                        && py >= r.y * scale
+                        && py < (r.y + r.h) * scale
+                });
+                if over_pane {
+                    // Drop onto the terminal: paste the shell-quoted path.
+                    let quoted = shell_quote(&path.to_string_lossy());
+                    let pasted = format!("{quoted} ");
+                    state.paste(&pasted);
+                } else {
+                    state.open_editor(path);
+                }
+                state.window.request_redraw();
+            }
+            WindowEvent::HoveredFile(_) => {}
             WindowEvent::MouseInput {
                 state: es, button, ..
             } => match button {
@@ -3221,6 +3268,13 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn shell_quoting() {
+        assert_eq!(super::shell_quote("/tmp/a.txt"), "/tmp/a.txt");
+        assert_eq!(super::shell_quote("/a b/c"), "'/a b/c'");
+        assert_eq!(super::shell_quote("it's"), "'it'\\''s'");
+    }
 
     #[test]
     fn layout_json_round_trip() {
