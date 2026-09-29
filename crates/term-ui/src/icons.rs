@@ -1,5 +1,5 @@
-//! UI icons, rendered from the Phosphor Icons font (MIT) so they are crisp and
-//! consistent. The host registers the `ph` (fill) and `ph-bold` families.
+//! UI icons, rendered from the Tabler Icons font (MIT) so they are crisp and
+//! consistent. The host registers the `tabler` family.
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Icon {
@@ -23,32 +23,32 @@ pub enum Icon {
     Refresh,
 }
 
-/// The Phosphor (fill) glyph for an icon.
+/// The Tabler Icons glyph for an icon.
 pub fn glyph(icon: Icon) -> char {
     match icon {
-        Icon::Terminal => '\u{e47e}',
-        Icon::Info => '\u{e2ce}',
-        Icon::Agent => '\u{e762}',   // robot
-        Icon::Outline => '\u{e2f0}', // list
-        Icon::Git | Icon::GitBranch => '\u{e278}',
-        Icon::Files | Icon::Folder => '\u{e24a}', // folder
-        Icon::Ports => '\u{e946}',                // plug
-        Icon::Queue => '\u{eadc}',                // list-checks
-        Icon::Sidebar => '\u{ec24}',              // sidebar-simple
-        Icon::Details => '\u{e546}',              // columns
-        Icon::Plus => '\u{e3d4}',
-        Icon::File => '\u{e230}',
-        Icon::Server => '\u{e2a0}', // hard-drives
-        Icon::Command => '\u{e1c4}',
-        Icon::Search => '\u{e30c}',  // magnifying-glass
-        Icon::Refresh => '\u{e094}', // arrows-clockwise
+        Icon::Terminal => '\u{ebdc}',
+        Icon::Info => '\u{eac5}',                  // info-circle
+        Icon::Agent => '\u{f00b}',                 // robot
+        Icon::Outline => '\u{eb6b}',               // list
+        Icon::Git | Icon::GitBranch => '\u{eab2}', // git-branch
+        Icon::Files | Icon::Folder => '\u{eaad}',  // folder
+        Icon::Ports => '\u{ebd9}',                 // plug
+        Icon::Queue => '\u{eb6a}',                 // list-check
+        Icon::Sidebar => '\u{eada}',               // layout-sidebar
+        Icon::Details => '\u{ead4}',               // layout-columns
+        Icon::Plus => '\u{eb0b}',
+        Icon::File => '\u{eaa4}',
+        Icon::Server => '\u{eb1f}',
+        Icon::Command => '\u{ea78}',
+        Icon::Search => '\u{eb1c}',
+        Icon::Refresh => '\u{eb13}',
     }
 }
 
 /// Draw `icon` centered in `rect`, filled with `color`.
 pub fn draw(p: &egui::Painter, rect: egui::Rect, icon: Icon, color: egui::Color32) {
     let size = rect.height().min(rect.width()).max(8.0);
-    let font = egui::FontId::new(size, egui::FontFamily::Name("ph".into()));
+    let font = egui::FontId::new(size, egui::FontFamily::Name("tabler".into()));
     p.text(
         rect.center(),
         egui::Align2::CENTER_CENTER,

@@ -179,20 +179,26 @@ pub fn details_tabs(
     active: usize,
 ) -> Option<usize> {
     let mut sel = None;
-    ui.visuals_mut().selection.bg_fill = bg_color(ch.active);
-    ui.visuals_mut().override_text_color = Some(bg_color(ch.text));
     ui.horizontal_wrapped(|ui| {
-        for (i, (icon, l)) in tabs.iter().enumerate() {
-            // Reserve leading space so the icon sits left of the label text.
-            let resp = ui.selectable_label(i == active, format!("    {l}"));
-            if resp.clicked() {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        for (i, (icon, label)) in tabs.iter().enumerate() {
+            // Icon-only tabs (the label is a tooltip), like the reference app.
+            let (rect, resp) = ui.allocate_exact_size(egui::vec2(26.0, 22.0), egui::Sense::click());
+            let bg = if i == active {
+                Some(bg_color(ch.active))
+            } else if resp.hovered() {
+                Some(bg_color(ch.hover))
+            } else {
+                None
+            };
+            if let Some(b) = bg {
+                ui.painter().rect_filled(rect, egui::Rounding::same(5.0), b);
+            }
+            let ir = egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(15.0));
+            crate::icons::draw(ui.painter(), ir, *icon, bg_color(ch.text));
+            if resp.on_hover_text(*label).clicked() {
                 sel = Some(i);
             }
-            let ir = egui::Rect::from_center_size(
-                egui::pos2(resp.rect.left() + 10.0, resp.rect.center().y),
-                egui::Vec2::splat(13.0),
-            );
-            crate::icons::draw(ui.painter(), ir, *icon, bg_color(ch.text));
         }
     });
     sel
