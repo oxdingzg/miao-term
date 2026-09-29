@@ -20,6 +20,14 @@ use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, KeyEvent, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
+
+/// Events posted to the loop: a repaint wake-up, or the global Quick Terminal
+/// hotkey (which is the only thing that should toggle the scratch tab).
+#[derive(Debug, Clone, Copy)]
+enum HostEvent {
+    Wake,
+    Hotkey,
+}
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
@@ -35,6 +43,16 @@ const BLINK: Duration = Duration::from_millis(530);
 
 /// Run a native terminal window until it is closed.
 pub fn run(title: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
+    // Single instance (ADR 0019): a later launch — a deep link or a second
+    // `miaotty-native <url>` — is handed to the running instance, which drains
+    // its inbox, and this process exits without opening a window.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let intent = miao_term_ui::launch::Intent::from_args(&args);
+    if miao_term_ui::launch::forward_to_running(&intent.encode()) {
+        eprintln!("miaotty-native: forwarded to the running instance");
+        return Ok(());
+    }
+
     // MTP control plane (ADR 0005): the shell inherits `MIAOTTY_SOCKET`, so
     // `miaotty-cli`, plugins and agent hooks work exactly as with the eframe app.
     let socket = miao_term_mtp::default_socket();
@@ -56,7 +74,7 @@ pub fn run(title: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
         }
     }
 
-    let event_loop = EventLoop::<()>::with_user_event().build()?;
+    let event_loop = EventLoop::<HostEvent>::with_user_event().build()?;
     event_loop.set_control_flow(ControlFlow::Wait);
     let proxy = event_loop.create_proxy();
     // Let the control plane wake the loop, so `miaotty-cli` commands apply
@@ -64,7 +82,7 @@ pub fn run(title: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
     {
         let proxy = proxy.clone();
         mtp.set_waker(Arc::new(move || {
-            let _ = proxy.send_event(());
+            let _ = proxy.send_event(HostEvent::Wake);
         }));
     }
     let mut host = Host {
@@ -79,7 +97,7 @@ pub fn run(title: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
 
 struct Host {
     title: String,
-    proxy: EventLoopProxy<()>,
+    proxy: EventLoopProxy<HostEvent>,
     mtp: Arc<miao_term_mtp::ServerState>,
     state: Option<State>,
 }
@@ -146,7 +164,7 @@ struct PaneDraw {
 
 struct State {
     window: Arc<Window>,
-    proxy: EventLoopProxy<()>,
+    proxy: EventLoopProxy<HostEvent>,
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -220,6 +238,9 @@ struct State {
     composer: Option<String>,
     quick: Option<String>,
     closed: Vec<Option<std::path::PathBuf>>,
+    /// Scratch "Quick" tab (ADR 0019): its pane id and the tab to return to.
+    quick_pane: Option<String>,
+    quick_return: Option<usize>,
     hover_pointer: bool,
     search: Option<String>,
     search_idx: usize,
@@ -274,6 +295,7 @@ struct Shortcut {
     quickly: bool,
     reopen: bool,
     search: bool,
+    quick_terminal: bool,
 }
 
 fn shortcut(event: &KeyEvent, mods: ModifiersState) -> Option<Shortcut> {
@@ -299,12 +321,14 @@ fn shortcut(event: &KeyEvent, mods: ModifiersState) -> Option<Shortcut> {
         quickly: false,
         reopen: false,
         search: false,
+        quick_terminal: false,
     };
     let mut matched = true;
     match &event.logical_key {
         Key::Character(c) => match c.as_str() {
-            "t" if mods.shift_key() => s.reopen = true,
+            "t" if mods.shift_key() => s.quick_terminal = true,
             "t" => s.new_tab = true,
+            "z" if mods.shift_key() => s.reopen = true,
             "e" => s.composer = true,
             "h" if mods.shift_key() => s.hint = true,
             "g" if mods.shift_key() => s.find = -1,
@@ -412,7 +436,7 @@ impl State {
         let id = gen_id();
         let proxy = self.proxy.clone();
         let waker: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
-            let _ = proxy.send_event(());
+            let _ = proxy.send_event(HostEvent::Wake);
         });
         let env = vec![("MIAOTTY_PANE_ID".to_string(), id.clone())];
         Terminal::new(None, cols, rows, 10_000, cwd, &env, waker)
@@ -470,6 +494,42 @@ impl State {
     }
 
     /// Reopen the most recently closed tab (Cmd+Shift+T) in its old cwd.
+    /// Toggle the scratch "Quick" tab (ADR 0019): the first invocation opens a
+    /// tab named *Quick* and remembers where to return; later ones flip between
+    /// the Quick tab and that tab.
+    fn toggle_quick_terminal(&mut self) {
+        if let Some(id) = self.quick_pane.clone() {
+            if let Some(ti) = self
+                .tabs
+                .iter()
+                .position(|t| t.panes.iter().any(|p| p.id == id))
+            {
+                if self.active_tab == ti {
+                    if let Some(prev) = self.quick_return.take() {
+                        self.active_tab = prev.min(self.tabs.len().saturating_sub(1));
+                        self.selection = None;
+                    }
+                } else {
+                    self.quick_return = Some(self.active_tab);
+                    self.active_tab = ti;
+                    self.selection = None;
+                }
+                self.window.request_redraw();
+                return;
+            }
+        }
+        let prev = self.active_tab;
+        self.new_tab();
+        if let Some(tab) = self.tabs.last_mut() {
+            tab.title = miao_term_ui::i18n::t(self.lang, "Quick", "快速").to_string();
+            if let Some(pane) = tab.panes.first() {
+                self.quick_pane = Some(pane.id.clone());
+            }
+        }
+        self.quick_return = Some(prev);
+        self.publish_panes();
+    }
+
     fn reopen_tab(&mut self) {
         let Some(cwd) = self.closed.pop() else {
             return;
@@ -763,6 +823,10 @@ impl State {
         else {
             return;
         };
+        if self.quick_pane.as_deref() == Some(id) {
+            self.quick_pane = None;
+            self.quick_return = None;
+        }
         let tab = &mut self.tabs[ti];
         tab.panes.retain(|p| p.id != id);
         let _ = tab.layout.remove(id);
@@ -1858,7 +1922,7 @@ impl State {
                 ports: pid.map(ports_rows).unwrap_or_default(),
             };
             let _ = tx.send((cwd2, data));
-            let _ = proxy.send_event(());
+            let _ = proxy.send_event(HostEvent::Wake);
         });
         self.details_rx = Some(rx);
     }
@@ -1989,6 +2053,7 @@ enum Cmd {
     ClearScrollback,
     DuplicateTab,
     ReopenClosed,
+    QuickTerminal,
     SelectAll,
     CopyPath,
     RevealCwd,
@@ -2011,6 +2076,7 @@ impl State {
             (Cmd::NewTab, t(l, "New Tab", "新建标签")),
             (Cmd::Composer, "Composer"),
             (Cmd::OpenQuickly, t(l, "Open Quickly", "快速打开")),
+            (Cmd::QuickTerminal, t(l, "Quick Terminal", "快速终端")),
             (Cmd::CheckUpdates, t(l, "Check for Updates", "检查更新")),
             (Cmd::NewSsh, t(l, "New SSH Session…", "新建 SSH 会话…")),
             (Cmd::OpenRemote, t(l, "Open Remote File…", "打开远端文件…")),
@@ -2076,6 +2142,7 @@ impl State {
     fn run_command(&mut self, cmd: Cmd) {
         match cmd {
             Cmd::NewTab => self.new_tab(),
+            Cmd::QuickTerminal => self.toggle_quick_terminal(),
             Cmd::SplitRight => self.split(SplitDir::Right),
             Cmd::SplitDown => self.split(SplitDir::Down),
             Cmd::ClosePane => self.close_pane(),
@@ -2629,7 +2696,8 @@ impl State {
     fn apply_launch(&mut self, intent: &miao_term_ui::launch::Intent) {
         use miao_term_ui::launch::Intent;
         match intent {
-            Intent::Activate | Intent::Quick => {}
+            Intent::Activate => {}
+            Intent::Quick => self.toggle_quick_terminal(),
             Intent::Focus(id) => {
                 for (i, tab) in self.tabs.iter().enumerate() {
                     if tab.panes.iter().any(|p| &p.id == id) {
@@ -3782,7 +3850,7 @@ fn gen_id() -> String {
     format!("pane{}", N.fetch_add(1, Ordering::SeqCst))
 }
 
-impl ApplicationHandler for Host {
+impl ApplicationHandler<HostEvent> for Host {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.state.is_some() {
             return;
@@ -3957,6 +4025,8 @@ impl ApplicationHandler for Host {
             composer: None,
             quick: None,
             closed: Vec::new(),
+            quick_pane: None,
+            quick_return: None,
             hover_pointer: false,
             search: None,
             search_idx: 0,
@@ -3994,7 +4064,7 @@ impl ApplicationHandler for Host {
         if let Some(spec) = cfg.quick_terminal_hotkey.clone() {
             let proxy = self.proxy.clone();
             state.hotkeys = miao_term_ui::hotkey::Hotkeys::register(&spec, move || {
-                let _ = proxy.send_event(());
+                let _ = proxy.send_event(HostEvent::Hotkey);
             });
             if state.hotkeys.is_none() {
                 eprintln!("miaotty-native: could not register hotkey {spec}");
@@ -4004,14 +4074,29 @@ impl ApplicationHandler for Host {
         self.state = Some(state);
     }
 
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ()) {
-        if let Some(state) = &self.state {
-            state.window.request_redraw();
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: HostEvent) {
+        let Some(state) = &mut self.state else {
+            return;
+        };
+        match event {
+            // PTY output / MTP work: just repaint.
+            HostEvent::Wake => state.window.request_redraw(),
+            // Global Quick Terminal hotkey.
+            HostEvent::Hotkey => {
+                state.toggle_quick_terminal();
+                state.window.focus_window();
+            }
         }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if let Some(state) = &mut self.state {
+            // Launches forwarded by later processes (ADR 0019).
+            for line in miao_term_ui::launch::drain_inbox() {
+                let intent = miao_term_ui::launch::Intent::decode(&line);
+                state.apply_launch(&intent);
+                state.window.request_redraw();
+            }
             if let Some(rx) = state.update_rx.take() {
                 match rx.try_recv() {
                     Ok(msg) => {
@@ -4334,6 +4419,9 @@ impl ApplicationHandler for Host {
                     }
                     if s.reopen {
                         state.reopen_tab();
+                    }
+                    if s.quick_terminal {
+                        state.toggle_quick_terminal();
                     }
                     if s.close {
                         state.close_pane();

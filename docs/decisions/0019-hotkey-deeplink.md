@@ -52,3 +52,8 @@ mechanism, which is how they bind everything else anyway.
   Wayland native global shortcuts remain follow-ups.
 - Update: Wayland native global shortcuts landed in ADR 0026 (see the
   addendum); in-window menu accelerators remain a follow-up.
+- Update: the intent/forwarding helpers moved into `miao-term-ui::launch`, and
+  the native host (`miaotty-native`) now parses argv intents, forwards later
+  launches through the same inbox (waking the running instance over MTP) and
+  implements the Quick Terminal scratch tab on `⌘⇧T`; reopening a closed tab
+  moved to `⌘⇧Z` there.

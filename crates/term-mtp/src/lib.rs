@@ -383,6 +383,9 @@ fn dispatch(state: &ServerState, req: Request) -> Response {
             return Response::err(id, rev, "unauthorized", "missing or invalid token");
         }
     }
+    // Any request may be a wake-up (a forwarded launch pings `core.health`
+    // after dropping its inbox file), so repaint once per request.
+    state.wake();
     let cap = method_cap(&req.ns, &req.method);
     if !state.allows(cap) {
         return Response::err(

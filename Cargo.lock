@@ -2152,6 +2152,7 @@ dependencies = [
  "global-hotkey",
  "miao-term-config",
  "miao-term-core",
+ "miao-term-mtp",
  "miao-term-render",
  "serde",
  "serde_json",

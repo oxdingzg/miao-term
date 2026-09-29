@@ -96,6 +96,61 @@ pub fn command_for(arg: &str) -> Option<String> {
     }
 }
 
+/// The inbox directory for cross-instance launches.
+pub fn inbox_dir() -> Option<std::path::PathBuf> {
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/share"))
+        })?;
+    Some(base.join("miaotty").join("inbox"))
+}
+
+/// Hand a launch to an already-running instance (single-instance deep link) and
+/// wake it, so it drains the inbox promptly. Returns true when one was reached.
+pub fn forward_to_running(request: &str) -> bool {
+    let socket = miao_term_mtp::default_socket();
+    let Ok(mut client) = miao_term_mtp::client::connect(&socket) else {
+        return false;
+    };
+    if let Some(dir) = inbox_dir() {
+        let _ = std::fs::create_dir_all(&dir);
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let _ = std::fs::write(dir.join(format!("{stamp}.request")), request);
+    }
+    // Any request wakes the host (see `ServerState::wake`), which then drains.
+    let _ = client.call("core", "health", serde_json::json!({}));
+    true
+}
+
+/// Consume forwarding requests written by later launches. Each line is an
+/// [`Intent::encode`] payload; an empty line means a bare activation.
+pub fn drain_inbox() -> Vec<String> {
+    let mut out = Vec::new();
+    let Some(dir) = inbox_dir() else {
+        return out;
+    };
+    let Ok(read) = std::fs::read_dir(&dir) else {
+        return out;
+    };
+    let mut paths: Vec<std::path::PathBuf> = read
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("request"))
+        .collect();
+    paths.sort();
+    for path in paths {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            out.push(text.trim().to_string());
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+    out
+}
+
 /// Parse `[user@]host[:port][/path][?query]` into an `ssh` invocation using
 /// the SSH integration (connection reuse + remote bootstrap, ADR 0014).
 fn ssh_command(rest: &str) -> Option<String> {

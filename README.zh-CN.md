@@ -255,6 +255,7 @@ miaotty-cli file write --path /tmp/x --data-b64 "AAECAw=="   # 二进制
 | `⌘F` | 查找 |
 | `⌘⇧E` | Composer(向焦点 pane 发送多行提示) |
 | `⌘⇧T` | 快速终端(临时标签) |
+| `⌘⇧Z` | 重新打开最近关闭的标签 |
 | `⌘,` | 设置 |
 | `⌘+` / `⌘-` / `⌘0` | 增大 / 减小 / 重置字号 |
 | `Shift+PgUp` / `Shift+PgDn` | 滚动视口 |
@@ -298,9 +299,10 @@ view/edit、更新下载/校验/安装、URL scheme、全局快速终端热键�
   MSI 与 `.deb` 已在真机验证;AppImage 安装与自替换路径仍需端到端跑一次
   (`docs/RELEASE.md`)。
 - **CI 性能基线**:目前用 `actions/cache` 绑定;更持久的基线存储能让门更稳(缓存会被淘汰)。
-- **原生版对齐**(`miaotty-native`):URL scheme 仅由 `miaotty` 从 argv 处理;两个 host 都还
-  未在系统注册,`miaotty-native` 没有单实例转发,也没有内联 IME preedit(只有已提交
-  文本)。`background-opacity` 仅在 surface 支持 straight alpha 时生效。
+- **原生版对齐**(`miaotty-native`):两个 host 现在都从 argv 解析 intent、共用转发 inbox
+  并实现了快速终端;二者都还未在系统注册,只有 launcher 把 URL 作为参数传入时链接才会
+  到达。`miaotty-native` 没有内联 IME preedit(只有已提交文本)。`background-opacity`
+  仅在 surface 支持 straight alpha 时生效。
 - **终端内联图片**:仅由 `miaotty-native` 渲染;回滚容量内锚定精确,超出后为近似(alacritty
   不暴露滚动计数,除非打补丁);会话恢复不保留图像(会与恢复的内容不一致)。
 - **Markdown**:Mermaid 支持 `graph`/`flowchart` 子集(或经 `mermaid-command` 全量渲染);

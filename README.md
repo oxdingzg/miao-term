@@ -94,8 +94,9 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 - zsh shell integration (cwd via OSC 7, command history) installed through a
   `ZDOTDIR` shim — the user's dotfiles are never modified.
 - **URL schemes**: `miaotty://`, `ssh://` and `x-man-page://` open a tab with the
-  matching command; a second launch is forwarded to the running instance
-  (single instance, including "focus pane" and "quick" intents).
+  matching command; a second launch — of either host — is forwarded to the
+  running instance (single instance, including "focus pane" and "quick"
+  intents) through a shared inbox beside the control socket.
 - **Global Quick Terminal hotkey**: `global-hotkey` on macOS/Windows, the
   `GlobalShortcuts` desktop portal on Linux (plus compositor bindings for
   sway/hyprland/GNOME and friends).
@@ -292,6 +293,7 @@ Pass `--socket PATH` or set `MIAOTTY_SOCKET` to target a non-default socket.
 | `⌘F` | Find |
 | `⌘⇧E` | Composer (multi-line prompt to the focused pane) |
 | `⌘⇧T` | Quick Terminal (scratch tab) |
+| `⌘⇧Z` | Reopen the last closed tab |
 | `⌘,` | Settings |
 | `⌘+` / `⌘-` / `⌘0` | Increase / decrease / reset font size |
 | `Shift+PgUp` / `Shift+PgDn` | Scroll the viewport |
@@ -344,10 +346,11 @@ Still open:
   end-to-end run (`docs/RELEASE.md`).
 - **CI performance baseline**: bound through `actions/cache` today; a durable
   baseline store would make the gate robust across cache eviction.
-- **Native parity** (`miaotty-native`): URL schemes are handled from argv by
-  `miaotty` only; neither host is registered with the OS yet, `miaotty-native`
-  has no single-instance forwarding, and it has no inline IME preedit (committed
-  text only). `background-opacity` works only where the surface offers straight
+- **Native parity** (`miaotty-native`): both hosts now parse argv intents, share
+  the forwarding inbox and implement the Quick Terminal; neither is registered
+  with the OS yet, so a link only reaches them when the launcher passes the URL
+  as an argument. `miaotty-native` has no inline IME preedit (committed text
+  only). `background-opacity` works only where the surface offers straight
   alpha.
 - **Inline graphics**: rendered by `miaotty-native` only; anchors are exact up to
   the scrollback cap and approximate past it (alacritty exposes no scroll counter
