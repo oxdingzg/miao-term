@@ -832,6 +832,14 @@ impl State {
         let events = raw.events.clone();
         let egui_ctx = self.egui_ctx.clone();
         let output = egui_ctx.run(raw, |ctx| self.chrome(ctx));
+        // egui asks for an immediate repaint when a widget changed (e.g. a
+        // clicked tab). Honour it, otherwise the new state only shows on the
+        // next OS event or the cursor-blink tick — which reads as lag.
+        let repaint_now = output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .map(|v| v.repaint_delay.is_zero())
+            .unwrap_or(false);
         self.egui_state
             .handle_platform_output(&self.window, output.platform_output);
         let ppp = self.egui_ctx.pixels_per_point();
@@ -904,6 +912,9 @@ impl State {
                 egui::Event::Paste(text) => self.paste(text),
                 _ => {}
             }
+        }
+        if repaint_now {
+            self.window.request_redraw();
         }
     }
 
