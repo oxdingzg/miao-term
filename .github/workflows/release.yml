@@ -81,9 +81,10 @@ jobs:
           [Desktop Entry]
           Type=Application
           Name=miaotty
-          Exec=miaotty
+          Exec=miaotty %u
           Icon=miaotty
           Categories=System;TerminalEmulator;
+          MimeType=x-scheme-handler/miaotty;x-scheme-handler/ssh;x-scheme-handler/x-man-page;
           Terminal=false
           EOF
           cp "$AppDir/miaotty.desktop" "$AppDir/usr/share/applications/"
