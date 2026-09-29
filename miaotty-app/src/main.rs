@@ -4250,12 +4250,16 @@ impl MiaottyApp {
                         .small()
                         .color(if found { ok } else { muted }),
                 );
-                if ui.small_button(self.t("Install hook")).clicked() {
-                    install = Some(agent.name);
-                }
-                if ui.small_button(self.t("Copy snippet")).clicked() {
-                    if let Some(path) = integration::script_path(agent.name) {
-                        copy = Some(integration::snippet(agent, &path));
+                if agent.auto {
+                    ui.label(egui::RichText::new(self.t("built-in")).small().color(ok));
+                } else {
+                    if ui.small_button(self.t("Install hook")).clicked() {
+                        install = Some(agent.name);
+                    }
+                    if ui.small_button(self.t("Copy snippet")).clicked() {
+                        if let Some(path) = integration::script_path(agent.name) {
+                            copy = Some(integration::snippet(agent, &path));
+                        }
                     }
                 }
                 if ui.small_button(self.t("Launch")).clicked() {

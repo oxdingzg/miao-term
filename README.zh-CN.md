@@ -66,7 +66,8 @@
 - **全局快速终端热键**:macOS/Windows 用 `global-hotkey`,Linux 用 `GlobalShortcuts` 门户
   (另提供 sway/hyprland/GNOME 等 compositor 绑定)。
 - **Agent 集成**:检测 claude/codex/opencode/miao,安装状态上报 hook 脚本,复制接入该 agent 自身
-  配置的片段,并可启动 agent —— 不替用户修改 agent 配置。
+  配置的片段,并可启动 agent —— 不替用户修改 agent 配置。`miao` 通过内置集成自动上报状态,
+  无需接线 hook。
 - **更新**:检查清单、下载本平台产物、校验 SHA-256(配置后另校验 minisign 签名),macOS 上安装
   并重启(带回滚 helper)—— 见 [`docs/decisions`](docs/decisions/README.zh-CN.md)。
 - **远端 view/edit**:经 pane 的 ssh ControlMaster 连接读/写远端文件,带零安装 terminfo 引导。

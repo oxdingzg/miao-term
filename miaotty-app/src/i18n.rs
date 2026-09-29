@@ -120,6 +120,7 @@ fn zh(key: &'static str) -> &'static str {
         "AGENT INTEGRATIONS" => "Agent 集成",
         "detected" => "已检测到",
         "not found" => "未找到",
+        "built-in" => "内置",
         "Install hook" => "安装 hook",
         "Copy snippet" => "复制片段",
         "Launch" => "启动",

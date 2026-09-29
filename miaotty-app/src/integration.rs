@@ -16,6 +16,9 @@ pub struct Agent {
     pub launch: &'static str,
     /// Where the hook is registered, for the snippet text.
     pub hook_via: &'static str,
+    /// The agent reports its own state from inside miaotty; no hook wiring is
+    /// required of the user.
+    pub auto: bool,
 }
 
 pub const AGENTS: &[Agent] = &[
@@ -24,24 +27,28 @@ pub const AGENTS: &[Agent] = &[
         bin: "claude",
         launch: "claude",
         hook_via: "Claude Code hooks (Stop / Notification / PreToolUse)",
+        auto: false,
     },
     Agent {
         name: "codex",
         bin: "codex",
         launch: "codex",
         hook_via: "codex hook config",
+        auto: false,
     },
     Agent {
         name: "opencode",
         bin: "opencode",
         launch: "opencode",
         hook_via: "the opencode plugin `event` hook",
+        auto: false,
     },
     Agent {
         name: "miao",
         bin: "miao",
         launch: "miao",
-        hook_via: ".miao/plugins/miaotty or a session hook",
+        hook_via: "the built-in miao integration",
+        auto: true,
     },
 ];
 
@@ -112,6 +119,12 @@ pub fn install(agent: &str) -> std::io::Result<PathBuf> {
 
 /// The text to paste into the agent's hook configuration.
 pub fn snippet(agent: &Agent, path: &Path) -> String {
+    if agent.auto {
+        return format!(
+            "{}: reports its state automatically when launched inside miaotty; no hook wiring needed.",
+            agent.name
+        );
+    }
     format!(
         "{}: register `{} <processing|idle|awaiting|error> [session]` via {}.",
         agent.name,
@@ -215,5 +228,18 @@ mod tests {
         names.dedup();
         assert_eq!(names.len(), AGENTS.len());
         assert_eq!(launch_command(&AGENTS[1]), "codex");
+    }
+
+    #[test]
+    fn miao_integrates_itself() {
+        let miao = AGENTS.iter().find(|a| a.name == "miao").unwrap();
+        assert!(miao.auto);
+        let text = snippet(miao, Path::new("/tmp/miao.sh"));
+        assert!(text.contains("no hook wiring needed"));
+    }
+
+    #[test]
+    fn other_agents_need_wiring() {
+        assert!(AGENTS.iter().filter(|a| !a.auto).count() >= 3);
     }
 }

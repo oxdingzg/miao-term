@@ -87,7 +87,8 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
   sway/hyprland/GNOME and friends).
 - **Agent integrations**: detect claude/codex/opencode/miao, install a state hook
   script, copy the snippet that wires it into the agent's own config, and launch
-  the agent — the user's agent config is never edited for them.
+  the agent — the user's agent config is never edited for them. `miao` reports
+  its state from a built-in integration, so it needs no hook wiring.
 - **Updates**: check a manifest, download the platform artifact, verify its
   SHA-256 (and a minisign signature when configured), and on macOS install and
   relaunch with a rollback helper — see [`docs/decisions`](docs/decisions).

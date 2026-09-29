@@ -24,6 +24,11 @@ where the hook is registered. From *Settings → Agent integrations* you can:
 We deliberately do **not** edit an agent's config for the user; we generate the
 script and hand over the snippet.
 
+**Self-reporting agents.** `miao` ships a built-in plugin that reports the same
+state vocabulary through `miaotty-cli` whenever `MIAOTTY_PANE_ID` is set, so it
+needs no hook install or snippet. The UI marks it *built-in* and only offers
+**Launch**.
+
 **Single instance / deep link.** A launch checks the MTP socket; if an instance
 is already listening, the new process writes a request under
 `~/.local/share/miaotty/inbox/` and exits. The running instance drains that
