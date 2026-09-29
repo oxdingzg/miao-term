@@ -7,14 +7,15 @@
 //! instead of duplicated (ADR 0030, step 2/4).
 
 pub mod chrome;
-pub mod ssh;
-pub mod update;
 pub mod i18n;
 pub mod icons;
 pub mod input;
 pub mod layout;
+pub mod palette;
 pub mod selection;
+pub mod ssh;
 pub mod theme;
+pub mod update;
 
 use miao_term_core::ATerm;
 use miao_term_render::Span;

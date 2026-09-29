@@ -1863,20 +1863,8 @@ fn rank_entries(entries: &[PaletteEntry], query: &str) -> Vec<(usize, usize)> {
 /// Rank an entry against a lowercased query: substring hits rank by position,
 /// subsequence hits after all substring hits, and an empty query matches all.
 fn palette_score(label: &str, kind: &str, query: &str) -> Option<usize> {
-    if query.is_empty() {
-        return Some(0);
-    }
-    let hay = format!("{label} {kind}").to_lowercase();
-    if let Some(pos) = hay.find(query) {
-        return Some(pos);
-    }
-    let mut chars = hay.chars();
-    for c in query.chars() {
-        if !chars.any(|h| h == c) {
-            return None;
-        }
-    }
-    Some(1000)
+    // Shared with the native host (miao-term-ui).
+    miao_term_ui::palette::score(label, kind, query)
 }
 
 fn match_summary(rule: &miao_term_config::view::Rule) -> String {
