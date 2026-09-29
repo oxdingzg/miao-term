@@ -162,6 +162,7 @@ struct State {
     vim: Option<miao_term_ui::vim::VimRuntime>,
     vim_for: String,
     mmd: Mermaid,
+    recent_files: Vec<String>,
     notifications: bool,
     prevent_sleep: bool,
     sleep: miao_term_ui::agentloop::SleepGuard,
@@ -1117,7 +1118,11 @@ impl State {
                 "panes": panes,
             }));
         }
-        serde_json::json!({ "active_tab": self.active_tab, "tabs": tabs })
+        serde_json::json!({
+            "active_tab": self.active_tab,
+            "tabs": tabs,
+            "recent": self.recent_files,
+        })
     }
 
     fn save_session(&self) {
@@ -1199,6 +1204,15 @@ impl State {
         if self.tabs.is_empty() {
             return false;
         }
+        self.recent_files = v
+            .get("recent")
+            .and_then(|r| r.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
         self.active_tab = v.get("active_tab").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
         self.active_tab = self.active_tab.min(self.tabs.len() - 1);
         self.publish_panes();
@@ -1808,6 +1822,7 @@ impl State {
         enum Pick {
             Tab(usize),
             File(String),
+            Path(std::path::PathBuf),
         }
         let cwd = self.cwd();
         let tabs: Vec<(usize, String)> = self
@@ -1821,6 +1836,7 @@ impl State {
             .as_ref()
             .map(|d| d.files.iter().map(|(n, _)| n.clone()).collect())
             .unwrap_or_default();
+        let recents = self.recent_files.clone();
         let Some(query) = self.quick.as_mut() else {
             return;
         };
@@ -1848,12 +1864,22 @@ impl State {
                         rows.push((s, format!("   {name}"), Pick::File(name.clone())));
                     }
                 }
+                for path in &recents {
+                    if let Some(s) = miao_term_ui::palette::score(path, "recent", &q) {
+                        rows.push((
+                            s,
+                            format!("\u{21ba} {path}"),
+                            Pick::Path(std::path::PathBuf::from(path)),
+                        ));
+                    }
+                }
                 rows.sort_by_key(|(s, _, _)| *s);
                 for (_, label, pick) in rows.iter().take(50) {
                     if ui.selectable_label(false, label).clicked() {
                         chosen = Some(match pick {
                             Pick::Tab(i) => Pick::Tab(*i),
                             Pick::File(n) => Pick::File(n.clone()),
+                            Pick::Path(p) => Pick::Path(p.clone()),
                         });
                     }
                 }
@@ -1862,6 +1888,7 @@ impl State {
                         chosen = Some(match p {
                             Pick::Tab(i) => Pick::Tab(*i),
                             Pick::File(n) => Pick::File(n.clone()),
+                            Pick::Path(p) => Pick::Path(p.clone()),
                         });
                     }
                 }
@@ -1879,6 +1906,9 @@ impl State {
                     if let Some(path) = cwd.map(|c| c.join(&name)) {
                         self.open_editor(path);
                     }
+                }
+                Pick::Path(path) => {
+                    self.open_editor(path);
                 }
             }
         } else if !open {
@@ -2273,6 +2303,7 @@ impl State {
                     .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_default();
                 let preview = name.ends_with(".md") || name.ends_with(".markdown");
+                let key = path.to_string_lossy().to_string();
                 self.editor = Some(Editor {
                     path,
                     original: text.clone(),
@@ -2281,6 +2312,9 @@ impl State {
                     remote: None,
                 });
                 self.vim_for.clear();
+                self.recent_files.retain(|p| p != &key);
+                self.recent_files.insert(0, key);
+                self.recent_files.truncate(50);
                 true
             }
             Err(e) => {
@@ -2748,6 +2782,7 @@ impl ApplicationHandler for Host {
                 cmd: cfg.mermaid_command.clone(),
                 cache: std::collections::HashMap::new(),
             },
+            recent_files: Vec::new(),
             notifications: cfg.notifications,
             prevent_sleep: cfg.prevent_sleep,
             sleep: miao_term_ui::agentloop::SleepGuard::new(),
