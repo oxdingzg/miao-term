@@ -86,6 +86,8 @@ struct Editor {
     text: String,
     original: String,
     preview: bool,
+    /// `(destination, remote path)` when editing a file over ssh.
+    remote: Option<(String, String)>,
 }
 
 struct PaneDraw {
@@ -134,6 +136,8 @@ struct State {
     recipe_dialog: Option<bool>,
     recipe_name: String,
     recipe_list: Vec<String>,
+    ssh_dialog: Option<String>,
+    remote_dialog: Option<(String, String)>,
     details_tab: usize,
     git_cache: Cache,
     files_cache: Cache,
@@ -1040,6 +1044,8 @@ impl State {
         self.open_dialog_window(ctx);
         self.editor_window(ctx);
         self.recipe_dialog_window(ctx);
+        self.ssh_dialog_window(ctx);
+        self.remote_dialog_window(ctx);
         if let Some(i) = self.renaming {
             self.rename_window(ctx, i);
         }
@@ -1298,6 +1304,8 @@ impl State {
 /// A palette command.
 enum Cmd {
     NewTab,
+    NewSsh,
+    OpenRemote,
     SaveRecipe,
     OpenRecipe,
     OpenFile,
@@ -1326,6 +1334,8 @@ impl State {
     fn commands(&self) -> Vec<(Cmd, &'static str)> {
         vec![
             (Cmd::NewTab, "New Tab"),
+            (Cmd::NewSsh, "New SSH Session…"),
+            (Cmd::OpenRemote, "Open Remote File…"),
             (Cmd::SaveRecipe, "Save Recipe…"),
             (Cmd::OpenRecipe, "Open Recipe…"),
             (Cmd::OpenFile, "Open File…"),
@@ -1365,6 +1375,8 @@ impl State {
                 self.ch = ch;
                 self.resize();
             }
+            Cmd::NewSsh => self.ssh_dialog = Some(String::new()),
+            Cmd::OpenRemote => self.remote_dialog = Some((String::new(), String::new())),
             Cmd::SaveRecipe => {
                 self.recipe_name.clear();
                 self.recipe_dialog = Some(true);
@@ -1376,7 +1388,14 @@ impl State {
             Cmd::OpenFile => self.show_open = true,
             Cmd::Save => {
                 if let Some(ed) = self.editor.as_mut() {
-                    let _ = std::fs::write(&ed.path, &ed.text);
+                    match &ed.remote {
+                        Some((dest, path)) => {
+                            let _ = miao_term_ui::ssh::write_remote(dest, path, ed.text.as_bytes());
+                        }
+                        None => {
+                            let _ = std::fs::write(&ed.path, &ed.text);
+                        }
+                    }
                     ed.original = ed.text.clone();
                 }
             }
@@ -1520,6 +1539,121 @@ impl State {
         }
     }
 
+    fn open_ssh(&mut self, input: &str) {
+        let Some(target) = miao_term_ui::ssh::Target::parse(input) else {
+            return;
+        };
+        let resolved = miao_term_ui::ssh::resolve(&target);
+        let cmd =
+            miao_term_ui::ssh::command(&resolved, &miao_term_ui::ssh::bootstrap("xterm-256color"));
+        self.new_tab();
+        if let Some(tab) = self.tabs.last_mut() {
+            tab.title = resolved.destination();
+            let active = tab.active.clone();
+            if let Some(pane) = tab.panes.iter_mut().find(|p| p.id == active) {
+                pane.term.write(format!("{cmd}\r").as_bytes());
+            }
+        }
+        self.publish_panes();
+    }
+
+    fn ssh_dialog_window(&mut self, ctx: &egui::Context) {
+        let Some(ref mut input) = self.ssh_dialog else {
+            return;
+        };
+        let mut open = true;
+        let mut connect = false;
+        egui::Window::new(miao_term_ui::i18n::t(
+            self.lang,
+            "New SSH Session",
+            "新建 SSH 会话",
+        ))
+        .collapsible(false)
+        .open(&mut open)
+        .show(ctx, |ui| {
+            let r = ui.add(
+                egui::TextEdit::singleline(input)
+                    .hint_text("[user@]host[:port]")
+                    .desired_width(280.0),
+            );
+            r.request_focus();
+            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                connect = true;
+            }
+            if ui
+                .button(miao_term_ui::i18n::t(self.lang, "Connect", "连接"))
+                .clicked()
+            {
+                connect = true;
+            }
+        });
+        if connect {
+            let target = input.clone();
+            self.ssh_dialog = None;
+            self.open_ssh(&target);
+        } else if !open {
+            self.ssh_dialog = None;
+        }
+    }
+
+    fn remote_dialog_window(&mut self, ctx: &egui::Context) {
+        let Some((dest, path)) = self.remote_dialog.as_mut() else {
+            return;
+        };
+        let mut open = true;
+        let mut do_open = false;
+        egui::Window::new(miao_term_ui::i18n::t(
+            self.lang,
+            "Open Remote File",
+            "打开远端文件",
+        ))
+        .collapsible(false)
+        .open(&mut open)
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("SSH");
+                ui.add(
+                    egui::TextEdit::singleline(dest)
+                        .hint_text("host")
+                        .desired_width(140.0),
+                );
+            });
+            ui.horizontal(|ui| {
+                ui.label("Path");
+                ui.add(
+                    egui::TextEdit::singleline(path)
+                        .hint_text("/etc/hosts")
+                        .desired_width(240.0),
+                );
+            });
+            if ui
+                .button(miao_term_ui::i18n::t(self.lang, "Open", "打开"))
+                .clicked()
+            {
+                do_open = true;
+            }
+        });
+        if do_open {
+            let (dest, path) = (dest.clone(), path.clone());
+            self.remote_dialog = None;
+            match miao_term_ui::ssh::read_remote(&dest, &path) {
+                Ok(bytes) => {
+                    let text = String::from_utf8_lossy(&bytes).to_string();
+                    self.editor = Some(Editor {
+                        path: std::path::PathBuf::from(&path),
+                        original: text.clone(),
+                        text,
+                        preview: path.ends_with(".md"),
+                        remote: Some((dest, path)),
+                    });
+                }
+                Err(e) => eprintln!("remote read failed: {e}"),
+            }
+        } else if !open {
+            self.remote_dialog = None;
+        }
+    }
+
     fn recipe_dialog_window(&mut self, ctx: &egui::Context) {
         let Some(save) = self.recipe_dialog else {
             return;
@@ -1622,6 +1756,7 @@ impl State {
                     original: text.clone(),
                     text,
                     preview: false,
+                    remote: None,
                 });
                 self.show_open = false;
             }
@@ -1635,11 +1770,14 @@ impl State {
         let Some(ed) = self.editor.as_mut() else {
             return;
         };
-        let title = ed
-            .path
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| ed.path.display().to_string());
+        let title = match &ed.remote {
+            Some((dest, path)) => format!("{dest}:{path}"),
+            None => ed
+                .path
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| ed.path.display().to_string()),
+        };
         let modified = ed.text != ed.original;
         let mut open = true;
         let mut save = false;
@@ -1702,7 +1840,14 @@ impl State {
                 }
             });
         if save {
-            let _ = std::fs::write(&ed.path, &ed.text);
+            match &ed.remote {
+                Some((dest, path)) => {
+                    let _ = miao_term_ui::ssh::write_remote(dest, path, ed.text.as_bytes());
+                }
+                None => {
+                    let _ = std::fs::write(&ed.path, &ed.text);
+                }
+            }
             ed.original = ed.text.clone();
         }
         if !open {
@@ -1886,6 +2031,8 @@ impl ApplicationHandler for Host {
             recipe_dialog: None,
             recipe_name: String::new(),
             recipe_list: Vec::new(),
+            ssh_dialog: None,
+            remote_dialog: None,
             details_tab: 0,
             git_cache: None,
             files_cache: None,

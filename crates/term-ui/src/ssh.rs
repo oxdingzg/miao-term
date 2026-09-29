@@ -239,7 +239,7 @@ pub fn write_remote(dest: &str, path: &str, data: &[u8]) -> std::io::Result<()> 
     Ok(())
 }
 
-pub(crate) fn shell_quote(s: &str) -> String {
+pub fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 

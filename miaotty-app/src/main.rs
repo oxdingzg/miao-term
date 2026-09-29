@@ -22,7 +22,7 @@ mod icons;
 mod integration;
 mod launch;
 mod panels;
-mod ssh;
+use miao_term_ui::ssh;
 mod update;
 
 use miao_term_core::aterm::{ATerm, Color};
