@@ -47,7 +47,11 @@ jobs:
 
   check:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    # Windows is the slow runner (link/IO); keep it off the push path and cover
+    # it on PRs, the nightly run and manual runs.
+    if: >-
+      needs.changes.outputs.code == 'true' &&
+      (github.event_name != 'push' || matrix.os != 'windows-latest')
     strategy:
       fail-fast: false
       matrix:
@@ -90,7 +94,9 @@ jobs:
 
   perf:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    # Release + LTO build; run it on PRs/nightly/manual, not on every push.
+    if: >-
+      needs.changes.outputs.code == 'true' && github.event_name != 'push'
     runs-on: ubuntu-latest
     env:
       # Looser than the local 25% so shared-runner noise does not flake.
