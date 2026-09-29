@@ -26,6 +26,15 @@ metrics; the app and the core merge into the same file). The `perf` job:
 
 The first run has no baseline: it reports and passes, then seeds the cache.
 
+### Enforcement floor
+
+Sub-millisecond timings are jitter-dominated on shared runners (the same code
+measured 0.06 ms then 0.10 ms on `ubuntu-latest`), so the comparison is
+**reported but not enforced** below a per-metric floor (0.5 ms for
+`build_rows`/`screen_snapshot`, 10 ms for palette ranking); the absolute budget
+is the gate there. Sustained measurements such as parse throughput are always
+compared.
+
 ## Consequences
 
 - CI compares a runner against *itself* over time, catching drift that the wide

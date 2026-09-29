@@ -18,6 +18,16 @@ import sys
 
 HIGHER_IS_BETTER = {"vt_parse_mbps"}
 
+# Times below these floors are jitter-dominated on shared CI runners: the same
+# code measured 0.06 then 0.10 ms between runs. There the *absolute* budget is
+# the gate and the comparison is only reported.
+ENFORCE_FLOOR = {
+    "vt_parse_mbps": 0.0,  # a sustained measurement, always comparable
+    "build_rows_frame_ms": 0.5,
+    "palette_rank_10k_ms": 10.0,
+    "screen_snapshot_30_rows_ms": 0.5,
+}
+
 measured_path = pathlib.Path(os.environ.get("PERF_MEASURED", "target/perf-measured.json"))
 baseline_path = pathlib.Path(os.environ.get("PERF_BASELINE", ".perf/baseline.json"))
 budgets = json.loads(pathlib.Path("benches/budgets.json").read_text())
@@ -39,6 +49,9 @@ for key, value in sorted(measured.items()):
         print(f"{key}: {value:.4f} (no baseline yet)")
         continue
     base = float(base)
+    if value < ENFORCE_FLOOR.get(key, 0.0):
+        print(f"{key}: {value:.4f} (reported only; below the {ENFORCE_FLOOR[key]} floor)")
+        continue
     if key in HIGHER_IS_BETTER:
         limit = base * (1 - pct / 100)
         ok = value >= limit
