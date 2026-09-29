@@ -1527,7 +1527,11 @@ impl State {
         .show(ctx, |ui| {
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut query)
-                    .hint_text("Type a command…")
+                    .hint_text(miao_term_ui::i18n::t(
+                        self.lang,
+                        "Type a command…",
+                        "输入命令…",
+                    ))
                     .desired_width(420.0),
             );
             resp.request_focus();
@@ -2262,12 +2266,12 @@ impl State {
                 ui.label("SSH");
                 ui.add(
                     egui::TextEdit::singleline(dest)
-                        .hint_text("host")
+                        .hint_text(miao_term_ui::i18n::t(self.lang, "host", "主机"))
                         .desired_width(140.0),
                 );
             });
             ui.horizontal(|ui| {
-                ui.label("Path");
+                ui.label(miao_term_ui::i18n::t(self.lang, "Path", "路径"));
                 ui.add(
                     egui::TextEdit::singleline(path)
                         .hint_text("/etc/hosts")
@@ -2323,7 +2327,7 @@ impl State {
                 if save {
                     let r = ui.add(
                         egui::TextEdit::singleline(&mut self.recipe_name)
-                            .hint_text("name")
+                            .hint_text(miao_term_ui::i18n::t(self.lang, "name", "名称"))
                             .desired_width(240.0),
                     );
                     r.request_focus();
