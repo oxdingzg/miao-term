@@ -918,7 +918,15 @@ impl State {
             &screen,
         );
         if self.shot_now || std::env::var_os("MIAOTTY_NATIVE_SHOT").is_some() {
-            self.capture(&draws, window_bg, &paint_jobs, &screen);
+            self.capture(
+                &draws,
+                &image_quads,
+                &rects,
+                scale,
+                window_bg,
+                &paint_jobs,
+                &screen,
+            );
         }
 
         let Ok(frame) = self.surface.get_current_texture() else {
@@ -1565,6 +1573,9 @@ impl State {
     fn capture(
         &self,
         draws: &[PaneDraw],
+        image_quads: &[(u64, ImageInstance)],
+        rects: &[(String, Rect)],
+        scale: f32,
         window_bg: miao_term_ui::theme::Rgb,
         paint_jobs: &[egui::ClippedPrimitive],
         screen: &egui_wgpu::ScreenDescriptor,
@@ -1611,6 +1622,12 @@ impl State {
                 })
                 .forget_lifetime();
             self.quads.render(&mut pass);
+            if !image_quads.is_empty() {
+                let (sx, sy, sw, sh) = grid_scissor(rects, scale, w, h);
+                pass.set_scissor_rect(sx, sy, sw, sh);
+                self.images.render(&mut pass);
+                pass.set_scissor_rect(0, 0, w, h);
+            }
             for d in draws {
                 if let Some(r) = self.renderers.get(&d.id) {
                     r.render(&mut pass);
