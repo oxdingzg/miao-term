@@ -23,6 +23,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy}
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
+const MENU_H: f32 = 24.0;
 const TAB_H: f32 = 30.0;
 const STATUS_H: f32 = 22.0;
 const SIDEBAR_W: f32 = 200.0;
@@ -227,9 +228,9 @@ impl State {
         let right = if self.show_details { DETAILS_W } else { 0.0 };
         Rect {
             x,
-            y: TAB_H,
+            y: MENU_H + TAB_H,
             w: (w - x - right).max(1.0),
-            h: (h - TAB_H - STATUS_H).max(1.0),
+            h: (h - MENU_H - TAB_H - STATUS_H).max(1.0),
         }
     }
 
@@ -752,7 +753,103 @@ impl State {
         }
     }
 
+    fn menu_bar(&mut self, ctx: &egui::Context) {
+        use miao_term_ui::i18n::t;
+        let lang = self.lang;
+        let theme = self.theme.clone();
+        let mut action: Option<Cmd> = None;
+        egui::TopBottomPanel::top("menu")
+            .exact_height(MENU_H)
+            .frame(
+                egui::Frame::default()
+                    .fill(chrome::bg_color(darken(theme.bg, 0.92)))
+                    .inner_margin(egui::Margin::symmetric(6.0, 1.0)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.visuals_mut().override_text_color = Some(chrome::fg_color(&theme));
+                    ui.menu_button(t(lang, "File", "文件"), |ui| {
+                        if ui.button(t(lang, "New Tab", "新建标签")).clicked() {
+                            action = Some(Cmd::NewTab);
+                            ui.close_menu();
+                        }
+                        if ui
+                            .button(t(lang, "Close Pane / Tab", "关闭 Pane/标签"))
+                            .clicked()
+                        {
+                            action = Some(Cmd::ClosePane);
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button(t(lang, "Quit", "退出")).clicked() {
+                            action = Some(Cmd::Quit);
+                            ui.close_menu();
+                        }
+                    });
+                    ui.menu_button(t(lang, "Edit", "编辑"), |ui| {
+                        if ui.button(t(lang, "Copy", "复制")).clicked() {
+                            action = Some(Cmd::Copy);
+                            ui.close_menu();
+                        }
+                        if ui.button(t(lang, "Paste", "粘贴")).clicked() {
+                            action = Some(Cmd::Paste);
+                            ui.close_menu();
+                        }
+                    });
+                    ui.menu_button(t(lang, "View", "视图"), |ui| {
+                        if ui.button(t(lang, "Toggle Sidebar", "开关侧栏")).clicked() {
+                            action = Some(Cmd::ToggleSidebar);
+                            ui.close_menu();
+                        }
+                        if ui.button(t(lang, "Toggle Details", "开关详情")).clicked() {
+                            action = Some(Cmd::ToggleDetails);
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui
+                            .button(t(lang, "Increase Font Size", "增大字号"))
+                            .clicked()
+                        {
+                            action = Some(Cmd::FontUp);
+                            ui.close_menu();
+                        }
+                        if ui
+                            .button(t(lang, "Decrease Font Size", "减小字号"))
+                            .clicked()
+                        {
+                            action = Some(Cmd::FontDown);
+                            ui.close_menu();
+                        }
+                        if ui.button(t(lang, "Settings", "设置")).clicked() {
+                            action = Some(Cmd::Settings);
+                            ui.close_menu();
+                        }
+                    });
+                    ui.menu_button(t(lang, "Shell", "终端"), |ui| {
+                        if ui.button(t(lang, "Split Right", "向右分屏")).clicked() {
+                            action = Some(Cmd::SplitRight);
+                            ui.close_menu();
+                        }
+                        if ui.button(t(lang, "Split Down", "向下分屏")).clicked() {
+                            action = Some(Cmd::SplitDown);
+                            ui.close_menu();
+                        }
+                    });
+                    ui.menu_button(t(lang, "Help", "帮助"), |ui| {
+                        ui.hyperlink_to(
+                            t(lang, "Documentation", "文档"),
+                            "https://github.com/oxdingzg/miao-term#readme",
+                        );
+                    });
+                });
+            });
+        if let Some(a) = action {
+            self.run_command(a);
+        }
+    }
+
     fn chrome(&mut self, ctx: &egui::Context) {
+        self.menu_bar(ctx);
         let lang = self.lang;
         let theme = self.theme.clone();
         let titles: Vec<String> = self.tabs.iter().map(|t| self.title_of(t)).collect();
@@ -1167,6 +1264,8 @@ impl State {
 /// A palette command.
 enum Cmd {
     NewTab,
+    Copy,
+    Paste,
     SplitRight,
     SplitDown,
     ClosePane,
@@ -1189,6 +1288,8 @@ impl State {
     fn commands(&self) -> Vec<(Cmd, &'static str)> {
         vec![
             (Cmd::NewTab, "New Tab"),
+            (Cmd::Copy, "Copy"),
+            (Cmd::Paste, "Paste"),
             (Cmd::SplitRight, "Split Right"),
             (Cmd::SplitDown, "Split Down"),
             (Cmd::ClosePane, "Close Pane / Tab"),
@@ -1221,6 +1322,16 @@ impl State {
                 self.cw = cw;
                 self.ch = ch;
                 self.resize();
+            }
+            Cmd::Copy => {
+                let ctx = self.egui_ctx.clone();
+                self.copy_selection(&ctx);
+            }
+            Cmd::Paste => {
+                let text = self.egui_state.clipboard_text().unwrap_or_default();
+                if !text.is_empty() {
+                    self.paste(&text);
+                }
             }
             Cmd::Settings => self.show_settings = true,
             Cmd::Quit => {
