@@ -59,6 +59,14 @@ pub fn run(title: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
     let event_loop = EventLoop::<()>::with_user_event().build()?;
     event_loop.set_control_flow(ControlFlow::Wait);
     let proxy = event_loop.create_proxy();
+    // Let the control plane wake the loop, so `miaotty-cli` commands apply
+    // immediately even while the window is idle or unfocused.
+    {
+        let proxy = proxy.clone();
+        mtp.set_waker(Arc::new(move || {
+            let _ = proxy.send_event(());
+        }));
+    }
     let mut host = Host {
         title: title.to_string(),
         proxy,
@@ -116,6 +124,8 @@ struct Editor {
     text: String,
     original: String,
     preview: bool,
+    /// Opened via MTP `app.view`: shown without an editable text field.
+    readonly: bool,
     /// `(destination, remote path)` when editing a file over ssh.
     remote: Option<(String, String)>,
 }
@@ -1099,6 +1109,32 @@ impl State {
                 if let Some(p) = tab.panes.iter_mut().find(|p| p.id == pane_id) {
                     p.term.write(&data);
                     p.scroll = 0;
+                }
+            }
+        }
+        // MTP `pane.focus` / `pane.close` / `app.view` / `app.edit`.
+        for command in self.mtp.take_commands() {
+            match command {
+                miao_term_mtp::Command::Focus(id) => {
+                    let found = self
+                        .tabs
+                        .iter()
+                        .position(|t| t.panes.iter().any(|p| p.id == id));
+                    if let Some(ti) = found {
+                        self.tabs[ti].active = id.clone();
+                        self.active_tab = ti;
+                        self.selection = None;
+                        for p in self.tabs[ti].panes.iter_mut() {
+                            p.scroll = 0;
+                        }
+                    }
+                }
+                miao_term_mtp::Command::Close(id) => self.close_pane_id(&id),
+                miao_term_mtp::Command::View(path) => {
+                    self.open_editor_ro(std::path::PathBuf::from(path), true);
+                }
+                miao_term_mtp::Command::Edit(path) => {
+                    self.open_editor_ro(std::path::PathBuf::from(path), false);
                 }
             }
         }
@@ -3097,6 +3133,7 @@ impl State {
                         original: text.clone(),
                         text,
                         preview: path.ends_with(".md"),
+                        readonly: false,
                         remote: Some((dest, path)),
                     });
                 }
@@ -3176,6 +3213,11 @@ impl State {
     /// Open a local file in the built-in editor. Returns false if it can't be
     /// read. Resets the vim runtime so a new file starts in Normal mode.
     fn open_editor(&mut self, path: std::path::PathBuf) -> bool {
+        self.open_editor_ro(path, false)
+    }
+
+    /// Open a file in the built-in editor; `readonly` is used by MTP `app.view`.
+    fn open_editor_ro(&mut self, path: std::path::PathBuf, readonly: bool) -> bool {
         match std::fs::read_to_string(&path) {
             Ok(text) => {
                 let name = path
@@ -3189,6 +3231,7 @@ impl State {
                     original: text.clone(),
                     text,
                     preview,
+                    readonly,
                     remote: None,
                 });
                 self.vim_for.clear();
@@ -3275,7 +3318,16 @@ impl State {
             .default_size([640.0, 480.0])
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    if ui
+                    if ed.readonly {
+                        ui.label(
+                            egui::RichText::new(miao_term_ui::i18n::t(
+                                self.lang,
+                                "read-only",
+                                "只读",
+                            ))
+                            .color(egui::Color32::from_gray(140)),
+                        );
+                    } else if ui
                         .button(miao_term_ui::i18n::t(self.lang, "Save", "保存"))
                         .clicked()
                     {
@@ -3285,7 +3337,7 @@ impl State {
                         &mut ed.preview,
                         miao_term_ui::i18n::t(self.lang, "Markdown preview", "Markdown 预览"),
                     );
-                    if modified {
+                    if modified && !ed.readonly {
                         ui.label(
                             egui::RichText::new(miao_term_ui::i18n::t(
                                 self.lang,
@@ -3334,14 +3386,16 @@ impl State {
                                     .selectable(false),
                                 );
                                 let text_id = egui::Id::new("miaotty-native-editor-text");
-                                ui.add(
-                                    egui::TextEdit::multiline(&mut ed.text)
-                                        .id(text_id)
-                                        .code_editor()
-                                        .desired_width(f32::INFINITY)
-                                        .layouter(&mut layouter),
-                                );
-                                if let Some(v) = self.vim.as_mut() {
+                                let mut edit = egui::TextEdit::multiline(&mut ed.text)
+                                    .id(text_id)
+                                    .code_editor()
+                                    .desired_width(f32::INFINITY)
+                                    .layouter(&mut layouter);
+                                if ed.readonly {
+                                    edit = edit.interactive(false);
+                                }
+                                ui.add(edit);
+                                if let Some(v) = self.vim.as_mut().filter(|_| !ed.readonly) {
                                     vim_effect = miao_term_ui::vim::vim_handle(
                                         &mut ed.text,
                                         v,

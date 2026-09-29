@@ -146,6 +146,8 @@ pub struct ServerState {
     panes: Mutex<Vec<Value>>,
     writes: Mutex<Vec<(String, Vec<u8>)>>,
     commands: Mutex<Vec<Command>>,
+    /// Called after work is queued so the host can wake its event loop.
+    waker: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 /// UI-side control actions queued by MTP methods.
@@ -251,8 +253,23 @@ impl ServerState {
         self.states.lock().unwrap().get(&k).cloned()
     }
 
+    /// Register a callback the host uses to wake its event loop; it is invoked
+    /// whenever the control plane queues work (`pane.send`, `pane.focus`, …).
+    pub fn set_waker(&self, waker: Arc<dyn Fn() + Send + Sync>) {
+        *self.waker.lock().unwrap() = Some(waker);
+    }
+
+    /// Wake the host, if it registered a waker.
+    fn wake(&self) {
+        let waker = self.waker.lock().unwrap().clone();
+        if let Some(waker) = waker {
+            waker();
+        }
+    }
+
     fn queue_write(&self, pane_id: String, data: Vec<u8>) {
         self.writes.lock().unwrap().push((pane_id, data));
+        self.wake();
     }
 
     /// Take queued writes for the UI to feed into the panes.
@@ -262,6 +279,7 @@ impl ServerState {
 
     fn queue_command(&self, command: Command) {
         self.commands.lock().unwrap().push(command);
+        self.wake();
     }
 
     /// Take queued focus/close commands for the UI to apply.
