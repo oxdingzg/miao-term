@@ -24,31 +24,73 @@ pub struct TabBarEvents {
     pub switch: Option<usize>,
     pub close: Option<usize>,
     pub rename: Option<usize>,
+    pub reorder: Option<(usize, usize)>,
     pub new_tab: bool,
 }
 
-/// A horizontal tab bar: clickable labels, a close affordance, and `+`.
+/// A horizontal tab bar: clickable, draggable labels, a close affordance, `+`.
 pub fn tab_bar(
     ui: &mut egui::Ui,
     theme: &crate::theme::Theme,
     titles: &[String],
     active: usize,
 ) -> TabBarEvents {
+    const DRAG_ID: &str = "miao_tab_drag";
     let mut ev = TabBarEvents::default();
     ui.visuals_mut().selection.bg_fill = bg_color(theme.palette[4]);
     ui.visuals_mut().override_text_color = Some(fg_color(theme));
+    let font = egui::FontId::proportional(13.0);
+    let text_color = fg_color(theme);
+    let mut rects: Vec<egui::Rect> = Vec::with_capacity(titles.len());
     for (i, title) in titles.iter().enumerate() {
-        let resp = ui.selectable_label(i == active, title);
+        let galley = ui
+            .painter()
+            .layout_no_wrap(title.clone(), font.clone(), text_color);
+        let desired = egui::vec2(galley.size().x + 16.0, 22.0);
+        let (rect, resp) = ui.allocate_exact_size(desired, egui::Sense::click_and_drag());
+        let bg = if i == active {
+            bg_color(theme.palette[4])
+        } else if resp.hovered() {
+            bg_color(lighten(theme.bg, 0.10))
+        } else {
+            egui::Color32::TRANSPARENT
+        };
+        ui.painter().rect_filled(rect, 4.0, bg);
+        let pos = rect.min + egui::vec2(8.0, (rect.height() - galley.size().y) * 0.5);
+        ui.painter().galley(pos, galley, text_color);
         if resp.clicked() {
             ev.switch = Some(i);
         }
         if resp.double_clicked() {
             ev.rename = Some(i);
         }
+        if resp.drag_started() {
+            ui.ctx()
+                .memory_mut(|m| m.data.insert_temp(egui::Id::new(DRAG_ID), i));
+        }
+        rects.push(rect);
         if titles.len() > 1 && ui.small_button("\u{00d7}").clicked() {
             ev.close = Some(i);
         }
         ui.add_space(2.0);
+    }
+    // Resolve a finished drag against the collected chip rects.
+    if ui.ctx().input(|i| i.pointer.any_released()) {
+        let from = ui
+            .ctx()
+            .memory_mut(|m| m.data.remove_temp::<usize>(egui::Id::new(DRAG_ID)));
+        if let (Some(from), Some(p)) = (from, ui.ctx().pointer_interact_pos()) {
+            let mut target = from;
+            for (j, r) in rects.iter().enumerate() {
+                if p.x >= r.left() && p.x <= r.right() {
+                    target = j;
+                    break;
+                }
+            }
+            if target != from {
+                ev.reorder = Some((from, target));
+            }
+        }
     }
     if ui.button("+").on_hover_text("New Tab").clicked() {
         ev.new_tab = true;
@@ -291,6 +333,7 @@ pub trait Chrome {
     fn on_switch_tab(&mut self, i: usize) {}
     fn on_close_tab(&mut self, i: usize) {}
     fn on_rename_tab(&mut self, i: usize) {}
+    fn on_reorder_tab(&mut self, from: usize, to: usize) {}
     fn on_font_delta(&mut self, delta: f32) {}
     fn on_toggle_sidebar(&mut self) {}
     fn on_toggle_details(&mut self) {}
@@ -334,6 +377,7 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
     let mut switch = None;
     let mut close = None;
     let mut rename = None;
+    let mut reorder = None;
     let mut new_tab = false;
     let mut font_delta = 0.0f32;
     let mut toggle_sidebar = false;
@@ -477,6 +521,7 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
                 switch = ev.switch;
                 close = ev.close;
                 rename = ev.rename;
+                reorder = ev.reorder;
                 new_tab = ev.new_tab;
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("A+").clicked() {
@@ -560,6 +605,9 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
     }
     if let Some(i) = rename {
         host.on_rename_tab(i);
+    }
+    if let Some((from, to)) = reorder {
+        host.on_reorder_tab(from, to);
     }
     if new_tab {
         host.on_new_tab();

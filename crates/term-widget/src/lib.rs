@@ -146,6 +146,8 @@ struct State {
     remote_dialog: Option<(String, String)>,
     composer: Option<String>,
     quick: Option<String>,
+    closed: Vec<Option<std::path::PathBuf>>,
+    hover_pointer: bool,
     update_url: Option<String>,
     update_rx: Option<std::sync::mpsc::Receiver<String>>,
     update_msg: Option<String>,
@@ -179,6 +181,7 @@ struct Shortcut {
     settings: bool,
     composer: bool,
     quickly: bool,
+    reopen: bool,
 }
 
 fn shortcut(event: &KeyEvent, mods: ModifiersState) -> Option<Shortcut> {
@@ -199,10 +202,12 @@ fn shortcut(event: &KeyEvent, mods: ModifiersState) -> Option<Shortcut> {
         settings: false,
         composer: false,
         quickly: false,
+        reopen: false,
     };
     let mut matched = true;
     match &event.logical_key {
         Key::Character(c) => match c.as_str() {
+            "t" if mods.shift_key() => s.reopen = true,
             "t" => s.new_tab = true,
             "e" => s.composer = true,
             "o" if mods.shift_key() => s.quickly = true,
@@ -241,6 +246,15 @@ fn shortcut(event: &KeyEvent, mods: ModifiersState) -> Option<Shortcut> {
     } else {
         None
     }
+}
+
+/// A hyperlink resolved under the pointer, with its screen geometry.
+struct LinkHit {
+    url: String,
+    start: u16,
+    end: u16,
+    row: u16,
+    inner: Rect,
 }
 
 impl State {
@@ -342,7 +356,31 @@ impl State {
         self.publish_panes();
     }
 
+    /// Reopen the most recently closed tab (Cmd+Shift+T) in its old cwd.
+    fn reopen_tab(&mut self) {
+        let Some(cwd) = self.closed.pop() else {
+            return;
+        };
+        let Some(pane) = self.spawn_pane(cwd) else {
+            return;
+        };
+        let id = pane.id.clone();
+        let n = self.tabs.len() + 1;
+        self.tabs.push(Tab {
+            layout: Layout::leaf(id.clone()),
+            panes: vec![pane],
+            active: id,
+            title: format!("shell {n}"),
+        });
+        self.active_tab = self.tabs.len() - 1;
+        self.selection = None;
+        self.publish_panes();
+    }
+
     fn close_pane(&mut self) {
+        let cwd = self
+            .active_pane()
+            .and_then(|p| p.term.cwd().map(std::path::PathBuf::from));
         let Some(tab) = self.tabs.get_mut(self.active_tab) else {
             return;
         };
@@ -350,6 +388,7 @@ impl State {
         if tab.panes.len() <= 1 {
             // Close the tab.
             if self.tabs.len() > 1 {
+                self.closed.push(cwd);
                 self.tabs.remove(self.active_tab);
                 self.active_tab = self.active_tab.min(self.tabs.len() - 1);
                 self.selection = None;
@@ -434,8 +473,8 @@ impl State {
         self.window.request_redraw();
     }
 
-    /// The URL under the pointer in the active pane, if any.
-    fn link_at_pointer(&self) -> Option<String> {
+    /// The hyperlink under the pointer in the active pane, if any.
+    fn link_at_pointer(&self) -> Option<LinkHit> {
         let scale = self.window.scale_factor() as f32;
         let (px, py) = (self.cursor.0 as f32, self.cursor.1 as f32);
         let (id, r) = self.pane_rects().into_iter().find(|(_, r)| {
@@ -453,7 +492,14 @@ impl State {
             .max(0.0) as u16;
         let tab = self.tabs.get(self.active_tab)?;
         let pane = tab.panes.iter().find(|p| p.id == id)?;
-        link_at(&pane.term.screen().line_text(row), col)
+        let (url, start, end) = link_at(&pane.term.screen().line_text(row), col)?;
+        Some(LinkHit {
+            url,
+            start,
+            end,
+            row,
+            inner,
+        })
     }
 
     fn copy_selection(&self, ctx: &egui::Context) {
@@ -822,6 +868,34 @@ impl State {
     fn chrome(&mut self, ctx: &egui::Context) {
         // Shared, host-agnostic chrome (menu/tabs/sidebar/details/status).
         chrome::render(ctx, self);
+        // Hyperlink hover cue: hand cursor + underline while Cmd/Ctrl is held.
+        let link = if self.mods.super_key() || self.mods.control_key() {
+            self.link_at_pointer()
+        } else {
+            None
+        };
+        let want = link.is_some();
+        if want != self.hover_pointer {
+            self.hover_pointer = want;
+            self.window.set_cursor(if want {
+                winit::window::CursorIcon::Pointer
+            } else {
+                winit::window::CursorIcon::Default
+            });
+        }
+        if let Some(h) = link {
+            let y = h.inner.y + (h.row as f32 + 1.0) * self.ch - 1.5;
+            let x0 = h.inner.x + h.start as f32 * self.cw;
+            let x1 = h.inner.x + (h.end as f32 + 1.0) * self.cw;
+            let painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("link_underline"),
+            ));
+            painter.line_segment(
+                [egui::pos2(x0, y), egui::pos2(x1, y)],
+                egui::Stroke::new(1.0_f32, chrome::fg_color(&self.theme)),
+            );
+        }
         // Host-specific overlay windows.
         self.palette_window(ctx);
         self.settings_window(ctx);
@@ -1988,8 +2062,8 @@ impl State {
     }
 }
 
-/// The URL token under `col` in a line, if any.
-fn link_at(line: &str, col: u16) -> Option<String> {
+/// The URL token under `col` in a line: `(url, start_col, end_col)`.
+fn link_at(line: &str, col: u16) -> Option<(String, u16, u16)> {
     let chars: Vec<char> = line.chars().collect();
     let col = col as usize;
     if col >= chars.len() || chars[col].is_whitespace() {
@@ -2006,14 +2080,15 @@ fn link_at(line: &str, col: u16) -> Option<String> {
     while end + 1 < chars.len() && !is_break(chars[end + 1]) {
         end += 1;
     }
-    let token: String = chars[start..=end].iter().collect();
-    let token = token.trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']']);
+    let raw: String = chars[start..=end].iter().collect();
+    let token = raw.trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']']);
     if token.starts_with("http://")
         || token.starts_with("https://")
         || token.starts_with("ftp://")
         || token.starts_with("file://")
     {
-        Some(token.to_string())
+        let end = start + token.chars().count() - 1;
+        Some((token.to_string(), start as u16, end as u16))
     } else {
         None
     }
@@ -2175,6 +2250,8 @@ impl ApplicationHandler for Host {
             remote_dialog: None,
             composer: None,
             quick: None,
+            closed: Vec::new(),
+            hover_pointer: false,
             update_url: cfg.update_check_url.clone(),
             update_rx: None,
             update_msg: None,
@@ -2258,7 +2335,10 @@ impl ApplicationHandler for Host {
                 state.resize();
                 state.window.request_redraw();
             }
-            WindowEvent::ModifiersChanged(m) => state.mods = m.state(),
+            WindowEvent::ModifiersChanged(m) => {
+                state.mods = m.state();
+                state.window.request_redraw();
+            }
             WindowEvent::Ime(winit::event::Ime::Commit(text)) => {
                 state.write_input(text.as_bytes());
             }
@@ -2269,8 +2349,8 @@ impl ApplicationHandler for Host {
                     if es == ElementState::Pressed
                         && (state.mods.super_key() || state.mods.control_key())
                     {
-                        if let Some(url) = state.link_at_pointer() {
-                            open_external(&url);
+                        if let Some(hit) = state.link_at_pointer() {
+                            open_external(&hit.url);
                         }
                     } else if es == ElementState::Pressed {
                         // Prefer a divider under the pointer, else a selection.
@@ -2314,6 +2394,9 @@ impl ApplicationHandler for Host {
             },
             WindowEvent::CursorMoved { position, .. } => {
                 state.cursor = (position.x, position.y);
+                if state.mods.super_key() || state.mods.control_key() {
+                    state.window.request_redraw();
+                }
                 let scale = state.window.scale_factor() as f32;
                 let (px, py) = (position.x as f32, position.y as f32);
                 if let Some((path, dir, area)) = state.divider_drag.clone() {
@@ -2369,6 +2452,9 @@ impl ApplicationHandler for Host {
                 if let Some(s) = shortcut(&event, state.mods) {
                     if s.new_tab {
                         state.new_tab();
+                    }
+                    if s.reopen {
+                        state.reopen_tab();
                     }
                     if s.close {
                         state.close_pane();
@@ -2824,6 +2910,17 @@ impl chrome::Chrome for State {
         self.renaming = Some(i);
         self.rename_buf = title;
     }
+    fn on_reorder_tab(&mut self, from: usize, to: usize) {
+        if from < self.tabs.len() && to < self.tabs.len() && from != to {
+            let was_active = self.active_tab == from;
+            let tab = self.tabs.remove(from);
+            self.tabs.insert(to, tab);
+            if was_active {
+                self.active_tab = to;
+            }
+            self.publish_panes();
+        }
+    }
     fn on_font_delta(&mut self, d: f32) {
         self.font_size = (self.font_size + d).clamp(6.0, 40.0);
         let (cw, ch) =
@@ -2901,12 +2998,14 @@ mod tests {
     fn link_detection() {
         let line = "see https://example.com/a?b=1 now";
         assert_eq!(
-            super::link_at(line, 8).as_deref(),
+            super::link_at(line, 8).map(|(u, _, _)| u).as_deref(),
             Some("https://example.com/a?b=1")
         );
         assert_eq!(super::link_at(line, 0), None);
         assert_eq!(
-            super::link_at("(https://x.io).", 2).as_deref(),
+            super::link_at("(https://x.io).", 2)
+                .map(|(u, _, _)| u)
+                .as_deref(),
             Some("https://x.io")
         );
     }
