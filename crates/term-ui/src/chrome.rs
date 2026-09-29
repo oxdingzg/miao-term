@@ -33,6 +33,7 @@ pub fn tab_bar(
     ui: &mut egui::Ui,
     theme: &crate::theme::Theme,
     titles: &[String],
+    icons: &[crate::icons::Icon],
     active: usize,
     lang: Lang,
 ) -> TabBarEvents {
@@ -44,10 +45,11 @@ pub fn tab_bar(
     let text_color = fg_color(theme);
     let mut rects: Vec<egui::Rect> = Vec::with_capacity(titles.len());
     for (i, title) in titles.iter().enumerate() {
+        let icon = icons[i];
         let galley = ui
             .painter()
             .layout_no_wrap(title.clone(), font.clone(), text_color);
-        let desired = egui::vec2(galley.size().x + 16.0, 22.0);
+        let desired = egui::vec2(galley.size().x + 26.0, 22.0);
         let (rect, resp) = ui.allocate_exact_size(desired, egui::Sense::click_and_drag());
         let bg = if i == active {
             bg_color(theme.palette[4])
@@ -57,7 +59,12 @@ pub fn tab_bar(
             egui::Color32::TRANSPARENT
         };
         ui.painter().rect_filled(rect, 4.0, bg);
-        let pos = rect.min + egui::vec2(8.0, (rect.height() - galley.size().y) * 0.5);
+        let ir = egui::Rect::from_center_size(
+            egui::pos2(rect.left() + 12.0, rect.center().y),
+            egui::Vec2::splat(14.0),
+        );
+        crate::icons::draw(ui.painter(), ir, icon, text_color);
+        let pos = rect.min + egui::vec2(22.0, (rect.height() - galley.size().y) * 0.5);
         ui.painter().galley(pos, galley, text_color);
         if resp.clicked() {
             ev.switch = Some(i);
@@ -108,6 +115,7 @@ pub fn sidebar(
     ui: &mut egui::Ui,
     theme: &crate::theme::Theme,
     titles: &[String],
+    icons: &[crate::icons::Icon],
     badges: &[Option<Rgb>],
     active: usize,
     heading: &str,
@@ -123,7 +131,10 @@ pub fn sidebar(
             crate::icons::draw(
                 ui.painter(),
                 irect,
-                crate::icons::Icon::Terminal,
+                icons
+                    .get(i)
+                    .copied()
+                    .unwrap_or(crate::icons::Icon::Terminal),
                 fg_color(theme),
             );
             match badges.get(i).copied().flatten() {
@@ -326,6 +337,7 @@ pub enum MenuId {
 pub struct ChromeTab {
     pub title: String,
     pub badge: Option<Rgb>,
+    pub icon: crate::icons::Icon,
 }
 
 /// The host implements this; [`render`] draws the surrounding UI from it and
@@ -407,6 +419,7 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
     let tabs = host.tabs();
     let titles: Vec<String> = tabs.iter().map(|t| t.title.clone()).collect();
     let badges: Vec<Option<Rgb>> = tabs.iter().map(|t| t.badge).collect();
+    let icons: Vec<crate::icons::Icon> = tabs.iter().map(|t| t.icon).collect();
     let active = host.active_tab();
     let show_sidebar = host.show_sidebar();
     let show_details = host.show_details();
@@ -563,7 +576,7 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
         .frame(panel_frame(&theme, egui::Margin::symmetric(6.0, 3.0)))
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                let ev = tab_bar(ui, &theme, &titles, active, lang);
+                let ev = tab_bar(ui, &theme, &titles, &icons, active, lang);
                 switch = ev.switch;
                 close = ev.close;
                 rename = ev.rename;
@@ -598,7 +611,7 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
             .frame(panel_frame(&theme, egui::Margin::same(6.0)))
             .show(ctx, |ui| {
                 let heading = t(lang, "Sessions", "会话");
-                if let Some(i) = sidebar(ui, &theme, &titles, &badges, active, heading) {
+                if let Some(i) = sidebar(ui, &theme, &titles, &icons, &badges, active, heading) {
                     switch = Some(i);
                 }
             });

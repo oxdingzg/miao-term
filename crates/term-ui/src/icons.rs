@@ -15,6 +15,8 @@ pub enum Icon {
     Plus,
     Folder,
     File,
+    Server,
+    GitBranch,
 }
 
 /// Draw `icon` centered in `rect`.
@@ -58,6 +60,27 @@ pub fn draw(p: &egui::Painter, rect: egui::Rect, icon: Icon, color: egui::Color3
             line((l, t), (l, t - 2.0));
             line((l, t - 2.0), (l + 4.0, t - 2.0));
             line((l + 4.0, t - 2.0), (l + 5.5, t));
+        }
+        Icon::Server => {
+            for k in 0..2 {
+                let y = r.top() + 3.0 + k as f32 * 4.0;
+                p.rect_stroke(
+                    egui::Rect::from_min_max(
+                        egui::pos2(r.left() + 1.0, y),
+                        egui::pos2(r.right() - 1.0, y + 3.0),
+                    ),
+                    egui::Rounding::same(1.0),
+                    s,
+                );
+                p.circle_filled(egui::pos2(r.right() - 3.0, y + 1.5), 0.8, color);
+            }
+        }
+        Icon::GitBranch => {
+            p.circle_stroke(egui::pos2(c.x - 3.0, r.top() + 3.0), 1.6, s);
+            p.circle_stroke(egui::pos2(c.x - 3.0, r.bottom() - 3.0), 1.6, s);
+            p.circle_stroke(egui::pos2(c.x + 3.0, r.top() + 3.0), 1.6, s);
+            line((c.x - 3.0, r.top() + 4.6), (c.x - 3.0, r.bottom() - 4.6));
+            line((c.x - 3.0, c.y), (c.x + 3.0, r.top() + 3.0));
         }
         Icon::File => {
             let (l, t, rr, b) = (

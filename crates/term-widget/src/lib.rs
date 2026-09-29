@@ -81,6 +81,8 @@ struct Tab {
     panes: Vec<Pane>,
     active: String,
     title: String,
+    /// Opened as an ssh session (shows a server icon).
+    ssh: bool,
 }
 
 /// Background-computed details (git status / directory listing / ports).
@@ -405,6 +407,7 @@ impl State {
             panes: vec![pane],
             active: id,
             title: format!("shell {n}"),
+            ssh: false,
         });
         self.active_tab = self.tabs.len() - 1;
         self.selection = None;
@@ -426,6 +429,7 @@ impl State {
             panes: vec![pane],
             active: id,
             title: format!("shell {n}"),
+            ssh: false,
         });
         self.active_tab = self.tabs.len() - 1;
         self.selection = None;
@@ -1226,6 +1230,7 @@ impl State {
                 panes,
                 active,
                 title,
+                ssh: false,
             });
         }
         if self.tabs.is_empty() {
@@ -1377,25 +1382,37 @@ impl State {
     }
 
     fn status_text(&self) -> String {
+        use miao_term_ui::i18n::t;
+        let l = self.lang;
+        let mut s = self
+            .cwd()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "miaotty".to_string());
+        // Git branch (when the details worker has it).
+        if let Some(branch) = self.details_data.as_ref().and_then(|d| {
+            d.git
+                .iter()
+                .find(|(k, _)| k == "branch")
+                .map(|(_, v)| v.clone())
+        }) {
+            let b = branch.split_whitespace().next().unwrap_or(&branch);
+            if !b.is_empty() {
+                s.push_str("   ");
+                s.push_str(t(l, "branch", "分支"));
+                s.push(' ');
+                s.push_str(b);
+            }
+        }
         let panes = self
             .tabs
             .get(self.active_tab)
             .map(|t| t.panes.len())
             .unwrap_or(0);
-        use miao_term_ui::i18n::t;
-        let l = self.lang;
-        let mut s = format!(
-            "miaotty-native · {} {}/{} · {} {} · {} {}",
-            t(l, "tab", "标签"),
-            self.active_tab + 1,
-            self.tabs.len(),
-            panes,
-            t(l, "pane(s)", "个 pane"),
-            self.tabs.len(),
-            t(l, "tabs", "个标签"),
-        );
+        if panes > 1 {
+            s.push_str(&format!("   {} {panes}", t(l, "panes", "分屏")));
+        }
         if let Some(m) = &self.update_msg {
-            s.push_str(" · ");
+            s.push_str("   \u{00b7}   ");
             s.push_str(m);
         }
         s
@@ -2282,6 +2299,7 @@ impl State {
         self.new_tab();
         if let Some(tab) = self.tabs.last_mut() {
             tab.title = resolved.destination();
+            tab.ssh = true;
             let active = tab.active.clone();
             if let Some(pane) = tab.panes.iter_mut().find(|p| p.id == active) {
                 pane.term.write(format!("{cmd}\r").as_bytes());
@@ -3845,9 +3863,20 @@ impl chrome::Chrome for State {
     fn tabs(&self) -> Vec<chrome::ChromeTab> {
         self.tabs
             .iter()
-            .map(|t| chrome::ChromeTab {
-                title: self.title_of(t),
-                badge: self.agent_badge(&t.active),
+            .map(|t| {
+                let badge = self.agent_badge(&t.active);
+                let icon = if badge.is_some() {
+                    miao_term_ui::icons::Icon::Agent
+                } else if t.ssh {
+                    miao_term_ui::icons::Icon::Server
+                } else {
+                    miao_term_ui::icons::Icon::Terminal
+                };
+                chrome::ChromeTab {
+                    title: self.title_of(t),
+                    badge,
+                    icon,
+                }
             })
             .collect()
     }
