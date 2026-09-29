@@ -131,6 +131,9 @@ struct State {
     editor: Option<Editor>,
     open_path: String,
     show_open: bool,
+    recipe_dialog: Option<bool>,
+    recipe_name: String,
+    recipe_list: Vec<String>,
     details_tab: usize,
     git_cache: Cache,
     files_cache: Cache,
@@ -1036,6 +1039,7 @@ impl State {
         self.settings_window(ctx);
         self.open_dialog_window(ctx);
         self.editor_window(ctx);
+        self.recipe_dialog_window(ctx);
         if let Some(i) = self.renaming {
             self.rename_window(ctx, i);
         }
@@ -1066,7 +1070,7 @@ impl State {
     }
 
     /// Persist tabs/panes/cwd/layout so the next launch restores the session.
-    fn save_session(&self) {
+    fn session_value(&self) -> serde_json::Value {
         let mut tabs = Vec::new();
         for tab in &self.tabs {
             let panes: Vec<serde_json::Value> = tab
@@ -1081,26 +1085,29 @@ impl State {
                 "panes": panes,
             }));
         }
-        let v = serde_json::json!({ "active_tab": self.active_tab, "tabs": tabs });
+        serde_json::json!({ "active_tab": self.active_tab, "tabs": tabs })
+    }
+
+    fn save_session(&self) {
         if let Some(path) = session_file() {
             if let Some(dir) = path.parent() {
                 let _ = std::fs::create_dir_all(dir);
             }
-            let _ = std::fs::write(path, serde_json::to_vec(&v).unwrap_or_default());
+            let _ = std::fs::write(
+                path,
+                serde_json::to_vec(&self.session_value()).unwrap_or_default(),
+            );
         }
     }
 
-    /// Restore a saved session; returns false if there is nothing to restore.
-    fn restore_session(&mut self) -> bool {
-        let Some(path) = session_file() else {
-            return false;
-        };
-        let Ok(bytes) = std::fs::read(&path) else {
-            return false;
-        };
-        let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-            return false;
-        };
+    /// Drop every tab (and its panes/shells), e.g. before opening a recipe.
+    fn clear_tabs(&mut self) {
+        self.tabs.clear();
+        self.selection = None;
+        self.active_tab = 0;
+    }
+
+    fn restore_from_value(&mut self, v: &serde_json::Value) -> bool {
         let Some(tabs) = v.get("tabs").and_then(|t| t.as_array()) else {
             return false;
         };
@@ -1153,6 +1160,20 @@ impl State {
         self.active_tab = self.active_tab.min(self.tabs.len() - 1);
         self.publish_panes();
         true
+    }
+
+    /// Restore a saved session; returns false if there is nothing to restore.
+    fn restore_session(&mut self) -> bool {
+        let Some(path) = session_file() else {
+            return false;
+        };
+        let Ok(bytes) = std::fs::read(&path) else {
+            return false;
+        };
+        let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            return false;
+        };
+        self.restore_from_value(&v)
     }
 
     fn active_pane(&self) -> Option<&Pane> {
@@ -1277,6 +1298,8 @@ impl State {
 /// A palette command.
 enum Cmd {
     NewTab,
+    SaveRecipe,
+    OpenRecipe,
     OpenFile,
     Save,
     Copy,
@@ -1303,6 +1326,8 @@ impl State {
     fn commands(&self) -> Vec<(Cmd, &'static str)> {
         vec![
             (Cmd::NewTab, "New Tab"),
+            (Cmd::SaveRecipe, "Save Recipe…"),
+            (Cmd::OpenRecipe, "Open Recipe…"),
             (Cmd::OpenFile, "Open File…"),
             (Cmd::Save, "Save"),
             (Cmd::Copy, "Copy"),
@@ -1339,6 +1364,14 @@ impl State {
                 self.cw = cw;
                 self.ch = ch;
                 self.resize();
+            }
+            Cmd::SaveRecipe => {
+                self.recipe_name.clear();
+                self.recipe_dialog = Some(true);
+            }
+            Cmd::OpenRecipe => {
+                self.recipe_list = list_recipes();
+                self.recipe_dialog = Some(false);
             }
             Cmd::OpenFile => self.show_open = true,
             Cmd::Save => {
@@ -1484,6 +1517,72 @@ impl State {
         }
         if !open {
             self.show_settings = false;
+        }
+    }
+
+    fn recipe_dialog_window(&mut self, ctx: &egui::Context) {
+        let Some(save) = self.recipe_dialog else {
+            return;
+        };
+        use miao_term_ui::i18n::t;
+        let lang = self.lang;
+        let mut open = true;
+        let mut do_save = false;
+        let mut open_recipe: Option<String> = None;
+        let title = if save {
+            t(lang, "Save Recipe", "保存配方")
+        } else {
+            t(lang, "Open Recipe", "打开配方")
+        };
+        egui::Window::new(title)
+            .collapsible(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                if save {
+                    let r = ui.add(
+                        egui::TextEdit::singleline(&mut self.recipe_name)
+                            .hint_text("name")
+                            .desired_width(240.0),
+                    );
+                    r.request_focus();
+                    if ui.button(t(lang, "Save", "保存")).clicked() {
+                        do_save = true;
+                    }
+                } else if self.recipe_list.is_empty() {
+                    ui.label(t(lang, "No recipes yet", "还没有配方"));
+                } else {
+                    for name in &self.recipe_list {
+                        if ui.button(name).clicked() {
+                            open_recipe = Some(name.clone());
+                        }
+                    }
+                }
+            });
+        if do_save && !self.recipe_name.is_empty() {
+            if let Some(dir) = recipes_dir() {
+                let _ = std::fs::create_dir_all(&dir);
+                let _ = std::fs::write(
+                    dir.join(format!("{}.json", self.recipe_name)),
+                    serde_json::to_vec(&self.session_value()).unwrap_or_default(),
+                );
+            }
+            self.recipe_dialog = None;
+        }
+        if let Some(name) = open_recipe {
+            if let Some(dir) = recipes_dir() {
+                if let Ok(bytes) = std::fs::read(dir.join(format!("{name}.json"))) {
+                    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                        self.clear_tabs();
+                        if !self.restore_from_value(&v) {
+                            self.new_tab();
+                        }
+                    }
+                }
+            }
+            self.recipe_dialog = None;
+        }
+        if !open {
+            self.recipe_dialog = None;
         }
     }
 
@@ -1784,6 +1883,9 @@ impl ApplicationHandler for Host {
             editor: None,
             open_path: String::new(),
             show_open: false,
+            recipe_dialog: None,
+            recipe_name: String::new(),
+            recipe_list: Vec::new(),
             details_tab: 0,
             git_cache: None,
             files_cache: None,
@@ -2283,6 +2385,29 @@ fn install_egui_fonts(ctx: &egui::Context) {
         list.push("nerd".to_owned());
     }
     ctx.set_fonts(fonts);
+}
+
+fn recipes_dir() -> Option<std::path::PathBuf> {
+    window_file().map(|p| p.with_file_name("recipes"))
+}
+
+fn list_recipes() -> Vec<String> {
+    let Some(dir) = recipes_dir() else {
+        return Vec::new();
+    };
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = read
+        .flatten()
+        .filter_map(|e| {
+            e.path()
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+        })
+        .collect();
+    out.sort();
+    out
 }
 
 fn session_file() -> Option<std::path::PathBuf> {
