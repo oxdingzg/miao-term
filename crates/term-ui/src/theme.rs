@@ -187,32 +187,24 @@ pub struct Chrome {
     pub hover: Rgb,
     pub active: Rgb,
     pub accent: Rgb,
-    /// Panel/dividers outline (Otty `[sidebar]` border-right `#434C5E`).
-    pub border: Rgb,
 }
 
 impl Chrome {
-    /// Chrome palette from Otty's Nord theme tokens: `[sidebar]`/`[panel]`
-    /// background `#2E3440` (Nord0), `surface` `#3B4252` (Nord1), text
-    /// `#E5E9F0` (Nord5), tertiary `#7B8294`, accent `#88C0D0` (Nord8).
-    /// `hover` and `active` are `rgba(255,255,255,.06)` and
-    /// `rgba(136,192,208,.18)` composited over the background.
     pub fn dark() -> Self {
         Self {
-            bg: Rgb(0x2e, 0x34, 0x40),
-            card: Rgb(0x3b, 0x42, 0x52),
-            text: Rgb(0xe5, 0xe9, 0xf0),
-            muted: Rgb(0x7b, 0x82, 0x94),
-            hover: Rgb(0x3a, 0x40, 0x4b),
-            active: Rgb(0x3e, 0x4d, 0x5a),
-            accent: Rgb(0x88, 0xc0, 0xd0),
-            border: Rgb(0x43, 0x4c, 0x5e),
+            bg: Rgb(0x1c, 0x1c, 0x1e),
+            card: Rgb(0x23, 0x23, 0x25),
+            text: Rgb(0xd1, 0xd1, 0xd1),
+            muted: Rgb(0x8a, 0x8a, 0x8a),
+            hover: Rgb(0x2c, 0x2c, 0x2e),
+            active: Rgb(0x3a, 0x3a, 0x3c),
+            accent: Rgb(0x0a, 0x84, 0xff),
         }
     }
 }
 
 impl Theme {
-    /// The chrome palette (matches Otty's Nord panel colours).
+    /// The chrome palette (neutral dark, not tied to the terminal colours).
     pub fn chrome(&self) -> Chrome {
         Chrome::dark()
     }

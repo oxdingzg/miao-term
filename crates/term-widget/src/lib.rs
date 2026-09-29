@@ -1329,7 +1329,7 @@ impl State {
 
         // Split dividers between panes (Otty's 1px `[divider]` token).
         if let Some(tab) = self.tabs.get(self.active_tab) {
-            let border = theme.chrome().border;
+            let border = theme.chrome().hover;
             let mut divider_quads = Vec::new();
             for h in tab.layout.handles(self.grid_area()) {
                 let (x0, y0, x1, y1) = match h.dir {
@@ -4705,10 +4705,6 @@ fn configure_egui(ctx: &egui::Context) {
         v.widgets.inactive.bg_fill = col(ch.hover);
         v.widgets.hovered.bg_fill = col(ch.active);
         v.widgets.active.bg_fill = col(ch.active);
-        // Panel separators and dialog outlines (egui defaults to a flat grey).
-        v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, col(ch.border));
-        v.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0_f32, col(ch.muted));
-        v.window_stroke = egui::Stroke::new(1.0_f32, col(ch.border));
     }
     let r = egui::Rounding::same(6.0);
     style.visuals.widgets.inactive.rounding = r;
