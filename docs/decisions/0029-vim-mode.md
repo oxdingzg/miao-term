@@ -36,3 +36,8 @@ marks, search motions, text objects, `p`, or ex commands beyond `:w`/`:q`.
   break normal editing.
 - A fuller vim would need a real editor widget rather than a text field; this
   ADR does not commit to that.
+
+## Update (2026-09-29)
+
+The model (and the `egui` glue) now live in `miao-term-ui::vim`, shared by both
+hosts; the native editor honours `editor-vim` as well. No behaviour change.

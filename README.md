@@ -305,8 +305,8 @@ Still open:
 - **CI performance baseline**: the regression gate compares against a recorded
   baseline, so it needs a CI-side baseline store to bind there.
 - **Markdown**: Mermaid diagrams are not rendered.
-- **Editor**: the app has an opt-in vim mode (ADR 0029) but the native editor
-  does not; i18n covers the main chrome but not every string.
+- **Editor**: both editors have an opt-in vim mode (ADR 0029); i18n covers the
+  main chrome but not every string.
 - **MTP**: no per-capability authorization; `file.read/write` is UTF-8 text only
   (no binary/streaming transfer).
 
