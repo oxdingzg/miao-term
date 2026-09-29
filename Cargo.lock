@@ -2096,6 +2096,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "miao-term-ui"
+version = "0.0.0"
+dependencies = [
+ "egui",
+ "miao-term-core",
+ "miao-term-render",
+]
+
+[[package]]
 name = "miao-term-widget"
 version = "0.0.0"
 dependencies = [
@@ -2104,6 +2113,7 @@ dependencies = [
  "egui-winit",
  "miao-term-core",
  "miao-term-render",
+ "miao-term-ui",
  "pollster",
  "wgpu",
  "winit",

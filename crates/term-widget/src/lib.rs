@@ -1,19 +1,21 @@
-//! `miao-term-widget` — a native `winit` + `wgpu` render loop for the engine.
+//! `miao-term-widget` — a native `winit` + `wgpu` host for the engine.
 //!
-//! The terminal grid is **self-drawn** (no egui immediate-mode frame flow):
-//! `term-widget` owns the window and surface, and the PTY reader threads wake
-//! the loop (`EventLoopProxy` → `request_redraw`) the moment output arrives, so
-//! echo is drawn on the next frame. The surrounding UI (ADR 0030, step 1) is an
-//! **egui overlay composed in the same wgpu frame**: the grid is drawn first,
-//! then egui's meshes on top.
+//! The terminal grid is **self-drawn** (no egui immediate-mode frame flow): the
+//! host owns the window and surface, and the PTY reader threads wake the loop so
+//! echo is drawn on the next frame. The surrounding UI (tabs, sidebar, details,
+//! status) is an **egui overlay composed in the same wgpu frame**. Shared,
+//! host-agnostic pieces (theme, input encoding, selection, split layout, row
+//! building, chrome widgets) live in `miao-term-ui`.
 
+use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use miao_term_core::aterm::Color as TermColor;
-use miao_term_core::{ATerm, Terminal};
-use miao_term_render::{MetricsProbe, Quad, QuadRenderer, Span, TermRenderer};
+use miao_term_core::Terminal;
+use miao_term_render::{Quad, QuadRenderer, Span, TermRenderer};
+use miao_term_ui::layout::{Layout, Rect, SplitDir};
+use miao_term_ui::{build_rows, chrome, input, theme::Theme, Selection};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, KeyEvent, MouseButton, WindowEvent};
@@ -21,32 +23,13 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy}
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
-/// Nord defaults, matching the terminal core's theme.
-const BG: (u8, u8, u8) = (0x2e, 0x34, 0x40);
-const FG: (u8, u8, u8) = (0xd8, 0xde, 0xe9);
-const PALETTE: [(u8, u8, u8); 16] = [
-    (0x3b, 0x42, 0x52),
-    (0xbf, 0x61, 0x6a),
-    (0xa3, 0xbe, 0x8c),
-    (0xeb, 0xcb, 0x8b),
-    (0x81, 0xa1, 0xc1),
-    (0xb4, 0x8e, 0xad),
-    (0x88, 0xc0, 0xd0),
-    (0xe5, 0xe9, 0xf0),
-    (0x4c, 0x56, 0x6a),
-    (0xbf, 0x61, 0x6a),
-    (0xa3, 0xbe, 0x8c),
-    (0xeb, 0xcb, 0x8b),
-    (0x81, 0xa1, 0xc1),
-    (0xb4, 0x8e, 0xad),
-    (0x8f, 0xbc, 0xbb),
-    (0xec, 0xef, 0xf4),
-];
-const SEL_BG: (u8, u8, u8) = (0x43, 0x4c, 0x5e);
 const FONT_SIZE: f32 = 13.0;
 const LINE_RATIO: f32 = 1.3;
-/// Height of the egui chrome bar (logical points), reserved above the grid.
-const BAR_H: f32 = 30.0;
+const TAB_H: f32 = 30.0;
+const STATUS_H: f32 = 22.0;
+const SIDEBAR_W: f32 = 200.0;
+const DETAILS_W: f32 = 300.0;
+const GUTTER: f32 = 4.0;
 const BLINK: Duration = Duration::from_millis(530);
 
 /// Run a native terminal window until it is closed.
@@ -69,9 +52,24 @@ struct Host {
     state: Option<State>,
 }
 
-struct Tab {
+struct Pane {
+    id: String,
     term: Terminal,
+    scroll: usize,
+}
+
+struct Tab {
+    layout: Layout,
+    panes: Vec<Pane>,
+    active: String,
     title: String,
+}
+
+struct PaneDraw {
+    id: String,
+    rect: Rect,
+    quads: Vec<Quad>,
+    rows: Vec<Vec<Span>>,
 }
 
 struct State {
@@ -81,30 +79,96 @@ struct State {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
-    glyphs: TermRenderer,
     quads: QuadRenderer,
+    renderers: HashMap<String, TermRenderer>,
     tabs: Vec<Tab>,
-    active: usize,
+    active_tab: usize,
+    theme: Theme,
     cw: f32,
     ch: f32,
     font_size: f32,
     mods: ModifiersState,
-    scroll: usize,
-    selection: Option<((u16, u16), (u16, u16))>,
+    selection: Option<(String, Selection)>,
     dragging: bool,
+    show_sidebar: bool,
+    show_details: bool,
     last_title: Option<String>,
     focused: bool,
     cursor_on: bool,
     last_blink: Instant,
-    // egui overlay (chrome).
     egui_ctx: egui::Context,
     egui_state: egui_winit::State,
     egui_renderer: egui_wgpu::Renderer,
 }
 
+struct Shortcut {
+    new_tab: bool,
+    close: bool,
+    select: Option<usize>,
+    font: f32,
+    split_right: bool,
+    split_down: bool,
+    cycle: i32,
+    toggle_sidebar: bool,
+    toggle_details: bool,
+}
+
+fn shortcut(event: &KeyEvent, mods: ModifiersState) -> Option<Shortcut> {
+    if event.state != ElementState::Pressed || !mods.super_key() {
+        return None;
+    }
+    let mut s = Shortcut {
+        new_tab: false,
+        close: false,
+        select: None,
+        font: 0.0,
+        split_right: false,
+        split_down: false,
+        cycle: 0,
+        toggle_sidebar: false,
+        toggle_details: false,
+    };
+    let mut matched = true;
+    match &event.logical_key {
+        Key::Character(c) => match c.as_str() {
+            "t" => s.new_tab = true,
+            "w" => s.close = true,
+            "d" => {
+                if mods.shift_key() {
+                    s.split_down = true;
+                } else {
+                    s.split_right = true;
+                }
+            }
+            "l" if mods.shift_key() => s.toggle_sidebar = true,
+            "r" if mods.shift_key() => s.toggle_details = true,
+            "]" => s.cycle = 1,
+            "[" => s.cycle = -1,
+            "+" | "=" => s.font = 1.0,
+            "-" => s.font = -1.0,
+            "1" => s.select = Some(0),
+            "2" => s.select = Some(1),
+            "3" => s.select = Some(2),
+            "4" => s.select = Some(3),
+            "5" => s.select = Some(4),
+            "6" => s.select = Some(5),
+            "7" => s.select = Some(6),
+            "8" => s.select = Some(7),
+            "9" => s.select = Some(8),
+            _ => matched = false,
+        },
+        _ => matched = false,
+    }
+    if matched {
+        Some(s)
+    } else {
+        None
+    }
+}
+
 impl State {
     fn cell_size(font_size: f32) -> (f32, f32) {
-        let mut probe = MetricsProbe::new();
+        let mut probe = miao_term_render::MetricsProbe::new();
         probe.cell(
             font_size,
             (font_size * LINE_RATIO).round(),
@@ -112,45 +176,133 @@ impl State {
         )
     }
 
-    fn grid_size(&self) -> (u16, u16) {
-        let size = self.window.inner_size();
-        let scale = self.window.scale_factor() as f32;
-        let cols = (size.width as f32 / (self.cw * scale)).floor().max(1.0) as u16;
-        let rows = ((size.height as f32 - BAR_H * scale) / (self.ch * scale))
-            .floor()
-            .max(1.0) as u16;
-        (rows, cols)
+    fn window_size(&self) -> (u32, u32) {
+        let s = self.window.inner_size();
+        (s.width.max(1), s.height.max(1))
     }
 
-    fn spawn(&self, title: String) -> Option<Tab> {
-        let (rows, cols) = self.grid_size();
+    /// The central grid area in logical points (window minus chrome).
+    fn grid_area(&self) -> Rect {
+        let size = self.window.inner_size();
+        let scale = self.window.scale_factor() as f32;
+        let w = size.width as f32 / scale;
+        let h = size.height as f32 / scale;
+        let x = if self.show_sidebar { SIDEBAR_W } else { 0.0 };
+        let right = if self.show_details { DETAILS_W } else { 0.0 };
+        Rect {
+            x,
+            y: TAB_H,
+            w: (w - x - right).max(1.0),
+            h: (h - TAB_H - STATUS_H).max(1.0),
+        }
+    }
+
+    fn pane_rects(&self) -> Vec<(String, Rect)> {
+        match self.tabs.get(self.active_tab) {
+            Some(tab) => tab.layout.rects(self.grid_area()),
+            None => Vec::new(),
+        }
+    }
+
+    fn active_pane_id(&self) -> Option<String> {
+        self.tabs.get(self.active_tab).map(|t| t.active.clone())
+    }
+
+    fn spawn_pane(&self) -> Option<Pane> {
+        let (cw, ch) = (
+            self.cw * self.window.scale_factor() as f32,
+            self.ch * self.window.scale_factor() as f32,
+        );
+        let area = self.grid_area();
+        let cols = ((area.w * self.window.scale_factor() as f32) / cw)
+            .floor()
+            .max(1.0) as u16;
+        let rows = ((area.h * self.window.scale_factor() as f32) / ch)
+            .floor()
+            .max(1.0) as u16;
+        let id = gen_id();
         let proxy = self.proxy.clone();
         let waker: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
             let _ = proxy.send_event(());
         });
         Terminal::new(None, cols, rows, 10_000, None, &[], waker)
             .ok()
-            .map(|term| Tab { term, title })
+            .map(|term| Pane {
+                id,
+                term,
+                scroll: 0,
+            })
     }
 
     fn new_tab(&mut self) {
+        let Some(pane) = self.spawn_pane() else {
+            return;
+        };
+        let id = pane.id.clone();
         let n = self.tabs.len() + 1;
-        if let Some(tab) = self.spawn(format!("shell {n}")) {
-            self.tabs.push(tab);
-            self.active = self.tabs.len() - 1;
-            self.selection = None;
-            self.scroll = 0;
-        }
+        self.tabs.push(Tab {
+            layout: Layout::leaf(id.clone()),
+            panes: vec![pane],
+            active: id,
+            title: format!("shell {n}"),
+        });
+        self.active_tab = self.tabs.len() - 1;
+        self.selection = None;
     }
 
-    fn close_tab(&mut self, i: usize) {
-        if self.tabs.len() <= 1 || i >= self.tabs.len() {
+    fn close_pane(&mut self) {
+        let Some(tab) = self.tabs.get_mut(self.active_tab) else {
+            return;
+        };
+        let target = tab.active.clone();
+        if tab.panes.len() <= 1 {
+            // Close the tab.
+            if self.tabs.len() > 1 {
+                self.tabs.remove(self.active_tab);
+                self.active_tab = self.active_tab.min(self.tabs.len() - 1);
+                self.selection = None;
+            }
             return;
         }
-        self.tabs.remove(i);
-        self.active = self.active.min(self.tabs.len() - 1);
+        tab.panes.retain(|p| p.id != target);
+        let single = tab.layout.remove(&target);
+        if single {
+            // collapse handled by remove
+        }
+        tab.active = tab.layout.ids().first().cloned().unwrap_or_default();
         self.selection = None;
-        self.scroll = 0;
+    }
+
+    fn split(&mut self, dir: SplitDir) {
+        let Some(pane) = self.spawn_pane() else {
+            return;
+        };
+        let new_id = pane.id.clone();
+        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+            let target = tab.active.clone();
+            if tab.layout.split(&target, &new_id, dir) {
+                tab.panes.push(pane);
+                tab.active = new_id;
+                self.selection = None;
+            }
+        }
+        self.resize();
+    }
+
+    fn cycle_pane(&mut self, forward: bool) {
+        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+            let ids = tab.layout.ids();
+            if ids.len() > 1 {
+                let cur = ids.iter().position(|x| x == &tab.active).unwrap_or(0);
+                let next = if forward {
+                    (cur + 1) % ids.len()
+                } else {
+                    (cur + ids.len() - 1) % ids.len()
+                };
+                tab.active = ids[next].clone();
+                self.selection = None;
+            }
+        }
     }
 
     fn resize(&mut self) {
@@ -161,212 +313,235 @@ impl State {
         self.config.width = size.width;
         self.config.height = size.height;
         self.surface.configure(&self.device, &self.config);
-        let (rows, cols) = self.grid_size();
-        for tab in &mut self.tabs {
-            tab.term.resize(rows, cols);
+        let scale = self.window.scale_factor() as f32;
+        let cw = self.cw * scale;
+        let ch = self.ch * scale;
+        let rects = self.pane_rects();
+        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+            for (id, r) in &rects {
+                if let Some(pane) = tab.panes.iter_mut().find(|p| &p.id == id) {
+                    let cols = ((r.w * scale - GUTTER * 2.0) / cw).floor().max(1.0) as u16;
+                    let rows = ((r.h * scale - GUTTER * 2.0) / ch).floor().max(1.0) as u16;
+                    pane.term.resize(rows, cols);
+                }
+            }
         }
     }
 
     fn write_input(&mut self, bytes: &[u8]) {
-        if !bytes.is_empty() {
-            if let Some(tab) = self.tabs.get_mut(self.active) {
-                tab.term.write(bytes);
-            }
-            self.scroll = 0;
-            self.window.request_redraw();
+        if bytes.is_empty() {
+            return;
         }
-    }
-
-    fn cell_at(&self, pos: (f64, f64), rows: u16, cols: u16) -> (u16, u16) {
-        let scale = self.window.scale_factor() as f32;
-        let cw = self.cw * scale;
-        let ch = self.ch * scale;
-        let col = (pos.0 as f32 / cw).floor().clamp(0.0, cols as f32 - 1.0) as u16;
-        let row = ((pos.1 as f32 - BAR_H * scale) / ch)
-            .floor()
-            .clamp(0.0, rows as f32 - 1.0) as u16;
-        (row, col)
+        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+            if let Some(pane) = tab.panes.iter_mut().find(|p| p.id == tab.active) {
+                pane.term.write(bytes);
+                pane.scroll = 0;
+            }
+        }
+        self.window.request_redraw();
     }
 
     fn copy_selection(&self, ctx: &egui::Context) {
-        if let (Some((a, b)), Some(tab)) = (self.selection, self.tabs.get(self.active)) {
-            let (r1, c1, r2, c2) = ordered(a, b);
-            let text = tab.term.screen().contents_between(r1, c1, r2, c2);
-            if !text.is_empty() {
-                ctx.copy_text(text);
+        let Some((pane_id, sel)) = &self.selection else {
+            return;
+        };
+        if let Some(tab) = self.tabs.get(self.active_tab) {
+            if let Some(pane) = tab.panes.iter().find(|p| &p.id == pane_id) {
+                let (r1, c1, r2, c2) = sel.ordered();
+                let text = pane.term.screen().contents_between(r1, c1, r2, c2);
+                if !text.is_empty() {
+                    ctx.copy_text(text);
+                }
             }
         }
     }
 
-    /// The egui chrome overlay: a tab bar above the grid.
-    fn chrome(&mut self, ctx: &egui::Context) {
-        let mut switch: Option<usize> = None;
-        let mut close: Option<usize> = None;
-        let mut new_tab = false;
-        let mut font_delta = 0.0f32;
-        let active = self.active;
-        let titles: Vec<String> = self
-            .tabs
+    fn paste(&mut self, text: &str) {
+        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+            if let Some(pane) = tab.panes.iter_mut().find(|p| p.id == tab.active) {
+                let body = text.replace('\n', "\r");
+                let bytes = if pane.term.screen().bracketed_paste() {
+                    format!("\x1b[200~{body}\x1b[201~")
+                } else {
+                    body
+                };
+                pane.term.write(bytes.as_bytes());
+                pane.scroll = 0;
+            }
+        }
+        self.window.request_redraw();
+    }
+
+    fn title_of(&self, tab: &Tab) -> String {
+        tab.panes
             .iter()
-            .map(|t| {
-                t.term
-                    .title()
-                    .map(str::to_string)
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| t.title.clone())
-            })
-            .collect();
-        let cwd = self
-            .tabs
-            .get(self.active)
-            .and_then(|t| t.term.cwd().map(str::to_string))
-            .unwrap_or_default();
-        let fg = egui::Color32::from_rgb(FG.0, FG.1, FG.2);
-        let bg = egui::Color32::from_rgb(0x24, 0x29, 0x33);
-        egui::TopBottomPanel::top("bar")
-            .exact_height(BAR_H)
-            .frame(
-                egui::Frame::default()
-                    .fill(bg)
-                    .inner_margin(egui::Margin::symmetric(6.0, 3.0)),
-            )
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.visuals_mut().override_text_color = Some(fg);
-                    for (i, title) in titles.iter().enumerate() {
-                        if ui.selectable_label(i == active, title).clicked() {
-                            switch = Some(i);
-                        }
-                        if self.tabs.len() > 1 && ui.small_button("\u{00d7}").clicked() {
-                            close = Some(i);
-                        }
-                    }
-                    if ui.button("+").clicked() {
-                        new_tab = true;
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("A+").clicked() {
-                            font_delta = 1.0;
-                        }
-                        if ui.button("A-").clicked() {
-                            font_delta = -1.0;
-                        }
-                        if !cwd.is_empty() && ui.button("Reveal").clicked() {
-                            reveal(&cwd);
-                        }
-                    });
-                });
-            });
-        if let Some(i) = switch {
-            self.active = i;
-            self.selection = None;
-            self.scroll = 0;
-        }
-        if new_tab {
-            self.new_tab();
-        }
-        if let Some(i) = close {
-            self.close_tab(i);
-        }
-        if font_delta != 0.0 {
-            self.font_size = (self.font_size + font_delta).clamp(6.0, 40.0);
-            let (cw, ch) = State::cell_size(self.font_size);
-            self.cw = cw;
-            self.ch = ch;
-            self.resize();
-        }
+            .find(|p| p.id == tab.active)
+            .and_then(|p| p.term.title().map(str::to_string))
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| tab.title.clone())
     }
 
     fn render(&mut self) {
-        // Drain every tab; new output on the active tab jumps to the bottom.
-        let mut active_changed = false;
-        for (i, tab) in self.tabs.iter_mut().enumerate() {
-            if tab.term.process_pending() && i == self.active {
-                active_changed = true;
-            }
-        }
-        if active_changed {
-            self.scroll = 0;
-        }
-
-        let bracketed = {
-            let Some(tab) = self.tabs.get_mut(self.active) else {
-                return;
-            };
-            tab.term.screen_mut().set_scrollback(self.scroll);
-
-            // Sync the window title from OSC 0/2.
-            let title = tab.term.title().map(str::to_string);
-            if title != self.last_title {
-                if let Some(t) = &title {
-                    self.window.set_title(t);
+        // Drain every pane.
+        for tab in &mut self.tabs {
+            for pane in &mut tab.panes {
+                if pane.term.process_pending() {
+                    pane.scroll = 0;
                 }
-                self.last_title = title;
             }
+        }
 
-            let (rows, cols) = tab.term.screen().size();
-            let scale = self.window.scale_factor() as f32;
-            let cw = self.cw * scale;
-            let ch = self.ch * scale;
-            let top = BAR_H * scale;
+        // Sync the window title from the active pane's OSC 0/2.
+        let title = self
+            .tabs
+            .get(self.active_tab)
+            .map(|t| self.title_of(t))
+            .filter(|s| !s.is_empty());
+        if title != self.last_title {
+            if let Some(t) = &title {
+                self.window.set_title(t);
+            }
+            self.last_title = title;
+        }
 
-            let mut quads: Vec<Quad> = Vec::new();
-            for row in 0..rows {
-                for col in 0..cols {
-                    let Some(cell) = tab.term.screen().cell(row, col) else {
-                        continue;
-                    };
-                    let bg = map_color(cell.bg, false);
-                    if bg != BG {
-                        quads.push(cell_quad(row, col, cw, ch, top, bg));
+        // Build per-pane draw data (owning; releases the self.tabs borrow).
+        let scale = self.window.scale_factor() as f32;
+        let cw = self.cw * scale;
+        let ch = self.ch * scale;
+        let theme = self.theme.clone();
+        let selection = self.selection.clone();
+        let rects = self.pane_rects();
+        let active_id = self.active_pane_id().unwrap_or_default();
+        let mut draws: Vec<PaneDraw> = Vec::new();
+        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+            for (id, r) in &rects {
+                let Some(pane) = tab.panes.iter_mut().find(|p| &p.id == id) else {
+                    continue;
+                };
+                let cols = ((r.w * scale - GUTTER * 2.0) / cw).floor().max(1.0) as u16;
+                let rows = ((r.h * scale - GUTTER * 2.0) / ch).floor().max(1.0) as u16;
+                pane.term.resize(rows, cols);
+                pane.term.screen_mut().set_scrollback(pane.scroll);
+                let (sr, sc) = pane.term.screen().size();
+                let ox = (r.x * scale) + GUTTER;
+                let oy = (r.y * scale) + GUTTER;
+
+                let mut quads: Vec<Quad> = Vec::new();
+                for row in 0..sr {
+                    for col in 0..sc {
+                        let Some(cell) = pane.term.screen().cell(row, col) else {
+                            continue;
+                        };
+                        let bg = theme.color(cell.bg, false);
+                        if bg != theme.bg {
+                            quads.push(quad(ox, oy, row, col, cw, ch, (bg.0, bg.1, bg.2)));
+                        }
                     }
                 }
-            }
-            if let Some((a, b)) = self.selection {
-                let (r1, c1, r2, c2) = ordered(a, b);
-                let start = r1 as usize * cols as usize + c1 as usize;
-                let end = r2 as usize * cols as usize + c2 as usize;
-                for i in start..=end {
-                    let r = (i / cols as usize) as u16;
-                    let c = (i % cols as usize) as u16;
-                    quads.push(cell_quad(r, c, cw, ch, top, SEL_BG));
+                if let Some((pid, sel)) = &selection {
+                    if pid == id {
+                        for (row, col) in sel.cells(sc) {
+                            let s = theme.selection;
+                            quads.push(quad(ox, oy, row, col, cw, ch, (s.0, s.1, s.2)));
+                        }
+                    }
                 }
-            }
-            let cursor = tab.term.screen().cursor_position();
-            let show_cursor = self.scroll == 0
-                && self.cursor_on
-                && !tab.term.screen().hide_cursor()
-                && cursor.0 < rows
-                && cursor.1 < cols;
-            if show_cursor {
-                quads.push(cell_quad(cursor.0, cursor.1, cw, ch, top, FG));
-            }
+                // Scrollbar indicator.
+                let sb = pane.term.screen().scrollback_len();
+                if sb > 0 {
+                    let total = (sb + sr as usize) as f32;
+                    let track = r.h * scale;
+                    let thumb = (track * sr as f32 / total).max(12.0);
+                    let pos = pane.term.screen().scroll_offset() as f32 / sb as f32;
+                    let y = oy + (track - thumb) * (1.0 - pos);
+                    quads.push(Quad::new(
+                        (ox + (r.w * scale) - 8.0, y),
+                        (ox + (r.w * scale) - 4.0, y + thumb),
+                        (0x4c, 0x56, 0x6a, 200),
+                    ));
+                }
+                // Cursor (only on the focused pane, at the bottom).
+                let cur = pane.term.screen().cursor_position();
+                let show = id == &active_id
+                    && self.cursor_on
+                    && pane.scroll == 0
+                    && !pane.term.screen().hide_cursor()
+                    && cur.0 < sr
+                    && cur.1 < sc;
+                if show {
+                    match theme.cursor {
+                        miao_term_ui::CursorStyle::Block => {
+                            let f = theme.fg;
+                            quads.push(quad(ox, oy, cur.0, cur.1, cw, ch, (f.0, f.1, f.2)));
+                        }
+                        miao_term_ui::CursorStyle::Bar => {
+                            let f = theme.fg;
+                            quads.push(Quad::new(
+                                (ox + cur.1 as f32 * cw, oy + cur.0 as f32 * ch),
+                                (ox + cur.1 as f32 * cw + 2.0, oy + (cur.0 as f32 + 1.0) * ch),
+                                (f.0, f.1, f.2, 255),
+                            ));
+                        }
+                        miao_term_ui::CursorStyle::Underline => {
+                            let f = theme.fg;
+                            quads.push(Quad::new(
+                                (ox + cur.1 as f32 * cw, oy + (cur.0 as f32 + 1.0) * ch - 2.0),
+                                (
+                                    ox + (cur.1 as f32 + 1.0) * cw,
+                                    oy + (cur.0 as f32 + 1.0) * ch,
+                                ),
+                                (f.0, f.1, f.2, 255),
+                            ));
+                        }
+                    }
+                }
 
-            let rows_data = build_rows(tab.term.screen());
-            self.quads.prepare(
-                &self.device,
-                &self.queue,
-                (self.config.width, self.config.height),
-                &quads,
-            );
-            self.glyphs.prepare(
-                &self.device,
-                &self.queue,
-                (self.config.width, self.config.height),
+                let cursor_cell = if show { Some(cur) } else { None };
+                let rows_data = build_rows(pane.term.screen(), &theme, cursor_cell);
+                // Glyph origin is relative to the pane's viewport (the egui-wgpu
+                // callback sets the viewport), so we render per-pane with the
+                // viewer origin at 0 for the glyph renderer.
+                draws.push(PaneDraw {
+                    id: id.clone(),
+                    rect: *r,
+                    quads,
+                    rows: rows_data,
+                });
+            }
+        }
+
+        // GPU: quads (all panes) then per-pane glyphs.
+        let all_quads: Vec<Quad> = draws.iter().flat_map(|d| d.quads.iter().copied()).collect();
+        self.quads
+            .prepare(&self.device, &self.queue, self.window_size(), &all_quads);
+        let win_size = self.window_size();
+        let format = self.config.format;
+        for d in &draws {
+            let device = &self.device;
+            let queue = &self.queue;
+            let renderer = self
+                .renderers
+                .entry(d.id.clone())
+                .or_insert_with(|| TermRenderer::new(device, queue, format));
+            // The pass viewport is the whole surface, so glyphon needs the full
+            // resolution and the pane's origin as a logical offset.
+            renderer.prepare(
+                device,
+                queue,
+                win_size,
                 scale,
                 self.font_size,
                 (self.font_size * LINE_RATIO).round(),
                 self.cw,
-                0.0,
-                BAR_H,
-                FG,
+                d.rect.x + GUTTER / scale,
+                d.rect.y + GUTTER / scale,
+                (theme.fg.0, theme.fg.1, theme.fg.2),
                 Some("JetBrains Mono"),
-                &rows_data,
+                &d.rows,
             );
-            tab.term.screen().bracketed_paste()
-        };
+        }
 
-        // egui overlay: run the chrome, then tessellate and upload.
+        // egui chrome.
         let raw = self.egui_state.take_egui_input(&self.window);
         let events = raw.events.clone();
         let egui_ctx = self.egui_ctx.clone();
@@ -407,9 +582,9 @@ impl State {
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color {
-                                r: BG.0 as f64 / 255.0,
-                                g: BG.1 as f64 / 255.0,
-                                b: BG.2 as f64 / 255.0,
+                                r: theme.bg.0 as f64 / 255.0,
+                                g: theme.bg.1 as f64 / 255.0,
+                                b: theme.bg.2 as f64 / 255.0,
                                 a: 1.0,
                             }),
                             store: wgpu::StoreOp::Store,
@@ -421,7 +596,11 @@ impl State {
                 })
                 .forget_lifetime();
             self.quads.render(&mut pass);
-            self.glyphs.render(&mut pass);
+            for d in &draws {
+                if let Some(renderer) = self.renderers.get(&d.id) {
+                    renderer.render(&mut pass);
+                }
+            }
             self.egui_renderer.render(&mut pass, &paint_jobs, &screen);
         }
         self.queue.submit(Some(encoder.finish()));
@@ -430,26 +609,169 @@ impl State {
             self.egui_renderer.free_texture(id);
         }
 
-        // Copy / paste delivered by egui-winit.
         for ev in &events {
             match ev {
                 egui::Event::Copy => self.copy_selection(&self.egui_ctx),
-                egui::Event::Paste(text) => {
-                    let body = text.replace('\n', "\r");
-                    let bytes = if bracketed {
-                        format!("\x1b[200~{body}\x1b[201~")
-                    } else {
-                        body
-                    };
-                    if let Some(tab) = self.tabs.get_mut(self.active) {
-                        tab.term.write(bytes.as_bytes());
-                    }
-                    self.window.request_redraw();
-                }
+                egui::Event::Paste(text) => self.paste(text),
                 _ => {}
             }
         }
     }
+
+    fn chrome(&mut self, ctx: &egui::Context) {
+        let theme = self.theme.clone();
+        let titles: Vec<String> = self.tabs.iter().map(|t| self.title_of(t)).collect();
+        let active = self.active_tab;
+        let mut switch = None;
+        let mut close = None;
+        let mut new_tab = false;
+        let mut font_delta = 0.0f32;
+
+        egui::TopBottomPanel::top("tabs")
+            .exact_height(TAB_H)
+            .frame(
+                egui::Frame::default()
+                    .fill(chrome::bg_color(miao_term_ui::theme::Rgb(0x24, 0x29, 0x33)))
+                    .inner_margin(egui::Margin::symmetric(6.0, 3.0)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    let ev = chrome::tab_bar(ui, &theme, &titles, active);
+                    switch = ev.switch;
+                    close = ev.close;
+                    new_tab = ev.new_tab;
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("A+").clicked() {
+                            font_delta = 1.0;
+                        }
+                        if ui.button("A-").clicked() {
+                            font_delta = -1.0;
+                        }
+                        if ui
+                            .button("\u{2630}")
+                            .on_hover_text("Toggle sidebar")
+                            .clicked()
+                        {
+                            self.show_sidebar = !self.show_sidebar;
+                        }
+                        if ui
+                            .button("\u{25a4}")
+                            .on_hover_text("Toggle details")
+                            .clicked()
+                        {
+                            self.show_details = !self.show_details;
+                        }
+                    });
+                });
+            });
+
+        if self.show_sidebar {
+            let mut s = None;
+            egui::SidePanel::left("sessions")
+                .exact_width(SIDEBAR_W)
+                .frame(
+                    egui::Frame::default()
+                        .fill(chrome::bg_color(miao_term_ui::theme::Rgb(0x24, 0x29, 0x33)))
+                        .inner_margin(egui::Margin::same(6.0)),
+                )
+                .show(ctx, |ui| {
+                    s = chrome::sidebar(ui, &theme, &titles, active);
+                });
+            if let Some(i) = s {
+                switch = Some(i);
+            }
+        }
+        if self.show_details {
+            let rows = self.details_rows();
+            egui::SidePanel::right("details")
+                .exact_width(DETAILS_W)
+                .frame(
+                    egui::Frame::default()
+                        .fill(chrome::bg_color(miao_term_ui::theme::Rgb(0x24, 0x29, 0x33)))
+                        .inner_margin(egui::Margin::same(8.0)),
+                )
+                .show(ctx, |ui| {
+                    chrome::info(ui, &theme, "Info", &rows);
+                });
+        }
+        let status = self.status_text();
+        egui::TopBottomPanel::bottom("status")
+            .exact_height(STATUS_H)
+            .frame(
+                egui::Frame::default()
+                    .fill(chrome::bg_color(miao_term_ui::theme::Rgb(0x1f, 0x23, 0x2b)))
+                    .inner_margin(egui::Margin::symmetric(8.0, 2.0)),
+            )
+            .show(ctx, |ui| {
+                ui.visuals_mut().override_text_color = Some(chrome::fg_color(&theme));
+                ui.label(egui::RichText::new(status).size(11.0));
+            });
+
+        if let Some(i) = switch {
+            self.active_tab = i;
+            self.selection = None;
+        }
+        if new_tab {
+            self.new_tab();
+        }
+        if let Some(i) = close {
+            self.active_tab = i;
+            self.close_pane();
+        }
+        if font_delta != 0.0 {
+            self.font_size = (self.font_size + font_delta).clamp(6.0, 40.0);
+            let (cw, ch) = State::cell_size(self.font_size);
+            self.cw = cw;
+            self.ch = ch;
+            self.resize();
+        }
+    }
+
+    fn details_rows(&self) -> Vec<(String, String)> {
+        let mut rows = Vec::new();
+        if let Some(tab) = self.tabs.get(self.active_tab) {
+            if let Some(pane) = tab.panes.iter().find(|p| p.id == tab.active) {
+                rows.push(("Title".into(), self.title_of(tab)));
+                rows.push((
+                    "Directory".into(),
+                    pane.term.cwd().unwrap_or("—").to_string(),
+                ));
+                let (r, c) = pane.term.screen().size();
+                rows.push(("Size".into(), format!("{c} × {r}")));
+                rows.push(("Pane".into(), pane.id.clone()));
+            }
+        }
+        rows
+    }
+
+    fn status_text(&self) -> String {
+        let panes = self
+            .tabs
+            .get(self.active_tab)
+            .map(|t| t.panes.len())
+            .unwrap_or(0);
+        format!(
+            "miaotty-native · tab {}/{} · {} pane(s) · {} tabs",
+            self.active_tab + 1,
+            self.tabs.len(),
+            panes,
+            self.tabs.len()
+        )
+    }
+}
+
+fn quad(ox: f32, oy: f32, row: u16, col: u16, cw: f32, ch: f32, color: (u8, u8, u8)) -> Quad {
+    Quad::new(
+        (ox + col as f32 * cw, oy + row as f32 * ch),
+        (ox + (col as f32 + 1.0) * cw, oy + (row as f32 + 1.0) * ch),
+        (color.0, color.1, color.2, 255),
+    )
+}
+
+fn gen_id() -> String {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static N: AtomicU32 = AtomicU32::new(0);
+    format!("pane{}", N.fetch_add(1, Ordering::SeqCst))
 }
 
 impl ApplicationHandler for Host {
@@ -457,9 +779,10 @@ impl ApplicationHandler for Host {
         if self.state.is_some() {
             return;
         }
+        let (init_w, init_h) = load_window_size().unwrap_or((1100.0, 720.0));
         let attrs = Window::default_attributes()
             .with_title(&self.title)
-            .with_inner_size(LogicalSize::new(1100.0, 720.0));
+            .with_inner_size(LogicalSize::new(init_w, init_h));
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
@@ -487,7 +810,7 @@ impl ApplicationHandler for Host {
             })) {
                 Some(a) => a,
                 None => {
-                    eprintln!("miaotty-native: no suitable wgpu adapter");
+                    eprintln!("miaotty-native: no wgpu adapter");
                     event_loop.exit();
                     return;
                 }
@@ -515,9 +838,7 @@ impl ApplicationHandler for Host {
         };
         surface.configure(&device, &config);
 
-        let glyphs = TermRenderer::new(&device, &queue, format);
         let quads = QuadRenderer::new(&device, format);
-
         let egui_ctx = egui::Context::default();
         install_egui_fonts(&egui_ctx);
         let egui_state = egui_winit::State::new(
@@ -529,8 +850,8 @@ impl ApplicationHandler for Host {
             None,
         );
         let egui_renderer = egui_wgpu::Renderer::new(&device, format, None, 1, false);
-
         let (cw, ch) = State::cell_size(FONT_SIZE);
+
         let mut state = State {
             window,
             proxy: self.proxy.clone(),
@@ -538,17 +859,19 @@ impl ApplicationHandler for Host {
             device,
             queue,
             config,
-            glyphs,
             quads,
+            renderers: HashMap::new(),
             tabs: Vec::new(),
-            active: 0,
+            active_tab: 0,
+            theme: Theme::nord(),
             cw,
             ch,
             font_size: FONT_SIZE,
             mods: ModifiersState::empty(),
-            scroll: 0,
             selection: None,
             dragging: false,
+            show_sidebar: true,
+            show_details: true,
             last_title: None,
             focused: false,
             cursor_on: true,
@@ -557,9 +880,7 @@ impl ApplicationHandler for Host {
             egui_state,
             egui_renderer,
         };
-        if let Some(tab) = state.spawn("shell 1".to_string()) {
-            state.tabs.push(tab);
-        }
+        state.new_tab();
         state.window.request_redraw();
         self.state = Some(state);
     }
@@ -571,7 +892,6 @@ impl ApplicationHandler for Host {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // Cursor blink while focused (idle otherwise → ~0% CPU).
         if let Some(state) = &mut self.state {
             if state.focused {
                 if state.last_blink.elapsed() >= BLINK {
@@ -590,8 +910,6 @@ impl ApplicationHandler for Host {
         let Some(state) = self.state.as_mut() else {
             return;
         };
-        // Let egui see input events (overlay + clipboard). Never forward
-        // `RedrawRequested`: egui answers it with "repaint again" → 100% CPU.
         if !matches!(event, WindowEvent::RedrawRequested) {
             let resp = state.egui_state.on_window_event(&state.window, &event);
             if resp.repaint {
@@ -599,7 +917,14 @@ impl ApplicationHandler for Host {
             }
         }
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                let s = state.window.inner_size();
+                save_window_size(
+                    s.width as f32 / state.window.scale_factor() as f32,
+                    s.height as f32 / state.window.scale_factor() as f32,
+                );
+                event_loop.exit();
+            }
             WindowEvent::Focused(f) => state.focused = f,
             WindowEvent::Resized(_) => {
                 state.resize();
@@ -611,27 +936,54 @@ impl ApplicationHandler for Host {
             }
             WindowEvent::MouseInput {
                 state: es, button, ..
-            } => {
-                if button == MouseButton::Left {
+            } => match button {
+                MouseButton::Left => {
                     state.dragging = es == ElementState::Pressed;
                     if es == ElementState::Pressed {
                         state.selection = None;
+                    } else {
+                        // Copy on mouse-up when a selection exists.
+                        let ctx = state.egui_ctx.clone();
+                        state.copy_selection(&ctx);
                     }
                 }
-            }
+                MouseButton::Right if es == ElementState::Pressed => {
+                    if state.selection.is_some() {
+                        let ctx = state.egui_ctx.clone();
+                        state.copy_selection(&ctx);
+                        state.selection = None;
+                    } else {
+                        // Paste.
+                        let text = state.egui_state.clipboard_text().unwrap_or_default();
+                        if !text.is_empty() {
+                            state.paste(&text);
+                        }
+                    }
+                }
+                _ => {}
+            },
             WindowEvent::CursorMoved { position, .. } => {
                 if state.dragging {
-                    let (rows, cols) = state
-                        .tabs
-                        .get(state.active)
-                        .map(|t| t.term.screen().size())
-                        .unwrap_or((0, 0));
-                    let cell = state.cell_at((position.x, position.y), rows, cols);
-                    match &mut state.selection {
-                        Some((_, end)) => *end = cell,
-                        None => state.selection = Some((cell, cell)),
+                    let scale = state.window.scale_factor() as f32;
+                    let (px, py) = (position.x as f32, position.y as f32);
+                    let rects = state.pane_rects();
+                    if let Some((id, r)) = rects.iter().find(|(_, r)| {
+                        px >= r.x * scale
+                            && px < (r.x + r.w) * scale
+                            && py >= r.y * scale
+                            && py < (r.y + r.h) * scale
+                    }) {
+                        let cw = state.cw * scale;
+                        let ch = state.ch * scale;
+                        let col = ((px - r.x * scale - GUTTER) / cw).floor().max(0.0) as u16;
+                        let row = ((py - r.y * scale - GUTTER) / ch).floor().max(0.0) as u16;
+                        let cell = (row, col);
+                        match &mut state.selection {
+                            Some((sid, sel)) if sid == id => sel.end = cell,
+                            _ => state.selection = Some((id.clone(), Selection::cell(cell))),
+                        }
+                        state.window.request_redraw();
                     }
-                    state.window.request_redraw();
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -640,46 +992,70 @@ impl ApplicationHandler for Host {
                     MouseScrollDelta::LineDelta(_, y) => y as i32,
                     MouseScrollDelta::PixelDelta(p) => (p.y / 12.0) as i32,
                 };
-                let max = state
-                    .tabs
-                    .get(state.active)
-                    .map(|t| t.term.screen().scrollback_len())
-                    .unwrap_or(0);
-                if lines > 0 {
-                    state.scroll = (state.scroll + lines as usize).min(max);
-                } else {
-                    state.scroll = state.scroll.saturating_sub((-lines) as usize);
+                if let Some(tab) = state.tabs.get_mut(state.active_tab) {
+                    if let Some(pane) = tab.panes.iter_mut().find(|p| p.id == tab.active) {
+                        let max = pane.term.screen().scrollback_len();
+                        if lines > 0 {
+                            pane.scroll = (pane.scroll + lines as usize).min(max);
+                        } else {
+                            pane.scroll = pane.scroll.saturating_sub((-lines) as usize);
+                        }
+                    }
                 }
                 state.window.request_redraw();
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                if let Some(bytes) = shortcut(&event, state.mods) {
-                    match bytes {
-                        Shortcut::NewTab => state.new_tab(),
-                        Shortcut::CloseTab => state.close_tab(state.active),
-                        Shortcut::SelectTab(i) => {
-                            if i < state.tabs.len() {
-                                state.active = i;
-                                state.selection = None;
-                                state.scroll = 0;
-                            }
+                if let Some(s) = shortcut(&event, state.mods) {
+                    if s.new_tab {
+                        state.new_tab();
+                    }
+                    if s.close {
+                        state.close_pane();
+                    }
+                    if let Some(i) = s.select {
+                        if i < state.tabs.len() {
+                            state.active_tab = i;
+                            state.selection = None;
                         }
-                        Shortcut::Font(delta) => {
-                            state.font_size = (state.font_size + delta).clamp(6.0, 40.0);
-                            let (cw, ch) = State::cell_size(state.font_size);
-                            state.cw = cw;
-                            state.ch = ch;
-                            state.resize();
-                        }
+                    }
+                    if s.font != 0.0 {
+                        state.font_size = (state.font_size + s.font).clamp(6.0, 40.0);
+                        let (cw, ch) = State::cell_size(state.font_size);
+                        state.cw = cw;
+                        state.ch = ch;
+                        state.resize();
+                    }
+                    if s.split_right {
+                        state.split(SplitDir::Right);
+                    }
+                    if s.split_down {
+                        state.split(SplitDir::Down);
+                    }
+                    if s.cycle != 0 {
+                        state.cycle_pane(s.cycle > 0);
+                    }
+                    if s.toggle_sidebar {
+                        state.show_sidebar = !state.show_sidebar;
+                    }
+                    if s.toggle_details {
+                        state.show_details = !state.show_details;
                     }
                     state.window.request_redraw();
                 } else {
                     let app_cursor = state
                         .tabs
-                        .get(state.active)
-                        .map(|t| t.term.screen().application_cursor())
+                        .get(state.active_tab)
+                        .and_then(|t| t.panes.iter().find(|p| p.id == t.active))
+                        .map(|p| p.term.screen().application_cursor())
                         .unwrap_or(false);
-                    let bytes = encode_key(&event, state.mods, app_cursor);
+                    let key = key_input(&event);
+                    let mods = input::Modifiers {
+                        ctrl: state.mods.control_key(),
+                        alt: state.mods.alt_key(),
+                        shift: state.mods.shift_key(),
+                        sup: state.mods.super_key(),
+                    };
+                    let bytes = input::encode(&key, mods, app_cursor);
                     state.write_input(&bytes);
                 }
             }
@@ -689,59 +1065,35 @@ impl ApplicationHandler for Host {
     }
 }
 
-enum Shortcut {
-    NewTab,
-    CloseTab,
-    SelectTab(usize),
-    Font(f32),
-}
-
-fn shortcut(event: &KeyEvent, mods: ModifiersState) -> Option<Shortcut> {
-    if event.state != ElementState::Pressed || !mods.super_key() {
-        return None;
+fn key_input(event: &KeyEvent) -> input::KeyInput {
+    let kind = match &event.logical_key {
+        Key::Character(s) => s.chars().next().map(input::KeyKind::Char),
+        Key::Named(n) => Some(match n {
+            NamedKey::Enter => input::KeyKind::Enter,
+            NamedKey::Backspace => input::KeyKind::Backspace,
+            NamedKey::Tab => input::KeyKind::Tab,
+            NamedKey::Escape => input::KeyKind::Escape,
+            NamedKey::ArrowUp => input::KeyKind::Up,
+            NamedKey::ArrowDown => input::KeyKind::Down,
+            NamedKey::ArrowLeft => input::KeyKind::Left,
+            NamedKey::ArrowRight => input::KeyKind::Right,
+            NamedKey::Home => input::KeyKind::Home,
+            NamedKey::End => input::KeyKind::End,
+            NamedKey::Delete => input::KeyKind::Delete,
+            NamedKey::PageUp => input::KeyKind::PageUp,
+            NamedKey::PageDown => input::KeyKind::PageDown,
+            _ => input::KeyKind::Other,
+        }),
+        _ => Some(input::KeyKind::Other),
     }
-    match &event.logical_key {
-        Key::Character(s) => match s.as_str() {
-            "t" => Some(Shortcut::NewTab),
-            "w" => Some(Shortcut::CloseTab),
-            "+" | "=" => Some(Shortcut::Font(1.0)),
-            "-" => Some(Shortcut::Font(-1.0)),
-            "1" => Some(Shortcut::SelectTab(0)),
-            "2" => Some(Shortcut::SelectTab(1)),
-            "3" => Some(Shortcut::SelectTab(2)),
-            "4" => Some(Shortcut::SelectTab(3)),
-            "5" => Some(Shortcut::SelectTab(4)),
-            "6" => Some(Shortcut::SelectTab(5)),
-            "7" => Some(Shortcut::SelectTab(6)),
-            "8" => Some(Shortcut::SelectTab(7)),
-            "9" => Some(Shortcut::SelectTab(8)),
-            _ => None,
-        },
-        _ => None,
+    .unwrap_or(input::KeyKind::Other);
+    input::KeyInput {
+        kind,
+        text: event.text.as_ref().map(|t| t.to_string()),
     }
 }
 
-fn ordered(a: (u16, u16), b: (u16, u16)) -> (u16, u16, u16, u16) {
-    if b < a {
-        (b.0, b.1, a.0, a.1)
-    } else {
-        (a.0, a.1, b.0, b.1)
-    }
-}
-
-fn reveal(path: &str) {
-    #[cfg(target_os = "macos")]
-    {
-        let _ = std::process::Command::new("open")
-            .arg("-R")
-            .arg(path)
-            .spawn();
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = std::process::Command::new("xdg-open").arg(path).spawn();
-    }
-}
+// ---- helpers ---------------------------------------------------------------
 
 fn install_egui_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
@@ -772,209 +1124,28 @@ fn install_egui_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
-fn map_color(c: TermColor, foreground: bool) -> (u8, u8, u8) {
-    use miao_term_core::aterm::NamedColor;
-    match c {
-        TermColor::Spec(rgb) => (rgb.r, rgb.g, rgb.b),
-        TermColor::Indexed(i) => indexed(i),
-        TermColor::Named(n) => match n {
-            NamedColor::Foreground | NamedColor::BrightForeground | NamedColor::Cursor => FG,
-            NamedColor::Background => BG,
-            NamedColor::DimForeground => (0x7a, 0x82, 0x8e),
-            NamedColor::Black => PALETTE[0],
-            NamedColor::Red => PALETTE[1],
-            NamedColor::Green => PALETTE[2],
-            NamedColor::Yellow => PALETTE[3],
-            NamedColor::Blue => PALETTE[4],
-            NamedColor::Magenta => PALETTE[5],
-            NamedColor::Cyan => PALETTE[6],
-            NamedColor::White => PALETTE[7],
-            NamedColor::BrightBlack => PALETTE[8],
-            NamedColor::BrightRed => PALETTE[9],
-            NamedColor::BrightGreen => PALETTE[10],
-            NamedColor::BrightYellow => PALETTE[11],
-            NamedColor::BrightBlue => PALETTE[12],
-            NamedColor::BrightMagenta => PALETTE[13],
-            NamedColor::BrightCyan => PALETTE[14],
-            NamedColor::BrightWhite => PALETTE[15],
-            _ => {
-                if foreground {
-                    FG
-                } else {
-                    BG
-                }
-            }
-        },
-    }
+fn window_file() -> Option<std::path::PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config"))
+        })?;
+    Some(base.join("miaotty").join("native-window"))
 }
 
-fn indexed(i: u8) -> (u8, u8, u8) {
-    match i {
-        0..=15 => PALETTE[i as usize],
-        16..=231 => {
-            let i = i as u16 - 16;
-            let f = |x: u16| (x as u8) * 40 + if x > 0 { 55 } else { 0 };
-            (f(i / 36), f((i / 6) % 6), f(i % 6))
-        }
-        _ => {
-            let v = ((i as u16 - 232) * 10 + 8) as u8;
-            (v, v, v)
-        }
-    }
+fn load_window_size() -> Option<(f32, f32)> {
+    let text = std::fs::read_to_string(window_file()?).ok()?;
+    let mut it = text.split_whitespace();
+    let w: f32 = it.next()?.parse().ok()?;
+    let h: f32 = it.next()?.parse().ok()?;
+    Some((w, h))
 }
 
-fn cell_quad(row: u16, col: u16, cw: f32, ch: f32, top: f32, color: (u8, u8, u8)) -> Quad {
-    Quad::new(
-        (col as f32 * cw, top + row as f32 * ch),
-        ((col as f32 + 1.0) * cw, top + (row as f32 + 1.0) * ch),
-        (color.0, color.1, color.2, 255),
-    )
-}
-
-fn build_rows(screen: &ATerm) -> Vec<Vec<Span>> {
-    let (rows, cols) = screen.size();
-    let mut out = Vec::with_capacity(rows as usize);
-    for row in 0..rows {
-        let mut spans: Vec<Span> = Vec::new();
-        let mut run_col: Option<u16> = None;
-        let mut run_color = (0u8, 0u8, 0u8);
-        let mut run_text = String::new();
-        let mut col = 0u16;
-        while col < cols {
-            let Some(cell) = screen.cell(row, col) else {
-                col += 1;
-                continue;
-            };
-            let width = unicode_width_of(cell.ch);
-            let mut buf = [0u8; 4];
-            let text = cell.ch.encode_utf8(&mut buf).to_string();
-            let color = if cell.inverse {
-                BG
-            } else {
-                map_color(cell.fg, true)
-            };
-            if width >= 2 {
-                if let Some(rc) = run_col.take() {
-                    spans.push(Span::new(rc, std::mem::take(&mut run_text), run_color));
-                }
-                spans.push(Span::new(col, text, color));
-                col += 2;
-            } else {
-                if let Some(rc) = run_col {
-                    if run_color == color {
-                        run_text.push_str(&text);
-                    } else {
-                        spans.push(Span::new(rc, std::mem::take(&mut run_text), run_color));
-                        run_col = Some(col);
-                        run_color = color;
-                        run_text = text;
-                    }
-                } else {
-                    run_col = Some(col);
-                    run_color = color;
-                    run_text = text;
-                }
-                col += 1;
-            }
+fn save_window_size(w: f32, h: f32) {
+    if let Some(path) = window_file() {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
         }
-        if let Some(rc) = run_col.take() {
-            spans.push(Span::new(rc, run_text, run_color));
-        }
-        out.push(spans);
+        let _ = std::fs::write(path, format!("{w:.0} {h:.0}\n"));
     }
-    out
-}
-
-fn unicode_width_of(c: char) -> u16 {
-    let u = c as u32;
-    if u >= 0x1100
-        && (u <= 0x115f
-            || (0x2e80..=0xa4cf).contains(&u)
-            || (0xac00..=0xd7a3).contains(&u)
-            || (0xf900..=0xfaff).contains(&u)
-            || (0xfe30..=0xfe4f).contains(&u)
-            || (0xff00..=0xff60).contains(&u)
-            || (0xffe0..=0xffe6).contains(&u)
-            || (0x1f300..=0x1faff).contains(&u)
-            || (0x20000..=0x3fffd).contains(&u))
-    {
-        2
-    } else {
-        1
-    }
-}
-
-fn encode_key(event: &KeyEvent, mods: ModifiersState, app_cursor: bool) -> Vec<u8> {
-    if event.state != ElementState::Pressed {
-        return Vec::new();
-    }
-    // Cmd (super) is reserved for app shortcuts (handled by `shortcut`).
-    if mods.super_key() {
-        return Vec::new();
-    }
-    let ctrl = mods.control_key();
-    let alt = mods.alt_key();
-    let mut out: Vec<u8> = Vec::new();
-    if alt {
-        out.push(0x1b);
-    }
-    if let Key::Character(s) = &event.logical_key {
-        if ctrl {
-            if let Some(c) = s.chars().next() {
-                let c = c.to_ascii_uppercase();
-                if ('@'..='_').contains(&c) {
-                    out.push(c as u8 - 0x40);
-                    return out;
-                }
-            }
-        }
-        out.extend_from_slice(s.as_bytes());
-        return out;
-    }
-    if let Some(text) = &event.text {
-        out.extend_from_slice(text.as_bytes());
-        return out;
-    }
-    let seq: &[u8] = match &event.logical_key {
-        Key::Named(NamedKey::Enter) => b"\r",
-        Key::Named(NamedKey::Backspace) => &[0x7f],
-        Key::Named(NamedKey::Tab) => b"\t",
-        Key::Named(NamedKey::Escape) => &[0x1b],
-        Key::Named(NamedKey::ArrowUp) => {
-            if app_cursor {
-                b"\x1bOA"
-            } else {
-                b"\x1b[A"
-            }
-        }
-        Key::Named(NamedKey::ArrowDown) => {
-            if app_cursor {
-                b"\x1bOB"
-            } else {
-                b"\x1b[B"
-            }
-        }
-        Key::Named(NamedKey::ArrowRight) => {
-            if app_cursor {
-                b"\x1bOC"
-            } else {
-                b"\x1b[C"
-            }
-        }
-        Key::Named(NamedKey::ArrowLeft) => {
-            if app_cursor {
-                b"\x1bOD"
-            } else {
-                b"\x1b[D"
-            }
-        }
-        Key::Named(NamedKey::Home) => b"\x1b[H",
-        Key::Named(NamedKey::End) => b"\x1b[F",
-        Key::Named(NamedKey::Delete) => b"\x1b[3~",
-        Key::Named(NamedKey::PageUp) => b"\x1b[5~",
-        Key::Named(NamedKey::PageDown) => b"\x1b[6~",
-        _ => return out,
-    };
-    out.extend_from_slice(seq);
-    out
 }
