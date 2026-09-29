@@ -3516,6 +3516,7 @@ impl Mermaid {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn markdown_preview(
     ui: &mut egui::Ui,
     text: &str,
