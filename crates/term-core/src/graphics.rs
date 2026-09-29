@@ -24,6 +24,9 @@ pub struct PlacedImage {
     /// this is `None`.
     pub cols: Option<u16>,
     pub rows: Option<u16>,
+    /// Pixel offsets from the cursor cell (Kitty `X`/`Y`).
+    pub x_off: i32,
+    pub y_off: i32,
     pub image: Arc<gfx::Image>,
     pub z: i32,
 }
@@ -38,6 +41,8 @@ struct Partial {
     format: u32,
     compressed: bool,
     size: Option<(u32, u32)>,
+    x: i32,
+    y: i32,
     data: Vec<u8>,
 }
 
@@ -59,6 +64,7 @@ impl GraphicsLayer {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn place(
         &mut self,
         image: gfx::Image,
@@ -66,6 +72,8 @@ impl GraphicsLayer {
         col: u16,
         cols: Option<u16>,
         rows: Option<u16>,
+        x_off: i32,
+        y_off: i32,
         z: i32,
     ) -> u64 {
         self.next_id += 1;
@@ -76,6 +84,8 @@ impl GraphicsLayer {
             col,
             cols,
             rows,
+            x_off,
+            y_off,
             image: Arc::new(image),
             z,
         });
@@ -139,6 +149,8 @@ impl GraphicsLayer {
             p.format = cmd.format;
             p.compressed = cmd.compressed;
             p.size = cmd.size.or(p.size);
+            p.x = cmd.x;
+            p.y = cmd.y;
         }
         p.data.extend_from_slice(&cmd.data);
         if cmd.more {
@@ -163,7 +175,7 @@ impl GraphicsLayer {
         };
         match gfx::kitty::decode(&full, self.max_pixels) {
             Some(img) => {
-                self.place(img, anchor, col, p.cols, p.rows, p.z);
+                self.place(img, anchor, col, p.cols, p.rows, p.x, p.y, p.z);
                 true
             }
             None => false,
@@ -187,7 +199,7 @@ mod tests {
     fn anchors_shift_with_buffer_growth() {
         let mut l = GraphicsLayer::new();
         l.sync_total(10); // last_total aligns with the buffer at placement
-        l.place(img(2, 2), 5, 0, None, None, 0);
+        l.place(img(2, 2), 5, 0, None, None, 0, 0, 0);
         l.sync_total(10);
         assert_eq!(l.images[0].anchor, 5);
         l.sync_total(13); // three new lines
@@ -197,7 +209,7 @@ mod tests {
     #[test]
     fn shift_moves_all_anchors() {
         let mut l = GraphicsLayer::new();
-        l.place(img(1, 1), 3, 0, None, None, 0);
+        l.place(img(1, 1), 3, 0, None, None, 0, 0, 0);
         l.shift(5);
         assert_eq!(l.images[0].anchor, -2);
     }
@@ -205,8 +217,8 @@ mod tests {
     #[test]
     fn delete_by_id_and_all() {
         let mut l = GraphicsLayer::new();
-        let a = l.place(img(1, 1), 0, 0, None, None, 0);
-        l.place(img(1, 1), 0, 0, None, None, 0);
+        let a = l.place(img(1, 1), 0, 0, None, None, 0, 0, 0);
+        l.place(img(1, 1), 0, 0, None, None, 0, 0, 0);
         l.delete_id(a);
         assert_eq!(l.images.len(), 1);
         l.images.clear();

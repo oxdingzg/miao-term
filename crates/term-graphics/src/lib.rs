@@ -38,6 +38,9 @@ pub struct KittyCmd {
     /// `C=0` means "move the cursor" (default is not to move it).
     pub move_cursor: bool,
     pub z: i32,
+    /// `X`/`Y`: pixel offsets from the cursor cell.
+    pub x: i32,
+    pub y: i32,
     /// Format: 24 = RGB, 32 = RGBA, 100 = PNG.
     pub format: u32,
     /// `o=z`: payload is zlib-compressed.

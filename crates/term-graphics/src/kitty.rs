@@ -16,6 +16,8 @@ pub fn parse(body: &[u8]) -> KittyCmd {
         rows: None,
         move_cursor: false,
         z: 0,
+        x: 0,
+        y: 0,
         format: 32,
         compressed: false,
         more: false,
@@ -34,6 +36,8 @@ pub fn parse(body: &[u8]) -> KittyCmd {
             // `C=0` requests moving the cursor (default is not to).
             "C" => cmd.move_cursor = v == "0",
             "z" => cmd.z = v.parse().unwrap_or(0),
+            "X" => cmd.x = v.parse().unwrap_or(0),
+            "Y" => cmd.y = v.parse().unwrap_or(0),
             "f" => cmd.format = v.parse().unwrap_or(32),
             "o" => cmd.compressed = v == "z",
             "m" => cmd.more = v == "1",
@@ -104,13 +108,14 @@ mod tests {
 
     #[test]
     fn parses_parameters() {
-        let cmd = parse(b"a=T,f=100,c=10,r=5,i=7,z=1,m=1;somedata");
+        let cmd = parse(b"a=T,f=100,c=10,r=5,i=7,z=1,X=3,Y=4,m=1;somedata");
         assert_eq!(cmd.action, 'T');
         assert_eq!(cmd.format, 100);
         assert_eq!(cmd.cols, Some(10));
         assert_eq!(cmd.rows, Some(5));
         assert_eq!(cmd.id, Some(7));
         assert_eq!(cmd.z, 1);
+        assert_eq!((cmd.x, cmd.y), (3, 4));
         assert!(cmd.more);
         assert_eq!(cmd.data, b"somedata");
     }

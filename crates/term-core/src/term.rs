@@ -246,7 +246,7 @@ impl Terminal {
                     return false;
                 };
                 let rows = img.height.div_ceil(self.cell_h()).max(1);
-                self.graphics.place(img, line, col, None, None, 0);
+                self.graphics.place(img, line, col, None, None, 0, 0, 0);
                 for _ in 0..rows {
                     self.screen.process(b"\r\n");
                 }
@@ -278,7 +278,7 @@ impl Terminal {
                 let Some(img) = gfx::decode_iterm2(&data, self.graphics.max_pixels) else {
                     return false;
                 };
-                self.graphics.place(img, line, col, None, None, 0);
+                self.graphics.place(img, line, col, None, None, 0, 0, 0);
                 true
             }
         }

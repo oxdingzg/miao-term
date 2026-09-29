@@ -817,10 +817,21 @@ impl State {
                         let key = image_key(id, im.id);
                         image_keep.insert(key);
                         image_uploads.push((key, Arc::new(im.clone())));
-                        let x0 = ox + im.col as f32 * cw;
-                        let y0 = oy + (im.anchor + off) as f32 * ch;
-                        let x1 = x0 + im.image.width as f32;
-                        let y1 = y0 + im.image.height as f32;
+                        let w = im.image.width as f32;
+                        let h = im.image.height as f32;
+                        let bx = ox + im.col as f32 * cw;
+                        let by = oy + (im.anchor + off) as f32 * ch;
+                        let (x0, y0, x1, y1) = if let (Some(c), Some(r)) = (im.cols, im.rows) {
+                            // Explicit cell footprint: fit inside it, centred.
+                            let (tw, th) = (c as f32 * cw, r as f32 * ch);
+                            let s = (tw / w).min(th / h);
+                            let (dw, dh) = (w * s, h * s);
+                            let (x, y) = (bx + (tw - dw) / 2.0, by + (th - dh) / 2.0);
+                            (x, y, x + dw, y + dh)
+                        } else {
+                            let (x, y) = (bx + im.x_off as f32, by + im.y_off as f32);
+                            (x, y, x + w, y + h)
+                        };
                         if x1 < ox || y1 < oy || x0 > px1 || y0 > py1 {
                             continue;
                         }
