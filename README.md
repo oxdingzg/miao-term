@@ -303,19 +303,29 @@ Quick Terminal hotkey, i18n, and a performance gate.
 
 Still open:
 
-- **Release chain**: sign the release artifacts (minisign `.sig` + published
-  public key) and verify the installers end to end — notarized macOS builds,
-  Linux AppImage/`.deb`, Windows MSI.
-- **Platform verification**: the Linux wgpu render path now runs in CI via Mesa
-  software Vulkan (lavapipe); a real Linux desktop, the Wayland portal hotkey,
+- **Release chain**: obtain the signing credentials and run the pipeline end to
+  end — a minisign key with its published public key, Apple notarization
+  (Developer ID certificate + app password) and Windows MSI signing (a CA
+  certificate). The workflows are already wired; only the secrets are missing
+  (`docs/RELEASE.md`).
+- **Platform verification**: the Linux wgpu render path runs in CI via Mesa
+  software Vulkan (lavapipe); a real Linux desktop, the Wayland portal hotkey
   and Windows IME/GUI still need an interactive session.
 - **Update install** on Windows and Linux (macOS only today).
 - **CI performance baseline**: the regression gate compares against a recorded
   baseline, so it needs a CI-side baseline store to bind there.
+- **Native parity**: the native host still lacks system notifications, the sleep
+  guard, window opacity, the global Quick Terminal hotkey, URL schemes and the
+  shell/agent integration installers; its Settings window is a subset.
+- **Inline graphics**: anchoring is approximate past the scrollback cap; images
+  are clipped to the grid area rather than per pane; Kitty region-deletes
+  (`d=p/c/r`) and animation are not implemented; session restore keeps none.
 - **Markdown**: Mermaid renders a `graph`/`flowchart` subset (or fully via
-  `mermaid-command`); other diagram types show a placeholder.
+  `mermaid-command`); other diagram types show a placeholder, and remote
+  (http/https) images are not loaded.
 - **Editor**: both editors have an opt-in vim mode (ADR 0029); i18n covers the
   main chrome but not every string.
+- **Open Quickly**: folder / open-file entries and frecency ranking (ADR 0008).
 - **MTP**: `file.read/write` is UTF-8 text only (no binary/streaming transfer);
   per-capability authorization is available via `MIAOTTY_MTP_ALLOW`.
 
