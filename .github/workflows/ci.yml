@@ -4,9 +4,50 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Full three-OS test matrix once a night (and on demand).
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+# Rapid pushes to the same branch cancel the previous run instead of queueing.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  # Decide whether anything but docs changed, so docs-only pushes stay fast
+  # (they still run `privacy`).
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        run: |
+          set -e
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+            range="origin/${{ github.base_ref }}...HEAD"
+          elif [ -n "${{ github.event.before }}" ] && \
+               [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            range="${{ github.event.before }}...${{ github.sha }}"
+          else
+            range=""
+          fi
+          if [ -z "$range" ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "$range" | grep -qvE '\.(md|txt)$|^docs/'; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
   check:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -17,11 +58,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       # Cache the registry + target so a push does not recompile ~450 crates.
       - uses: Swatinem/rust-cache@v2
-      # `cargo test` compiles the whole workspace, so a separate `cargo check`
-      # only doubled the compile time.
-      - run: cargo test --workspace
+      # Pushes run the suite on Linux only (fast); macOS/Windows compile-check.
+      # PRs, the nightly run and manual runs test all three (ConPTY etc.).
+      - name: Test
+        if: github.event_name != 'push' || runner.os == 'Linux'
+        run: cargo test --workspace
+      - name: Check (compile only)
+        if: github.event_name == 'push' && runner.os != 'Linux'
+        run: cargo check --workspace --all-targets
 
   render-linux:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,6 +89,8 @@ jobs:
         run: cargo test -p miao-term-render -- --nocapture
 
   perf:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     env:
       # Looser than the local 25% so shared-runner noise does not flake.
