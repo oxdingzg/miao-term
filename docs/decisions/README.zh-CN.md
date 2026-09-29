@@ -39,3 +39,4 @@
 | [0028](./0028-ci-perf-baseline.zh-CN.md) | CI 侧性能基线 | 已接受 |
 | [0029](./0029-vim-mode.zh-CN.md) | 极小、可选的 vim 模式 | 已接受 |
 | [0030](./0030-native-render-loop.zh-CN.md) | 原生渲染循环（自绘网格） | 已接受 |
+| [0031](./0031-mermaid-rendering.zh-CN.md) | Markdown 预览里的 Mermaid | 已接受 |

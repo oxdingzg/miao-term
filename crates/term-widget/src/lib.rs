@@ -152,6 +152,7 @@ struct State {
     editor_vim: bool,
     vim: Option<miao_term_ui::vim::VimRuntime>,
     vim_for: String,
+    mmd: Mermaid,
     composer: Option<String>,
     quick: Option<String>,
     closed: Vec<Option<std::path::PathBuf>>,
@@ -2152,6 +2153,8 @@ impl State {
         });
         let mut layouter =
             miao_term_ui::syntax::layouter(lang, egui::Color32::from_rgb(0xe5, 0xe5, 0xe5), 13.0);
+        let diag_fg = miao_term_ui::chrome::fg_color(&self.theme);
+        let diag_panel = miao_term_ui::chrome::bg_color(lighten(self.theme.bg, 0.08));
         let mut open = true;
         let mut save = false;
         let mut quit = false;
@@ -2185,7 +2188,16 @@ impl State {
                 if ed.preview {
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
-                        .show(ui, |ui| markdown_preview(ui, &ed.text, ed.path.parent()));
+                        .show(ui, |ui| {
+                            markdown_preview(
+                                ui,
+                                &ed.text,
+                                ed.path.parent(),
+                                &mut self.mmd,
+                                diag_fg,
+                                diag_panel,
+                            )
+                        });
                 } else {
                     let mut vim_effect = miao_term_ui::vim::VimEffect::Nothing;
                     egui::ScrollArea::both()
@@ -2494,6 +2506,13 @@ impl ApplicationHandler for Host {
             editor_vim: cfg.editor_vim,
             vim: cfg.editor_vim.then(miao_term_ui::vim::VimRuntime::default),
             vim_for: String::new(),
+            mmd: Mermaid {
+                dir: window_file()
+                    .map(|p| p.with_file_name("mermaid-cache"))
+                    .unwrap_or_default(),
+                cmd: cfg.mermaid_command.clone(),
+                cache: std::collections::HashMap::new(),
+            },
             composer: None,
             quick: None,
             closed: Vec::new(),
@@ -2922,16 +2941,79 @@ fn lighten(c: miao_term_ui::theme::Rgb, f: f32) -> miao_term_ui::theme::Rgb {
 }
 
 /// A naive Markdown renderer: headings, bullets, quotes and fenced code.
-fn markdown_preview(ui: &mut egui::Ui, text: &str, base: Option<&std::path::Path>) {
-    let mut in_code = false;
-    for line in text.lines() {
-        if line.trim_start().starts_with("```") {
-            in_code = !in_code;
-            ui.separator();
-            continue;
+/// Mermaid rendering for the Markdown preview: an external CLI (opt-in via
+/// `mermaid-command`) with a cache, falling back to the built-in subset.
+#[derive(Default)]
+struct Mermaid {
+    dir: std::path::PathBuf,
+    cmd: Option<String>,
+    cache: std::collections::HashMap<u64, Option<std::path::PathBuf>>,
+}
+
+impl Mermaid {
+    /// Externally-rendered PNG for `source`, or `None` (no tool configured or
+    /// it failed). Runs the command at most once per diagram.
+    fn image(&mut self, source: &str) -> Option<std::path::PathBuf> {
+        let cmd = self.cmd.clone()?;
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        source.hash(&mut h);
+        let key = h.finish();
+        if let Some(v) = self.cache.get(&key) {
+            return v.clone();
         }
-        if in_code {
-            ui.label(egui::RichText::new(line).monospace().size(12.0));
+        let img = miao_term_ui::mermaid::render_external(source, &cmd, &self.dir);
+        self.cache.insert(key, img.clone());
+        img
+    }
+}
+
+fn markdown_preview(
+    ui: &mut egui::Ui,
+    text: &str,
+    base: Option<&std::path::Path>,
+    mmd: &mut Mermaid,
+    fg: egui::Color32,
+    panel: egui::Color32,
+) {
+    let mut lines = text.lines().peekable();
+    while let Some(line) = lines.next() {
+        if let Some(info) = line.trim_start().strip_prefix("```") {
+            let info = info.trim().to_ascii_lowercase();
+            let mut body = String::new();
+            for l in lines.by_ref() {
+                if l.trim_start().starts_with("```") {
+                    break;
+                }
+                body.push_str(l);
+                body.push('\n');
+            }
+            ui.separator();
+            if info == "mermaid" {
+                if let Some(path) = mmd.image(&body) {
+                    let uri = miao_term_ui::markdown::image_uri(&path.display().to_string(), None);
+                    if let Some(uri) = uri {
+                        ui.add(
+                            egui::Image::new(uri)
+                                .max_width(ui.available_width())
+                                .max_height(400.0),
+                        );
+                    }
+                } else if let Some(g) = miao_term_ui::mermaid::parse(&body) {
+                    miao_term_ui::mermaid::show(ui, &g, fg, panel);
+                } else {
+                    ui.label(
+                        egui::RichText::new("Mermaid diagram (not rendered)")
+                            .size(12.0)
+                            .color(egui::Color32::from_gray(150)),
+                    );
+                }
+            } else {
+                for l in body.lines() {
+                    ui.label(egui::RichText::new(l).monospace().size(12.0));
+                }
+            }
+            ui.separator();
             continue;
         }
         if let Some((alt, url)) = miao_term_ui::markdown::parse_image(line.trim()) {

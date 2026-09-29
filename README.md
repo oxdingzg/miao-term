@@ -309,7 +309,8 @@ Still open:
 - **Update install** on Windows and Linux (macOS only today).
 - **CI performance baseline**: the regression gate compares against a recorded
   baseline, so it needs a CI-side baseline store to bind there.
-- **Markdown**: Mermaid diagrams are not rendered.
+- **Markdown**: Mermaid renders a `graph`/`flowchart` subset (or fully via
+  `mermaid-command`); other diagram types show a placeholder.
 - **Editor**: both editors have an opt-in vim mode (ADR 0029); i18n covers the
   main chrome but not every string.
 - **MTP**: `file.read/write` is UTF-8 text only (no binary/streaming transfer);

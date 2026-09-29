@@ -12,6 +12,7 @@ font-size = 14
 # quick-terminal-hotkey = "cmd+shift+t"  # system-wide Quick Terminal toggle
 # editor-vim = true                # minimal vim mode in the built-in editor
 # editor = "code --wait"            # command used by "Edit in Tab"
+# mermaid-command = "mmdc"          # render ```mermaid blocks with mermaid-cli (else a built-in subset)
 # language = "zh"                  # UI language ("en" default; also reads $LANG)
 # update-pubkey = "RW…"            # minisign public key; enables signature checks
 # update-check-url = "https://example.com/miaotty/latest.json"

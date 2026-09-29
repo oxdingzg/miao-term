@@ -270,7 +270,7 @@ view/edit、更新下载/校验/安装、URL scheme、全局快速终端热键�
   真实 Linux 桌面、Wayland 门户热键、以及 Windows 的 IME/GUI 仍需交互式会话。
 - **更新安装**:Windows 与 Linux(目前仅 macOS)。
 - **CI 性能基线**:回归门对比记录的基线,需 CI 侧基线存储才能在 CI 生效。
-- **Markdown**:Mermaid 图未渲染。
+- **Markdown**:Mermaid 支持 `graph`/`flowchart` 子集(或经 `mermaid-command` 全量渲染);其它图类型显示占位。
 - **编辑器**:两端编辑器均有可选的 vim 模式(ADR 0029);i18n 覆盖主要界面但未覆盖全部字符串。
 - **MTP**:`file.read/write` 仅 UTF-8 文本(无二进制/流式传输);已支持按能力授权(`MIAOTTY_MTP_ALLOW`)。
 

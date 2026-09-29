@@ -38,3 +38,4 @@ Docs are English by default; keep a Simplified Chinese version in sync
 | [0028](./0028-ci-perf-baseline.md) | CI-side performance baseline | accepted |
 | [0029](./0029-vim-mode.md) | A minimal, opt-in vim mode | accepted |
 | [0030](./0030-native-render-loop.md) | Native render loop (self-drawn grid) | accepted |
+| [0031](./0031-mermaid-rendering.md) | Mermaid in the Markdown preview | accepted |

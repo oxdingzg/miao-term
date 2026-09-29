@@ -116,6 +116,8 @@ struct RawConfig {
     editor: Option<String>,
     #[serde(rename = "editor-vim")]
     editor_vim: Option<bool>,
+    #[serde(rename = "mermaid-command")]
+    mermaid_command: Option<String>,
     #[serde(rename = "quick-terminal-hotkey")]
     quick_terminal_hotkey: Option<String>,
     #[serde(rename = "update-pubkey")]
@@ -205,6 +207,9 @@ pub struct Config {
     pub editor: Option<String>,
     /// Enable a minimal vim mode in the built-in editor (ADR 0029).
     pub editor_vim: bool,
+    /// External Mermaid renderer (e.g. `mmdc`) for `mermaid` code blocks.
+    /// `None` (default) draws the built-in `graph`/`flowchart` subset instead.
+    pub mermaid_command: Option<String>,
     /// System-wide accelerator that toggles the Quick Terminal, e.g.
     /// `cmd+shift+t` (see ADR 0019). `None` disables it.
     pub quick_terminal_hotkey: Option<String>,
@@ -260,6 +265,7 @@ impl Default for Config {
             update_check_url: None,
             editor: None,
             editor_vim: false,
+            mermaid_command: None,
             quick_terminal_hotkey: None,
             update_pubkey: None,
             theme: Theme::default(),
@@ -529,6 +535,12 @@ impl Config {
         }
         if let Some(vim) = raw.editor_vim {
             cfg.editor_vim = vim;
+        }
+        if let Some(cmd) = raw.mermaid_command {
+            let cmd = cmd.trim();
+            if !cmd.is_empty() {
+                cfg.mermaid_command = Some(cmd.to_string());
+            }
         }
         if let Some(editor) = raw.editor {
             let editor = editor.trim();

@@ -2307,15 +2307,31 @@ fn markdown_ui(
         let trimmed = line.trim_start();
         if trimmed.starts_with("```") {
             let info = trimmed.trim_start_matches('`').trim().to_ascii_lowercase();
-            in_code = !in_code;
-            if in_code && info == "mermaid" {
-                // Mermaid layout is out of scope; say so instead of pretending.
-                ui.label(
-                    egui::RichText::new(i18n::t(lang, "Mermaid diagram (not rendered)"))
-                        .small()
-                        .color(muted),
-                );
+            if !in_code && info == "mermaid" {
+                let mut j = i + 1;
+                let mut body = String::new();
+                while j < lines.len() && !lines[j].trim_start().starts_with("```") {
+                    body.push_str(lines[j]);
+                    body.push('\n');
+                    j += 1;
+                }
+                ui.add_space(4.0);
+                if let Some(g) = miao_term_ui::mermaid::parse(&body) {
+                    let panel = ui.visuals().extreme_bg_color;
+                    miao_term_ui::mermaid::show(ui, &g, fg, panel);
+                } else {
+                    // Not a `graph`/`flowchart` we can draw; say so.
+                    ui.label(
+                        egui::RichText::new(i18n::t(lang, "Mermaid diagram (not rendered)"))
+                            .small()
+                            .color(muted),
+                    );
+                }
+                ui.add_space(4.0);
+                i = if j < lines.len() { j + 1 } else { j };
+                continue;
             }
+            in_code = !in_code;
             ui.label(egui::RichText::new(line).monospace().color(muted));
             i += 1;
             continue;
