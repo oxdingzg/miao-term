@@ -45,3 +45,5 @@ CLI 增加对应子命令:`miaotty-cli view <path>`、`miaotty-cli edit <path>`�
   文本,足以支撑查看/编辑流程。
 - 鉴权仍是"能连到 socket 即可"(socket 为用户私有,0600);更细的能力门控与二进制/流式传输
   属后续。
+- Update:随后加入了 `remote-listen` TCP 监听(要求 `MIAOTTY_MTP_TOKEN`)与 `MIAOTTY_MTP_ALLOW`
+  能力白名单,故鉴权不再只是"能连到 socket 即可";本地 socket 仍为用户私有(0600)。

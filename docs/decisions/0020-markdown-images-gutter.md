@@ -42,3 +42,5 @@ stays put when long lines scroll horizontally (the earlier limitation is gone).
   moving the gutter outside the scroll area later.
 - Mermaid/`svg` diagrams and remote images remain follow-ups (the latter need an
   HTTP loader and a network fetch).
+- Update: the gutter now sits outside the scroll area (see the addendum), so it
+  no longer scrolls horizontally with long lines.

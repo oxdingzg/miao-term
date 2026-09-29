@@ -41,3 +41,4 @@ Linux AppImage/deb)是另一份工作。
 - macOS 上更新路径端到端可用:检查 → 下载 → 校验 → 安装 → 重启,且替换失败可回滚。
 - helper 文本与 `bundle_root` 是纯函数并有单测;真正的替换只能在真实安装的包上验证。
 - Windows/Linux 的自我替换与已签名发布通道仍属后续。
+- Update:Windows/Linux 的自我替换已落地(见附记);已签名发布通道仍属后续。

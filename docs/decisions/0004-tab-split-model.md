@@ -1,7 +1,5 @@
 # ADR 0004 — Own tab/split model (not OS-native)
 
-> 简体中文: [`0004-tab-split-model.zh-CN.md`](0004-tab-split-model.zh-CN.md)
-
 Status: accepted.
 
 ## Context

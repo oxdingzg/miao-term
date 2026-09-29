@@ -32,3 +32,5 @@ absolute budget would hide. Bumping the baseline is an explicit edit to
   `ubuntu-latest`, so the regression check is most meaningful on the maintainer's
   hardware and the absolute budget remains the CI-safe gate. A CI-maintained
   baseline store is the next step if we want the tighter check to bind in CI.
+- Update: the CI-side baseline store landed in ADR 0028, so the tighter check can
+  bind on a stable runner.

@@ -1,7 +1,5 @@
 # ADR 0005 — MTP transport
 
-> 简体中文: [`0005-transport.zh-CN.md`](0005-transport.zh-CN.md)
-
 Status: accepted.
 
 ## Context
@@ -26,3 +24,6 @@ hooks, on all three platforms, without coupling to the engine.
 - The existing `miaotty-cli` talks to the Rust host unchanged (verified).
 - Windows needs a small transport shim behind the same interface.
 - A crash in the socket server cannot take down the UI (separate thread).
+- Update: the socket path now prefers `$XDG_RUNTIME_DIR/miaotty.sock` and falls
+  back to `$TMPDIR/miaotty.sock`, so it stays in a user-private directory where
+  the platform offers one.

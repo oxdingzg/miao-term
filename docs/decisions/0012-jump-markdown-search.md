@@ -36,3 +36,6 @@ search; requests are debounced to 200 ms so keystrokes do not flood the worker.
   finding fewer hits rather than by stalling.
 - Line-accurate jumps into the editor, richer Markdown (tables/links/Mermaid)
   and a fuzzy-ranked `jump` are follow-ups.
+- Update: line jumps and links landed in ADR 0015, tables in ADR 0017, images in
+  ADR 0020, and a Mermaid subset later; a fuzzy-ranked `jump` remains a
+  follow-up.

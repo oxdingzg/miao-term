@@ -54,3 +54,7 @@ The CLI gains matching subcommands: `miaotty-cli view <path>`,
 - Auth remains "whoever can reach the socket" (the socket is user-private,
   0600); finer-grained capability gating and binary/streaming transfers are
   follow-ups.
+- Update: a `remote-listen` TCP listener (requiring `MIAOTTY_MTP_TOKEN`) and an
+  `MIAOTTY_MTP_ALLOW` capability allowlist were added later, so auth is no longer
+  only "whoever can reach the socket"; the local socket stays user-private
+  (0600).

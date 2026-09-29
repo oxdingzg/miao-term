@@ -42,3 +42,6 @@ available*. Off by default; no TLS/runtime dependency is added.
   are visibly English rather than blank.
 - True global hotkeys, deep-link focus of an existing window, and in-app update
   download/signing remain follow-ups.
+- Update: true global hotkeys and deep-link focus landed in ADR 0019 (Wayland in
+  ADR 0026), and in-app download, verification and install landed in ADRs
+  0022/0025.

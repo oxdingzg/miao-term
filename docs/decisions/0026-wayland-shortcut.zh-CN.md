@@ -12,7 +12,7 @@ X11;Wayland compositor 会忽略它。`GlobalShortcuts` XDG desktop portal 是�
 
 ## 决定
 
-Linux 上 `hotkey.rs` 经 `ashpd`(MIT)用门户注册快速终端:
+Linux 上 `crates/term-ui/src/hotkey.rs` 经 `ashpd`(MIT)用门户注册快速终端:
 
 1. 专属线程跑一个 current-thread tokio runtime(`enable_all`)。
 2. `GlobalShortcuts::new` → `create_session` → `bind_shortcuts(["quick"])`;门户可能提示用户,

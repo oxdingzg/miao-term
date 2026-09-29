@@ -64,3 +64,5 @@ is user-editable and round-trippable). It lives in `miao-term-config::view`
 - The icon set itself (29 hand-authored painter primitives in
   `miaotty-app/src/icons.rs`) and the rule *editor* UI are follow-ups; this
   ADR covers the model and the matching semantics they build on.
+- Update: the icon set and the rule *editor* UI now exist (add, reorder, delete
+  and save rules).

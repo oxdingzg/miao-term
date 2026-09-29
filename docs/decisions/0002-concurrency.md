@@ -1,7 +1,5 @@
 # ADR 0002 — Concurrency and lock discipline
 
-> 简体中文: [`0002-concurrency.zh-CN.md`](0002-concurrency.zh-CN.md)
-
 Status: accepted.
 
 ## Context

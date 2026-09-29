@@ -44,3 +44,7 @@ the artifact and quit); true self-replacement is still a follow-up.
   remaining gap before auto-install, as is actually replacing the running app.
 - Everything is dependency-free (`curl` + our hash), keeping ADR 0006's rule
   that the engine and app pull no copyleft and few new crates.
+- Update: the signature check landed (see the addendum) and self-replacement
+  landed in ADR 0025, where the button is now *Install and Relaunch*. The
+  manifest may also carry `macos-x86_64`, `linux-x86_64` (plus the
+  manifest-only `linux-x86_64-deb`), `linux-aarch64` and `windows-x86_64`.

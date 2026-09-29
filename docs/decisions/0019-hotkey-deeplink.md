@@ -50,3 +50,5 @@ mechanism, which is how they bind everything else anyway.
   be driven from outside the app, which is what editor/launcher integrations
   need. Grabbing keys *inside* an existing window (menu accelerators) and
   Wayland native global shortcuts remain follow-ups.
+- Update: Wayland native global shortcuts landed in ADR 0026 (see the
+  addendum); in-window menu accelerators remain a follow-up.

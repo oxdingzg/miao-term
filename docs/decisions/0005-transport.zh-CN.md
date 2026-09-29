@@ -22,3 +22,5 @@
 - 现有 `miaotty-cli` 无需改动即可连 Rust host(已验证)。
 - Windows 需要在同一接口后加一个小传输层。
 - socket server 崩溃不会拖垮 UI(独立线程)。
+- Update:socket 路径现优先 `$XDG_RUNTIME_DIR/miaotty.sock`,回退 `$TMPDIR/miaotty.sock`,
+  以便在平台提供用户私有目录时避开共享位置。

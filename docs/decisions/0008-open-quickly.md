@@ -36,3 +36,5 @@ flat list of entries and runs the chosen one.
   `Verb` — both are small, local changes.
 - Folder/open-file entries and frecency (the `jump` ranking) are deferred to
   U5, where the file model lands.
+- Update: open-file entries landed with the editor (ADR 0009) and the file model
+  (ADR 0012); folder entries and frecency remain follow-ups.

@@ -17,7 +17,8 @@ event loop (see ARCHITECTURE §3, D3).
 ## Decision
 
 Move the terminal grid onto a **native `winit` + `wgpu` render loop** owned by
-`term-widget`, and stop routing it through egui:
+`term-widget` (the `miao-term-widget` package, bin `miaotty-native`), and stop
+routing it through egui:
 
 - `term-widget` owns the `winit` event loop and the `wgpu` surface.
 - `term-render` owns the passes: background/selection/cursor quads plus glyphs,
@@ -27,8 +28,8 @@ Move the terminal grid onto a **native `winit` + `wgpu` render loop** owned by
   so echo is drawn on the next frame; idle costs ~0.
 - egui remains available for chrome (panels/settings) and composes in the *same*
   frame once the chrome exists (D3), but the grid never depends on it.
-- Present mode is selected to minimise latency (`AutoNoVsync` where the display
-  allows it), preferring `Mailbox`/`Immediate` over forced `Fifo`.
+- Present mode is `AutoNoVsync` and `desired_maximum_frame_latency = 1`, to
+  minimise latency.
 
 ## Consequences
 

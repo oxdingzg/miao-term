@@ -27,3 +27,4 @@ spaces and quotes are safe.
 - Editors like `code --wait`, `nvim` or `emacsclient` can be pinned per user.
 - Images, footnotes and Mermaid remain follow-ups; the separator/pipe heuristics
   cover the common GFM table shape.
+- Update: images and footnotes landed in ADR 0020.

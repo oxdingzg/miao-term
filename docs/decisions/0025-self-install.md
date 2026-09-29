@@ -51,3 +51,5 @@ The generators are pure functions and unit-tested on every platform.
 - The helper text and `bundle_root` are pure functions and unit-tested; the
   actual swap can only be exercised on a real installed bundle.
 - Windows/Linux self-replacement and a signed-release channel remain follow-ups.
+- Update: Windows/Linux self-replacement landed (see the addendum); a
+  signed-release channel remains a follow-up.

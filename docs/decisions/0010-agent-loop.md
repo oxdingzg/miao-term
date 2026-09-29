@@ -51,3 +51,5 @@ when its target pane's agent becomes `idle`.
   missing; they can never fail the app.
 - The queue is in-memory (session restore covers panes, not prompts); resuming
   a specific agent session and quota display remain follow-ups.
+- Update: session resume and quota display landed with the U6 tail Addendum
+  above; the queue is still in-memory.

@@ -33,3 +33,5 @@ U5's remaining polish.
   (`link_segments`, `is_rule`, `heading`).
 - In-editor line-number gutters while *editing*, richer Markdown (tables,
   images, Mermaid) and an `open_with` preference remain follow-ups.
+- Update: the editing gutter landed in ADR 0020 and tables/images/Mermaid landed
+  in ADRs 0017/0020; an `open_with` preference remains a follow-up.

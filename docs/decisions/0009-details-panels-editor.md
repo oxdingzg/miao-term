@@ -42,3 +42,6 @@ its `OpenFile` action routes to the same editor.
   engine's threading model (ADR 0002).
 - Symbol search, `jump` frecency and rich previews (Markdown/Mermaid) are
   follow-ups; this ADR fixes the plumbing they build on.
+- Update: content search landed in ADR 0012, and rich previews (Markdown,
+  Mermaid, images) landed in ADRs 0015/0017/0020; `jump` frecency remains a
+  follow-up.

@@ -27,3 +27,5 @@
 - 这些都是在字符串之上的展示逻辑,并保持有单测
   (`link_segments`、`is_rule`、`heading`)。
 - *编辑态*的行号栏、更丰富的 Markdown(表格、图片、Mermaid)与 `open_with` 偏好仍属后续。
+- Update:编辑态行号栏已在 ADR 0020 落地,表格/图片/Mermaid 已在 ADR 0017/0020 落地;
+  `open_with` 偏好仍属后续。

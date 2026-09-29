@@ -1,7 +1,5 @@
 # ADR 0003 — Terminal + egui co-frame rendering
 
-> 简体中文: [`0003-co-frame-rendering.zh-CN.md`](0003-co-frame-rendering.zh-CN.md)
-
 Status: accepted.
 
 ## Context

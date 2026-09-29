@@ -11,8 +11,8 @@ its trigger is owned by the compositor/user rather than grabbed by us.
 
 ## Decision
 
-On Linux, `hotkey.rs` registers the Quick Terminal through the portal using
-`ashpd` (MIT):
+On Linux, `crates/term-ui/src/hotkey.rs` registers the Quick Terminal through the
+portal using `ashpd` (MIT):
 
 1. A dedicated thread runs a current-thread tokio runtime (`enable_all`).
 2. `GlobalShortcuts::new` → `create_session` → `bind_shortcuts(["quick"])`; the

@@ -26,7 +26,7 @@ Info/Agent/Outline 读现有状态;Git/Files/Ports 读后台 worker 产出的快
 (Preview),带 Edit 切换、Reload、Save。超过 2 MB 的文件拒绝打开;非 UTF-8 字节按 lossy
 解码,故查看器不会因二进制或超大输入崩溃。Markdown/Mermaid 渲染推迟。
 
-**面板(命令面板)。** Open Quickly 增加焦点目录下的 `file` 条目,其 `OpenFile` 动作路由到
+**命令面板。** Open Quickly 增加焦点目录下的 `file` 条目,其 `OpenFile` 动作路由到
 同一个编辑器。
 
 ## 后果
@@ -34,3 +34,5 @@ Info/Agent/Outline 读现有状态;Git/Files/Ports 读后台 worker 产出的快
 - 即便 `git status` 或 `lsof` 很慢,面板仍保持响应;UI 在下一次快照到达前显示上一份。
 - worker 是普通线程,而非 async 运行时 —— 与引擎的线程模型一致(ADR 0002)。
 - 符号搜索、`jump` frecency 与富预览(Markdown/Mermaid)属后续;本 ADR 固定它们所依赖的管道。
+- Update:内容搜索已在 ADR 0012 落地,富预览(Markdown、Mermaid、图片)已在
+  ADR 0015/0017/0020 落地;`jump` frecency 仍属后续。

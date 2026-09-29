@@ -44,3 +44,5 @@ shared `term-mtp` crate — was needed.
   spawning a duplicate window.
 - True global hotkeys, deep-linking *into* an existing window's specific pane,
   and remote hooks remain follow-ups.
+- Update: true global hotkeys and deep-linking to a specific pane landed in ADR
+  0019; remote hooks remain a follow-up.
