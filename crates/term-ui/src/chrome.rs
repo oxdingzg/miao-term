@@ -117,6 +117,7 @@ pub fn tab_bar(
 }
 
 /// A vertical session list for the sidebar.
+#[allow(clippy::too_many_arguments)]
 pub fn sidebar(
     ui: &mut egui::Ui,
     theme: &crate::theme::Theme,
