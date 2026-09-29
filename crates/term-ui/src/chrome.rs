@@ -410,6 +410,10 @@ pub trait Chrome {
     fn read_only(&self) -> bool {
         false
     }
+    /// The host's active theme (colours for the whole chrome).
+    fn theme(&self) -> crate::theme::Theme {
+        crate::theme::Theme::default()
+    }
     /// A single-line list view for list-like tabs; `None` falls back to k/v.
     fn details_list(&self) -> Option<Vec<ChromeItem>> {
         None
@@ -462,7 +466,7 @@ pub const CHROME_DETAILS_W: f32 = 300.0;
 /// Draw the whole surrounding UI (menu, tabs, sidebar, details, status).
 pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
     use crate::icons::{icon_button, Icon};
-    let theme = crate::theme::Theme::default();
+    let theme = host.theme();
     let lang = host.lang();
 
     // Snapshot (owned), so nothing borrows the host while egui closures run.

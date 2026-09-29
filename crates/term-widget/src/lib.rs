@@ -4685,6 +4685,9 @@ impl chrome::Chrome for State {
     fn read_only(&self) -> bool {
         self.read_only
     }
+    fn theme(&self) -> Theme {
+        self.theme.clone()
+    }
     fn details_is_queue(&self) -> bool {
         self.details_tab == 6
     }
