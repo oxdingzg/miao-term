@@ -256,7 +256,8 @@ impl Terminal {
                 let move_now = cmd.move_cursor && matches!(cmd.action, 'T' | 'p');
                 let rows_hint = cmd.rows;
                 let before = self.graphics.images.len();
-                let changed = self.graphics.kitty(cmd, line, col);
+                let view_offset = self.screen.scroll_offset() as i32;
+                let changed = self.graphics.kitty(cmd, line, col, view_offset);
                 if move_now && self.graphics.images.len() > before {
                     let rows = rows_hint
                         .map(u32::from)

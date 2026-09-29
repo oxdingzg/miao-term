@@ -22,6 +22,9 @@ pub fn parse(body: &[u8]) -> KittyCmd {
         compressed: false,
         more: false,
         size: None,
+        delete: None,
+        cell_x: None,
+        cell_y: None,
         data,
     };
     for part in params.split(',') {
@@ -41,6 +44,9 @@ pub fn parse(body: &[u8]) -> KittyCmd {
             "f" => cmd.format = v.parse().unwrap_or(32),
             "o" => cmd.compressed = v == "z",
             "m" => cmd.more = v == "1",
+            "d" => cmd.delete = v.chars().next(),
+            "x" => cmd.cell_x = v.parse().ok(),
+            "y" => cmd.cell_y = v.parse().ok(),
             "s" => {
                 if let Some((w, h)) = v.split_once('x') {
                     cmd.size = Some((w.parse().unwrap_or(0), h.parse().unwrap_or(0)));
@@ -109,6 +115,10 @@ mod tests {
     #[test]
     fn parses_parameters() {
         let cmd = parse(b"a=T,f=100,c=10,r=5,i=7,z=1,X=3,Y=4,m=1;somedata");
+        assert_eq!(cmd.delete, None);
+        let del = parse(b"a=d,d=p,x=4,y=2;i=1");
+        assert_eq!(del.delete, Some('p'));
+        assert_eq!((del.cell_x, del.cell_y), (Some(4), Some(2)));
         assert_eq!(cmd.action, 'T');
         assert_eq!(cmd.format, 100);
         assert_eq!(cmd.cols, Some(10));

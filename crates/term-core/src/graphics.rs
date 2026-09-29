@@ -127,14 +127,36 @@ impl GraphicsLayer {
         self.last_total = total;
     }
 
-    /// Handle a Kitty command. `anchor`/`col` are the current cursor position.
+    /// Handle a Kitty command. `anchor`/`col` are the current cursor position,
+    /// `view_offset` the scrollback offset (so viewport rows can be computed).
     /// Returns true if the visible content changed.
-    pub fn kitty(&mut self, cmd: gfx::KittyCmd, anchor: i32, col: u16) -> bool {
+    pub fn kitty(&mut self, cmd: gfx::KittyCmd, anchor: i32, col: u16, view_offset: i32) -> bool {
         let key = cmd.id.unwrap_or(0);
         if cmd.action == 'd' {
-            match cmd.id {
-                Some(id) => self.delete_id(id),
-                None => self.images.clear(),
+            let row_of = |im: &PlacedImage| im.anchor + view_offset;
+            match cmd
+                .delete
+                .unwrap_or(if cmd.id.is_some() { 'i' } else { 'a' })
+            {
+                'i' => match cmd.id {
+                    Some(id) => self.delete_id(id),
+                    None => self.images.clear(),
+                },
+                'p' => {
+                    let (cx, cy) = (cmd.cell_x.unwrap_or(0), cmd.cell_y.unwrap_or(0));
+                    self.images
+                        .retain(|im| !(im.col == cx && row_of(im) == cy as i32));
+                }
+                'c' => {
+                    let cx = cmd.cell_x.unwrap_or(0);
+                    self.images.retain(|im| im.col != cx);
+                }
+                'r' => {
+                    let cy = cmd.cell_y.unwrap_or(0) as i32;
+                    self.images.retain(|im| row_of(im) != cy);
+                }
+                'z' => self.images.retain(|im| im.z != cmd.z),
+                _ => self.images.clear(),
             }
             return true;
         }
@@ -204,6 +226,24 @@ mod tests {
         assert_eq!(l.images[0].anchor, 5);
         l.sync_total(13); // three new lines
         assert_eq!(l.images[0].anchor, 2);
+    }
+
+    #[test]
+    fn region_deletes() {
+        let mut l = GraphicsLayer::new();
+        l.place(img(2, 2), 3, 1, None, None, 0, 0, 0); // column 1, line 3
+        l.place(img(2, 2), 5, 2, None, None, 0, 0, 0); // column 2, line 5
+                                                       // d=p at (col 1, row 3) deletes only the first.
+        let mut cmd = gfx::kitty::parse(b"a=d,d=p,x=1,y=3");
+        cmd.id = None;
+        l.kitty(cmd, 0, 0, 0);
+        assert_eq!(l.images.len(), 1);
+        assert_eq!(l.images[0].col, 2);
+        // d=c at column 2 removes the rest.
+        let mut cmd = gfx::kitty::parse(b"a=d,d=c,x=2");
+        cmd.id = None;
+        l.kitty(cmd, 0, 0, 0);
+        assert!(l.images.is_empty());
     }
 
     #[test]

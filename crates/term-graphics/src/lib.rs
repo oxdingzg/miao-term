@@ -49,6 +49,11 @@ pub struct KittyCmd {
     pub more: bool,
     /// `s=WxH` pixel size (needed for raw formats).
     pub size: Option<(u32, u32)>,
+    /// `d` (delete what): a = all, i = by id, p = at cell, c/r = column/row, z = z-index.
+    pub delete: Option<char>,
+    /// `x`/`y`: cell coordinates (viewport-relative) for `a=d,d=p/c/r`.
+    pub cell_x: Option<u16>,
+    pub cell_y: Option<u16>,
     /// The `;`-separated payload (raw bytes; usually base64 text).
     pub data: Vec<u8>,
 }
