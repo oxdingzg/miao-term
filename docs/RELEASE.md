@@ -51,6 +51,19 @@ its single line into their config:
 update-pubkey = "RWQ…"
 ```
 
+## Backing up and rotating the minisign key
+
+GitHub Secrets are **write-only**: once `MINISIGN_SECRET_KEY` is set you cannot
+read it back from the UI or API. Losing the local copy does **not** break
+releases (CI keeps signing), but you cannot recover the raw key either — so keep
+an offline backup and treat the key as long-lived:
+
+- The public key is in the repo (`minisign.pub`) and attached to every release.
+- Back up the private key somewhere durable (password manager, encrypted copy,
+  macOS Keychain). To rotate: generate a new pair, `gh secret set
+  MINISIGN_SECRET_KEY`, replace `minisign.pub` and tell users to update
+  `update-pubkey`. Old releases stay verifiable with the archived old public key.
+
 ## Update manifest
 
 The release job writes `latest.json` and attaches it to the release:

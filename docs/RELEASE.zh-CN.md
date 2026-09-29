@@ -48,6 +48,16 @@ gh secret set MINISIGN_SECRET_KEY < minisign.key   # 密钥文件内容
 update-pubkey = "RWQ…"
 ```
 
+## 备份与轮换 minisign 密钥
+
+GitHub Secrets 是**只写**的:设了 `MINISIGN_SECRET_KEY` 之后,UI/API 都读不回原值。本地副本丢失
+**不会**让发布中断(CI 照常签名),但你也拿不回原始私钥——所以要留离线备份,并把它当长期密钥:
+
+- 公钥在仓库(`minisign.pub`)并随每次 release 附加。
+- 私钥请另存到可靠处(密码管理器 / 加密副本 / macOS 钥匙串)。若要轮换:生成新密钥对 →
+  `gh secret set MINISIGN_SECRET_KEY` → 替换 `minisign.pub` → 告知用户更新 `update-pubkey`。
+  旧 release 仍可用归档的旧公钥校验。
+
 ## 更新清单
 
 发布作业会写出 `latest.json` 并随 release 附上:
