@@ -40,6 +40,7 @@ pub struct Terminal {
     graphics: crate::graphics::GraphicsLayer,
     graphics_enabled: bool,
     scrollback: usize,
+    cell_px: (u16, u16),
     /// Pending bytes scanned for a ConPTY cursor-position query (DSR, `ESC[6n`),
     /// which must be answered or the Windows shell stalls before it runs anything.
     dsr_buf: Vec<u8>,
@@ -169,6 +170,7 @@ impl Terminal {
             graphics: crate::graphics::GraphicsLayer::new(),
             graphics_enabled: true,
             scrollback,
+            cell_px: (0, 0),
             dsr_buf: Vec::new(),
         })
     }
@@ -243,14 +245,35 @@ impl Terminal {
                 else {
                     return false;
                 };
-                let rows = img.height.div_ceil(NOMINAL_CELL_H).max(1);
+                let rows = img.height.div_ceil(self.cell_h()).max(1);
                 self.graphics.place(img, line, col, None, None, 0);
                 for _ in 0..rows {
                     self.screen.process(b"\r\n");
                 }
                 true
             }
-            gfx::Graphic::Kitty(cmd) => self.graphics.kitty(cmd, line, col),
+            gfx::Graphic::Kitty(cmd) => {
+                let move_now = cmd.move_cursor && matches!(cmd.action, 'T' | 'p');
+                let rows_hint = cmd.rows;
+                let before = self.graphics.images.len();
+                let changed = self.graphics.kitty(cmd, line, col);
+                if move_now && self.graphics.images.len() > before {
+                    let rows = rows_hint
+                        .map(u32::from)
+                        .or_else(|| {
+                            self.graphics
+                                .images
+                                .last()
+                                .map(|i| i.image.height.div_ceil(self.cell_h()))
+                        })
+                        .unwrap_or(1)
+                        .max(1);
+                    for _ in 0..rows {
+                        self.screen.process(b"\r\n");
+                    }
+                }
+                changed
+            }
             gfx::Graphic::Iterm2 { data, .. } => {
                 let Some(img) = gfx::decode_iterm2(&data, self.graphics.max_pixels) else {
                     return false;
@@ -264,6 +287,21 @@ impl Terminal {
     /// Enable/disable inline graphics processing (config `graphics`).
     pub fn set_graphics_enabled(&mut self, on: bool) {
         self.graphics_enabled = on;
+    }
+
+    /// Report the cell size in physical pixels (used for `TIOCSWINSZ` so image
+    /// tools size themselves to the grid, and to advance below Sixel images).
+    pub fn set_cell_size(&mut self, w: u16, h: u16) {
+        self.cell_px = (w, h);
+    }
+
+    fn cell_h(&self) -> u32 {
+        let h = self.cell_px.1 as u32;
+        if h == 0 {
+            NOMINAL_CELL_H
+        } else {
+            h
+        }
     }
 
     /// Feed bytes as if they came from the PTY (tests only).
@@ -292,12 +330,16 @@ impl Terminal {
         self.rows = rows;
         self.cols = cols;
         self.screen.resize(cols, rows);
+        let (pw, ph) = (
+            cols.saturating_mul(self.cell_px.0),
+            rows.saturating_mul(self.cell_px.1),
+        );
         let _ = self.master.as_ref().map(|m| {
             m.resize(PtySize {
                 rows,
                 cols,
-                pixel_width: 0,
-                pixel_height: 0,
+                pixel_width: pw,
+                pixel_height: ph,
             })
         });
     }
@@ -467,6 +509,20 @@ mod tests {
         assert_eq!((imgs[0].image.width, imgs[0].image.height), (10, 6));
         // Red at the top-left pixel.
         assert_eq!(&imgs[0].image.rgba[..4], &[255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn cell_height_drives_sixel_cursor_advance() {
+        let mut t = make(); // 5-row screen
+        t.set_cell_size(8, 16);
+        // One 6px band => ceil(6/16) = 1 row below.
+        t.feed_for_test(b"\x1bPq#0;2;100;0;0#0@\x1b\\");
+        assert_eq!(t.screen().cursor().0, 1, "cursor moved one row down");
+        // Same image with a 6px cell => still one row.
+        let mut t2 = make();
+        t2.set_cell_size(8, 6);
+        t2.feed_for_test(b"\x1bPq#0;2;100;0;0#0@\x1b\\");
+        assert_eq!(t2.screen().cursor().0, 1);
     }
 
     #[test]

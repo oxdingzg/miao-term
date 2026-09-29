@@ -344,6 +344,8 @@ impl State {
             .ok()
             .map(|mut term| {
                 term.set_graphics_enabled(self.graphics_enabled);
+                let scale = self.window.scale_factor() as f32;
+                term.set_cell_size((self.cw * scale) as u16, (self.ch * scale) as u16);
                 Pane {
                     id,
                     term,
@@ -484,6 +486,7 @@ impl State {
                     let inner = card_inner(*r);
                     let cols = ((inner.w * scale) / cw).floor().max(1.0) as u16;
                     let rows = ((inner.h * scale) / ch).floor().max(1.0) as u16;
+                    pane.term.set_cell_size(cw as u16, ch as u16);
                     pane.term.resize(rows, cols);
                 }
             }
