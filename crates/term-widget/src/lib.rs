@@ -162,6 +162,10 @@ struct State {
     vim: Option<miao_term_ui::vim::VimRuntime>,
     vim_for: String,
     mmd: Mermaid,
+    notifications: bool,
+    prevent_sleep: bool,
+    sleep: miao_term_ui::agentloop::SleepGuard,
+    agent_states: HashMap<String, String>,
     composer: Option<String>,
     quick: Option<String>,
     closed: Vec<Option<std::path::PathBuf>>,
@@ -621,6 +625,7 @@ impl State {
     }
 
     fn render(&mut self) {
+        self.agent_loop();
         self.refresh_search();
         self.poll_details();
         self.ensure_details();
@@ -1534,6 +1539,8 @@ impl State {
         let mut font = self.font_size;
         let mut cursor = self.theme.cursor;
         let mut graphics = self.graphics_enabled;
+        let mut notifications = self.notifications;
+        let mut prevent_sleep = self.prevent_sleep;
         let current_theme = self.theme_name.clone();
         let mut chosen_theme: Option<&'static str> = None;
         egui::Window::new(miao_term_ui::i18n::t(self.lang, "Settings", "设置"))
@@ -1569,6 +1576,14 @@ impl State {
                     &mut graphics,
                     miao_term_ui::i18n::t(self.lang, "Inline graphics", "终端内联图片"),
                 );
+                ui.checkbox(
+                    &mut notifications,
+                    miao_term_ui::i18n::t(self.lang, "Notifications", "通知"),
+                );
+                ui.checkbox(
+                    &mut prevent_sleep,
+                    miao_term_ui::i18n::t(self.lang, "Prevent sleep", "防休眠"),
+                );
                 ui.separator();
                 ui.label(miao_term_ui::i18n::t(self.lang, "Theme", "主题"));
                 for name in Theme::NAMES {
@@ -1586,6 +1601,13 @@ impl State {
             self.resize();
         }
         self.theme.cursor = cursor;
+        self.notifications = notifications;
+        if self.prevent_sleep != prevent_sleep {
+            self.prevent_sleep = prevent_sleep;
+            if !prevent_sleep {
+                self.sleep.set_awake(false);
+            }
+        }
         if graphics != self.graphics_enabled {
             self.graphics_enabled = graphics;
             for tab in &mut self.tabs {
@@ -1718,6 +1740,59 @@ impl State {
         drop(data);
         let _ = std::fs::write("/tmp/native_shot.ppm", ppm);
         std::process::exit(0);
+    }
+
+    /// Notifications + sleep guard (ADR 0010), mirroring the eframe host.
+    fn agent_loop(&mut self) {
+        if !self.notifications && !self.prevent_sleep {
+            return;
+        }
+        let focused_id = self.active_pane_id();
+        let mut states: Vec<(String, String, String)> = Vec::new();
+        let mut any_processing = false;
+        for tab in &self.tabs {
+            for pane in &tab.panes {
+                let Some(a) = self.mtp.agent_for(&pane.id) else {
+                    continue;
+                };
+                let state = a
+                    .get("state")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let agent = a
+                    .get("agent")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("agent")
+                    .to_string();
+                if state == "processing" {
+                    any_processing = true;
+                }
+                states.push((pane.id.clone(), agent, state));
+            }
+        }
+        let mut alert: Option<(String, String)> = None;
+        for (id, agent, state) in states {
+            let prev = self.agent_states.insert(id.clone(), state.clone());
+            let changed = prev.as_deref() != Some(state.as_str());
+            let wants = matches!(state.as_str(), "awaiting" | "error");
+            let focused = Some(&id) == focused_id.as_ref();
+            if changed && wants && self.notifications && !self.focused && !focused {
+                let body = self
+                    .tabs
+                    .iter()
+                    .find(|t| t.panes.iter().any(|p| p.id == id))
+                    .map(|t| self.title_of(t))
+                    .unwrap_or_default();
+                alert = Some((format!("{agent} \u{00b7} {state}"), body));
+            }
+        }
+        if let Some((title, body)) = alert {
+            miao_term_ui::agentloop::notify(&title, &body);
+        }
+        if self.prevent_sleep {
+            self.sleep.set_awake(any_processing);
+        }
     }
 
     fn quick_window(&mut self, ctx: &egui::Context) {
@@ -2664,6 +2739,10 @@ impl ApplicationHandler for Host {
                 cmd: cfg.mermaid_command.clone(),
                 cache: std::collections::HashMap::new(),
             },
+            notifications: cfg.notifications,
+            prevent_sleep: cfg.prevent_sleep,
+            sleep: miao_term_ui::agentloop::SleepGuard::new(),
+            agent_states: HashMap::new(),
             composer: None,
             quick: None,
             closed: Vec::new(),

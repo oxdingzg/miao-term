@@ -6,6 +6,7 @@
 //! egui chrome widgets. Keeping them here is what lets the chrome be shared
 //! instead of duplicated (ADR 0030, step 2/4).
 
+pub mod agentloop;
 pub mod chrome;
 pub mod i18n;
 pub mod icons;

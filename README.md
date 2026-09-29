@@ -314,9 +314,9 @@ Still open:
 - **Update install** on Windows and Linux (macOS only today).
 - **CI performance baseline**: the regression gate compares against a recorded
   baseline, so it needs a CI-side baseline store to bind there.
-- **Native parity**: the native host still lacks system notifications, the sleep
-  guard, window opacity, the global Quick Terminal hotkey, URL schemes and the
-  shell/agent integration installers; its Settings window is a subset.
+- **Native parity**: the native host still lacks window opacity, the global
+  Quick Terminal hotkey, URL schemes and the shell/agent integration
+  installers; its Settings window is a subset.
 - **Inline graphics**: anchoring is approximate past the scrollback cap; images
   are clipped to the grid area rather than per pane; Kitty region-deletes
   (`d=p/c/r`) and animation are not implemented; session restore keeps none.

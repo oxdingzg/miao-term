@@ -273,8 +273,8 @@ view/edit、更新下载/校验/安装、URL scheme、全局快速终端热键�
   真实 Linux 桌面、Wayland 门户热键、以及 Windows 的 IME/GUI 仍需交互式会话。
 - **更新安装**:Windows 与 Linux(目前仅 macOS)。
 - **CI 性能基线**:回归门对比记录的基线,需 CI 侧基线存储才能在 CI 生效。
-- **原生版对齐**:native 宿主仍缺系统通知、防休眠、窗口透明度、全局快速终端热键、URL scheme、
-  以及 shell/agent 集成安装;其设置窗口是子集。
+- **原生版对齐**:native 宿主仍缺窗口透明度、全局快速终端热键、URL scheme、以及 shell/agent
+  集成安装;其设置窗口是子集。
 - **终端内联图片**:超过回滚容量后的锚定是近似;按整个网格区裁剪而非按 pane;Kitty 按区域
   删除(`d=p/c/r`)与动画未实现;会话恢复不保留图像。
 - **Markdown**:Mermaid 支持 `graph`/`flowchart` 子集(或经 `mermaid-command` 全量渲染);
