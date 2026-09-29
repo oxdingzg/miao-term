@@ -45,31 +45,43 @@ jobs:
             echo "code=false" >> "$GITHUB_OUTPUT"
           fi
 
-  check:
+  # Linux is the fast runner: full test suite on every code change.
+  test-linux:
     needs: changes
-    # Windows is the slow runner (link/IO); keep it off the push path and cover
-    # it on PRs, the nightly run and manual runs.
-    if: >-
-      needs.changes.outputs.code == 'true' &&
-      (github.event_name != 'push' || matrix.os != 'windows-latest')
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      # Cache the registry + target so a push does not recompile ~450 crates.
       - uses: Swatinem/rust-cache@v2
-      # Pushes run the suite on Linux only (fast); macOS/Windows compile-check.
-      # PRs, the nightly run and manual runs test all three (ConPTY etc.).
+      - run: cargo test --workspace
+
+  # macOS: compile-check on pushes, full tests on PRs/nightly/manual.
+  macos:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: Test
-        if: github.event_name != 'push' || runner.os == 'Linux'
+        if: github.event_name != 'push'
         run: cargo test --workspace
       - name: Check (compile only)
-        if: github.event_name == 'push' && runner.os != 'Linux'
+        if: github.event_name == 'push'
         run: cargo check --workspace --all-targets
+
+  # Windows is the slow runner (link/IO), so it is kept off the push path.
+  windows:
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && github.event_name != 'push'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
 
   render-linux:
     needs: changes
@@ -92,11 +104,10 @@ jobs:
           LIBGL_ALWAYS_SOFTWARE: "1"
         run: cargo test -p miao-term-render -- --nocapture
 
+  # Release + LTO build; run it on PRs/nightly/manual, not on every push.
   perf:
     needs: changes
-    # Release + LTO build; run it on PRs/nightly/manual, not on every push.
-    if: >-
-      needs.changes.outputs.code == 'true' && github.event_name != 'push'
+    if: needs.changes.outputs.code == 'true' && github.event_name != 'push'
     runs-on: ubuntu-latest
     env:
       # Looser than the local 25% so shared-runner noise does not flake.
