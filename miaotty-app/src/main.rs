@@ -48,11 +48,17 @@ fn main() -> eframe::Result<()> {
         Ok(()) => eprintln!("miaotty: MTP host listening on {}", socket.display()),
         Err(e) => eprintln!("miaotty: failed to start MTP host: {e}"),
     }
+    // Transparent windows go through a slower compositing path on macOS, which
+    // adds input-to-photon latency. Only opt in when a translucent background
+    // is actually configured.
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size([1180.0, 760.0])
+        .with_title("miaotty");
+    if cfg.background_opacity < 1.0 {
+        viewport = viewport.with_transparent(true);
+    }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1180.0, 760.0])
-            .with_title("miaotty")
-            .with_transparent(true),
+        viewport,
         ..Default::default()
     };
     eframe::run_native(
@@ -116,15 +122,6 @@ fn install_fonts(ctx: &egui::Context) {
         list.push("nerd".to_owned());
     }
     ctx.set_fonts(fonts);
-}
-
-/// TEMP: wall-clock ms for latency instrumentation.
-static ECHO_SENT_MS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
 }
 
 /// Nerd Font glyphs (Font Awesome subset) used across the UI.
@@ -849,14 +846,7 @@ impl MiaottyApp {
         ctx: egui::Context,
     ) -> Self {
         let opacity = cfg.background_opacity.clamp(0.1, 1.0);
-        let waker: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
-            use std::sync::atomic::{AtomicU64, Ordering};
-            static N: AtomicU64 = AtomicU64::new(0);
-            if N.fetch_add(1, Ordering::Relaxed) < 5 {
-                eprintln!("miaotty[lat]: waker fired");
-            }
-            ctx.request_repaint();
-        });
+        let waker: Arc<dyn Fn() + Send + Sync> = Arc::new(move || ctx.request_repaint());
         let mut app = Self {
             tabs: Vec::new(),
             active: 0,
@@ -1243,39 +1233,6 @@ impl MiaottyApp {
 
 impl eframe::App for MiaottyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let __t0 = std::time::Instant::now();
-        // TEMP latency instrumentation.
-        {
-            use std::sync::Mutex;
-            static FT: Mutex<Option<(std::time::Instant, u32, f32, f32)>> = Mutex::new(None);
-            let now = std::time::Instant::now();
-            if let Ok(mut g) = FT.lock() {
-                match &mut *g {
-                    None => *g = Some((now, 0, 0.0, 0.0)),
-                    Some((last, n, sum, max)) => {
-                        let dt = now.duration_since(*last).as_secs_f32() * 1000.0;
-                        *last = now;
-                        *n += 1;
-                        *sum += dt;
-                        if dt > *max {
-                            *max = dt;
-                        }
-                        if *n >= 120 {
-                            eprintln!(
-                                "miaotty[lat]: frames={} avg={:.1}ms max={:.1}ms",
-                                *n,
-                                *sum / *n as f32,
-                                *max
-                            );
-                            *n = 0;
-                            *sum = 0.0;
-                            *max = 0.0;
-                        }
-                    }
-                }
-            }
-        }
-
         // Drain output for every tab (keeps channels from growing unbounded).
         let mut changed = false;
         for tab in &mut self.tabs {
@@ -1290,18 +1247,12 @@ impl eframe::App for MiaottyApp {
             // New output jumps to the bottom.
             self.scroll = 0;
             ctx.request_repaint();
-            let w = ECHO_SENT_MS.swap(0, std::sync::atomic::Ordering::Relaxed);
-            if w != 0 {
-                let d = now_ms() - w;
-                eprintln!("miaotty[lat]: write->echo {d} ms");
-            }
         }
 
         // MTP `pane.send` / `pane.run` — inject bytes into the target pane.
         let writes = self.state.take_writes();
         if !writes.is_empty() {
             for (pane_id, data) in writes {
-                ECHO_SENT_MS.store(now_ms(), std::sync::atomic::Ordering::Relaxed);
                 'outer: for tab in &mut self.tabs {
                     for pane in &mut tab.panes {
                         if pane.pane_id == pane_id {
@@ -1538,27 +1489,6 @@ impl eframe::App for MiaottyApp {
         }
         if self.palette.is_some() {
             self.palette_ui(ctx);
-        }
-
-        // TEMP: measure time spent in update().
-        {
-            use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-            static SUM_US: AtomicU64 = AtomicU64::new(0);
-            static MAX_US: AtomicU64 = AtomicU64::new(0);
-            static N: AtomicU32 = AtomicU32::new(0);
-            let us = __t0.elapsed().as_micros() as u64;
-            SUM_US.fetch_add(us, Ordering::Relaxed);
-            MAX_US.fetch_max(us, Ordering::Relaxed);
-            if N.fetch_add(1, Ordering::Relaxed) + 1 >= 60 {
-                let n = N.swap(0, Ordering::Relaxed) as f64;
-                let sum = SUM_US.swap(0, Ordering::Relaxed) as f64;
-                let mx = MAX_US.swap(0, Ordering::Relaxed) as f64;
-                eprintln!(
-                    "miaotty[lat]: update avg={:.1}ms max={:.1}ms",
-                    sum / n / 1000.0,
-                    mx / 1000.0
-                );
-            }
         }
     }
 }
@@ -3868,6 +3798,8 @@ impl MiaottyApp {
     /// (macOS). Elsewhere (or when not running from a bundle) the artifact is
     /// opened instead.
     fn install_update(&mut self, ctx: &egui::Context) {
+        #[cfg(not(target_os = "macos"))]
+        let _ = ctx;
         let Some(artifact) = self.update_ready.clone() else {
             self.update_msg = Some(self.t("No verified download").to_string());
             return;
@@ -5193,7 +5125,6 @@ impl MiaottyApp {
                 self.ime_preedit = p;
             }
             if !out.is_empty() {
-                ECHO_SENT_MS.store(now_ms(), std::sync::atomic::Ordering::Relaxed);
                 self.tabs[ti].panes[pi].term.write(&out);
                 self.ime_preedit.clear();
                 ctx.request_repaint();
