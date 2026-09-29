@@ -793,341 +793,23 @@ impl State {
         }
     }
 
-    fn menu_bar(&mut self, ctx: &egui::Context) {
-        use miao_term_ui::i18n::t;
-        let lang = self.lang;
-        let theme = self.theme.clone();
-        let mut action: Option<Cmd> = None;
-        egui::TopBottomPanel::top("menu")
-            .exact_height(MENU_H)
-            .frame(
-                egui::Frame::default()
-                    .fill(chrome::bg_color(theme.bg))
-                    .stroke(egui::Stroke::new(
-                        1.0_f32,
-                        chrome::bg_color(lighten(theme.bg, 0.10)),
-                    ))
-                    .inner_margin(egui::Margin::symmetric(6.0, 1.0)),
-            )
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.visuals_mut().override_text_color = Some(chrome::fg_color(&theme));
-                    ui.menu_button(t(lang, "File", "文件"), |ui| {
-                        if ui.button(t(lang, "New Tab", "新建标签")).clicked() {
-                            action = Some(Cmd::NewTab);
-                            ui.close_menu();
-                        }
-                        if ui
-                            .button(t(lang, "Close Pane / Tab", "关闭 Pane/标签"))
-                            .clicked()
-                        {
-                            action = Some(Cmd::ClosePane);
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        if ui.button(t(lang, "Quit", "退出")).clicked() {
-                            action = Some(Cmd::Quit);
-                            ui.close_menu();
-                        }
-                    });
-                    ui.menu_button(t(lang, "Edit", "编辑"), |ui| {
-                        if ui.button(t(lang, "Copy", "复制")).clicked() {
-                            action = Some(Cmd::Copy);
-                            ui.close_menu();
-                        }
-                        if ui.button(t(lang, "Paste", "粘贴")).clicked() {
-                            action = Some(Cmd::Paste);
-                            ui.close_menu();
-                        }
-                    });
-                    ui.menu_button(t(lang, "View", "视图"), |ui| {
-                        if ui.button(t(lang, "Toggle Sidebar", "开关侧栏")).clicked() {
-                            action = Some(Cmd::ToggleSidebar);
-                            ui.close_menu();
-                        }
-                        if ui.button(t(lang, "Toggle Details", "开关详情")).clicked() {
-                            action = Some(Cmd::ToggleDetails);
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        if ui
-                            .button(t(lang, "Increase Font Size", "增大字号"))
-                            .clicked()
-                        {
-                            action = Some(Cmd::FontUp);
-                            ui.close_menu();
-                        }
-                        if ui
-                            .button(t(lang, "Decrease Font Size", "减小字号"))
-                            .clicked()
-                        {
-                            action = Some(Cmd::FontDown);
-                            ui.close_menu();
-                        }
-                        if ui.button(t(lang, "Settings", "设置")).clicked() {
-                            action = Some(Cmd::Settings);
-                            ui.close_menu();
-                        }
-                    });
-                    ui.menu_button(t(lang, "Shell", "终端"), |ui| {
-                        if ui.button(t(lang, "Split Right", "向右分屏")).clicked() {
-                            action = Some(Cmd::SplitRight);
-                            ui.close_menu();
-                        }
-                        if ui.button(t(lang, "Split Down", "向下分屏")).clicked() {
-                            action = Some(Cmd::SplitDown);
-                            ui.close_menu();
-                        }
-                    });
-                    ui.menu_button(t(lang, "Agent", "Agent"), |ui| {
-                        if ui.button(t(lang, "Composer", "Composer")).clicked() {
-                            action = Some(Cmd::Composer);
-                            ui.close_menu();
-                        }
-                    });
-                    ui.menu_button(t(lang, "Help", "帮助"), |ui| {
-                        if ui
-                            .button(t(lang, "Check for Updates", "检查更新"))
-                            .clicked()
-                        {
-                            action = Some(Cmd::CheckUpdates);
-                            ui.close_menu();
-                        }
-                        ui.hyperlink_to(
-                            t(lang, "Documentation", "文档"),
-                            "https://github.com/oxdingzg/miao-term#readme",
-                        );
-                    });
-                });
-            });
-        if let Some(a) = action {
-            self.run_command(a);
-        }
-    }
-
     fn chrome(&mut self, ctx: &egui::Context) {
-        self.menu_bar(ctx);
-        let lang = self.lang;
-        let theme = self.theme.clone();
-        let titles: Vec<String> = self.tabs.iter().map(|t| self.title_of(t)).collect();
-        let active = self.active_tab;
-        let mut switch = None;
-        let mut close = None;
-        let mut rename: Option<usize> = None;
-        let mut new_tab = false;
-        let mut font_delta = 0.0f32;
-
-        egui::TopBottomPanel::top("tabs")
-            .exact_height(TAB_H)
-            .frame(
-                egui::Frame::default()
-                    .fill(chrome::bg_color(theme.bg))
-                    .stroke(egui::Stroke::new(
-                        1.0_f32,
-                        chrome::bg_color(lighten(theme.bg, 0.10)),
-                    ))
-                    .inner_margin(egui::Margin::symmetric(6.0, 3.0)),
-            )
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    let ev = chrome::tab_bar(ui, &theme, &titles, active);
-                    switch = ev.switch;
-                    close = ev.close;
-                    rename = ev.rename;
-                    new_tab = ev.new_tab;
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("A+").clicked() {
-                            font_delta = 1.0;
-                        }
-                        if ui.button("A-").clicked() {
-                            font_delta = -1.0;
-                        }
-                        if icon_button(ui, Icon::Sidebar, chrome::fg_color(&theme))
-                            .on_hover_text(miao_term_ui::i18n::t(
-                                lang,
-                                "Toggle sidebar",
-                                "开关侧栏",
-                            ))
-                            .clicked()
-                        {
-                            self.show_sidebar = !self.show_sidebar;
-                        }
-                        if icon_button(ui, Icon::Details, chrome::fg_color(&theme))
-                            .on_hover_text(miao_term_ui::i18n::t(
-                                lang,
-                                "Toggle details",
-                                "开关详情",
-                            ))
-                            .clicked()
-                        {
-                            self.show_details = !self.show_details;
-                        }
-                    });
-                });
-            });
-
-        if self.show_sidebar {
-            let badges: Vec<Option<miao_term_ui::theme::Rgb>> = self
-                .tabs
-                .iter()
-                .map(|t| self.agent_badge(&t.active))
-                .collect();
-            let heading = miao_term_ui::i18n::t(lang, "Sessions", "会话");
-            let mut s = None;
-            egui::SidePanel::left("sessions")
-                .exact_width(SIDEBAR_W)
-                .frame(
-                    egui::Frame::default()
-                        .fill(chrome::bg_color(theme.bg))
-                        .stroke(egui::Stroke::new(
-                            1.0_f32,
-                            chrome::bg_color(lighten(theme.bg, 0.10)),
-                        ))
-                        .inner_margin(egui::Margin::same(6.0)),
-                )
-                .show(ctx, |ui| {
-                    s = chrome::sidebar(ui, &theme, &titles, &badges, active, heading);
-                });
-            if let Some(i) = s {
-                switch = Some(i);
-            }
-        }
-        if self.show_details {
-            use miao_term_ui::i18n::t;
-            use miao_term_ui::icons::Icon;
-            let tabs = [
-                (Icon::Info, t(lang, "Info", "信息")),
-                (Icon::Agent, t(lang, "Agent", "Agent")),
-                (Icon::Outline, t(lang, "Outline", "大纲")),
-                (Icon::Git, t(lang, "Git", "Git")),
-                (Icon::Files, t(lang, "Files", "文件")),
-                (Icon::Ports, t(lang, "Ports", "端口")),
-                (Icon::Queue, t(lang, "Queue", "队列")),
-            ];
-            let active = self.details_tab.min(tabs.len() - 1);
-            let (title, rows) = if active == 6 {
-                ("Queue".to_string(), Vec::new())
-            } else {
-                let (t, r) = self.details_content(active);
-                (t.to_string(), r)
-            };
-            let mut sel = None;
-            let mut qev = chrome::QueueEvents::default();
-            egui::SidePanel::right("details")
-                .exact_width(DETAILS_W)
-                .frame(
-                    egui::Frame::default()
-                        .fill(chrome::bg_color(theme.bg))
-                        .stroke(egui::Stroke::new(
-                            1.0_f32,
-                            chrome::bg_color(lighten(theme.bg, 0.10)),
-                        ))
-                        .inner_margin(egui::Margin::same(8.0)),
-                )
-                .show(ctx, |ui| {
-                    if let Some(i) = chrome::details_tabs(ui, &theme, &tabs, active) {
-                        sel = Some(i);
-                    }
-                    ui.separator();
-                    if active == 6 {
-                        qev = chrome::queue(ui, &theme, &self.prompts, &mut self.prompt_input);
-                    } else {
-                        chrome::info(ui, &theme, &title, &rows);
-                    }
-                });
-            if let Some(i) = sel {
-                self.details_tab = i;
-            }
-            if qev.add && !self.prompt_input.is_empty() {
-                self.prompts.push(std::mem::take(&mut self.prompt_input));
-            }
-            if let Some(i) = qev.send {
-                if let Some(item) = self.prompts.get(i).cloned() {
-                    self.write_input(format!("{item}\r").as_bytes());
-                }
-            }
-            if qev.send_all {
-                let items = std::mem::take(&mut self.prompts);
-                for item in items {
-                    self.write_input(format!("{item}\r").as_bytes());
-                }
-            }
-            if let Some(i) = qev.remove {
-                if i < self.prompts.len() {
-                    self.prompts.remove(i);
-                }
-            }
-            if qev.clear {
-                self.prompts.clear();
-            }
-        }
-        let status = self.status_text();
-        egui::TopBottomPanel::bottom("status")
-            .exact_height(STATUS_H)
-            .frame(
-                egui::Frame::default()
-                    .fill(chrome::bg_color(theme.bg))
-                    .stroke(egui::Stroke::new(
-                        1.0_f32,
-                        chrome::bg_color(lighten(theme.bg, 0.10)),
-                    ))
-                    .inner_margin(egui::Margin::symmetric(8.0, 2.0)),
-            )
-            .show(ctx, |ui| {
-                ui.visuals_mut().override_text_color = Some(chrome::fg_color(&theme));
-                ui.label(egui::RichText::new(status).size(11.0));
-            });
-
-        if let Some(i) = switch {
-            self.active_tab = i;
-            self.selection = None;
-        }
-        if new_tab {
-            self.new_tab();
-        }
-        if let Some(i) = close {
-            self.active_tab = i;
-            self.close_pane();
-        }
-        if font_delta != 0.0 {
-            self.font_size = (self.font_size + font_delta).clamp(6.0, 40.0);
-            let (cw, ch) =
-                State::cell_size(self.font_size, self.line_ratio, self.font_family.as_deref());
-            self.cw = cw;
-            self.ch = ch;
-            self.resize();
-        }
-        if let Some(i) = rename {
-            self.renaming = Some(i);
-            self.rename_buf = titles.get(i).cloned().unwrap_or_default();
-        }
+        // Shared, host-agnostic chrome (menu/tabs/sidebar/details/status).
+        chrome::render(ctx, self);
+        // Host-specific overlay windows.
         self.palette_window(ctx);
         self.settings_window(ctx);
         self.open_dialog_window(ctx);
         self.editor_window(ctx);
-        self.composer_window(ctx);
         self.recipe_dialog_window(ctx);
         self.ssh_dialog_window(ctx);
         self.remote_dialog_window(ctx);
+        self.composer_window(ctx);
         if let Some(i) = self.renaming {
             self.rename_window(ctx, i);
         }
     }
-
-    fn agent_badge(&self, pane_id: &str) -> Option<miao_term_ui::theme::Rgb> {
-        use miao_term_ui::theme::Rgb;
-        let a = self.mtp.agent_for(pane_id)?;
-        let state = a.get("state").and_then(|v| v.as_str())?;
-        Some(match state {
-            "processing" => Rgb(0x81, 0xa1, 0xc1),
-            "idle" => Rgb(0xa3, 0xbe, 0x8c),
-            "awaiting" => Rgb(0xeb, 0xcb, 0x8b),
-            "error" => Rgb(0xbf, 0x61, 0x6a),
-            _ => Rgb(0x88, 0x88, 0x88),
-        })
-    }
-
-    fn details_content(&mut self, tab: usize) -> (&'static str, Vec<(String, String)>) {
+    fn details_content(&self, tab: usize) -> (&'static str, Vec<(String, String)>) {
         match tab {
             1 => ("Agent", self.agent_rows()),
             2 => ("Outline", self.outline_rows()),
@@ -1344,6 +1026,19 @@ impl State {
             Err(std::sync::mpsc::TryRecvError::Empty) => self.details_rx = Some(rx),
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
         }
+    }
+
+    fn agent_badge(&self, pane_id: &str) -> Option<miao_term_ui::theme::Rgb> {
+        use miao_term_ui::theme::Rgb;
+        let a = self.mtp.agent_for(pane_id)?;
+        let state = a.get("state").and_then(|v| v.as_str())?;
+        Some(match state {
+            "processing" => Rgb(0x81, 0xa1, 0xc1),
+            "idle" => Rgb(0xa3, 0xbe, 0x8c),
+            "awaiting" => Rgb(0xeb, 0xcb, 0x8b),
+            "error" => Rgb(0xbf, 0x61, 0x6a),
+            _ => Rgb(0x88, 0x88, 0x88),
+        })
     }
 
     fn details_rows(&self) -> Vec<(String, String)> {
@@ -2667,40 +2362,6 @@ fn json_to_layout(
     })
 }
 
-enum Icon {
-    Sidebar,
-    Details,
-}
-
-/// A small, hand-drawn icon button (no font glyphs, so it always renders).
-fn icon_button(ui: &mut egui::Ui, icon: Icon, color: egui::Color32) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(22.0, 18.0), egui::Sense::click());
-    if ui.is_rect_visible(rect) {
-        let p = ui.painter();
-        if resp.hovered() {
-            p.rect_filled(
-                rect,
-                egui::Rounding::same(4.0),
-                ui.visuals().widgets.hovered.bg_fill,
-            );
-        }
-        let r = rect.shrink(4.0);
-        let s = egui::Stroke::new(1.3_f32, color);
-        p.rect_stroke(r, egui::Rounding::same(2.0), s);
-        match icon {
-            Icon::Sidebar => {
-                let x = r.left() + 4.0;
-                p.line_segment([egui::pos2(x, r.top()), egui::pos2(x, r.bottom())], s);
-            }
-            Icon::Details => {
-                let x = r.right() - 4.0;
-                p.line_segment([egui::pos2(x, r.top()), egui::pos2(x, r.bottom())], s);
-            }
-        }
-    }
-    resp
-}
-
 fn card_inner(r: Rect) -> Rect {
     let card = Rect {
         x: r.x + CARD_MARGIN,
@@ -2940,5 +2601,144 @@ mod tests {
         let mut ids = back.ids();
         ids.sort();
         assert_eq!(ids, vec!["x".to_string(), "y".to_string(), "z".to_string()]);
+    }
+}
+
+impl chrome::Chrome for State {
+    fn lang(&self) -> miao_term_ui::i18n::Lang {
+        self.lang
+    }
+    fn tabs(&self) -> Vec<chrome::ChromeTab> {
+        self.tabs
+            .iter()
+            .map(|t| chrome::ChromeTab {
+                title: self.title_of(t),
+                badge: self.agent_badge(&t.active),
+            })
+            .collect()
+    }
+    fn active_tab(&self) -> usize {
+        self.active_tab
+    }
+    fn show_sidebar(&self) -> bool {
+        self.show_sidebar
+    }
+    fn show_details(&self) -> bool {
+        self.show_details
+    }
+    fn details_tab(&self) -> usize {
+        self.details_tab.min(6)
+    }
+    fn details_title(&self) -> String {
+        self.details_content(self.details_tab.min(6)).0.to_string()
+    }
+    fn details_rows(&self) -> Vec<(String, String)> {
+        self.details_content(self.details_tab.min(6)).1
+    }
+    fn details_is_queue(&self) -> bool {
+        self.details_tab == 6
+    }
+    fn status(&self) -> String {
+        self.status_text()
+    }
+    fn queue(&self) -> Vec<String> {
+        self.prompts.clone()
+    }
+    fn take_queue_input(&mut self) -> String {
+        std::mem::take(&mut self.prompt_input)
+    }
+    fn set_queue_input(&mut self, input: String) {
+        self.prompt_input = input;
+    }
+    fn on_new_tab(&mut self) {
+        self.new_tab();
+    }
+    fn on_switch_tab(&mut self, i: usize) {
+        if i < self.tabs.len() {
+            self.active_tab = i;
+            self.selection = None;
+        }
+    }
+    fn on_close_tab(&mut self, i: usize) {
+        self.active_tab = i;
+        self.close_pane();
+    }
+    fn on_rename_tab(&mut self, i: usize) {
+        let title = self
+            .tabs
+            .get(i)
+            .map(|t| self.title_of(t))
+            .unwrap_or_default();
+        self.renaming = Some(i);
+        self.rename_buf = title;
+    }
+    fn on_font_delta(&mut self, d: f32) {
+        self.font_size = (self.font_size + d).clamp(6.0, 40.0);
+        let (cw, ch) =
+            State::cell_size(self.font_size, self.line_ratio, self.font_family.as_deref());
+        self.cw = cw;
+        self.ch = ch;
+        self.resize();
+    }
+    fn on_toggle_sidebar(&mut self) {
+        self.show_sidebar = !self.show_sidebar;
+    }
+    fn on_toggle_details(&mut self) {
+        self.show_details = !self.show_details;
+    }
+    fn on_details_tab(&mut self, i: usize) {
+        self.details_tab = i;
+    }
+    fn on_queue_add(&mut self) {
+        if !self.prompt_input.is_empty() {
+            let p = std::mem::take(&mut self.prompt_input);
+            self.prompts.push(p);
+        }
+    }
+    fn on_queue_send(&mut self, i: usize) {
+        if let Some(item) = self.prompts.get(i).cloned() {
+            self.write_input(format!("{item}\r").as_bytes());
+        }
+    }
+    fn on_queue_remove(&mut self, i: usize) {
+        if i < self.prompts.len() {
+            self.prompts.remove(i);
+        }
+    }
+    fn on_queue_send_all(&mut self) {
+        let items = std::mem::take(&mut self.prompts);
+        for item in items {
+            self.write_input(format!("{item}\r").as_bytes());
+        }
+    }
+    fn on_queue_clear(&mut self) {
+        self.prompts.clear();
+    }
+    fn on_menu(&mut self, id: chrome::MenuId) {
+        use chrome::MenuId::*;
+        let cmd = match id {
+            NewTab => Cmd::NewTab,
+            ClosePane => Cmd::ClosePane,
+            OpenFile => Cmd::OpenFile,
+            Save => Cmd::Save,
+            SaveRecipe => Cmd::SaveRecipe,
+            OpenRecipe => Cmd::OpenRecipe,
+            NewSsh => Cmd::NewSsh,
+            OpenRemote => Cmd::OpenRemote,
+            Composer => Cmd::Composer,
+            CheckUpdates => Cmd::CheckUpdates,
+            Copy => Cmd::Copy,
+            Paste => Cmd::Paste,
+            SplitRight => Cmd::SplitRight,
+            SplitDown => Cmd::SplitDown,
+            ToggleSidebar => Cmd::ToggleSidebar,
+            ToggleDetails => Cmd::ToggleDetails,
+            FontUp => Cmd::FontUp,
+            FontDown => Cmd::FontDown,
+            Settings => Cmd::Settings,
+            Quit => Cmd::Quit,
+        };
+        self.run_command(cmd);
+        self.window.request_redraw();
     }
 }

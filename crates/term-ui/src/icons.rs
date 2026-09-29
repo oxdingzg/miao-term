@@ -95,3 +95,19 @@ pub fn draw(p: &egui::Painter, rect: egui::Rect, icon: Icon, color: egui::Color3
         }
     }
 }
+
+/// A small icon button (allocates space, draws the icon, hover highlight).
+pub fn icon_button(ui: &mut egui::Ui, icon: Icon, color: egui::Color32) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(22.0, 18.0), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        if resp.hovered() {
+            ui.painter().rect_filled(
+                rect,
+                egui::Rounding::same(4.0),
+                ui.visuals().widgets.hovered.bg_fill,
+            );
+        }
+        draw(ui.painter(), rect, icon, color);
+    }
+    resp
+}
