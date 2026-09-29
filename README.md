@@ -298,13 +298,15 @@ Still open:
 - **Release chain**: sign the release artifacts (minisign `.sig` + published
   public key) and verify the installers end to end — notarized macOS builds,
   Linux AppImage/`.deb`, Windows MSI.
-- **Platform verification**: Linux runtime (and the Wayland portal hotkey) on a
-  real desktop; Windows IME and GUI rendering need an interactive session.
+- **Platform verification**: the Linux wgpu render path now runs in CI via Mesa
+  software Vulkan (lavapipe); a real Linux desktop, the Wayland portal hotkey,
+  and Windows IME/GUI still need an interactive session.
 - **Update install** on Windows and Linux (macOS only today).
 - **CI performance baseline**: the regression gate compares against a recorded
   baseline, so it needs a CI-side baseline store to bind there.
 - **Markdown**: Mermaid diagrams are not rendered.
-- **Editor**: no vim mode; i18n covers the main chrome but not every string.
+- **Editor**: the app has an opt-in vim mode (ADR 0029) but the native editor
+  does not; i18n covers the main chrome but not every string.
 - **MTP**: no per-capability authorization; `file.read/write` is UTF-8 text only
   (no binary/streaming transfer).
 

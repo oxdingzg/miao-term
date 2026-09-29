@@ -262,12 +262,12 @@ view/edit、更新下载/校验/安装、URL scheme、全局快速终端热键�
 
 - **发布链**:为发布产物签名(minisign `.sig` + 公钥分发),并对安装包做端到端验证 ——
   公证的 macOS 构建、Linux AppImage/`.deb`、Windows MSI。
-- **平台验证**:Linux 运行时(及 Wayland 门户热键)需在真实桌面验证;Windows 的 IME 与 GUI
-  渲染需要交互式会话。
+- **平台验证**:Linux 的 wgpu 渲染路径现已在 CI 中通过 Mesa 软件 Vulkan(lavapipe)覆盖;
+  真实 Linux 桌面、Wayland 门户热键、以及 Windows 的 IME/GUI 仍需交互式会话。
 - **更新安装**:Windows 与 Linux(目前仅 macOS)。
 - **CI 性能基线**:回归门对比记录的基线,需 CI 侧基线存储才能在 CI 生效。
 - **Markdown**:Mermaid 图未渲染。
-- **编辑器**:无 vim 模式;i18n 覆盖主要界面但未覆盖全部字符串。
+- **编辑器**:应用版有可选的 vim 模式(ADR 0029),原生编辑器尚未支持;i18n 覆盖主要界面但未覆盖全部字符串。
 - **MTP**:无按能力授权;`file.read/write` 仅 UTF-8 文本(无二进制/流式传输)。
 
 ---
