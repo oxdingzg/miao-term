@@ -145,6 +145,7 @@ struct State {
     ssh_dialog: Option<String>,
     remote_dialog: Option<(String, String)>,
     composer: Option<String>,
+    quick: Option<String>,
     update_url: Option<String>,
     update_rx: Option<std::sync::mpsc::Receiver<String>>,
     update_msg: Option<String>,
@@ -177,6 +178,7 @@ struct Shortcut {
     palette: bool,
     settings: bool,
     composer: bool,
+    quickly: bool,
 }
 
 fn shortcut(event: &KeyEvent, mods: ModifiersState) -> Option<Shortcut> {
@@ -196,12 +198,14 @@ fn shortcut(event: &KeyEvent, mods: ModifiersState) -> Option<Shortcut> {
         palette: false,
         settings: false,
         composer: false,
+        quickly: false,
     };
     let mut matched = true;
     match &event.logical_key {
         Key::Character(c) => match c.as_str() {
             "t" => s.new_tab = true,
             "e" => s.composer = true,
+            "o" if mods.shift_key() => s.quickly = true,
             "k" => s.palette = true,
             "p" if mods.shift_key() => s.palette = true,
             "," => s.settings = true,
@@ -805,6 +809,7 @@ impl State {
         self.ssh_dialog_window(ctx);
         self.remote_dialog_window(ctx);
         self.composer_window(ctx);
+        self.quick_window(ctx);
         if let Some(i) = self.renaming {
             self.rename_window(ctx, i);
         }
@@ -1088,6 +1093,7 @@ impl State {
 enum Cmd {
     NewTab,
     Composer,
+    OpenQuickly,
     CheckUpdates,
     NewSsh,
     OpenRemote,
@@ -1122,6 +1128,7 @@ impl State {
         vec![
             (Cmd::NewTab, t(l, "New Tab", "新建标签")),
             (Cmd::Composer, "Composer"),
+            (Cmd::OpenQuickly, t(l, "Open Quickly", "快速打开")),
             (Cmd::CheckUpdates, t(l, "Check for Updates", "检查更新")),
             (Cmd::NewSsh, t(l, "New SSH Session…", "新建 SSH 会话…")),
             (Cmd::OpenRemote, t(l, "Open Remote File…", "打开远端文件…")),
@@ -1165,6 +1172,7 @@ impl State {
                 self.resize();
             }
             Cmd::Composer => self.composer = Some(String::new()),
+            Cmd::OpenQuickly => self.quick = Some(String::new()),
             Cmd::CheckUpdates => self.check_updates(),
             Cmd::NewSsh => self.ssh_dialog = Some(String::new()),
             Cmd::OpenRemote => self.remote_dialog = Some((String::new(), String::new())),
@@ -1433,6 +1441,96 @@ impl State {
         drop(data);
         let _ = std::fs::write("/tmp/native_shot.ppm", ppm);
         std::process::exit(0);
+    }
+
+    fn quick_window(&mut self, ctx: &egui::Context) {
+        enum Pick {
+            Tab(usize),
+            File(String),
+        }
+        let cwd = self.cwd();
+        let tabs: Vec<(usize, String)> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (i, self.title_of(t)))
+            .collect();
+        let files: Vec<String> = self
+            .details_data
+            .as_ref()
+            .map(|d| d.files.iter().map(|(n, _)| n.clone()).collect())
+            .unwrap_or_default();
+        let Some(query) = self.quick.as_mut() else {
+            return;
+        };
+        let mut chosen: Option<Pick> = None;
+        let mut open = true;
+        egui::Window::new(miao_term_ui::i18n::t(self.lang, "Open Quickly", "快速打开"))
+            .collapsible(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                let r = ui.add(
+                    egui::TextEdit::singleline(query)
+                        .hint_text("tab / file")
+                        .desired_width(420.0),
+                );
+                r.request_focus();
+                let q = query.to_lowercase();
+                let mut rows: Vec<(usize, String, Pick)> = Vec::new();
+                for (i, title) in &tabs {
+                    if let Some(s) = miao_term_ui::palette::score(title, "tab", &q) {
+                        rows.push((s, format!("\u{21e5} {title}"), Pick::Tab(*i)));
+                    }
+                }
+                for name in &files {
+                    if let Some(s) = miao_term_ui::palette::score(name, "file", &q) {
+                        rows.push((s, format!("   {name}"), Pick::File(name.clone())));
+                    }
+                }
+                rows.sort_by_key(|(s, _, _)| *s);
+                for (_, label, pick) in rows.iter().take(50) {
+                    if ui.selectable_label(false, label).clicked() {
+                        chosen = Some(match pick {
+                            Pick::Tab(i) => Pick::Tab(*i),
+                            Pick::File(n) => Pick::File(n.clone()),
+                        });
+                    }
+                }
+                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    if let Some((_, _, p)) = rows.first() {
+                        chosen = Some(match p {
+                            Pick::Tab(i) => Pick::Tab(*i),
+                            Pick::File(n) => Pick::File(n.clone()),
+                        });
+                    }
+                }
+            });
+        if let Some(p) = chosen {
+            self.quick = None;
+            match p {
+                Pick::Tab(i) => {
+                    if i < self.tabs.len() {
+                        self.active_tab = i;
+                        self.selection = None;
+                    }
+                }
+                Pick::File(name) => {
+                    if let Some(path) = cwd.map(|c| c.join(&name)) {
+                        if let Ok(text) = std::fs::read_to_string(&path) {
+                            self.editor = Some(Editor {
+                                path,
+                                original: text.clone(),
+                                text,
+                                preview: name.ends_with(".md"),
+                                remote: None,
+                            });
+                        }
+                    }
+                }
+            }
+        } else if !open {
+            self.quick = None;
+        }
     }
 
     fn composer_window(&mut self, ctx: &egui::Context) {
@@ -2012,6 +2110,7 @@ impl ApplicationHandler for Host {
             ssh_dialog: None,
             remote_dialog: None,
             composer: None,
+            quick: None,
             update_url: cfg.update_check_url.clone(),
             update_rx: None,
             update_msg: None,
@@ -2245,6 +2344,9 @@ impl ApplicationHandler for Host {
                     }
                     if s.composer {
                         state.composer = Some(String::new());
+                    }
+                    if s.quickly {
+                        state.quick = Some(String::new());
                     }
                     state.window.request_redraw();
                 } else {
