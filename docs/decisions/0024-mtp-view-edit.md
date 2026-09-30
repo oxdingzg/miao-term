@@ -59,7 +59,8 @@ The CLI gains matching subcommands: `miaotty-cli view <path>`,
   only "whoever can reach the socket"; the local socket stays user-private
   (0600).
 
-- Update: the protocol also gained `core.wait`, a long-poll that returns when the
-  state revision moves past a caller's value, so external clients can follow
-  agent/history/panes without busy-polling (true server-push is still not
-  implemented).
+- Update: the protocol also gained `core.wait` (long-poll on the state
+  revision) and `core.subscribe`, which upgrades a connection to a pushed event
+  stream for the `agent.state`, `panes` and `history` topics
+  (`miaotty-cli events [--topic T]`); a client drops the subscription by closing
+  the connection.

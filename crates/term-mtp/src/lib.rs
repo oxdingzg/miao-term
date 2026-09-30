@@ -150,6 +150,8 @@ pub struct ServerState {
     commands: Mutex<Vec<Command>>,
     /// Called after work is queued so the host can wake its event loop.
     waker: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    /// Event stream subscribers (`core.subscribe`). Dead channels are pruned.
+    subscribers: Mutex<Vec<std::sync::mpsc::Sender<Value>>>,
 }
 
 /// UI-side control actions queued by MTP methods.
@@ -249,7 +251,8 @@ impl ServerState {
 
     /// Replace the advertised pane list (called by the app on tab changes).
     pub fn set_panes(&self, panes: Vec<Value>) {
-        *self.panes.lock().unwrap() = panes;
+        *self.panes.lock().unwrap() = panes.clone();
+        self.broadcast(json!({ "topic": "panes", "panes": panes }));
     }
 
     /// Command history for a pane, oldest → newest.
@@ -267,6 +270,20 @@ impl ServerState {
     pub fn agent_for(&self, pane_id: &str) -> Option<Value> {
         let k = format!("pane:{pane_id}");
         self.states.lock().unwrap().get(&k).cloned()
+    }
+
+    /// Start an event stream. The returned receiver yields one JSON object per
+    /// state change; dropping it unsubscribes.
+    pub fn subscribe(&self) -> std::sync::mpsc::Receiver<Value> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.subscribers.lock().unwrap().push(tx);
+        rx
+    }
+
+    /// Send `event` to every subscriber, dropping those that went away.
+    fn broadcast(&self, event: Value) {
+        let mut subs = self.subscribers.lock().unwrap();
+        subs.retain(|tx| tx.send(event.clone()).is_ok());
     }
 
     /// Register a callback the host uses to wake its event loop; it is invoked
@@ -378,7 +395,7 @@ fn str_field(v: &Value, key: &str) -> Option<String> {
 /// The capability a method requires ("" when the method is unknown).
 fn method_cap(ns: &str, method: &str) -> &'static str {
     match (ns, method) {
-        ("core", "ping" | "health" | "wait") => "core.basic",
+        ("core", "ping" | "health" | "wait" | "subscribe") => "core.basic",
         ("pane", _) | ("app", _) => "app.view.write",
         ("file", "read") => "file.read",
         ("file", "write") => "file.write",
@@ -424,6 +441,10 @@ fn dispatch(state: &ServerState, req: Request) -> Response {
             }),
         ),
         ("core", "health") => Response::ok(id, rev, json!({ "ok": true, "revision": rev })),
+        ("core", "subscribe") => {
+            // The connection is upgraded to an event stream by `handle`.
+            Response::ok(id, rev, json!({ "ok": true, "subscribed": true }))
+        }
         ("core", "wait") => {
             // Long-poll: return as soon as the revision moves past `since`.
             let since = params.get("since").and_then(Value::as_i64).unwrap_or(0);
@@ -548,7 +569,14 @@ fn dispatch(state: &ServerState, req: Request) -> Response {
                 m.insert("seq".into(), json!(seq));
             }
             let revision = state.bump();
-            state.states.lock().unwrap().insert(k, entry);
+            state.states.lock().unwrap().insert(k, entry.clone());
+            state.broadcast(json!({
+                "topic": "agent.state",
+                "pane": pane,
+                "agent": agent,
+                "state": params.get("state").cloned().unwrap_or(Value::Null),
+                "revision": revision,
+            }));
             Response::ok(id, revision, json!({ "revision": revision }))
         }
         ("agent", "state.list") => {
@@ -573,6 +601,12 @@ fn dispatch(state: &ServerState, req: Request) -> Response {
                 let excess = list.len() - 1000;
                 list.drain(..excess);
             }
+            state.broadcast(json!({
+                "topic": "history",
+                "pane": pane,
+                "command": params.get("command").cloned().unwrap_or(Value::Null),
+                "revision": revision,
+            }));
             Response::ok(id, revision, json!({ "revision": revision }))
         }
         ("history", "list") => {
@@ -628,7 +662,13 @@ fn write_response(writer: &mut impl Write, response: &Response) -> bool {
     }
 }
 
-fn handle<R: BufRead, W: Write>(reader: &mut R, writer: &mut W, state: &ServerState) {
+fn handle<R: BufRead, W: Write>(
+    reader: &mut R,
+    writer: &mut W,
+    state: &ServerState,
+    pump: Option<Box<dyn Write + Send>>,
+) {
+    let mut pump = pump;
     let mut buf = Vec::new();
     while let Ok(true) = read_request(reader, &mut buf) {
         let response = match std::str::from_utf8(&buf) {
@@ -638,7 +678,23 @@ fn handle<R: BufRead, W: Write>(reader: &mut R, writer: &mut W, state: &ServerSt
                     continue;
                 }
                 match serde_json::from_str::<Request>(line) {
-                    Ok(req) => dispatch(state, req),
+                    Ok(req) => {
+                        // `core.subscribe` upgrades this connection to a stream.
+                        let is_subscribe = req.ns == "core" && req.method == "subscribe";
+                        let topics = is_subscribe
+                            .then(|| {
+                                req.params
+                                    .as_ref()
+                                    .and_then(|p| p.get("topics").cloned())
+                                    .map(|t| topic_list(&t))
+                            })
+                            .flatten();
+                        let response = dispatch(state, req);
+                        if let (true, true, Some(w)) = (is_subscribe, response.ok, pump.take()) {
+                            spawn_event_pump(w, state.subscribe(), topics);
+                        }
+                        response
+                    }
                     Err(e) => Response::err(0, state.revision(), "bad_request", e.to_string()),
                 }
             }
@@ -668,7 +724,7 @@ pub mod client {
     use interprocess::local_socket::{prelude::*, ConnectOptions};
     use interprocess::TryClone;
     use serde::Deserialize;
-    use serde_json::Value;
+    use serde_json::{json, Value};
 
     #[derive(Deserialize)]
     struct Reply {
@@ -723,6 +779,36 @@ pub mod client {
 
     impl Client {
         /// Send a request and return the result value (or an error).
+        /// Subscribe to the host's event stream (`topics` empty = all).
+        /// Subsequent events arrive via [`Client::next_event`].
+        pub fn subscribe(&mut self, topics: &[&str]) -> std::io::Result<()> {
+            self.call("core", "subscribe", json!({ "topics": topics }))
+                .map(|_| ())
+        }
+
+        /// Block until the next event arrives; `None` when the host closed the
+        /// stream.
+        pub fn next_event(&mut self) -> std::io::Result<Option<Value>> {
+            let mut buf = String::new();
+            loop {
+                buf.clear();
+                if self.reader.read_line(&mut buf)? == 0 {
+                    return Ok(None);
+                }
+                let line = buf.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                let v: Value =
+                    serde_json::from_str(line).map_err(|e| std::io::Error::other(e.to_string()))?;
+                match v.get("kind").and_then(Value::as_str) {
+                    Some("event") => return Ok(v.get("event").cloned()),
+                    // A late reply to a previous call: ignore.
+                    _ => continue,
+                }
+            }
+        }
+
         pub fn call(&mut self, ns: &str, method: &str, params: Value) -> std::io::Result<Value> {
             // A host started with MIAOTTY_MTP_TOKEN requires it on every request.
             let params = match std::env::var("MIAOTTY_MTP_TOKEN") {
@@ -763,6 +849,53 @@ pub mod client {
     }
 }
 
+/// Normalise a `topics` parameter (array or comma-separated string).
+fn topic_list(v: &Value) -> Vec<String> {
+    match v {
+        Value::Array(items) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect(),
+        Value::String(s) => s
+            .split(',')
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(str::to_string)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Forward subscription events to a socket as `kind: "event"` lines.
+fn spawn_event_pump(
+    mut writer: Box<dyn Write + Send>,
+    rx: std::sync::mpsc::Receiver<Value>,
+    topics: Option<Vec<String>>,
+) {
+    thread::spawn(move || {
+        for event in rx {
+            if let Some(only) = &topics {
+                if !only.is_empty() {
+                    let topic = event.get("topic").and_then(Value::as_str).unwrap_or("");
+                    if !only.iter().any(|t| t == topic) {
+                        continue;
+                    }
+                }
+            }
+            let line = json!({ "v": PROTO_VERSION, "kind": "event", "event": event });
+            let ok = writer
+                .write_all(line.to_string().as_bytes())
+                .and_then(|_| writer.write_all(b"\n"))
+                .and_then(|_| writer.flush())
+                .is_ok();
+            if !ok {
+                break;
+            }
+        }
+    });
+}
+
 /// Bind `path` and serve connections on a background thread.
 pub fn serve(path: &Path, state: Arc<ServerState>) -> std::io::Result<()> {
     #[cfg(unix)]
@@ -796,8 +929,12 @@ pub fn serve(path: &Path, state: Arc<ServerState>) -> std::io::Result<()> {
                     return;
                 };
                 let mut reader = BufReader::new(clone);
+                let pump = stream
+                    .try_clone()
+                    .ok()
+                    .map(|s| Box::new(s) as Box<dyn Write + Send>);
                 let mut writer = stream;
-                handle(&mut reader, &mut writer, &state);
+                handle(&mut reader, &mut writer, &state, pump);
             });
         }
     });
@@ -823,8 +960,12 @@ pub fn serve_tcp(addr: &str, state: Arc<ServerState>) -> std::io::Result<()> {
                     return;
                 };
                 let mut reader = BufReader::new(clone);
+                let pump = stream
+                    .try_clone()
+                    .ok()
+                    .map(|s| Box::new(s) as Box<dyn Write + Send>);
                 let mut writer = stream;
-                handle(&mut reader, &mut writer, &state);
+                handle(&mut reader, &mut writer, &state, pump);
             });
         }
     });
@@ -1055,6 +1196,69 @@ mod tests {
         let mut reader = BufReader::new(Cursor::new(input));
         let mut buf = Vec::new();
         assert!(matches!(read_request(&mut reader, &mut buf), Ok(false)));
+    }
+
+    #[test]
+    fn subscribe_receives_state_events() {
+        let st = ServerState::new();
+        let rx = st.subscribe();
+        dispatch(
+            &st,
+            request(
+                "agent",
+                "state.set",
+                json!({ "pane_id": "pane0", "agent": "claude", "state": "processing" }),
+            ),
+        );
+        let event = rx.recv_timeout(Duration::from_secs(2)).expect("event");
+        assert_eq!(event["topic"], json!("agent.state"));
+        assert_eq!(event["pane"], json!("pane0"));
+        assert_eq!(event["agent"], json!("claude"));
+        assert_eq!(event["state"], json!("processing"));
+        assert!(event["revision"].as_i64().unwrap() >= 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn event_stream_over_the_socket() {
+        let path = std::env::temp_dir().join(format!("miao-mtp-test-{}.sock", std::process::id()));
+        let st = ServerState::new();
+        serve(&path, st.clone()).expect("serve");
+        // The listener thread may need a moment to come up.
+        let mut client = loop {
+            match client::connect(&path) {
+                Ok(c) => break c,
+                Err(_) => thread::sleep(Duration::from_millis(20)),
+            }
+        };
+        client.subscribe(&["agent.state"]).expect("subscribe");
+        dispatch(
+            &st,
+            request(
+                "agent",
+                "state.set",
+                json!({ "pane_id": "pane1", "agent": "codex", "state": "idle" }),
+            ),
+        );
+        let event = client
+            .next_event()
+            .expect("stream")
+            .expect("an event arrived");
+        assert_eq!(event["topic"], json!("agent.state"));
+        assert_eq!(event["pane"], json!("pane1"));
+        // Topic filtering: a panes event is not delivered to this subscriber.
+        st.set_panes(vec![json!({ "id": "pane1" })]);
+        dispatch(
+            &st,
+            request(
+                "agent",
+                "state.set",
+                json!({ "pane_id": "pane2", "agent": "claude", "state": "error" }),
+            ),
+        );
+        let again = client.next_event().unwrap().unwrap();
+        assert_eq!(again["pane"], json!("pane2"), "filtered stream");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

@@ -17,7 +17,8 @@ use serde_json::{json, Value};
 fn usage() -> ! {
     eprintln!(
         "usage: miaotty-cli [--socket PATH|tcp://host:port] <command>\n\
-         commands: ping | health | wait [--since N] | pane list|run|send|focus|close | \
+         commands: ping | health | wait [--since N] | events [--topic T[,T]] | \
+         pane list|run|send|focus|close | \
          state <agent> --state S | state list | history add|list |\n     view|edit <path> |\n     file read --path P [--offset N] [--length N] [--base64] |\n     file write --path P [--data D | --data-b64 B]"
     );
     std::process::exit(2);
@@ -55,6 +56,28 @@ fn main() {
             std::process::exit(1);
         }
     };
+
+    if cmd == "events" {
+        // Stream events until interrupted; one JSON object per line.
+        let topics: Vec<&str> = flag(&args, "--topic")
+            .map(|t| t.split(',').collect())
+            .unwrap_or_default();
+        if let Err(e) = client.subscribe(&topics) {
+            eprintln!("miaotty-cli: subscribe failed: {e}");
+            std::process::exit(1);
+        }
+        loop {
+            match client.next_event() {
+                Ok(Some(event)) => println!("{event}"),
+                Ok(None) => break,
+                Err(e) => {
+                    eprintln!("miaotty-cli: stream ended: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        std::process::exit(0);
+    }
 
     let result: std::io::Result<Value> = match (cmd, args.get(1).map(String::as_str)) {
         ("ping", _) => client.call("core", "ping", json!({})),

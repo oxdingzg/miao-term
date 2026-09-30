@@ -176,12 +176,12 @@
 - 远程访问:`remote-listen = addr:port` 会额外用 TCP 提供控制面;它**要求**设置
   `MIAOTTY_MTP_TOKEN`,客户端每个请求都要带上该令牌。
 - 复用现有 `mtp` 报文与 `miaotty-cli`;**进程内 UI 直连注册表**,外部走 socket/pipe。
-- 方法面:`core.ping/health/wait`、`agent.state.*`、`history.*`、`pane.list/send/run/focus/close`、
-  `app.view/edit`(在查看器/编辑器中打开文件)、`file.read/write`(offset/length、base64、
-  上限 2 MB;可选 `MIAOTTY_MTP_TOKEN` 令牌)。
-- 变更通知用**revision 计数**加 `core.wait` 长轮询:一旦 revision 超过调用方给的值就返回。
-  真正的服务端推送式流未实现(早期设想的 `agent.state`/`history.changed`/`cwd.changed`
-  事件已弃用)。
+- 方法面:`core.ping/health/wait/subscribe`、`agent.state.*`、`history.*`、
+  `pane.list/send/run/focus/close`、`app.view/edit`(在查看器/编辑器中打开文件)、
+  `file.read/write`(offset/length、base64、上限 2 MB;可选 `MIAOTTY_MTP_TOKEN` 令牌)。
+- 变更通知有两种:**revision 计数**配 `core.wait` 长轮询(一旦 revision 超过调用方给的值即返回),
+  以及 `core.subscribe` 的**服务端推送**——把连接升级为 `{"kind":"event", …}` 行流,覆盖
+  `agent.state`、`panes`、`history` 三个 topic(`miaotty-cli events`)。不发送 `cwd.changed`。
 - 传输:`interprocess`(本地 socket / named pipe);`remote-listen` 走 TCP。
 
 ## 13. 应用层(miaotty-app)

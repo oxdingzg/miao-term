@@ -195,13 +195,14 @@ Use Alacritty's proven model (`FairMutex<Term>` + `EventListener`); do not inven
   **requires** `MIAOTTY_MTP_TOKEN`, and the client sends that token on every request.
 - Reuse the existing `mtp` messages and `miaotty-cli`; **in-process UI talks to the registries directly**,
   external callers go over the socket/pipe.
-- Methods: `core.ping/health/wait`, `agent.state.*`, `history.*`, `pane.list/send/run/focus/close`,
-  `app.view/edit` (open a file in the reader/editor), `file.read/write` (offset/length, base64,
-  2 MB cap; optional token via `MIAOTTY_MTP_TOKEN`).
-- Change notification is a **revision counter** plus the `core.wait` long-poll: it returns as
-  soon as the revision moves past the caller's value. True server-push event streaming is not
-  implemented (the earlier `agent.state` / `history.changed` / `cwd.changed` event sketch was
-  dropped in favour of this).
+- Methods: `core.ping/health/wait/subscribe`, `agent.state.*`, `history.*`,
+  `pane.list/send/run/focus/close`, `app.view/edit` (open a file in the reader/editor),
+  `file.read/write` (offset/length, base64, 2 MB cap; optional token via `MIAOTTY_MTP_TOKEN`).
+- Change notification comes in two forms: a **revision counter** with the `core.wait` long-poll
+  (returns as soon as the revision moves past the caller's value), and **server-push** via
+  `core.subscribe`, which upgrades the connection to a stream of `{"kind":"event", …}` lines for
+  the topics `agent.state`, `panes` and `history` (`miaotty-cli events`). `cwd.changed` is not
+  emitted.
 - Transport: `interprocess` (local socket / named pipe); TCP for `remote-listen`.
 
 ## 13. Application layer (miaotty-app)

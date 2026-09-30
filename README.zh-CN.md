@@ -209,14 +209,16 @@ shim 写入一个仅当前用户可访问的私有目录,并会恢复用户真�
 **MTP**(miaotty terminal protocol)控制面在 `$XDG_RUNTIME_DIR/miaotty.sock`
 (回退到 `$TMPDIR`)上使用换行分隔的 JSON,且 socket 以仅属主可访问的权限创建。
 shell 会继承 `MIAOTTY_SOCKET` 与 `MIAOTTY_PANE_ID`。每个响应都带状态 `revision`;
-`core.wait` 会阻塞到该值超过给定值后再返回,客户端据此跟踪 agent 状态、pane 或历史,
-无需轮询。
+`core.wait` 会阻塞到该值超过给定值后再返回;`core.subscribe` 则把连接升级为事件流
+(`agent.state`、`panes`、`history`),客户端据此跟踪 agent 状态、pane 或历史,无需轮询。
 
 `miaotty-cli` 是参考客户端:
 
 ```sh
 miaotty-cli ping
 miaotty-cli wait --since 42               # 阻塞直到状态 revision 变化
+miaotty-cli events                        # 以 JSON 行流式输出状态变化
+miaotty-cli events --topic agent.state    # ...仅订阅某个 topic
 miaotty-cli pane list
 miaotty-cli pane run --pane ID --data "echo hello"
 miaotty-cli pane focus --pane ID
@@ -313,9 +315,9 @@ view/edit、更新下载/校验/安装、URL scheme、全局快速终端热键�
   `classDiagram`、`erDiagram` 与 `pie` 子集(或经 `mermaid-command` 全量渲染);
   其它图类型显示占位。
 - **i18n**:主要界面已覆盖;少量示例/提示串仍为英文。
-- **MTP**:`file.read/write` 支持二进制(base64)与 `offset`/`length` 分块。客户端可用
-  `core.wait` 长轮询,在状态 revision 变化时立即返回,无需忙轮询;尚不支持真正的服务端推送。
-  已支持按能力授权(`MIAOTTY_MTP_ALLOW`)。
+- **MTP**:`file.read/write` 支持二进制(base64)与 `offset`/`length` 分块。客户端既可用
+  `core.wait` 长轮询,也可用 `core.subscribe` 事件流(`miaotty-cli events`)跟踪变化,
+  无需忙轮询。已支持按能力授权(`MIAOTTY_MTP_ALLOW`)。
 
 ---
 
