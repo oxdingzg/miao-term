@@ -371,6 +371,9 @@ struct State {
     mods: ModifiersState,
     selection: Option<(String, Selection)>,
     dragging: bool,
+    /// A file drag is hovering the window. The drop target is painted so the
+    /// destination is visible before the file is released.
+    dropping: bool,
     divider_drag: Option<(Vec<bool>, SplitDir, Rect)>,
     /// Mouse button currently forwarded to the application (0/1/2), if any.
     mouse_captured: Option<u8>,
@@ -1963,6 +1966,33 @@ impl State {
                 [egui::pos2(x0, y), egui::pos2(x1, y)],
                 egui::Stroke::new(1.0_f32, chrome::fg_color(&self.theme)),
             );
+        }
+        if self.dropping {
+            let ch = self.theme.chrome();
+            let accent = egui::Color32::from_rgb(ch.accent.0, ch.accent.1, ch.accent.2);
+            let scale = self.window.scale_factor() as f32;
+            let hovered = self
+                .pane_rects()
+                .into_iter()
+                .find(|(_, r)| r.contains(self.cursor.0 as f32 / scale, self.cursor.1 as f32 / scale))
+                .map(|(_, r)| card_inner(r));
+            // Over a pane the drop pastes a shell-quoted path, anywhere else it
+            // opens the editor. Which one is about to happen is the whole point
+            // of drawing this: the platform only shows a generic drag cursor.
+            let rect = match hovered {
+                Some(r) => egui::Rect::from_min_size(egui::pos2(r.x, r.y), egui::vec2(r.w, r.h)),
+                None => ctx.screen_rect(),
+            };
+            let painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("file_drop"),
+            ));
+            painter.rect_filled(
+                rect,
+                egui::Rounding::same(4.0),
+                egui::Color32::from_rgba_unmultiplied(ch.accent.0, ch.accent.1, ch.accent.2, 46),
+            );
+            painter.rect_stroke(rect, egui::Rounding::same(4.0), egui::Stroke::new(2.0_f32, accent));
         }
         // Host-specific overlay windows.
         self.palette_window(ctx);
@@ -4326,6 +4356,7 @@ impl ApplicationHandler<HostEvent> for Host {
             mods: ModifiersState::empty(),
             selection: None,
             dragging: false,
+            dropping: false,
             divider_drag: None,
             mouse_captured: None,
             cursor: (0.0, 0.0),
@@ -4647,13 +4678,19 @@ impl ApplicationHandler<HostEvent> for Host {
                 }
             }
             WindowEvent::DroppedFile(path) => {
+                state.dropping = false;
                 let scale = state.window.scale_factor() as f32;
                 let (px, py) = (state.cursor.0 as f32, state.cursor.1 as f32);
                 let over_pane = state
                     .pane_rects()
                     .into_iter()
                     .find(|(_, r)| r.contains(px / scale, py / scale));
-                if over_pane.is_some() && !state.egui_ctx.wants_pointer_input() {
+                // A directory never reaches the editor: `read_to_string` fails
+                // with EISDIR and leaves only a line on stderr, so a dragged
+                // folder looked like it did nothing at all. Pasting the path is
+                // what a dropped folder means in a terminal, so it always goes
+                // to the pane; only a file outside one opens in the editor.
+                if path.is_dir() || (over_pane.is_some() && !state.egui_ctx.wants_pointer_input()) {
                     if let Some((id, _)) = over_pane {
                         if let Some(tab) = state.tabs.get_mut(state.active_tab) {
                             tab.active = id;
@@ -4666,7 +4703,14 @@ impl ApplicationHandler<HostEvent> for Host {
                 }
                 state.window.request_redraw();
             }
-            WindowEvent::HoveredFile(_) => {}
+            WindowEvent::HoveredFile(_) => {
+                state.dropping = true;
+                state.window.request_redraw();
+            }
+            WindowEvent::HoveredFileCancelled => {
+                state.dropping = false;
+                state.window.request_redraw();
+            }
             WindowEvent::MouseInput {
                 state: es, button, ..
             } => match button {
