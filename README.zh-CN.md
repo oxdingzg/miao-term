@@ -294,22 +294,20 @@ miaotty-cli file write --path /tmp/x --data-b64 "AAECAw=="   # 二进制
 Open Quickly、details 面板、agent 闭环(通知、防休眠、提示队列)、Recipes、经 ssh 的远端
 view/edit、更新下载/校验/安装、URL scheme、全局快速终端热键、两个 host 的内联 IME 拼写与
 终端内联图片、Mermaid 时序/状态/类/ER/饼图、MTP 事件流、i18n,以及性能门。
+CI 性能基线已持久化于 `benches/perf-baseline.json`,由 nightly/手动运行刷新;
+比较仅报告,绝对预算作为门控。
 
 仍待完成:
 
-- **发布链(受限于凭证)**:工作流已接好,minisign **公钥**已提交并附加到每个 release,
-  minisign 私钥也已配置;剩下的是用真实凭证端到端跑一次,缺 **Apple 公证**(Developer ID
-  证书 + App 专用密码)与 **Windows MSI 签名**(代码签名证书)。流水线其余部分没有欠账 ——
-  见 `docs/RELEASE.md`。
+- **发布验收**:手动演练覆盖四个 runner 构建、包检查、minisign 校验与更新清单汇总。
+  仍需正式发布及下载/安装验收;**Apple 公证**与 **Windows MSI 签名**需要凭证。
+  见 `docs/RELEASE.zh-CN.md`。
 - **平台验证(需要硬件)**:Linux 的 wgpu 渲染路径已在 CI 中通过 Mesa 软件 Vulkan(lavapipe)
   覆盖,Windows 也在真机上经 MTP 驱动;真实 Linux 桌面会话、Wayland 门户热键、Windows 的
   IME/GUI 路径仍需一台交互机器。
 - **更新安装(需要硬件)**:三端均已实现(macOS app bundle、Windows MSI/zip helper、Linux
   AppImage)。MSI 与 `.deb` 已在真机验证;在真实桌面安装 AppImage 以及自替换路径仍需端到端
   跑一次(`docs/RELEASE.md`)。
-- **CI 性能基线**:已改为仓库内持久文件 `benches/perf-baseline.json`,由 `main` 上
-  nightly/手动运行刷新,不受缓存淘汰影响;比较仍为仅报告,因为 runner 抖动远大于信号
-  (真正的门是绝对预算)。
 - **原生版对齐**(`miaotty-native`):argv intent、转发 inbox、快速终端、IME 拼写与内联图片
   都已具备。剩下的是让 `miaotty-native` 自己完成系统注册 —— 目前由安装的 `.app` 持有 URL
   scheme,并把链接转发给正在运行的 host(`docs/INSTALL.md`)—— 以及 `background-opacity`,

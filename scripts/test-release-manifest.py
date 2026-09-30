@@ -6,6 +6,9 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+import sys
+
+sys.dont_write_bytecode = True
 
 spec = importlib.util.spec_from_file_location("manifest", Path(__file__).with_name("build-update-manifest.py"))
 assert spec is not None and spec.loader is not None

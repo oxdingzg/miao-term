@@ -30,10 +30,14 @@ PROFILE=debug scripts/package-macos.sh
 macOS 默认 ad-hoc 签名;若仓库配了 `APPLE_CERT_P12`+`APPLE_CERT_PASSWORD`+`APPLE_ID`+
 `APPLE_TEAM_ID`+`APPLE_APP_PASSWORD` 这些 secrets,则改为 Developer ID 签名 + 公证 + staple。
 Linux 额外产出 `.deb`(用 `cargo-deb`,元数据在 `miaotty-app/Cargo.toml`),
-并尽力产出 AppImage(`appimagetool`);Windows 为 zip,并尽力产出 MSI
-(`cargo-wix`/WiX)。AppImage/MSI 步骤为 `continue-on-error`,失败不影响发布。
+并产出 AppImage(`appimagetool`);Windows 为 zip 与 MSI(`cargo-wix`/WiX)。
+所有包均包含 `miaotty`、`miaotty-cli` 与 `miaotty-native`;AppImage/MSI 打包失败会使工作流失败。
 若存在 `WINDOWS_CERT_PFX` + `WINDOWS_CERT_PASSWORD` secrets,则用 `signtool`
 签 MSI。
+
+用 `gh workflow run release.yml --ref main -f tag=v0.0.1` 执行打包演练。
+它上传 `release-assembled`(安装包、公钥与 `latest.json`),不创建 GitHub Release。
+检查内容及剩余桌面验收见 [`RELEASE.zh-CN.md`](RELEASE.zh-CN.md)。
 
 ## 跨平台安装包
 

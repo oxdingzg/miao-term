@@ -15,15 +15,27 @@ git tag v0.1.0 && git push origin v0.1.0
 macOS, Linux and Windows, packages each platform, optionally signs, uploads the
 artifacts, builds an **update manifest**, and creates a GitHub Release.
 
+For a rehearsal without publishing a release:
+
+```sh
+gh workflow run release.yml --ref main -f tag=v0.0.1
+```
+
+Manual runs execute the same packaging, signing, and manifest checks, and upload
+the combined `release-assembled` artifact. The manifest uses the supplied tag;
+its download URLs become live only after a release with that tag is published.
+
 ## Artifacts
 
 | Platform | Artifact | Notes |
 |----------|----------|-------|
-| macOS | `miaotty-macos-arm64.zip`, `miaotty-macos-x86_64.zip` (each a `.app`) | ad-hoc signed; notarized when the Apple secrets are set. Apple Silicon is built on `macos-latest`, Intel on `macos-13` (`continue-on-error`, so a missing Intel runner cannot block a release) |
-| Linux | `miaotty-linux-x86_64.tar.gz`, `miaotty-linux-x86_64.AppImage`, `dist/*.deb` | AppImage is best-effort (`continue-on-error`) |
-| Windows | `miaotty-windows-x86_64.zip`, `miaotty-<ver>-x86_64.msi` | MSI is best-effort (`continue-on-error`) |
+| macOS | `miaotty-macos-arm64.zip`, `miaotty-macos-x86_64.zip` (each a `.app`) | ad-hoc signed; notarized when the Apple secrets are set. Apple Silicon uses `macos-latest`, Intel uses `macos-15-intel` |
+| Linux | `miaotty-linux-x86_64.tar.gz`, `miaotty-linux-x86_64.AppImage`, `dist/*.deb` | AppImage has an explicit `AppRun` entry point |
+| Windows | `miaotty-windows-x86_64.zip`, `miaotty-app-<ver>-x86_64.msi` | MSI installation/uninstallation is exercised on the runner |
 
 Every artifact gets a `.sig` next to it when signing is configured.
+All app bundles, archives, and installers contain the two hosts and the CLI.
+All four runner builds and AppImage/MSI packaging are required to succeed.
 
 ## Secrets (all optional)
 
@@ -100,10 +112,16 @@ Platform keys match the app's `platform_key()`: `macos-aarch64`,
 asks for it), and `release.yml` does not currently emit a `linux-aarch64`
 manifest entry.
 
+`scripts/build-update-manifest.py` requires both macOS architectures, Linux and
+Windows, computes SHA-256 from the actual files, and prefers AppImage/MSI over
+archive fallbacks. When minisign is configured, missing signatures fail the
+assembly job; all detached signatures are verified against `minisign.pub`.
+Run `python3 scripts/test-release-manifest.py` to check selection and failure cases.
+
 ## MSI (Windows) — verified
 
 The WiX template is committed at [`miaotty-app/wix/main.wxs`](../miaotty-app/wix/main.wxs)
-(it installs `miaotty.exe` **and** `miaotty-cli.exe` into
+(it installs `miaotty.exe`, `miaotty-cli.exe`, and `miaotty-native.exe` into
 `%ProgramFiles%\miaotty\bin`, adds that directory to the machine `PATH`, and
 registers an uninstall entry). `cargo wix --package miaotty-app` builds it; it
 needs WiX 3.x (chocolatey `wixtoolset`), and must run **from `miaotty-app/`**
@@ -123,9 +141,9 @@ Both installers were checked on real hardware (2026-09-29).
 **Linux `.deb` and AppImage** (Ubuntu 24.04):
 
 ```sh
-cargo build --release -p miaotty-app -p miaotty-cli
+cargo build --release -p miaotty-app -p miaotty-cli -p miao-term-widget
 cargo install cargo-deb --locked && cargo deb -p miaotty-app --no-build
-sudo dpkg -i target/debian/miaotty_*_amd64.deb     # /usr/bin/miaotty{,-cli}
+sudo dpkg -i target/debian/miaotty_*_amd64.deb     # /usr/bin/miaotty{,-cli,-native}
 miaotty-cli ping                                   # runs; errors only because no host
 ```
 
@@ -161,12 +179,22 @@ shasum -a 256 miaotty-macos-arm64.zip   # compare with the manifest's "sha256"
 Nothing is signed until `MINISIGN_SECRET_KEY` is configured, so unsigned releases
 simply have no `.sig` — verification is optional, not required to install.
 
-## Still open
+## Acceptance coverage and remaining work
 
-- The **AppImage** path is best-effort and not yet verified on a real install.
-- Self-replace now covers Windows (MSI/zip helper) and Linux (AppImage helper);
-only the *installation verification* of those paths is still pending (the .deb
-and MSI installs themselves are verified — see above).
-- The Intel macOS build runs on GitHub's `macos-13` runner, which is best-effort:
-  if that image is retired the Apple Silicon zip is still released and the
-  manifest simply has no `macos-x86_64` entry.
+The release workflow checks Linux package contents and CLI execution, and Windows
+MSI install → three binaries + URL handler → CLI execution → uninstall. These
+checks do not establish interactive desktop behavior. The real-host checks above
+describe the earlier two-binary packages, not the new native-host payload.
+
+| Check | Acceptance criterion | Environment still needed |
+|-------|----------------------|--------------------------|
+| AppImage desktop launch | Execute the AppImage, open a pane, use MTP, then exit cleanly | Linux desktop |
+| Wayland shortcut | Grant the portal request; invoke the shortcut with the app unfocused | Wayland desktop |
+| Windows IME, both hosts | Compose CJK text, check candidate position, commit/cancel, switch splits | Interactive Windows desktop |
+| Update self-replace | Download/verify a newer version, install/relaunch, retain workspace; exercise failure recovery | Installed macOS app, Windows MSI/zip, Linux AppImage |
+| Visual acceptance | Capture inline graphics, IME composition and Mermaid previews in both hosts | Desktop session |
+| Platform signing | Verify Developer ID/notarization and MSI Authenticode on shipped artifacts | Apple/Windows signing credentials |
+
+Record the commit, package hash, commands, result and screenshots for each desktop
+check. A manual rehearsal does not create live update-download URLs; a published
+release (or a dedicated test manifest server) is needed for download acceptance.

@@ -14,15 +14,26 @@ git tag v0.1.0 && git push origin v0.1.0
 [`.github/workflows/release.yml`](../.github/workflows/release.yml) 会在 macOS、Linux 与
 Windows 上构建、按平台打包、可选签名、上传产物、生成**更新清单**,并创建 GitHub Release。
 
+不发布 release 的演练:
+
+```sh
+gh workflow run release.yml --ref main -f tag=v0.0.1
+```
+
+手动运行执行相同的打包、签名与清单检查,上传汇总产物 `release-assembled`。
+清单使用传入的 tag;只有正式发布该 tag 后,其中的下载 URL 才会可用。
+
 ## 产物
 
 | 平台 | 产物 | 说明 |
 |------|------|------|
-| macOS | `miaotty-macos-arm64.zip`、`miaotty-macos-x86_64.zip`(各含一个 `.app`) | ad-hoc 签名;配置 Apple secrets 后公证。Apple Silicon 在 `macos-latest` 构建,Intel 在 `macos-13`(`continue-on-error`,故 Intel runner 缺失也不会卡住发布) |
-| Linux | `miaotty-linux-x86_64.tar.gz`、`miaotty-linux-x86_64.AppImage`、`dist/*.deb` | AppImage 为尽力而为(`continue-on-error`) |
-| Windows | `miaotty-windows-x86_64.zip`、`miaotty-<ver>-x86_64.msi` | MSI 为尽力而为(`continue-on-error`) |
+| macOS | `miaotty-macos-arm64.zip`、`miaotty-macos-x86_64.zip`(各含一个 `.app`) | ad-hoc 签名;配置 Apple secrets 后公证。Apple Silicon 用 `macos-latest`,Intel 用 `macos-15-intel` |
+| Linux | `miaotty-linux-x86_64.tar.gz`、`miaotty-linux-x86_64.AppImage`、`dist/*.deb` | AppImage 含明确的 `AppRun` 入口 |
+| Windows | `miaotty-windows-x86_64.zip`、`miaotty-app-<ver>-x86_64.msi` | 在 runner 上执行 MSI 安装/卸载验证 |
 
 配置签名后,每个产物旁边会生成 `.sig`。
+所有 app bundle、压缩包与安装包均包含两个 host 和 CLI。
+四个 runner 的构建与 AppImage/MSI 打包均必须成功。
 
 ## Secrets(全部可选)
 
@@ -91,10 +102,15 @@ update-check-url = "https://github.com/oxdingzg/miao-term/releases/latest/downlo
 `linux-aarch64`、`windows-x86_64`。`linux-x86_64-deb` 只是 `.deb` 产物的清单专用键
 (应用从不会请求它),而 `release.yml` 目前不产出 `linux-aarch64` 清单条目。
 
+`scripts/build-update-manifest.py` 要求两种 macOS 架构、Linux 与 Windows 产物齐全,
+从实际文件计算 SHA-256,优先选择 AppImage/MSI,其次才是压缩包。
+配置 minisign 后缺少签名会使汇总作业失败;所有分离签名均用 `minisign.pub` 校验。
+用 `python3 scripts/test-release-manifest.py` 检查产物选择及失败场景。
+
 ## MSI(Windows)——已验证
 
 WiX 模板已入库:[`miaotty-app/wix/main.wxs`](../miaotty-app/wix/main.wxs)(把 `miaotty.exe`
-**与** `miaotty-cli.exe` 安装到 `%ProgramFiles%\miaotty\bin`,把该目录加入机器 `PATH`,并注册
+、`miaotty-cli.exe` 与 `miaotty-native.exe` 安装到 `%ProgramFiles%\miaotty\bin`,把该目录加入机器 `PATH`,并注册
 卸载项)。用 `cargo wix --package miaotty-app` 构建;需要 WiX 3.x(choco `wixtoolset`),且必须
 **在 `miaotty-app/` 目录内**运行 —— 模板以相对路径引用 `wix\License.rtf`。
 
@@ -111,9 +127,9 @@ WiX 模板已入库:[`miaotty-app/wix/main.wxs`](../miaotty-app/wix/main.wxs)(�
 **Linux `.deb` 与 AppImage**(Ubuntu 24.04):
 
 ```sh
-cargo build --release -p miaotty-app -p miaotty-cli
+cargo build --release -p miaotty-app -p miaotty-cli -p miao-term-widget
 cargo install cargo-deb --locked && cargo deb -p miaotty-app --no-build
-sudo dpkg -i target/debian/miaotty_*_amd64.deb     # /usr/bin/miaotty{,-cli}
+sudo dpkg -i target/debian/miaotty_*_amd64.deb     # /usr/bin/miaotty{,-cli,-native}
 miaotty-cli ping                                   # 可运行;报错仅因无 host
 ```
 
@@ -145,10 +161,20 @@ shasum -a 256 miaotty-macos-arm64.zip   # 与清单里的 "sha256" 比对
 
 未配置 `MINISIGN_SECRET_KEY` 时不会签名，因此未签名的发布没有 `.sig` —— 校验是可选的，安装并不要求。
 
-## 仍待完成
+## 验收覆盖与剩余工作
 
-- **AppImage** 路径为尽力而为,尚未在真实安装场景验证。
-- 自我替换现已覆盖 Windows(MSI/zip helper)与 Linux(AppImage helper);仅这些路径的
-  *安装验证*仍待完成(`.deb` 与 MSI 安装本身已验证 —— 见上文)。
-- Intel macOS 构建跑在 GitHub 的 `macos-13` runner 上,属尽力而为:该镜像若退役,仍会发布
-  Apple Silicon 的 zip,只是清单里没有 `macos-x86_64` 条目。
+发布工作流检查 Linux 包内容与 CLI 运行,以及 Windows MSI 安装 → 三个二进制 + URL handler
+→ CLI 运行 → 卸载。这些检查不代表交互桌面体验已验收。上文的真机记录针对旧的双二进制包,
+不代表新增 native host 的安装验证。
+
+| 检查 | 验收标准 | 仍需环境 |
+|------|----------|----------|
+| AppImage 桌面启动 | 直接运行 AppImage,打开 pane,使用 MTP,正常退出 | Linux 桌面 |
+| Wayland 热键 | 授权门户请求;应用无焦点时触发热键 | Wayland 桌面 |
+| Windows IME,两个 host | 输入中日韩组合文本,检查候选框位置、提交/取消、切换分屏 | Windows 交互桌面 |
+| 更新自替换 | 下载/校验新版,安装/重启,保留工作区;验证失败恢复 | 已安装的 macOS app、Windows MSI/zip、Linux AppImage |
+| 视觉验收 | 截图检查两个 host 的内联图片、IME 组合文本与 Mermaid 预览 | 桌面会话 |
+| 平台签名 | 检查分发产物的 Developer ID/公证与 MSI Authenticode | Apple/Windows 签名凭证 |
+
+每项桌面检查记录 commit、安装包哈希、命令、结果与截图。
+手动演练不会产生可访问的更新下载 URL;下载验收需要正式发布或专用测试清单服务器。

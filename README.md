@@ -338,16 +338,16 @@ the agent loop (notifications, sleep guard, prompt queue), recipes, remote
 view/edit over ssh, update download/verify/install, URL schemes, the global
 Quick Terminal hotkey and IME preedit in both hosts, inline graphics in both
 hosts, Mermaid sequence/state/class/ER/pie diagrams, the MTP event stream, i18n,
-and a performance gate.
+and a performance gate. The CI performance baseline is persisted at
+`benches/perf-baseline.json` and refreshed by nightly/manual runs; comparison is
+report-only, with absolute budgets enforced.
 
 Still open:
 
-- **Release chain (blocked on credentials)**: the workflows are wired, the
-  minisign **public** key is committed and attached to every release, and the
-  minisign secret key is configured; what remains is a real end-to-end release
-  with **Apple notarization** (Developer ID certificate + app password) and
-  **Windows MSI signing** (a code-signing certificate). Nothing else in the
-  pipeline is outstanding — see [`docs/RELEASE.md`](docs/RELEASE.md).
+- **Release acceptance**: manual rehearsals cover four runner builds, package
+  checks, minisign verification and update-manifest assembly. A published release
+  and download/install acceptance are still needed; **Apple notarization** and
+  **Windows MSI signing** require credentials. See [`docs/RELEASE.md`](docs/RELEASE.md).
 - **Platform verification (needs hardware)**: the Linux wgpu render path runs in
   CI via Mesa software Vulkan (lavapipe) and Windows is driven over MTP on real
   hardware; a real Linux desktop session, the Wayland portal hotkey and the
@@ -356,10 +356,6 @@ Still open:
   (macOS app bundle, Windows MSI/zip helper, Linux AppImage). The MSI and the
   `.deb` are verified on real hosts; installing an AppImage on a real desktop
   and the self-replace path still need an end-to-end run (`docs/RELEASE.md`).
-- **CI performance baseline**: tracked at `benches/perf-baseline.json` and
-  refreshed by the nightly/manual run on `main`, so it survives cache eviction;
-  the comparison stays report-only because runner variance dwarfs the signal
-  (the absolute budgets are the gate).
 - **Native parity** (`miaotty-native`): argv intents, the forwarding inbox, the
   Quick Terminal, IME preedit and inline graphics are all in place. What is left
   is registering `miaotty-native` with the OS on its own — today the installed
