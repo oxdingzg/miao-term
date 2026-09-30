@@ -17,6 +17,7 @@ pub mod integration;
 pub mod launch;
 pub mod layout;
 pub mod markdown;
+pub mod menu;
 pub mod mermaid;
 pub mod palette;
 pub mod selection;

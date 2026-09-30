@@ -350,7 +350,7 @@ pub fn list(ui: &mut egui::Ui, ch: &ChromeColors, items: &[ChromeItem]) {
 }
 
 /// A menu command id; each host maps it to its own action.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MenuId {
     NewTab,
     ClosePane,
@@ -361,6 +361,7 @@ pub enum MenuId {
     NewSsh,
     OpenRemote,
     Composer,
+    QuickTerminal,
     CheckUpdates,
     Copy,
     Paste,
@@ -439,6 +440,12 @@ pub trait Chrome {
     /// A short right-side status chip (running program / agent), if any.
     fn status_right(&self) -> String {
         String::new()
+    }
+    /// Whether the host draws the menu bar inside the window. macOS inside an
+    /// app bundle returns false: the menu lives in the system menu bar there
+    /// (ADR 0031).
+    fn draws_menu_bar(&self) -> bool {
+        true
     }
     /// The host's active theme (colours for the whole chrome).
     fn theme(&self) -> crate::theme::Theme {
@@ -562,221 +569,54 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
         }
     };
 
-    egui::TopBottomPanel::top("menu")
-        .exact_height(CHROME_MENU_H)
-        .frame(panel_frame(&ch, egui::Margin::symmetric(6.0, 1.0)))
-        .show(ctx, |ui| {
-            // Menu-bar styling: transparent idle, subtle rounded hover/active.
-            {
-                let v = ui.visuals_mut();
-                v.override_text_color = Some(bg_color(ch.text));
-                v.widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
-                v.widgets.hovered.weak_bg_fill = bg_color(ch.hover);
-                v.widgets.active.weak_bg_fill = bg_color(ch.active);
-                v.widgets.hovered.bg_fill = bg_color(ch.hover);
-                v.widgets.active.bg_fill = bg_color(ch.active);
-                let r = egui::Rounding::same(5.0);
-                v.widgets.inactive.rounding = r;
-                v.widgets.hovered.rounding = r;
-                v.widgets.active.rounding = r;
-            }
-            ui.style_mut().spacing.button_padding = egui::vec2(8.0, 3.0);
-            ui.style_mut().spacing.item_spacing.x = 2.0;
-            ui.horizontal(|ui| {
-                ui.menu_button(t(lang, "File", "文件"), |ui| {
-                    menu_item(
-                        ui,
-                        t(lang, "New Tab", "新建标签"),
-                        MenuId::NewTab,
-                        &mut menu,
-                    );
-                    menu_item(
-                        ui,
-                        t(lang, "Duplicate Tab", "复制标签"),
-                        MenuId::DuplicateTab,
-                        &mut menu,
-                    );
-                    menu_item(
-                        ui,
-                        t(lang, "Reopen Last Closed", "重开最近关闭"),
-                        MenuId::ReopenClosed,
-                        &mut menu,
-                    );
-                    menu_item(
-                        ui,
-                        t(lang, "Close Pane / Tab", "关闭 Pane/标签"),
-                        MenuId::ClosePane,
-                        &mut menu,
-                    );
-                    ui.separator();
-                    menu_item(
-                        ui,
-                        t(lang, "New SSH Session…", "新建 SSH 会话…"),
-                        MenuId::NewSsh,
-                        &mut menu,
-                    );
-                    menu_item(
-                        ui,
-                        t(lang, "Open Remote File…", "打开远端文件…"),
-                        MenuId::OpenRemote,
-                        &mut menu,
-                    );
-                    ui.separator();
-                    menu_item(
-                        ui,
-                        t(lang, "Save Recipe…", "保存配方…"),
-                        MenuId::SaveRecipe,
-                        &mut menu,
-                    );
-                    menu_item(
-                        ui,
-                        t(lang, "Open Recipe…", "打开配方…"),
-                        MenuId::OpenRecipe,
-                        &mut menu,
-                    );
-                    ui.separator();
-                    menu_item(
-                        ui,
-                        t(lang, "Open File…", "打开文件…"),
-                        MenuId::OpenFile,
-                        &mut menu,
-                    );
-                    menu_item(ui, t(lang, "Save", "保存"), MenuId::Save, &mut menu);
-                    ui.separator();
-                    menu_item(ui, t(lang, "Quit", "退出"), MenuId::Quit, &mut menu);
-                });
-                ui.menu_button(t(lang, "Edit", "编辑"), |ui| {
-                    menu_item(ui, t(lang, "Copy", "复制"), MenuId::Copy, &mut menu);
-                    menu_item(ui, t(lang, "Paste", "粘贴"), MenuId::Paste, &mut menu);
-                    menu_item(
-                        ui,
-                        t(lang, "Select All", "全选"),
-                        MenuId::SelectAll,
-                        &mut menu,
-                    );
-                });
-                ui.menu_button(t(lang, "View", "视图"), |ui| {
-                    menu_item(
-                        ui,
-                        t(lang, "Toggle Sidebar", "开关侧栏"),
-                        MenuId::ToggleSidebar,
-                        &mut menu,
-                    );
-                    menu_item(
-                        ui,
-                        t(lang, "Toggle Details", "开关详情"),
-                        MenuId::ToggleDetails,
-                        &mut menu,
-                    );
-                    ui.separator();
-                    menu_item(
-                        ui,
-                        t(lang, "Increase Font Size", "增大字号"),
-                        MenuId::FontUp,
-                        &mut menu,
-                    );
-                    menu_item(
-                        ui,
-                        t(lang, "Decrease Font Size", "减小字号"),
-                        MenuId::FontDown,
-                        &mut menu,
-                    );
-                    menu_item(ui, t(lang, "Settings", "设置"), MenuId::Settings, &mut menu);
-                    ui.separator();
-                    menu_item(
-                        ui,
-                        t(lang, "Command Palette", "命令面板"),
-                        MenuId::Palette,
-                        &mut menu,
-                    );
-                    menu_item(ui, t(lang, "Find…", "查找…"), MenuId::Find, &mut menu);
-                    menu_item(
-                        ui,
-                        t(lang, "Toggle Full Screen", "全屏切换"),
-                        MenuId::Fullscreen,
-                        &mut menu,
-                    );
-                });
-                ui.menu_button(t(lang, "Shell", "终端"), |ui| {
-                    menu_item(
-                        ui,
-                        t(lang, "Split Right", "向右分屏"),
-                        MenuId::SplitRight,
-                        &mut menu,
-                    );
-                    menu_item(
-                        ui,
-                        t(lang, "Split Down", "向下分屏"),
-                        MenuId::SplitDown,
-                        &mut menu,
-                    );
-                    ui.separator();
-                    menu_item(
-                        ui,
-                        t(lang, "Clear Screen", "清屏"),
-                        MenuId::ClearScreen,
-                        &mut menu,
-                    );
-                    menu_item(
-                        ui,
-                        t(lang, "Clear Scrollback", "清除回滚"),
-                        MenuId::ClearScrollback,
-                        &mut menu,
-                    );
-                    let ro = if host_read_only {
-                        format!("{}  \u{2713}", t(lang, "Read Only", "只读"))
-                    } else {
-                        t(lang, "Read Only", "只读").to_string()
-                    };
-                    menu_item(ui, &ro, MenuId::ReadOnly, &mut menu);
-                    menu_item(
-                        ui,
-                        t(lang, "Open Link (Hint Mode)", "打开链接（提示模式）"),
-                        MenuId::HintMode,
-                        &mut menu,
-                    );
-                    menu_item(
-                        ui,
-                        t(lang, "Picture in Picture", "画中画"),
-                        MenuId::Pip,
-                        &mut menu,
-                    );
-                    menu_item(
-                        ui,
-                        t(lang, "Copy Path", "复制路径"),
-                        MenuId::CopyPath,
-                        &mut menu,
-                    );
-                    menu_item(
-                        ui,
-                        t(lang, "Reveal in File Manager", "在文件管理器中显示"),
-                        MenuId::RevealCwd,
-                        &mut menu,
-                    );
-                    menu_item(
-                        ui,
-                        t(lang, "Reset Font Size", "重置字号"),
-                        MenuId::FontReset,
-                        &mut menu,
-                    );
-                });
-                ui.menu_button(t(lang, "Agent", "Agent"), |ui| {
-                    menu_item(ui, "Composer", MenuId::Composer, &mut menu);
-                });
-                ui.menu_button(t(lang, "Help", "帮助"), |ui| {
-                    menu_item(
-                        ui,
-                        t(lang, "Check for Updates", "检查更新"),
-                        MenuId::CheckUpdates,
-                        &mut menu,
-                    );
-                    ui.hyperlink_to(
-                        t(lang, "Documentation", "文档"),
-                        "https://github.com/oxdingzg/miao-term#readme",
-                    );
+    if host.draws_menu_bar() {
+        let menu_table = crate::menu::menus(lang);
+        egui::TopBottomPanel::top("menu")
+            .exact_height(CHROME_MENU_H)
+            .frame(panel_frame(&ch, egui::Margin::symmetric(6.0, 1.0)))
+            .show(ctx, |ui| {
+                // Menu-bar styling: transparent idle, subtle rounded hover/active.
+                {
+                    let v = ui.visuals_mut();
+                    v.override_text_color = Some(bg_color(ch.text));
+                    v.widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
+                    v.widgets.hovered.weak_bg_fill = bg_color(ch.hover);
+                    v.widgets.active.weak_bg_fill = bg_color(ch.active);
+                    v.widgets.hovered.bg_fill = bg_color(ch.hover);
+                    v.widgets.active.bg_fill = bg_color(ch.active);
+                    let r = egui::Rounding::same(5.0);
+                    v.widgets.inactive.rounding = r;
+                    v.widgets.hovered.rounding = r;
+                    v.widgets.active.rounding = r;
+                }
+                ui.style_mut().spacing.button_padding = egui::vec2(8.0, 3.0);
+                ui.style_mut().spacing.item_spacing.x = 2.0;
+                ui.horizontal(|ui| {
+                    for (title, entries) in &menu_table {
+                        ui.menu_button(*title, |ui| {
+                            for entry in entries {
+                                match entry {
+                                    crate::menu::Entry::Item { label, id, .. } => {
+                                        let label = if *id == MenuId::ReadOnly && host_read_only {
+                                            format!("{label}  \u{2713}")
+                                        } else {
+                                            label.clone()
+                                        };
+                                        menu_item(ui, &label, *id, &mut menu);
+                                    }
+                                    crate::menu::Entry::Separator => {
+                                        ui.separator();
+                                    }
+                                    crate::menu::Entry::Link { label, url } => {
+                                        ui.hyperlink_to(label, url);
+                                    }
+                                }
+                            }
+                        });
+                    }
                 });
             });
-        });
+    }
 
     egui::TopBottomPanel::top("tabs")
         .exact_height(CHROME_TAB_H)

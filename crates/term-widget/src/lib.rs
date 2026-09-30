@@ -23,10 +23,12 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy}
 
 /// Events posted to the loop: a repaint wake-up, or the global Quick Terminal
 /// hotkey (which is the only thing that should toggle the scratch tab).
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 enum HostEvent {
     Wake,
     Hotkey,
+    /// A command from the OS menu bar (macOS, inside an app bundle).
+    Menu(miao_term_ui::chrome::MenuId),
 }
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
@@ -40,6 +42,134 @@ const CARD_MARGIN: f32 = 6.0;
 const CARD_RADIUS: f32 = 9.0;
 const CARD_PAD: f32 = 8.0;
 const BLINK: Duration = Duration::from_millis(530);
+
+/// Whether the app menu belongs in the OS menu bar: macOS, and only from inside
+/// an app bundle — that is where the application icon lives that AppKit's about
+/// panel wants, and `muda` needs one it can decode (ADR 0031).
+fn menu_in_os() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        std::env::current_exe()
+            .map(|p| p.to_string_lossy().contains(".app/Contents/MacOS/"))
+            .unwrap_or(false)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
+/// The OS menu bar, built from the shared menu table (ADR 0031).
+#[cfg(target_os = "macos")]
+mod appmenu {
+    use muda::accelerator::Accelerator;
+    use muda::{Menu, MenuEvent, MenuId as MudaId, MenuItem, PredefinedMenuItem, Submenu};
+    use std::str::FromStr;
+    use winit::event_loop::EventLoopProxy;
+
+    use super::HostEvent;
+
+    /// Everything created for the menu bar. It must stay alive for the life of
+    /// the app: muda's native items keep a raw pointer to the Rust-side
+    /// `MenuChild`, so dropping an item leaves the click handler reading freed
+    /// memory (`CFString cannot be created from a negative number of bytes`,
+    /// SIGTRAP). See ADR 0031.
+    pub struct MenuHandle {
+        _menu: Menu,
+        _items: Vec<MenuItem>,
+        _submenus: Vec<Submenu>,
+    }
+
+    /// Build and install the application menu.
+    pub fn install(
+        lang: miao_term_ui::i18n::Lang,
+        proxy: EventLoopProxy<HostEvent>,
+    ) -> Option<MenuHandle> {
+        let mut items: Vec<MenuItem> = Vec::new();
+        let mut submenus: Vec<Submenu> = Vec::new();
+        let menu = Menu::new();
+        // AppKit treats the first submenu as the application menu.
+        let app_sub = Submenu::new("miaotty", true);
+        let _ = app_sub.append(&PredefinedMenuItem::about(None, None));
+        let _ = app_sub.append(&PredefinedMenuItem::separator());
+        let _ = app_sub.append(&PredefinedMenuItem::services(None));
+        let _ = app_sub.append(&PredefinedMenuItem::separator());
+        let _ = app_sub.append(&PredefinedMenuItem::hide(None));
+        let _ = app_sub.append(&PredefinedMenuItem::hide_others(None));
+        let _ = app_sub.append(&PredefinedMenuItem::show_all(None));
+        let _ = app_sub.append(&PredefinedMenuItem::separator());
+        let quit = MenuItem::with_id(
+            MudaId::new(miao_term_ui::menu::key(miao_term_ui::chrome::MenuId::Quit)),
+            "Quit miaotty",
+            true,
+            Accelerator::from_str("CmdOrCtrl+Q").ok(),
+        );
+        let _ = app_sub.append(&quit);
+        items.push(quit);
+        if menu.append(&app_sub).is_err() {
+            return None;
+        }
+        submenus.push(app_sub);
+        for (title, entries) in miao_term_ui::menu::menus(lang) {
+            let sub = Submenu::new(title, true);
+            for entry in entries {
+                match entry {
+                    miao_term_ui::menu::Entry::Item {
+                        label,
+                        id,
+                        shortcut,
+                    } => {
+                        let acc = shortcut.and_then(|s| Accelerator::from_str(s).ok());
+                        let item = MenuItem::with_id(
+                            MudaId::new(miao_term_ui::menu::key(id)),
+                            label,
+                            true,
+                            acc,
+                        );
+                        if sub.append(&item).is_err() {
+                            return None;
+                        }
+                        items.push(item);
+                    }
+                    miao_term_ui::menu::Entry::Separator => {
+                        let _ = sub.append(&PredefinedMenuItem::separator());
+                    }
+                    miao_term_ui::menu::Entry::Link { label, .. } => {
+                        let item =
+                            MenuItem::with_id(MudaId::new("documentation"), label, true, None);
+                        if sub.append(&item).is_err() {
+                            return None;
+                        }
+                        items.push(item);
+                    }
+                }
+            }
+            if menu.append(&sub).is_err() {
+                return None;
+            }
+            submenus.push(sub);
+        }
+        MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
+            let key = e.id.0.as_str();
+            match miao_term_ui::menu::from_key(key) {
+                Some(id) => {
+                    let _ = proxy.send_event(HostEvent::Menu(id));
+                }
+                None => {
+                    if key == "documentation" {
+                        crate::open_external("https://github.com/oxdingzg/miao-term#readme");
+                    }
+                }
+            }
+        }));
+        menu.init_for_nsapp();
+        Some(MenuHandle {
+            _menu: menu,
+            _items: items,
+            _submenus: submenus,
+        })
+    }
+}
 
 /// Run a native terminal window until it is closed.
 pub fn run(title: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -90,6 +220,8 @@ pub fn run(title: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
         proxy,
         mtp,
         state: None,
+        #[cfg(target_os = "macos")]
+        menu: None,
     };
     event_loop.run_app(&mut host)?;
     Ok(())
@@ -100,6 +232,9 @@ struct Host {
     proxy: EventLoopProxy<HostEvent>,
     mtp: Arc<miao_term_mtp::ServerState>,
     state: Option<State>,
+    /// The OS menu bar, kept alive for the whole run (ADR 0031).
+    #[cfg(target_os = "macos")]
+    menu: Option<appmenu::MenuHandle>,
 }
 
 struct Pane {
@@ -4102,6 +4237,14 @@ impl ApplicationHandler<HostEvent> for Host {
         if !state.restore_session() {
             state.new_tab();
         }
+        #[cfg(target_os = "macos")]
+        if menu_in_os() {
+            let proxy = self.proxy.clone();
+            match appmenu::install(state.lang, proxy) {
+                Some(menu) => self.menu = Some(menu),
+                None => eprintln!("miaotty-native: could not install the application menu"),
+            }
+        }
         let args: Vec<String> = std::env::args().skip(1).collect();
         let intent = miao_term_ui::launch::Intent::from_args(&args);
         state.apply_launch(&intent);
@@ -4129,6 +4272,11 @@ impl ApplicationHandler<HostEvent> for Host {
             HostEvent::Hotkey => {
                 state.toggle_quick_terminal();
                 state.window.focus_window();
+            }
+            // OS menu bar command.
+            HostEvent::Menu(id) => {
+                chrome::Chrome::on_menu(state, id);
+                state.window.request_redraw();
             }
         }
     }
@@ -5038,6 +5186,11 @@ fn save_window_size(w: f32, h: f32) {
 }
 
 impl chrome::Chrome for State {
+    fn draws_menu_bar(&self) -> bool {
+        // macOS inside an app bundle uses the system menu bar instead (ADR 0031).
+        !menu_in_os()
+    }
+
     fn pane_close_rects(&self) -> Vec<(String, egui::Rect)> {
         self.pane_rects()
             .into_iter()
@@ -5321,6 +5474,7 @@ impl chrome::Chrome for State {
         use chrome::MenuId::*;
         let cmd = match id {
             NewTab => Cmd::NewTab,
+            QuickTerminal => Cmd::QuickTerminal,
             ClosePane => Cmd::ClosePane,
             OpenFile => Cmd::OpenFile,
             Save => Cmd::Save,

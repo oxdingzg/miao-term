@@ -60,6 +60,9 @@ on a release to generate per-platform artifacts.
 
 ## Deep links (URL schemes)
 
+Running `miaotty-native.app` also puts the menu in the system menu bar (ADR 0031);
+a bare binary keeps the in-window menu.
+
 The macOS bundles register `miaotty://`, `ssh://` and `x-man-page://` with the OS,
 and the Linux `.desktop` file registers the same three. A link is translated into
 a tab running the matching command.

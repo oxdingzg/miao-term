@@ -102,6 +102,10 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 - **Global Quick Terminal hotkey**: `global-hotkey` on macOS/Windows, the
   `GlobalShortcuts` desktop portal on Linux (plus compositor bindings for
   sway/hyprland/GNOME and friends).
+- **Native menu bar on macOS**: the installed `.app` shows File/Edit/View/Shell/
+  Agent/Help in the system menu bar — with About/Services/Hide/Quit — and the
+  window has no menu strip of its own, like every other macOS terminal
+  (ADR 0031). A bare `miaotty-native` binary keeps the in-window menu.
 - **Agent integrations**: detect claude/codex/opencode/miao, install a state hook
   script, copy the snippet that wires it into the agent's own config, and launch
   the agent — the user's agent config is never edited for them. `miao` reports

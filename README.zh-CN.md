@@ -76,6 +76,9 @@
 - zsh shell 集成(经 OSC 7 上报 cwd、命令历史),通过 `ZDOTDIR` shim 安装 —— 不修改用户点文件。
 - **URL scheme**:`miaotty://`、`ssh://`、`x-man-page://` 会用对应命令新开标签;二次启动会转发给
   正在运行的实例(单实例,含"聚焦 pane""quick"意图)。
+- **macOS 原生菜单栏**:安装的 `.app` 会把 文件/编辑/视图/终端/Agent/帮助 放进系统菜单栏
+  (含 About/Services/Hide/Quit),窗口内不再有菜单条,与其它 macOS 终端一致(ADR 0031);
+  裸跑 `miaotty-native` 仍用窗口内菜单。
 - **全局快速终端热键**:macOS/Windows 用 `global-hotkey`,Linux 用 `GlobalShortcuts` 门户
   (另提供 sway/hyprland/GNOME 等 compositor 绑定)。
 - **Agent 集成**:检测 claude/codex/opencode/miao,安装状态上报 hook 脚本,复制接入该 agent 自身

@@ -18,3 +18,9 @@ codegen-units = 1
 # optimize dependencies even in dev builds (our own crate stays debuggable).
 [profile.dev.package."*"]
 opt-level = 3
+
+# muda 0.15.3 aborts (an `unwrap` inside an AppKit callback that cannot unwind)
+# when an icon has no pixels, which is what clicking the standard About item hits
+# for a process without an application icon. See vendor/muda/PATCHES.miao.md.
+[patch.crates-io]
+muda = { path = "vendor/muda" }

@@ -22,3 +22,9 @@ egui-winit = "0.30"
 egui-wgpu = "0.30"
 egui_extras = { version = "0.30", features = ["image", "file", "http"] }
 egui_commonmark = "0.19"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Native menu bar (MIT). Only used when the binary runs from an app bundle,
+# which is where the application icon lives that AppKit's about panel wants.
+# Patched locally — see vendor/muda/PATCHES.miao.md and ADR 0031.
+muda = { version = "0.15", default-features = false }

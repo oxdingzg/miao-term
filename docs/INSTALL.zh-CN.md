@@ -53,6 +53,8 @@ Linux 额外产出 `.deb`(用 `cargo-deb`,元数据在 `miaotty-app/Cargo.toml`)
 
 ## 深链接(URL scheme)
 
+运行 `miaotty-native.app` 时菜单会出现在系统菜单栏(ADR 0031);裸跑二进制仍用窗口内菜单。
+
 这两个 macOS bundle 会向系统注册 `miaotty://`、`ssh://` 与 `x-man-page://`;Linux 的 `.desktop`
 文件注册同样三个。链接会被翻译成一个运行对应命令的新标签。
 
