@@ -105,7 +105,9 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 - **Native menu bar on macOS**: the installed `.app` shows File/Edit/View/Shell/
   Agent/Help in the system menu bar — with About/Services/Hide/Quit — and the
   window has no menu strip of its own, like every other macOS terminal
-  (ADR 0031). A bare `miaotty-native` binary keeps the in-window menu.
+  (ADR 0031). A bare `miaotty-native` binary keeps the in-window menu. The window
+  itself asks for the dark appearance, so its title bar matches the chrome
+  instead of opening as a light strip.
 - **Agent integrations**: detect claude/codex/opencode/miao, install a state hook
   script, copy the snippet that wires it into the agent's own config, and launch
   the agent — the user's agent config is never edited for them. `miao` reports

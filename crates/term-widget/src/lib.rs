@@ -4040,6 +4040,10 @@ impl ApplicationHandler<HostEvent> for Host {
         let attrs = Window::default_attributes()
             .with_title(&self.title)
             .with_inner_size(LogicalSize::new(init_w, init_h))
+            // The chrome is dark; ask the OS for a dark title bar so the window
+            // does not open with a light strip that clashes with the app (Otty
+            // themes its whole frame the same way).
+            .with_theme(Some(winit::window::Theme::Dark))
             .with_transparent(opacity < 1.0);
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),

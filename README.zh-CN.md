@@ -78,7 +78,8 @@
   正在运行的实例(单实例,含"聚焦 pane""quick"意图)。
 - **macOS 原生菜单栏**:安装的 `.app` 会把 文件/编辑/视图/终端/Agent/帮助 放进系统菜单栏
   (含 About/Services/Hide/Quit),窗口内不再有菜单条,与其它 macOS 终端一致(ADR 0031);
-  裸跑 `miaotty-native` 仍用窗口内菜单。
+  裸跑 `miaotty-native` 仍用窗口内菜单。窗口本身请求深色外观,标题栏与界面一致,不再是一条
+  浅色条。
 - **全局快速终端热键**:macOS/Windows 用 `global-hotkey`,Linux 用 `GlobalShortcuts` 门户
   (另提供 sway/hyprland/GNOME 等 compositor 绑定)。
 - **Agent 集成**:检测 claude/codex/opencode/miao,安装状态上报 hook 脚本,复制接入该 agent 自身

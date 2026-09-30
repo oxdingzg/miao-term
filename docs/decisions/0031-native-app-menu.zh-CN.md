@@ -35,6 +35,9 @@ macOS 上把菜单放进系统菜单栏,并保持诚实:
 4. 宿主创建的每个 `MenuItem`/`Submenu` 都在 `Host` 里**保活**
    (`appmenu::MenuHandle`),因为 muda 的原生项指向它们。
 
+窗口同时向系统请求深色外观(`with_theme(Dark)`):界面本身是深色,旁边一条浅色标题栏看起来像
+外来物——Otty 也是把整个外框按主题着色。
+
 ## 后果
 
 - macOS 得到原生菜单栏(含 About / Services / Hide / Quit),窗口内不再有菜单条,与 Otty 一致;

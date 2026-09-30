@@ -43,6 +43,10 @@ Put the menu in the system menu bar on macOS, and keep it honest:
    for the whole run (`appmenu::MenuHandle`), because muda's native items point
    into them.
 
+The window also asks the OS for the dark appearance (`with_theme(Dark)`), because
+the chrome is dark and a light title bar next to it looks like a foreign strip —
+Otty themes its whole frame the same way.
+
 ## Consequences
 
 - macOS gets a native menu bar (About / Services / Hide / Quit included) and the
