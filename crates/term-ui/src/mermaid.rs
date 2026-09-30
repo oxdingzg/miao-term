@@ -2,7 +2,9 @@
 //! `graph` / `flowchart` with `TD|TB|BT|LR|RL`, `id[Label]` / `id(Label)` /
 //! `id{Label}`, and `-->` / `---` / `-.->` / `==>` edges (optionally labelled);
 //! `sequenceDiagram` with participants, `->`/`->>`/`-->`/`-->>`/`-x`/`--x`
-//! messages and `Note over|left of|right of`; and `pie` charts with a title.
+//! messages and `Note over|left of|right of`; `stateDiagram`/`stateDiagram-v2`
+//! (with `[*]` pseudo-states); `classDiagram` and `erDiagram` boxes with member
+//! lines; and `pie` charts with a title.
 //!
 //! This is deliberately a **subset**: anything else makes [`parse`] return
 //! `None`, and the caller falls back to an external renderer or a placeholder.
@@ -23,6 +25,10 @@ pub enum NodeKind {
     Box,
     Round,
     Diamond,
+    /// Start/end marker of a state diagram (`[*]`).
+    Circle,
+    /// A class/entity box: title plus member lines in `Node::body`.
+    Class,
 }
 
 #[derive(Clone, Debug)]
@@ -30,6 +36,8 @@ pub struct Node {
     pub id: String,
     pub label: String,
     pub kind: NodeKind,
+    /// Member/attribute lines drawn under the title (class and ER diagrams).
+    pub body: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -194,6 +202,12 @@ pub fn parse_diagram(src: &str) -> Option<Diagram> {
         parse_sequence(src).map(Diagram::Sequence)
     } else if header == "pie" || header.starts_with("pie ") || header.starts_with("pie\t") {
         parse_pie(src).map(Diagram::Pie)
+    } else if header.starts_with("stateDiagram") {
+        parse_state(src).map(Diagram::Graph)
+    } else if header.starts_with("classDiagram") {
+        parse_class(src).map(Diagram::Graph)
+    } else if header.starts_with("erDiagram") {
+        parse_er(src).map(Diagram::Graph)
     } else {
         parse(src).map(Diagram::Graph)
     }
@@ -206,6 +220,284 @@ pub fn show_diagram(ui: &mut egui::Ui, d: &Diagram, fg: egui::Color32, panel: eg
         Diagram::Sequence(s) => show_sequence(ui, s, fg, panel),
         Diagram::Pie(p) => show_pie(ui, p, fg, panel),
     }
+}
+
+/// The `stateDiagram`/`stateDiagram-v2` case: a graph of states, where `[*]`
+/// marks the initial/final pseudo-state (drawn as a small circle).
+fn parse_state(src: &str) -> Option<Graph> {
+    use std::collections::HashMap;
+    let mut g = Graph {
+        dir: Dir::TopDown,
+        nodes: Vec::new(),
+        edges: Vec::new(),
+    };
+    let mut index: HashMap<String, usize> = HashMap::new();
+    let mut started = false;
+    let intern = |id: &str, g: &mut Graph, index: &mut HashMap<String, usize>| -> usize {
+        if let Some(&i) = index.get(id) {
+            return i;
+        }
+        let i = g.nodes.len();
+        let (label, kind) = if id == "[*]" {
+            (String::new(), NodeKind::Circle)
+        } else {
+            (id.to_string(), NodeKind::Box)
+        };
+        g.nodes.push(Node {
+            id: id.to_string(),
+            label,
+            kind,
+            body: Vec::new(),
+        });
+        index.insert(id.to_string(), i);
+        i
+    };
+    for raw in src.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with("%%") {
+            continue;
+        }
+        if !started {
+            if line == "stateDiagram" || line.starts_with("stateDiagram") {
+                started = true;
+            }
+            continue;
+        }
+        let lower = line.to_ascii_lowercase();
+        // Aliased states: `state "Long name" as S`.
+        if lower.starts_with("state ") {
+            let rest = line[6..].trim();
+            let (label, id) = rest.split_once(" as ")?;
+            let id = id.trim();
+            if id.is_empty() {
+                return None;
+            }
+            let i = intern(id, &mut g, &mut index);
+            let label = label.trim().trim_matches('"').trim();
+            g.nodes[i].label = if label.is_empty() {
+                id.to_string()
+            } else {
+                label.to_string()
+            };
+            continue;
+        }
+        if lower.starts_with("direction ") || lower == "note" || lower.starts_with("note ") {
+            // Notes and per-diagram direction are not modelled.
+            return None;
+        }
+        let (left, label, right) = split_relation(line, &["-->"]);
+        if right.trim().is_empty() {
+            return None;
+        }
+        let a = intern(left.trim(), &mut g, &mut index);
+        let b = intern(right.trim(), &mut g, &mut index);
+        g.edges.push(Edge {
+            from: a,
+            to: b,
+            label: label.map(str::to_string),
+            dotted: false,
+        });
+    }
+    if !started || g.edges.is_empty() || g.nodes.is_empty() {
+        return None;
+    }
+    Some(g)
+}
+
+/// Split `A <rel> B : label` into (left, label, right) for the first of `ops`
+/// that appears. Returns `("", None, "")` when none match.
+fn split_relation<'a>(line: &'a str, ops: &[&str]) -> (&'a str, Option<&'a str>, &'a str) {
+    let mut best: Option<(usize, &str)> = None;
+    for op in ops {
+        if let Some(p) = line.find(op) {
+            if best.map(|(bp, _)| p < bp).unwrap_or(true) {
+                best = Some((p, op));
+            }
+        }
+    }
+    let Some((pos, op)) = best else {
+        return ("", None, "");
+    };
+    let (head, tail) = line.split_at(pos);
+    let tail = &tail[op.len()..];
+    let (mid, label) = match tail.split_once(':') {
+        Some((m, l)) => (m, Some(l.trim())),
+        None => (tail, None),
+    };
+    (head.trim(), label, mid.trim())
+}
+
+/// `classDiagram`: classes (optionally with a member block) and relations.
+fn parse_class(src: &str) -> Option<Graph> {
+    use std::collections::HashMap;
+    let mut g = Graph {
+        dir: Dir::TopDown,
+        nodes: Vec::new(),
+        edges: Vec::new(),
+    };
+    let mut index: HashMap<String, usize> = HashMap::new();
+    let intern = |id: &str, g: &mut Graph, index: &mut HashMap<String, usize>| -> usize {
+        if let Some(&i) = index.get(id) {
+            return i;
+        }
+        let i = g.nodes.len();
+        g.nodes.push(Node {
+            id: id.to_string(),
+            label: id.to_string(),
+            kind: NodeKind::Class,
+            body: Vec::new(),
+        });
+        index.insert(id.to_string(), i);
+        i
+    };
+    let mut started = false;
+    let mut current: Option<usize> = None; // open `class X { ... }` block
+    for raw in src.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with("%%") {
+            continue;
+        }
+        if !started {
+            if line.starts_with("classDiagram") {
+                started = true;
+            }
+            continue;
+        }
+        if line == "}" {
+            current = None;
+            continue;
+        }
+        if let Some(i) = current {
+            g.nodes[i].body.push(line.to_string());
+            continue;
+        }
+        let lower = line.to_ascii_lowercase();
+        // `class Name`, `class Name {`, or `Name : member`.
+        if let Some(rest) = lower.strip_prefix("class ") {
+            let rest = line[line.len() - rest.len()..].trim();
+            let (name, open) = match rest.strip_suffix('{') {
+                Some(n) => (n.trim(), true),
+                None => (rest, false),
+            };
+            let i = intern(name, &mut g, &mut index);
+            if open {
+                current = Some(i);
+            }
+            continue;
+        }
+        if let Some((name, member)) = line.split_once(':') {
+            let name = name.trim();
+            let member = member.trim();
+            if name.contains('<') || name.contains('>') || name.contains('-') {
+                return None;
+            }
+            let i = intern(name, &mut g, &mut index);
+            if !member.is_empty() {
+                g.nodes[i].body.push(member.to_string());
+            }
+            continue;
+        }
+        // Relations, longest operator first so `<|--` beats `--`.
+        const CLASS_OPS: [&str; 14] = [
+            "<|--", "--|>", "<|..", "..|>", "*--", "--*", "o--", "--o", "..>", "<..", "-->", "<--",
+            "..", "--",
+        ];
+        let (left, label, right) = split_relation(line, &CLASS_OPS);
+        if left.is_empty() || right.is_empty() || left == line {
+            return None;
+        }
+        let op = &line[left.len()..line.len() - right.len()];
+        let dotted = op.contains("..");
+        let a = intern(left, &mut g, &mut index);
+        let b = intern(right, &mut g, &mut index);
+        g.edges.push(Edge {
+            from: a,
+            to: b,
+            label: label.map(str::to_string),
+            dotted,
+        });
+    }
+    if !started || g.nodes.is_empty() {
+        return None;
+    }
+    Some(g)
+}
+
+/// `erDiagram`: entities (with an attribute block) and cardinality relations.
+fn parse_er(src: &str) -> Option<Graph> {
+    use std::collections::HashMap;
+    let mut g = Graph {
+        dir: Dir::LeftRight,
+        nodes: Vec::new(),
+        edges: Vec::new(),
+    };
+    let mut index: HashMap<String, usize> = HashMap::new();
+    let intern = |id: &str, g: &mut Graph, index: &mut HashMap<String, usize>| -> usize {
+        if let Some(&i) = index.get(id) {
+            return i;
+        }
+        let i = g.nodes.len();
+        g.nodes.push(Node {
+            id: id.to_string(),
+            label: id.to_string(),
+            kind: NodeKind::Class,
+            body: Vec::new(),
+        });
+        index.insert(id.to_string(), i);
+        i
+    };
+    let mut started = false;
+    let mut current: Option<usize> = None;
+    for raw in src.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with("%%") {
+            continue;
+        }
+        if !started {
+            if line.starts_with("erDiagram") {
+                started = true;
+            }
+            continue;
+        }
+        if line == "}" {
+            current = None;
+            continue;
+        }
+        if let Some(i) = current {
+            g.nodes[i].body.push(line.to_string());
+            continue;
+        }
+        if let Some((head, open)) = line.strip_suffix('{').map(|h| (h.trim(), true)) {
+            if open && !head.contains(' ') {
+                let i = intern(head, &mut g, &mut index);
+                current = Some(i);
+                continue;
+            }
+        }
+        // Relations: `A ||--o{ B : label`.
+        if line.contains("--") {
+            let (left, label, right) = split_relation(line, &["--"]);
+            if left.is_empty() || right.is_empty() {
+                return None;
+            }
+            let left = left.trim_end_matches(['|', 'o', '{', '}']);
+            let right = right.trim_start_matches(['|', 'o', '{', '}']);
+            let a = intern(left.trim(), &mut g, &mut index);
+            let b = intern(right.trim(), &mut g, &mut index);
+            g.edges.push(Edge {
+                from: a,
+                to: b,
+                label: label.map(str::to_string),
+                dotted: false,
+            });
+            continue;
+        }
+        return None;
+    }
+    if !started || g.nodes.is_empty() {
+        return None;
+    }
+    Some(g)
 }
 
 /// Intern an actor id, appending it in first-seen order.
@@ -388,6 +680,7 @@ fn parse_statement(
                     id: id.clone(),
                     label: label.unwrap_or_else(|| id.clone()),
                     kind,
+                    body: Vec::new(),
                 });
                 index.insert(id, i);
                 i
@@ -554,6 +847,7 @@ pub fn show(ui: &mut egui::Ui, g: &Graph, fg: egui::Color32, panel: egui::Color3
     let font = egui::FontId::proportional(13.0);
     let pad = egui::vec2(14.0, 8.0);
     let gap = egui::vec2(36.0, 44.0);
+    let body_font = egui::FontId::proportional(11.0);
     let galleys: Vec<Arc<egui::Galley>> = g
         .nodes
         .iter()
@@ -562,7 +856,37 @@ pub fn show(ui: &mut egui::Ui, g: &Graph, fg: egui::Color32, panel: egui::Color3
                 .layout_no_wrap(n.label.clone(), font.clone(), fg)
         })
         .collect();
-    let sizes: Vec<egui::Vec2> = galleys.iter().map(|gl| gl.size() + pad * 2.0).collect();
+    let bodies: Vec<Vec<Arc<egui::Galley>>> = g
+        .nodes
+        .iter()
+        .map(|n| {
+            n.body
+                .iter()
+                .map(|l| {
+                    ui.painter()
+                        .layout_no_wrap(l.clone(), body_font.clone(), fg)
+                })
+                .collect()
+        })
+        .collect();
+    let line_h = 15.0f32;
+    let sizes: Vec<egui::Vec2> = g
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| {
+            if n.kind == NodeKind::Circle {
+                return egui::vec2(18.0, 18.0);
+            }
+            let body_w = bodies[i]
+                .iter()
+                .map(|gl| gl.size().x)
+                .fold(0.0f32, f32::max);
+            let w = (galleys[i].size().x.max(body_w) + pad.x * 2.0).max(64.0);
+            let h = galleys[i].size().y + bodies[i].len() as f32 * line_h + pad.y * 2.0;
+            egui::vec2(w, h)
+        })
+        .collect();
 
     let layers = assign_layers(g);
     let max_layer = layers.iter().copied().max().unwrap_or(0);
@@ -674,6 +998,10 @@ pub fn show(ui: &mut egui::Ui, g: &Graph, fg: egui::Color32, panel: egui::Color3
 
     for (i, c) in centers.iter().enumerate() {
         let rect = egui::Rect::from_center_size(*c, sizes[i]);
+        if g.nodes[i].kind == NodeKind::Circle {
+            painter.circle_filled(*c, sizes[i].x / 2.0, fg.gamma_multiply(0.9));
+            continue;
+        }
         let round = match g.nodes[i].kind {
             NodeKind::Round => egui::Rounding::same(sizes[i].y / 2.0),
             _ => egui::Rounding::same(4.0),
@@ -688,9 +1016,29 @@ pub fn show(ui: &mut egui::Ui, g: &Graph, fg: egui::Color32, panel: egui::Color3
         ] {
             painter.line_segment([a, b], egui::Stroke::new(1.2_f32, border));
         }
+        // Title centred in the top strip; member lines left-aligned under it.
         let gl = &galleys[i];
-        let pos = *c - gl.size() / 2.0;
-        painter.galley(pos, gl.clone(), fg);
+        let title_top = rect.top() + pad.y;
+        let mut y = title_top;
+        if bodies[i].is_empty() {
+            y = c.y - gl.size().y / 2.0;
+        }
+        painter.galley(egui::pos2(c.x - gl.size().x / 2.0, y), gl.clone(), fg);
+        if !bodies[i].is_empty() {
+            let mut by = title_top + gl.size().y + 3.0;
+            let sep = egui::Stroke::new(1.0_f32, border);
+            painter.line_segment(
+                [
+                    egui::pos2(rect.left() + 4.0, by - 3.0),
+                    egui::pos2(rect.right() - 4.0, by - 3.0),
+                ],
+                sep,
+            );
+            for line in &bodies[i] {
+                painter.galley(egui::pos2(rect.left() + pad.x, by), line.clone(), fg);
+                by += line_h;
+            }
+        }
     }
 }
 
@@ -1367,6 +1715,92 @@ mod tests {
             });
         });
         assert!(!out.shapes.is_empty(), "mermaid::show_pie drew nothing");
+    }
+
+    #[test]
+    fn parses_state_diagrams() {
+        let Diagram::Graph(g) = parse_diagram(
+            "stateDiagram-v2\n  [*] --> Idle\n  Idle --> Running: start\n  Running --> [*]",
+        )
+        .unwrap() else {
+            panic!("expected a graph for a state diagram");
+        };
+        assert_eq!(g.nodes.len(), 3, "two states plus the [*] marker");
+        assert_eq!(g.nodes[0].kind, NodeKind::Circle);
+        assert_eq!(g.nodes[1].label, "Idle");
+        assert_eq!(g.edges.len(), 3);
+        assert_eq!(g.edges[1].label.as_deref(), Some("start"));
+        // Aliases and rejection of what we do not model.
+        let Diagram::Graph(alias) =
+            parse_diagram("stateDiagram\n state \"Long name\" as S\n [*] --> S").unwrap()
+        else {
+            panic!("expected a graph");
+        };
+        assert_eq!(alias.nodes[0].label, "Long name");
+        assert!(parse_diagram("stateDiagram\n note left of A: hi\n [*] --> A").is_none());
+    }
+
+    #[test]
+    fn parses_class_diagrams() {
+        let Diagram::Graph(g) = parse_diagram(
+            "classDiagram\n  class Animal {\n    +String name\n    +speak()\n  }\n  Animal <|-- Dog\n  Dog : +bark()",
+        )
+        .unwrap()
+        else {
+            panic!("expected a graph for a class diagram");
+        };
+        assert_eq!(g.nodes.len(), 2);
+        let animal = g.nodes.iter().find(|n| n.label == "Animal").unwrap();
+        assert_eq!(animal.kind, NodeKind::Class);
+        assert_eq!(animal.body, vec!["+String name", "+speak()"]);
+        let dog = g.nodes.iter().find(|n| n.label == "Dog").unwrap();
+        assert_eq!(dog.body, vec!["+bark()"]);
+        assert_eq!(g.edges.len(), 1);
+        assert_eq!((g.edges[0].from, g.edges[0].to), (0, 1));
+    }
+
+    #[test]
+    fn parses_er_diagrams() {
+        let Diagram::Graph(g) = parse_diagram(
+            "erDiagram\n  CUSTOMER {\n    string name\n  }\n  CUSTOMER ||--o{ ORDER : places",
+        )
+        .unwrap() else {
+            panic!("expected a graph for an ER diagram");
+        };
+        assert_eq!(g.nodes.len(), 2);
+        let customer = g.nodes.iter().find(|n| n.label == "CUSTOMER").unwrap();
+        assert_eq!(customer.body, vec!["string name"]);
+        let order = g.nodes.iter().find(|n| n.label == "ORDER").unwrap();
+        assert!(order.body.is_empty(), "implicitly declared entity");
+        assert_eq!(g.edges.len(), 1);
+        assert_eq!(g.edges[0].label.as_deref(), Some("places"));
+    }
+
+    #[test]
+    fn shows_state_and_class_diagrams_headless() {
+        for src in [
+            "stateDiagram-v2\n [*] --> A\n A --> B: go\n B --> [*]",
+            "classDiagram\n class A {\n +x\n }\n A <|-- B",
+            "erDiagram\n A {\n int id\n }\n A ||--o{ B : has",
+        ] {
+            let Diagram::Graph(g) = parse_diagram(src).unwrap() else {
+                panic!("expected a graph for {src}");
+            };
+            let ctx = egui::Context::default();
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(640.0, 480.0),
+                )),
+                ..Default::default()
+            };
+            let out = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    show(ui, &g, egui::Color32::WHITE, egui::Color32::BLACK);
+                });
+            });
+            assert!(!out.shapes.is_empty(), "drew nothing for {src}");
+        }
     }
 
     #[test]
