@@ -8,6 +8,7 @@
 use std::time::Instant;
 
 use miao_term_core::aterm::ATerm;
+use miao_term_core::perfgate::baseline_gate;
 
 fn scale() -> f64 {
     std::env::var("MIAOTTY_PERF_SCALE")
@@ -41,40 +42,6 @@ fn record_metric(key: &str, value: f64) {
     let _ = std::fs::write(
         &path,
         serde_json::to_string_pretty(&map).unwrap_or_default(),
-    );
-}
-
-/// Compare a measured metric against the committed baseline and fail on a
-/// regression beyond `regression_pct` (ADR 0023).
-fn baseline_gate(key: &str, measured: f64, higher_is_better: bool) {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../benches/budgets.json");
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return;
-    };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return;
-    };
-    let Some(entry) = value.get(key) else { return };
-    let Some(base) = entry.get("baseline").and_then(|b| b.as_f64()) else {
-        return;
-    };
-    let pct = entry
-        .get("regression_pct")
-        .and_then(|p| p.as_f64())
-        .unwrap_or(25.0);
-    let limit = if higher_is_better {
-        base * (1.0 - pct / 100.0)
-    } else {
-        base * (1.0 + pct / 100.0)
-    };
-    let ok = if higher_is_better {
-        measured >= limit
-    } else {
-        measured <= limit
-    };
-    assert!(
-        ok,
-        "{key}: measured {measured:.4} regressed beyond {pct}% of baseline {base:.4} (limit {limit:.4})"
     );
 }
 

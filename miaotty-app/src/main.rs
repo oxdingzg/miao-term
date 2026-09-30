@@ -6014,40 +6014,6 @@ mod perf_tests {
             .unwrap_or(1.0)
     }
 
-    /// Compare a measured metric against the committed baseline and fail on a
-    /// regression beyond `regression_pct` (ADR 0023).
-    fn baseline_gate(key: &str, measured: f64, higher_is_better: bool) {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../benches/budgets.json");
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            return;
-        };
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
-            return;
-        };
-        let Some(entry) = value.get(key) else { return };
-        let Some(base) = entry.get("baseline").and_then(|b| b.as_f64()) else {
-            return;
-        };
-        let pct = entry
-            .get("regression_pct")
-            .and_then(|p| p.as_f64())
-            .unwrap_or(25.0);
-        let limit = if higher_is_better {
-            base * (1.0 - pct / 100.0)
-        } else {
-            base * (1.0 + pct / 100.0)
-        };
-        let ok = if higher_is_better {
-            measured >= limit
-        } else {
-            measured <= limit
-        };
-        assert!(
-            ok,
-            "{key}: measured {measured:.4} regressed beyond {pct}% of baseline {base:.4} (limit {limit:.4})"
-        );
-    }
-
     #[test]
     #[ignore = "perf gate; run `cargo test --release -- --ignored`"]
     fn build_rows_frame_budget() {
@@ -6069,7 +6035,7 @@ mod perf_tests {
             per_ms <= 4.0 * scale(),
             "row build {per_ms:.3} ms exceeds the 4 ms/frame budget"
         );
-        baseline_gate("build_rows_frame_ms", per_ms / scale(), false);
+        miao_term_core::perfgate::baseline_gate("build_rows_frame_ms", per_ms / scale(), false);
         record_metric("build_rows_frame_ms", per_ms / scale());
     }
 
@@ -6095,7 +6061,7 @@ mod perf_tests {
             per_ms <= 100.0 * scale(),
             "palette ranking {per_ms:.3} ms exceeds the 100 ms budget"
         );
-        baseline_gate("palette_rank_10k_ms", per_ms / scale(), false);
+        miao_term_core::perfgate::baseline_gate("palette_rank_10k_ms", per_ms / scale(), false);
         record_metric("palette_rank_10k_ms", per_ms / scale());
     }
 }

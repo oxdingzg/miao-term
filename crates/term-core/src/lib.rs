@@ -13,6 +13,7 @@
 
 pub mod aterm;
 pub mod graphics;
+pub mod perfgate;
 mod shell;
 mod term;
 
