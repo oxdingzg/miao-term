@@ -25,6 +25,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
 
       - name: Build
         run: cargo build --release -p miaotty-app -p miaotty-cli -p miao-term-widget
@@ -162,7 +164,7 @@ jobs:
             }
             & (Join-Path $bin 'miaotty-cli.exe') --help
             if ($LASTEXITCODE -ne 0) { throw 'Installed CLI failed' }
-            $command = (Get-Item 'Registry::HKEY_CLASSES_ROOT/miaotty/shell/open/command').GetValue('')
+            $command = (Get-Item 'Registry::HKEY_CLASSES_ROOT\miaotty\shell\open\command').GetValue('')
             if (-not $command.Contains('miaotty.exe')) { throw 'Missing URL handler' }
           } finally {
             $uninstall = Start-Process msiexec.exe -ArgumentList @('/x', "`"$msi`"", '/qn', '/norestart') -Wait -PassThru
