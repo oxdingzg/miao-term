@@ -14,13 +14,15 @@ use std::path::PathBuf;
 
 use serde_json::{json, Value};
 
+fn usage_text() -> &'static str {
+    "usage: miaotty-cli [--socket PATH|tcp://host:port] <command>\n\
+     commands: ping | health | wait [--since N] | events [--topic T[,T]] | \
+     pane list|run|send|focus|close | \
+     state <agent> --state S | state list | history add|list |\n     view|edit <path> |\n     file read --path P [--offset N] [--length N] [--base64] |\n     file write --path P [--data D | --data-b64 B]"
+}
+
 fn usage() -> ! {
-    eprintln!(
-        "usage: miaotty-cli [--socket PATH|tcp://host:port] <command>\n\
-         commands: ping | health | wait [--since N] | events [--topic T[,T]] | \
-         pane list|run|send|focus|close | \
-         state <agent> --state S | state list | history add|list |\n     view|edit <path> |\n     file read --path P [--offset N] [--length N] [--base64] |\n     file write --path P [--data D | --data-b64 B]"
-    );
+    eprintln!("{}", usage_text());
     std::process::exit(2);
 }
 
@@ -48,6 +50,10 @@ fn main() {
 
     let pane_default = || std::env::var("MIAOTTY_PANE_ID").ok();
     let cmd = args.first().map(String::as_str).unwrap_or("");
+    if cmd == "--help" || cmd == "-h" {
+        println!("{}", usage_text());
+        return;
+    }
 
     let mut client = match miao_term_mtp::client::connect_any(&socket.to_string_lossy()) {
         Ok(c) => c,
