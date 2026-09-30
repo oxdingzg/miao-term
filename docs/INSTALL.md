@@ -18,7 +18,9 @@ scripts/package-macos.sh              # release build -> dist/miaotty.app
 PROFILE=debug scripts/package-macos.sh
 ```
 
-Produces an ad-hoc-signed `dist/miaotty.app`. For distribution it is codesigned
+Produces an ad-hoc-signed `dist/miaotty.app` (the eframe host) and
+`dist/miaotty-native.app` (the native host); each bundle carries both binaries,
+the URL schemes and the application icon. For distribution they are codesigned
 and notarized automatically when the Apple secrets are configured (see
 [Releases](#releases)).
 
@@ -58,7 +60,7 @@ on a release to generate per-platform artifacts.
 
 ## Deep links (URL schemes)
 
-`miaotty.app` registers `miaotty://`, `ssh://` and `x-man-page://` with the OS,
+The macOS bundles register `miaotty://`, `ssh://` and `x-man-page://` with the OS,
 and the Linux `.desktop` file registers the same three. A link is translated into
 a tab running the matching command.
 

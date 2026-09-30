@@ -13,11 +13,12 @@ cargo run -p miaotty-app      # 或:cargo build && ./target/debug/miaotty
 ## macOS .app
 
 ```sh
-scripts/package-macos.sh              # release 构建 → dist/miaotty.app
+scripts/package-macos.sh              # release 构建 → dist/miaotty.app + dist/miaotty-native.app
 PROFILE=debug scripts/package-macos.sh
 ```
 
-产出 ad-hoc 签名的 `dist/miaotty.app`。配置 Apple secrets 后,分发时会自动 codesign +
+产出 ad-hoc 签名的 `dist/miaotty.app`(eframe 版)与 `dist/miaotty-native.app`(原生版);
+两个 bundle 都内含两个二进制、URL scheme 与应用图标。配置 Apple secrets 后,分发时会自动 codesign +
 公证(见[发布](#发布))。
 
 ## 发布
@@ -52,7 +53,7 @@ Linux 额外产出 `.deb`(用 `cargo-deb`,元数据在 `miaotty-app/Cargo.toml`)
 
 ## 深链接(URL scheme)
 
-`miaotty.app` 会向系统注册 `miaotty://`、`ssh://` 与 `x-man-page://`;Linux 的 `.desktop`
+这两个 macOS bundle 会向系统注册 `miaotty://`、`ssh://` 与 `x-man-page://`;Linux 的 `.desktop`
 文件注册同样三个。链接会被翻译成一个运行对应命令的新标签。
 
 由于两个 host 共用同一个控制 socket 以及其旁的 inbox,只要**装过**这个 bundle 即可:当链接到达

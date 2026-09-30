@@ -57,16 +57,18 @@ jobs:
             security set-key-partition-list -S apple-tool:,apple: -s -k actions tmp.keychain
             IDENTITY=$(security find-identity -v -p codesigning tmp.keychain | awk '{print $2}' | head -1)
             codesign --force --deep --options runtime --sign "$IDENTITY" dist/miaotty.app
-            ditto -c -k --keepParent dist/miaotty.app "miaotty-macos-$ARCH.zip"
+            codesign --force --deep --options runtime --sign "$IDENTITY" dist/miaotty-native.app
+            (cd dist && zip -qry "../miaotty-macos-$ARCH.zip" miaotty.app miaotty-native.app)
             xcrun notarytool submit "miaotty-macos-$ARCH.zip" \
               --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
               --password "$APPLE_APP_PASSWORD" --wait
             xcrun stapler staple dist/miaotty.app
+            xcrun stapler staple dist/miaotty-native.app
             rm -f "miaotty-macos-$ARCH.zip"
           else
             echo "no signing secrets; shipping ad-hoc signed build"
           fi
-          ditto -c -k --keepParent dist/miaotty.app "miaotty-macos-$ARCH.zip"
+          (cd dist && zip -qry "../miaotty-macos-$ARCH.zip" miaotty.app miaotty-native.app)
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
