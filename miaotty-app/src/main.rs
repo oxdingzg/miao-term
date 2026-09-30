@@ -2041,6 +2041,7 @@ fn windows_install_script(pid: u32, artifact: &std::path::Path, exe: &std::path:
          \x20 tar -xf \"{artifact}\" -C \"%TEMP%\\miaotty-update\"\r\n\
          \x20 copy /y \"%TEMP%\\miaotty-update\\miaotty.exe\" \"{exe}\" >nul\r\n\
          \x20 if exist \"%TEMP%\\miaotty-update\\miaotty-cli.exe\" copy /y \"%TEMP%\\miaotty-update\\miaotty-cli.exe\" \"{dir}\\miaotty-cli.exe\" >nul\r\n\
+         \x20 if exist \"%TEMP%\\miaotty-update\\miaotty-native.exe\" copy /y \"%TEMP%\\miaotty-update\\miaotty-native.exe\" \"{dir}\\miaotty-native.exe\" >nul\r\n\
          \x20 start \"\" \"{exe}\"\r\n\
          )\r\n"
     )
@@ -2074,7 +2075,7 @@ fn linux_install_script(
 }
 
 #[cfg(target_os = "macos")]
-/// The first `.app` bundle anywhere under `dir`.
+/// Find the eframe bundle, even when the archive also ships the native host.
 fn find_app(dir: &std::path::Path) -> Option<PathBuf> {
     let mut stack = vec![dir.to_path_buf()];
     while let Some(d) = stack.pop() {
@@ -2083,7 +2084,7 @@ fn find_app(dir: &std::path::Path) -> Option<PathBuf> {
         };
         for entry in read.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("app") {
+            if path.file_name().and_then(|e| e.to_str()) == Some("miaotty.app") {
                 return Some(path);
             }
             if path.is_dir() {
@@ -5891,6 +5892,82 @@ mod session_tests {
         assert!(lin.starts_with("#!/bin/sh"));
         assert!(lin.contains("kill -0 4242"), "waits for our pid");
         assert!(lin.contains("exec \"/opt/miaotty.AppImage\""), "relaunches");
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn update_selects_eframe_from_a_multi_bundle_archive() {
+        let root =
+            std::env::temp_dir().join(format!("miaotty-bundle-selection-{}", std::process::id()));
+        let native = root.join("miaotty-native.app");
+        std::fs::create_dir_all(&native).unwrap();
+        assert!(
+            find_app(&root).is_none(),
+            "a native-only archive cannot update eframe"
+        );
+        let eframe = root.join("release/miaotty.app");
+        std::fs::create_dir_all(&eframe).unwrap();
+        assert_eq!(find_app(&root), Some(eframe));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_update_helper_swaps_and_restores_on_failure() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("miaotty-helper-{}", std::process::id()));
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let open = bin.join("open");
+        std::fs::write(&open, "#!/bin/sh\nprintf '%s' \"$1\" > \"$OPEN_LOG\"\n").unwrap();
+        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o755)).unwrap();
+        for succeeds in [true, false] {
+            let case = root.join(if succeeds { "success" } else { "failure" });
+            let installed = case.join("installed app.app");
+            let downloaded = case.join("downloaded app.app");
+            let open_log = case.join("open.log");
+            std::fs::create_dir_all(&installed).unwrap();
+            std::fs::write(installed.join("version"), "old").unwrap();
+            if succeeds {
+                std::fs::create_dir_all(&downloaded).unwrap();
+                std::fs::write(downloaded.join("version"), "new").unwrap();
+            }
+            let result = std::process::Command::new("sh")
+                .args(["-c", &install_script(u32::MAX, &installed, &downloaded)])
+                .env(
+                    "PATH",
+                    format!(
+                        "{}:{}",
+                        bin.display(),
+                        std::env::var("PATH").unwrap_or_default()
+                    ),
+                )
+                .env("OPEN_LOG", &open_log)
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            assert_eq!(
+                std::fs::read_to_string(installed.join("version")).unwrap(),
+                if succeeds { "new" } else { "old" }
+            );
+            assert!(!case.join("installed app.app.old").exists());
+            if succeeds {
+                assert_eq!(
+                    std::fs::read_to_string(open_log).unwrap(),
+                    installed.to_string_lossy()
+                );
+            } else {
+                assert!(
+                    !open_log.exists(),
+                    "a failed replacement must not relaunch the update"
+                );
+            }
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
