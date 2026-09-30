@@ -336,41 +336,44 @@ Done recently: the Windows named-pipe transport and ConPTY path (verified on
 real hardware), session restore, View rules, Open Quickly, the details panels,
 the agent loop (notifications, sleep guard, prompt queue), recipes, remote
 view/edit over ssh, update download/verify/install, URL schemes, the global
-Quick Terminal hotkey, i18n, and a performance gate.
+Quick Terminal hotkey and IME preedit in both hosts, inline graphics in both
+hosts, Mermaid sequence/state/class/ER/pie diagrams, the MTP event stream, i18n,
+and a performance gate.
 
 Still open:
 
-- **Release chain**: run the pipeline end to end with real credentials. The
-  workflows are already wired and the minisign **public** key is committed and
-  attached to every release; the missing pieces are the secrets — the minisign
-  secret key, Apple notarization (Developer ID certificate + app password) and
-  Windows MSI signing (a CA certificate). See [`docs/RELEASE.md`](docs/RELEASE.md).
-- **Platform verification**: the Linux wgpu render path runs in CI via Mesa
-  software Vulkan (lavapipe); a real Linux desktop, the Wayland portal hotkey
-  and Windows IME/GUI still need an interactive session.
-- **Update install**: implemented on all three platforms (macOS app bundle,
-  Windows MSI/zip helper, Linux AppImage). The MSI and the `.deb` are verified on
-  real hosts; the AppImage install and the self-replace path still need an
-  end-to-end run (`docs/RELEASE.md`).
+- **Release chain (blocked on credentials)**: the workflows are wired, the
+  minisign **public** key is committed and attached to every release, and the
+  minisign secret key is configured; what remains is a real end-to-end release
+  with **Apple notarization** (Developer ID certificate + app password) and
+  **Windows MSI signing** (a code-signing certificate). Nothing else in the
+  pipeline is outstanding — see [`docs/RELEASE.md`](docs/RELEASE.md).
+- **Platform verification (needs hardware)**: the Linux wgpu render path runs in
+  CI via Mesa software Vulkan (lavapipe) and Windows is driven over MTP on real
+  hardware; a real Linux desktop session, the Wayland portal hotkey and the
+  Windows IME/GUI paths still need an interactive machine.
+- **Update install (needs hardware)**: implemented on all three platforms
+  (macOS app bundle, Windows MSI/zip helper, Linux AppImage). The MSI and the
+  `.deb` are verified on real hosts; installing an AppImage on a real desktop
+  and the self-replace path still need an end-to-end run (`docs/RELEASE.md`).
 - **CI performance baseline**: bound through `actions/cache` today; a durable
   baseline store would make the gate robust across cache eviction.
-- **Native parity** (`miaotty-native`): both hosts parse argv intents, share the
-  forwarding inbox, implement the Quick Terminal and render inline IME
-  composition at the cursor; neither is registered with the OS yet, so a link
-  only reaches them when the launcher passes the URL as an argument.
-  `background-opacity` works only where the surface offers straight alpha.
+- **Native parity** (`miaotty-native`): argv intents, the forwarding inbox, the
+  Quick Terminal, IME preedit and inline graphics are all in place. What is left
+  is registering `miaotty-native` with the OS on its own — today the installed
+  `.app` owns the URL schemes and forwards links to whichever host is running
+  (`docs/INSTALL.md`) — and `background-opacity`, which works only where the
+  surface offers straight alpha.
 - **Inline graphics**: Kitty z-index is not modelled (images paint over the
   grid); anchors are exact up to the scrollback cap and approximate past it
   (alacritty exposes no scroll counter without a patch), and session restore
   keeps no images (they would not match the restored content).
-- **Markdown**: Mermaid renders `graph`/`flowchart`, `sequenceDiagram`,
-  `stateDiagram`, `classDiagram`, `erDiagram` and `pie` subsets (or fully via
-  `mermaid-command`); other diagram types (gantt, journey, …) show a placeholder.
-- **i18n**: the main chrome is covered; a few example/hint strings stay English.
-- **MTP**: `file.read/write` support binary (base64) with `offset`/`length`
-  chunking. Clients can follow changes either by long-polling `core.wait` or by
-  subscribing to the `core.subscribe` event stream (`miaotty-cli events`).
-  Per-capability authorization is available via `MIAOTTY_MTP_ALLOW`.
+- **Mermaid**: the built-in subset covers `graph`/`flowchart`,
+  `sequenceDiagram`, `stateDiagram`, `classDiagram`, `erDiagram` and `pie`;
+  gantt, journey, git graphs and the rest fall back to `mermaid-command` or a
+  placeholder.
+- **i18n**: the chrome, palette, settings and dialogs are covered; a few
+  example/agent strings stay English on purpose.
 
 ---
 

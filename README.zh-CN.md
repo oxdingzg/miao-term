@@ -292,32 +292,32 @@ miaotty-cli file write --path /tmp/x --data-b64 "AAECAw=="   # 二进制
 
 近期已完成:Windows 命名管道传输与 ConPTY 路径(真实硬件验证)、会话恢复、View 规则、
 Open Quickly、details 面板、agent 闭环(通知、防休眠、提示队列)、Recipes、经 ssh 的远端
-view/edit、更新下载/校验/安装、URL scheme、全局快速终端热键、i18n,以及性能门。
+view/edit、更新下载/校验/安装、URL scheme、全局快速终端热键、两个 host 的内联 IME 拼写与
+终端内联图片、Mermaid 时序/状态/类/ER/饼图、MTP 事件流、i18n,以及性能门。
 
 仍待完成:
 
-- **发布链**:用真实凭证把流水线端到端跑通。工作流已接好,minisign **公钥**已提交并附加到
-  每个 release;缺的是各项密钥 —— minisign 私钥、macOS 公证(Developer ID 证书 + App 专用
-  密码)以及 Windows MSI 签名(CA 证书)。见 `docs/RELEASE.md`。
-- **平台验证**:Linux 的 wgpu 渲染路径现已在 CI 中通过 Mesa 软件 Vulkan(lavapipe)覆盖;
-  真实 Linux 桌面、Wayland 门户热键、以及 Windows 的 IME/GUI 仍需交互式会话。
-- **更新安装**:三端均已实现(macOS app bundle、Windows MSI/zip helper、Linux AppImage)。
-  MSI 与 `.deb` 已在真机验证;AppImage 安装与自替换路径仍需端到端跑一次
-  (`docs/RELEASE.md`)。
+- **发布链(受限于凭证)**:工作流已接好,minisign **公钥**已提交并附加到每个 release,
+  minisign 私钥也已配置;剩下的是用真实凭证端到端跑一次,缺 **Apple 公证**(Developer ID
+  证书 + App 专用密码)与 **Windows MSI 签名**(代码签名证书)。流水线其余部分没有欠账 ——
+  见 `docs/RELEASE.md`。
+- **平台验证(需要硬件)**:Linux 的 wgpu 渲染路径已在 CI 中通过 Mesa 软件 Vulkan(lavapipe)
+  覆盖,Windows 也在真机上经 MTP 驱动;真实 Linux 桌面会话、Wayland 门户热键、Windows 的
+  IME/GUI 路径仍需一台交互机器。
+- **更新安装(需要硬件)**:三端均已实现(macOS app bundle、Windows MSI/zip helper、Linux
+  AppImage)。MSI 与 `.deb` 已在真机验证;在真实桌面安装 AppImage 以及自替换路径仍需端到端
+  跑一次(`docs/RELEASE.md`)。
 - **CI 性能基线**:目前用 `actions/cache` 绑定;更持久的基线存储能让门更稳(缓存会被淘汰)。
-- **原生版对齐**(`miaotty-native`):两个 host 都从 argv 解析 intent、共用转发 inbox、
-  实现快速终端,并在光标处渲染内联 IME 拼写;二者都还未在系统注册,只有 launcher 把 URL
-  作为参数传入时链接才会到达。`background-opacity` 仅在 surface 支持 straight alpha
-  时生效。
+- **原生版对齐**(`miaotty-native`):argv intent、转发 inbox、快速终端、IME 拼写与内联图片
+  都已具备。剩下的是让 `miaotty-native` 自己完成系统注册 —— 目前由安装的 `.app` 持有 URL
+  scheme,并把链接转发给正在运行的 host(`docs/INSTALL.md`)—— 以及 `background-opacity`,
+  它仅在 surface 支持 straight alpha 时生效。
 - **终端内联图片**:不模拟 Kitty 的 z-index(图片绘制在网格之上);回滚容量内锚定精确,超出后
   为近似(alacritty 不暴露滚动计数,除非打补丁);会话恢复不保留图像(会与恢复的内容不一致)。
-- **Markdown**:Mermaid 支持 `graph`/`flowchart`、`sequenceDiagram`、`stateDiagram`、
-  `classDiagram`、`erDiagram` 与 `pie` 子集(或经 `mermaid-command` 全量渲染);
-  其它图类型显示占位。
-- **i18n**:主要界面已覆盖;少量示例/提示串仍为英文。
-- **MTP**:`file.read/write` 支持二进制(base64)与 `offset`/`length` 分块。客户端既可用
-  `core.wait` 长轮询,也可用 `core.subscribe` 事件流(`miaotty-cli events`)跟踪变化,
-  无需忙轮询。已支持按能力授权(`MIAOTTY_MTP_ALLOW`)。
+- **Mermaid**:内置子集覆盖 `graph`/`flowchart`、`sequenceDiagram`、`stateDiagram`、
+  `classDiagram`、`erDiagram` 与 `pie`;gantt、journey、git graph 等仍回退到
+  `mermaid-command` 或占位符。
+- **i18n**:外壳、命令面板、设置与对话框已覆盖;少量示例/agent 串刻意保留英文。
 
 ---
 
