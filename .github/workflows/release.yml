@@ -188,31 +188,6 @@ jobs:
             /tr http://timestamp.digicert.com /td SHA256 $msi
           if ($LASTEXITCODE -ne 0) { throw 'MSI signing failed' }
 
-      - name: Sign artifacts (minisign, optional)
-        shell: bash
-        env:
-          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
-        run: |
-          set -euo pipefail
-          if [ -z "$MINISIGN_SECRET_KEY" ]; then
-            echo "no minisign key; skipping artifact signing"
-            exit 0
-          fi
-          case "${{ runner.os }}" in
-            Linux)  sudo apt-get update -qq && sudo apt-get install -y -qq minisign ;;
-            macOS)  brew install minisign ;;
-            Windows) choco install -y minisign ;;
-          esac
-          key="$RUNNER_TEMP/minisign.key"
-          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key"
-          shopt -s nullglob
-          for f in miaotty-*.zip miaotty-*.tar.gz miaotty-*.AppImage dist/*.deb target/wix/*.msi; do
-            [ -f "$f" ] || continue
-            minisign -S -W -s "$key" -m "$f" -x "$f.sig"
-            echo "signed $f"
-          done
-          rm -f "$key"
-
       - uses: actions/upload-artifact@v4
         with:
           name: miaotty-${{ matrix.os }}
@@ -238,6 +213,30 @@ jobs:
       # Ship the minisign public key so users can verify the `.sig` files.
       - name: Add the signing public key
         run: cp minisign.pub artifacts/
+
+      # Detached signing is platform-independent. Sign once on Linux rather
+      # than relying on the obsolete minisign 0.8 Chocolatey package.
+      - name: Sign artifacts (minisign, optional)
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$MINISIGN_SECRET_KEY" ]; then
+            echo "no minisign key; skipping artifact signing"
+            exit 0
+          fi
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq minisign
+          key="$RUNNER_TEMP/minisign.key"
+          trap 'rm -f "$key"' EXIT
+          umask 077
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key"
+          shopt -s nullglob
+          for f in artifacts/*.zip artifacts/*.tar.gz artifacts/*.AppImage artifacts/*.deb artifacts/*.msi; do
+            minisign -S -W -s "$key" -m "$f" -x "$f.sig"
+            echo "signed $f"
+          done
+
       - name: Build the update manifest
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
