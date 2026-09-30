@@ -38,7 +38,7 @@ everyone to re-sync, and rotate any credentials involved.
 - `cargo test --workspace`
 - Performance gate (release): `cargo test --release -p miao-term-core -p miaotty-app -- --ignored`
 - Windows real-host checks: `docs/WINDOWS-DEV.md` (IME needs an interactive desktop).
-- Packaging/release: `.github/workflows/release.yml` (AppImage/MSI are best-effort).
+- Packaging/release: `.github/workflows/release.yml` (four runner builds and AppImage/MSI are required; manual dispatch rehearses without publishing).
 
 ## Shared working tree
 

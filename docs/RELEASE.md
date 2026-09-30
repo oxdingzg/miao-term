@@ -29,12 +29,15 @@ its download URLs become live only after a release with that tag is published.
 
 | Platform | Artifact | Notes |
 |----------|----------|-------|
-| macOS | `miaotty-macos-arm64.zip`, `miaotty-macos-x86_64.zip` (each a `.app`) | ad-hoc signed; notarized when the Apple secrets are set. Apple Silicon uses `macos-latest`, Intel uses `macos-15-intel` |
+| macOS | `miaotty-macos-arm64.zip`, `miaotty-macos-x86_64.zip` (each contains `miaotty.app` and `miaotty-native.app`) | ad-hoc signed; notarized when the Apple secrets are set. Apple Silicon uses `macos-latest`, Intel uses `macos-15-intel` |
 | Linux | `miaotty-linux-x86_64.tar.gz`, `miaotty-linux-x86_64.AppImage`, `dist/*.deb` | AppImage has an explicit `AppRun` entry point |
 | Windows | `miaotty-windows-x86_64.zip`, `miaotty-app-<ver>-x86_64.msi` | MSI installation/uninstallation is exercised on the runner |
 
 Every artifact gets a `.sig` next to it when signing is configured.
-All app bundles, archives, and installers contain the two hosts and the CLI.
+Detached signatures are generated once in the Linux assembly job, after platform
+codesigning, and verified there against the committed public key.
+All app bundles, main application archives, and installers contain the two hosts
+and the CLI; the additional `miaotty-native-macos-*.zip` is a standalone host.
 All four runner builds and AppImage/MSI packaging are required to succeed.
 
 ## Secrets (all optional)
@@ -185,6 +188,20 @@ The release workflow checks Linux package contents and CLI execution, and Window
 MSI install → three binaries + URL handler → CLI execution → uninstall. These
 checks do not establish interactive desktop behavior. The real-host checks above
 describe the earlier two-binary packages, not the new native-host payload.
+
+Local macOS verification (2026-09-30, `9e817a9`): both bundles pass
+`codesign --verify --deep --strict`; fmt, strict clippy, workspace tests and all
+four release performance budgets pass. The bundled binaries were driven over
+MTP for Kitty inline graphics and Mermaid sequence/pie previews in both hosts,
+with screenshots confirming the output. The eframe chrome now stays dark even
+when the OS uses a light theme, keeping preview text legible.
+
+The macOS update-helper test executes the swap and missing-download rollback
+against temporary bundles with spaces in their paths, using a test relaunch
+command. Archive selection rejects a native-only download and selects
+`miaotty.app` from a dual-bundle archive. These are component checks, not a real
+download/install/relaunch acceptance. Windows zip updates also replace the native
+binary along with the eframe host and CLI.
 
 | Check | Acceptance criterion | Environment still needed |
 |-------|----------------------|--------------------------|

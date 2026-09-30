@@ -27,12 +27,14 @@ gh workflow run release.yml --ref main -f tag=v0.0.1
 
 | 平台 | 产物 | 说明 |
 |------|------|------|
-| macOS | `miaotty-macos-arm64.zip`、`miaotty-macos-x86_64.zip`(各含一个 `.app`) | ad-hoc 签名;配置 Apple secrets 后公证。Apple Silicon 用 `macos-latest`,Intel 用 `macos-15-intel` |
+| macOS | `miaotty-macos-arm64.zip`、`miaotty-macos-x86_64.zip`(各含 `miaotty.app` 与 `miaotty-native.app`) | ad-hoc 签名;配置 Apple secrets 后公证。Apple Silicon 用 `macos-latest`,Intel 用 `macos-15-intel` |
 | Linux | `miaotty-linux-x86_64.tar.gz`、`miaotty-linux-x86_64.AppImage`、`dist/*.deb` | AppImage 含明确的 `AppRun` 入口 |
 | Windows | `miaotty-windows-x86_64.zip`、`miaotty-app-<ver>-x86_64.msi` | 在 runner 上执行 MSI 安装/卸载验证 |
 
 配置签名后,每个产物旁边会生成 `.sig`。
-所有 app bundle、压缩包与安装包均包含两个 host 和 CLI。
+分离签名在平台代码签名完成后,由 Linux 汇总作业统一生成,并用已提交的公钥校验。
+所有 app bundle、主应用压缩包与安装包均包含两个 host 和 CLI;
+额外的 `miaotty-native-macos-*.zip` 则只包含独立 native host。
 四个 runner 的构建与 AppImage/MSI 打包均必须成功。
 
 ## Secrets(全部可选)
@@ -166,6 +168,15 @@ shasum -a 256 miaotty-macos-arm64.zip   # 与清单里的 "sha256" 比对
 发布工作流检查 Linux 包内容与 CLI 运行,以及 Windows MSI 安装 → 三个二进制 + URL handler
 → CLI 运行 → 卸载。这些检查不代表交互桌面体验已验收。上文的真机记录针对旧的双二进制包,
 不代表新增 native host 的安装验证。
+
+macOS 本地验证(2026-09-30,`9e817a9`):两个 bundle 均通过
+`codesign --verify --deep --strict`;fmt、严格 clippy、workspace 测试与四项 release 性能预算均通过。
+安装包内的二进制经 MTP 驱动,两个 host 的 Kitty 内联图片及 Mermaid 时序图/饼图预览均已截图确认。
+eframe 外壳在系统浅色主题下也保持深色,使预览文字可读。
+
+macOS 更新 helper 测试对含空格路径的临时 bundle 实际执行替换与缺失下载时的回滚,
+重启命令由测试替身记录。压缩包选择测试拒绝 native-only 下载,并从双 bundle 包选择 `miaotty.app`。
+这些是组件验证,不代表真实的下载/安装/重启验收。Windows zip 更新同时替换 native、eframe 与 CLI。
 
 | 检查 | 验收标准 | 仍需环境 |
 |------|----------|----------|

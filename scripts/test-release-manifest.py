@@ -3,7 +3,10 @@
 
 import hashlib
 import importlib.util
+import os
 from pathlib import Path
+import shutil
+import subprocess
 import tempfile
 import unittest
 import sys
@@ -56,6 +59,32 @@ class ManifestTests(unittest.TestCase):
             artifact.with_name(artifact.name + ".sig").write_text("signature")
         for entry in self.build(signed=True)["artifacts"].values():
             self.assertEqual(entry["signature"], entry["url"] + ".sig")
+
+
+class AppRunTests(unittest.TestCase):
+    def test_launch_preserves_arguments_directory_path_and_exit_status(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bundle = root / "bundle with spaces"
+            binaries = bundle / "usr/bin"
+            binaries.mkdir(parents=True)
+            launcher = bundle / "AppRun"
+            shutil.copyfile(Path(__file__).parent.parent / "assets/AppRun", launcher)
+            host = binaries / "miaotty"
+            host.write_text('#!/bin/sh\nprintf "%s\\n" "$PWD" "$@"\ncommand -v miaotty-cli\nexit 7\n')
+            host.chmod(0o755)
+            cli = binaries / "miaotty-cli"
+            cli.write_text("#!/bin/sh\nexit 0\n")
+            cli.chmod(0o755)
+            working_directory = root / "working directory"
+            working_directory.mkdir()
+            arguments = ["miaotty://quick", "argument with spaces"]
+            result = subprocess.run(
+                ["sh", str(launcher), *arguments], cwd=working_directory,
+                env=dict(os.environ, PATH="/usr/bin:/bin"), capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 7, result.stderr)
+            self.assertEqual(result.stdout.splitlines(), [str(working_directory.resolve()), *arguments, str(cli)])
 
 
 if __name__ == "__main__":

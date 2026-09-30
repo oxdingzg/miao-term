@@ -357,11 +357,10 @@ Still open:
   `.deb` are verified on real hosts; installing an AppImage on a real desktop
   and the self-replace path still need an end-to-end run (`docs/RELEASE.md`).
 - **Native parity** (`miaotty-native`): argv intents, the forwarding inbox, the
-  Quick Terminal, IME preedit and inline graphics are all in place. What is left
-  is registering `miaotty-native` with the OS on its own — today the installed
-  `.app` owns the URL schemes and forwards links to whichever host is running
-  (`docs/INSTALL.md`) — and `background-opacity`, which works only where the
-  surface offers straight alpha.
+  Quick Terminal, IME preedit and inline graphics are all in place. macOS now
+  ships a separate `miaotty-native.app` declaring its own URL schemes
+  (`docs/INSTALL.md`). `background-opacity` still works only where the surface
+  offers straight alpha; OS deep-link acceptance needs an installed bundle.
 - **Inline graphics**: Kitty z-index is not modelled (images paint over the
   grid); anchors are exact up to the scrollback cap and approximate past it
   (alacritty exposes no scroll counter without a patch), and session restore

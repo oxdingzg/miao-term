@@ -309,9 +309,8 @@ CI 性能基线已持久化于 `benches/perf-baseline.json`,由 nightly/手动�
   AppImage)。MSI 与 `.deb` 已在真机验证;在真实桌面安装 AppImage 以及自替换路径仍需端到端
   跑一次(`docs/RELEASE.md`)。
 - **原生版对齐**(`miaotty-native`):argv intent、转发 inbox、快速终端、IME 拼写与内联图片
-  都已具备。剩下的是让 `miaotty-native` 自己完成系统注册 —— 目前由安装的 `.app` 持有 URL
-  scheme,并把链接转发给正在运行的 host(`docs/INSTALL.md`)—— 以及 `background-opacity`,
-  它仅在 surface 支持 straight alpha 时生效。
+  都已具备。macOS 现附带独立的 `miaotty-native.app`,声明自身的 URL scheme(`docs/INSTALL.md`)。
+  `background-opacity` 仍仅在 surface 支持 straight alpha 时生效;系统深链接验收需要已安装的 bundle。
 - **终端内联图片**:不模拟 Kitty 的 z-index(图片绘制在网格之上);回滚容量内锚定精确,超出后
   为近似(alacritty 不暴露滚动计数,除非打补丁);会话恢复不保留图像(会与恢复的内容不一致)。
 - **Mermaid**:内置子集覆盖 `graph`/`flowchart`、`sequenceDiagram`、`stateDiagram`、
