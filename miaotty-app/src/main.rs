@@ -76,6 +76,9 @@ fn main() -> eframe::Result<()> {
         "miaotty",
         options,
         Box::new(move |cc| {
+            // The chrome uses dark terminal colours; do not mix them with the
+            // system's light widgets and preview backgrounds.
+            cc.egui_ctx.set_theme(egui::Theme::Dark);
             install_fonts(&cc.egui_ctx);
             egui_extras::install_image_loaders(&cc.egui_ctx);
             if let Some(rs) = cc.wgpu_render_state.as_ref() {
