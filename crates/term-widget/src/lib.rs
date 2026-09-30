@@ -28,6 +28,7 @@ enum HostEvent {
     Wake,
     Hotkey,
     /// A command from the OS menu bar (macOS, inside an app bundle).
+    #[cfg(target_os = "macos")]
     Menu(miao_term_ui::chrome::MenuId),
 }
 use winit::keyboard::{Key, ModifiersState, NamedKey};
@@ -4274,6 +4275,7 @@ impl ApplicationHandler<HostEvent> for Host {
                 state.window.focus_window();
             }
             // OS menu bar command.
+            #[cfg(target_os = "macos")]
             HostEvent::Menu(id) => {
                 chrome::Chrome::on_menu(state, id);
                 state.window.request_redraw();
