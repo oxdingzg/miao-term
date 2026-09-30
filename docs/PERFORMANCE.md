@@ -16,7 +16,12 @@ headroom (an order-of-magnitude regression fails, runner jitter does not).
 `MIAOTTY_PERF_SCALE` (default `1.0`) relaxes every budget by a factor on slow
 machines. Each metric is also checked against the recorded **baseline** in
 `budgets.json` with a `regression_pct` (ADR 0023), so drift fails, not just
-cliffs. The `perf` job additionally compares against a **CI-side baseline** cached per runner OS (ADR 0028), so drift is caught in CI too — reported only, since runner variance (1.8x on the same code) dwarfs the signal; the absolute budgets are the gate.
+cliffs. The `perf` job additionally compares against a **durable CI baseline** tracked at
+[`benches/perf-baseline.json`](../benches/perf-baseline.json) (ADR 0028): the
+nightly/manual run on `main` rewrites it from the measurements and commits the
+change, so it survives cache eviction and runner-image changes. The comparison is
+**reported only**, since runner variance (1.8x on the same code) dwarfs the
+signal — the absolute budgets are the gate.
 
 ## Budgets
 

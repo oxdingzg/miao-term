@@ -51,3 +51,8 @@ compared.
   access); the job then reports instead of failing.
 - `benches/budgets.json` remains the reviewed, machine-independent record of
   budgets and the reference baseline; the CI baseline is a cache, not source.
+
+- Update: the baseline is no longer an `actions/cache` entry. It is a tracked file
+  (`benches/perf-baseline.json`) that the nightly/manual `perf` run on `main`
+  rewrites and commits, so it survives cache eviction and runner-image changes;
+  an empty object means "no baseline yet" and every metric is only reported.

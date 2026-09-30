@@ -134,6 +134,9 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true' && github.event_name != 'push'
     runs-on: ubuntu-latest
+    # The nightly/manual run on main commits the refreshed baseline.
+    permissions:
+      contents: write
     env:
       # Looser than the local 25% so shared-runner noise does not flake.
       PERF_REGRESSION_PCT: "40"
@@ -141,22 +144,31 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # Performance gate (ADR 0018/0028): release-mode budgets plus a baseline
-      # comparison against this runner's own previous measurements.
-      - uses: actions/cache@v4
-        with:
-          path: .perf
-          key: perf-baseline-${{ runner.os }}-${{ github.sha }}
-          restore-keys: perf-baseline-${{ runner.os }}-
+      # Performance gate (ADR 0018/0028): release-mode budgets plus a comparison
+      # against the durable baseline committed at benches/perf-baseline.json.
       - run: cargo test --release -p miao-term-core -p miaotty-app -- --ignored
-      - name: Compare against the CI baseline
+      - name: Compare against the committed baseline
         run: python3 scripts/check-perf-baseline.py
-      - name: Update the baseline (main only)
-        if: github.ref == 'refs/heads/main'
+      - name: Refresh the baseline (main, nightly / manual)
+        if: >-
+          github.ref == 'refs/heads/main' &&
+          (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         run: |
-          mkdir -p .perf
-          cp target/perf-measured.json .perf/baseline.json
-          cat .perf/baseline.json
+          set -e
+          if [ ! -f target/perf-measured.json ]; then
+            echo "no measurements; leaving the baseline alone"
+            exit 0
+          fi
+          cp target/perf-measured.json benches/perf-baseline.json
+          if git diff --quiet -- benches/perf-baseline.json; then
+            echo "baseline unchanged"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add benches/perf-baseline.json
+          git commit -m "chore(perf): refresh the CI baseline from the ${{ github.event_name }} run"
+          git push
 
   privacy:
     runs-on: ubuntu-latest

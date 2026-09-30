@@ -307,7 +307,9 @@ view/edit、更新下载/校验/安装、URL scheme、全局快速终端热键�
 - **更新安装(需要硬件)**:三端均已实现(macOS app bundle、Windows MSI/zip helper、Linux
   AppImage)。MSI 与 `.deb` 已在真机验证;在真实桌面安装 AppImage 以及自替换路径仍需端到端
   跑一次(`docs/RELEASE.md`)。
-- **CI 性能基线**:目前用 `actions/cache` 绑定;更持久的基线存储能让门更稳(缓存会被淘汰)。
+- **CI 性能基线**:已改为仓库内持久文件 `benches/perf-baseline.json`,由 `main` 上
+  nightly/手动运行刷新,不受缓存淘汰影响;比较仍为仅报告,因为 runner 抖动远大于信号
+  (真正的门是绝对预算)。
 - **原生版对齐**(`miaotty-native`):argv intent、转发 inbox、快速终端、IME 拼写与内联图片
   都已具备。剩下的是让 `miaotty-native` 自己完成系统注册 —— 目前由安装的 `.app` 持有 URL
   scheme,并把链接转发给正在运行的 host(`docs/INSTALL.md`)—— 以及 `background-opacity`,

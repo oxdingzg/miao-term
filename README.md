@@ -356,8 +356,10 @@ Still open:
   (macOS app bundle, Windows MSI/zip helper, Linux AppImage). The MSI and the
   `.deb` are verified on real hosts; installing an AppImage on a real desktop
   and the self-replace path still need an end-to-end run (`docs/RELEASE.md`).
-- **CI performance baseline**: bound through `actions/cache` today; a durable
-  baseline store would make the gate robust across cache eviction.
+- **CI performance baseline**: tracked at `benches/perf-baseline.json` and
+  refreshed by the nightly/manual run on `main`, so it survives cache eviction;
+  the comparison stays report-only because runner variance dwarfs the signal
+  (the absolute budgets are the gate).
 - **Native parity** (`miaotty-native`): argv intents, the forwarding inbox, the
   Quick Terminal, IME preedit and inline graphics are all in place. What is left
   is registering `miaotty-native` with the OS on its own — today the installed

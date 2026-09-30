@@ -42,3 +42,7 @@ runner 抖动远大于信号:同一版本在 `ubuntu-latest` 上先后测得 139
 - CI 让同一 runner 与**自身**的历史比较,能抓到宽泛绝对预算会掩盖的漂移,且不依赖维护者硬件。
 - 基线按 runner OS 缓存,可能过期(7 天未访问);那时作业改为"只报告、不失败"。
 - `benches/budgets.json` 仍是经过评审、与机器无关的预算与参考基线记录;CI 基线是缓存,不是源码。
+
+- Update:基线不再放在 `actions/cache` 里,而是仓库内受版本管理的文件
+  (`benches/perf-baseline.json`):`main` 上 nightly/手动的 `perf` 运行会重写并提交它,因此
+  不受缓存淘汰与 runner 镜像变更影响;空对象表示"尚无基线",此时各指标仅报告。

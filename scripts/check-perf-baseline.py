@@ -5,14 +5,16 @@ The perf tests write `target/perf-measured.json`; CI restores a baseline from
 the actions cache into `.perf/baseline.json` and prints the comparison.
 
 By default it **reports only**: the same code measured 139 MB/s and then 79 MB/s
-of VT parse throughput on `ubuntu-latest`, so a cached baseline is not a gate
-there — the *absolute* budgets asserted inside the tests are. Set
-`PERF_ENFORCE=1` (e.g. on the dev machine, or with a stable runner) to fail on a
-regression beyond the metric's `regression_pct` (default 25%, overridable with
+of VT parse throughput on `ubuntu-latest`, so the baseline is not a gate there —
+the *absolute* budgets asserted inside the tests are. Set `PERF_ENFORCE=1`
+(e.g. on the dev machine, or with a stable runner) to fail on a regression
+beyond the metric's `regression_pct` (default 25%, overridable with
 `PERF_REGRESSION_PCT`) once it is above the noise floor.
 
-On the first run there is no baseline, so every metric is only reported; CI
-copies the measurements into the cache afterwards on `main`.
+The baseline is a tracked file (`benches/perf-baseline.json`) so it survives
+runner changes and cache eviction: the nightly/manual CI run on `main` rewrites
+it from `target/perf-measured.json` and commits the change. On the first run
+there is no baseline, so every metric is only reported.
 """
 
 import json
@@ -35,7 +37,7 @@ ENFORCE_FLOOR = {
 }
 
 measured_path = pathlib.Path(os.environ.get("PERF_MEASURED", "target/perf-measured.json"))
-baseline_path = pathlib.Path(os.environ.get("PERF_BASELINE", ".perf/baseline.json"))
+baseline_path = pathlib.Path(os.environ.get("PERF_BASELINE", "benches/perf-baseline.json"))
 budgets = json.loads(pathlib.Path("benches/budgets.json").read_text())
 
 if not measured_path.is_file():
