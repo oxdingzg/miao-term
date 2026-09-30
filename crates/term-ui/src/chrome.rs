@@ -24,6 +24,9 @@ pub struct TabBarEvents {
     pub switch: Option<usize>,
     pub close: Option<usize>,
     pub rename: Option<usize>,
+    pub mark: Option<usize>,
+    pub group: Option<usize>,
+    pub ungroup: Option<usize>,
     pub reorder: Option<(usize, usize)>,
     pub duplicate: Option<usize>,
     pub close_others: Option<usize>,
@@ -40,6 +43,9 @@ pub struct TabBarEvents {
 pub enum TabMenuAction {
     Rename,
     Prefix,
+    Mark,
+    Group,
+    Ungroup,
     Duplicate,
     MoveUp,
     MoveDown,
@@ -57,6 +63,12 @@ pub fn tab_menu_items(lang: Lang) -> Vec<(&'static str, Option<TabMenuAction>)> 
             Some(TabMenuAction::Rename),
         ),
         (t(lang, "Prefix…", "前缀…"), Some(TabMenuAction::Prefix)),
+        (t(lang, "Mark…", "标记…"), Some(TabMenuAction::Mark)),
+        (t(lang, "Group…", "分组…"), Some(TabMenuAction::Group)),
+        (
+            t(lang, "Remove from Group", "移出分组"),
+            Some(TabMenuAction::Ungroup),
+        ),
         (
             t(lang, "Duplicate Tab", "复制标签"),
             Some(TabMenuAction::Duplicate),
@@ -84,6 +96,9 @@ pub fn apply_tab_menu(ev: &mut TabBarEvents, i: usize, action: TabMenuAction) {
     match action {
         TabMenuAction::Rename => ev.rename = Some(i),
         TabMenuAction::Prefix => ev.set_prefix = Some(i),
+        TabMenuAction::Mark => ev.mark = Some(i),
+        TabMenuAction::Group => ev.group = Some(i),
+        TabMenuAction::Ungroup => ev.ungroup = Some(i),
         TabMenuAction::Duplicate => ev.duplicate = Some(i),
         TabMenuAction::MoveUp => ev.move_up = Some(i),
         TabMenuAction::MoveDown => ev.move_down = Some(i),
@@ -94,14 +109,22 @@ pub fn apply_tab_menu(ev: &mut TabBarEvents, i: usize, action: TabMenuAction) {
     }
 }
 
-/// Attach the row menu to a tab/session row.
-fn tab_row_menu(resp: &egui::Response, lang: Lang, i: usize, ev: &mut TabBarEvents) {
+/// Attach the row menu to a tab/session row. `has_group` hides the
+/// "Remove from Group" entry when the row is not in a group.
+fn tab_row_menu(
+    resp: &egui::Response,
+    lang: Lang,
+    i: usize,
+    has_group: bool,
+    ev: &mut TabBarEvents,
+) {
     resp.context_menu(|ui| {
         for (label, action) in tab_menu_items(lang) {
             match action {
                 None => {
                     ui.separator();
                 }
+                Some(TabMenuAction::Ungroup) if !has_group => {}
                 Some(action) => {
                     if ui.button(label).clicked() {
                         apply_tab_menu(ev, i, action);
@@ -119,6 +142,7 @@ pub fn tab_bar(
     ch: &ChromeColors,
     titles: &[String],
     icons: &[crate::icons::Icon],
+    groups: &[Option<String>],
     active: usize,
     lang: Lang,
 ) -> TabBarEvents {
@@ -181,7 +205,13 @@ pub fn tab_bar(
         if resp.double_clicked() {
             ev.rename = Some(i);
         }
-        tab_row_menu(&resp, lang, i, &mut ev);
+        tab_row_menu(
+            &resp,
+            lang,
+            i,
+            groups.get(i).is_some_and(|g| g.is_some()),
+            &mut ev,
+        );
         if resp.drag_started() {
             ui.ctx()
                 .memory_mut(|m| m.data.insert_temp(egui::Id::new(DRAG_ID), i));
@@ -227,6 +257,7 @@ pub fn sidebar(
     icons: &[crate::icons::Icon],
     badges: &[Option<Rgb>],
     metas: &[String],
+    groups: &[Option<String>],
     active: usize,
     heading: &str,
     lang: Lang,
@@ -260,7 +291,13 @@ pub fn sidebar(
             if resp.clicked() {
                 ev.switch = Some(i);
             }
-            tab_row_menu(&resp, lang, i, &mut ev);
+            tab_row_menu(
+                &resp,
+                lang,
+                i,
+                groups.get(i).is_some_and(|g| g.is_some()),
+                &mut ev,
+            );
             if let Some(m) = metas.get(i).filter(|m| !m.is_empty()) {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
@@ -559,6 +596,13 @@ pub trait Chrome {
     fn on_switch_tab(&mut self, i: usize) {}
     fn on_close_tab(&mut self, i: usize) {}
     fn on_rename_tab(&mut self, i: usize) {}
+    /// The group label of each tab, in order (`None` = ungrouped).
+    fn tab_groups(&self) -> Vec<Option<String>> {
+        Vec::new()
+    }
+    fn on_mark_tab(&mut self, i: usize) {}
+    fn on_group_tab(&mut self, i: usize) {}
+    fn on_ungroup_tab(&mut self, i: usize) {}
     fn on_reorder_tab(&mut self, from: usize, to: usize) {}
     fn on_duplicate_tab(&mut self, i: usize) {}
     fn on_close_others(&mut self, i: usize) {}
@@ -602,6 +646,7 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
     // Snapshot (owned), so nothing borrows the host while egui closures run.
     let tabs = host.tabs();
     let titles: Vec<String> = tabs.iter().map(|t| t.title.clone()).collect();
+    let tab_groups = host.tab_groups();
     let badges: Vec<Option<Rgb>> = tabs.iter().map(|t| t.badge).collect();
     let icons: Vec<crate::icons::Icon> = tabs.iter().map(|t| t.icon).collect();
     let metas: Vec<String> = (0..titles.len())
@@ -638,6 +683,9 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
     let mut move_up = None;
     let mut move_down = None;
     let mut set_prefix = None;
+    let mut mark_tab = None;
+    let mut group_tab = None;
+    let mut ungroup_tab = None;
     let mut new_tab = false;
     let mut font_delta = 0.0f32;
     let mut toggle_sidebar = false;
@@ -706,7 +754,7 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
         .frame(panel_frame(&ch, egui::Margin::symmetric(6.0, 3.0)))
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                let ev = tab_bar(ui, &ch, &titles, &icons, active, lang);
+                let ev = tab_bar(ui, &ch, &titles, &icons, &tab_groups, active, lang);
                 switch = ev.switch;
                 close = ev.close;
                 rename = ev.rename;
@@ -717,6 +765,9 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
                 move_up = ev.move_up;
                 move_down = ev.move_down;
                 set_prefix = ev.set_prefix;
+                mark_tab = ev.mark;
+                group_tab = ev.group;
+                ungroup_tab = ev.ungroup;
                 new_tab = ev.new_tab;
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("A+").clicked() {
@@ -752,7 +803,16 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
             .show(ctx, |ui| {
                 let heading = t(lang, "Sessions", "会话");
                 let ev = sidebar(
-                    ui, &ch, &titles, &icons, &badges, &metas, active, heading, lang,
+                    ui,
+                    &ch,
+                    &titles,
+                    &icons,
+                    &badges,
+                    &metas,
+                    &tab_groups,
+                    active,
+                    heading,
+                    lang,
                 );
                 switch = ev.switch.or(switch);
                 close = ev.close.or(close);
@@ -763,6 +823,9 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
                 move_up = ev.move_up.or(move_up);
                 move_down = ev.move_down.or(move_down);
                 set_prefix = ev.set_prefix.or(set_prefix);
+                mark_tab = ev.mark.or(mark_tab);
+                group_tab = ev.group.or(group_tab);
+                ungroup_tab = ev.ungroup.or(ungroup_tab);
                 new_tab = new_tab || ev.new_tab;
             });
     }
@@ -908,6 +971,15 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
     if let Some(i) = set_prefix {
         host.on_set_prefix(i);
     }
+    if let Some(i) = mark_tab {
+        host.on_mark_tab(i);
+    }
+    if let Some(i) = group_tab {
+        host.on_group_tab(i);
+    }
+    if let Some(i) = ungroup_tab {
+        host.on_ungroup_tab(i);
+    }
     if new_tab {
         host.on_new_tab();
     }
@@ -963,6 +1035,9 @@ mod tab_menu_tests {
             vec![
                 "Rename Tab…",
                 "Prefix…",
+                "Mark…",
+                "Group…",
+                "Remove from Group",
                 "Duplicate Tab",
                 "Move Up",
                 "Move Down",
@@ -977,6 +1052,9 @@ mod tab_menu_tests {
             vec![
                 TabMenuAction::Rename,
                 TabMenuAction::Prefix,
+                TabMenuAction::Mark,
+                TabMenuAction::Group,
+                TabMenuAction::Ungroup,
                 TabMenuAction::Duplicate,
                 TabMenuAction::MoveUp,
                 TabMenuAction::MoveDown,
@@ -1028,5 +1106,11 @@ mod tab_menu_tests {
         assert_eq!(ev.close_below, Some(4));
         apply_tab_menu(&mut ev, 4, TabMenuAction::NewTab);
         assert!(ev.new_tab);
+        apply_tab_menu(&mut ev, 5, TabMenuAction::Mark);
+        assert_eq!(ev.mark, Some(5));
+        apply_tab_menu(&mut ev, 5, TabMenuAction::Group);
+        assert_eq!(ev.group, Some(5));
+        apply_tab_menu(&mut ev, 5, TabMenuAction::Ungroup);
+        assert_eq!(ev.ungroup, Some(5));
     }
 }

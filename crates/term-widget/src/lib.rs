@@ -253,6 +253,10 @@ struct Tab {
     ssh: bool,
     /// Optional short prefix shown before the tab title.
     prefix: Option<String>,
+    /// A short user marker appended to the tab title (ADR 0011).
+    mark: Option<String>,
+    /// The session-list group this tab belongs to (ADR 0011).
+    group: Option<String>,
 }
 
 /// Background-computed details (git status / directory listing / ports).
@@ -367,6 +371,10 @@ struct State {
     files_filter: String,
     prefix_renaming: Option<usize>,
     prefix_buf: String,
+    mark_renaming: Option<usize>,
+    mark_buf: String,
+    group_renaming: Option<usize>,
+    group_buf: String,
     hotkeys: Option<miao_term_ui::hotkey::Hotkeys>,
     opacity: f32,
     notifications: bool,
@@ -625,6 +633,8 @@ impl State {
             title: format!("shell {n}"),
             ssh: false,
             prefix: None,
+            mark: None,
+            group: None,
         });
         self.active_tab = self.tabs.len() - 1;
         self.selection = None;
@@ -684,6 +694,8 @@ impl State {
             title: format!("shell {n}"),
             ssh: false,
             prefix: None,
+            mark: None,
+            group: None,
         });
         self.active_tab = self.tabs.len() - 1;
         self.selection = None;
@@ -1878,6 +1890,20 @@ impl State {
         if let Some(i) = self.renaming {
             self.rename_window(ctx, i);
         }
+        if let Some(i) = self.mark_renaming {
+            let mut buf = std::mem::take(&mut self.mark_buf);
+            let mut slot = self.mark_renaming;
+            self.tab_text_window(ctx, i, "Tab Mark", "标签标记", &mut buf, &mut slot, false);
+            self.mark_buf = buf;
+            self.mark_renaming = slot;
+        }
+        if let Some(i) = self.group_renaming {
+            let mut buf = std::mem::take(&mut self.group_buf);
+            let mut slot = self.group_renaming;
+            self.tab_text_window(ctx, i, "Tab Group", "标签分组", &mut buf, &mut slot, true);
+            self.group_buf = buf;
+            self.group_renaming = slot;
+        }
         if let Some(i) = self.prefix_renaming {
             self.prefix_window(ctx, i);
         }
@@ -1920,6 +1946,8 @@ impl State {
                 "layout": layout_to_json(&tab.layout),
                 "panes": panes,
                 "prefix": tab.prefix,
+                "mark": tab.mark,
+                "group": tab.group,
                 "ssh": tab.ssh,
             }));
         }
@@ -2009,6 +2037,8 @@ impl State {
                 title,
                 ssh,
                 prefix,
+                mark: t.get("mark").and_then(|m| m.as_str()).map(str::to_string),
+                group: t.get("group").and_then(|g| g.as_str()).map(str::to_string),
             });
         }
         if self.tabs.is_empty() {
@@ -3723,6 +3753,56 @@ impl State {
         }
     }
 
+    /// A one-line editor for a tab's mark or group (ADR 0011). Empty clears it.
+    #[allow(clippy::too_many_arguments)]
+    fn tab_text_window(
+        &mut self,
+        ctx: &egui::Context,
+        i: usize,
+        en: &'static str,
+        zh: &'static str,
+        buf: &mut String,
+        slot: &mut Option<usize>,
+        is_group: bool,
+    ) {
+        let mut open = true;
+        let mut text = std::mem::take(buf);
+        let mut commit = false;
+        egui::Window::new(miao_term_ui::i18n::t(self.lang, en, zh))
+            .collapsible(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                let r = ui.text_edit_singleline(&mut text);
+                r.request_focus();
+                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    commit = true;
+                }
+                if ui
+                    .button(miao_term_ui::i18n::t(self.lang, "Set", "设置"))
+                    .clicked()
+                {
+                    commit = true;
+                }
+            });
+        *buf = text;
+        if commit {
+            let value = buf.trim().to_string();
+            if let Some(t) = self.tabs.get_mut(i) {
+                let value = if value.is_empty() { None } else { Some(value) };
+                if is_group {
+                    t.group = value;
+                } else {
+                    t.mark = value;
+                }
+            }
+            *slot = None;
+            self.publish_panes();
+        }
+        if !open {
+            *slot = None;
+        }
+    }
+
     fn rename_window(&mut self, ctx: &egui::Context, i: usize) {
         let mut open = true;
         let mut buf = std::mem::take(&mut self.rename_buf);
@@ -4200,6 +4280,10 @@ impl ApplicationHandler<HostEvent> for Host {
             files_filter: String::new(),
             prefix_renaming: None,
             prefix_buf: String::new(),
+            mark_renaming: None,
+            mark_buf: String::new(),
+            group_renaming: None,
+            group_buf: String::new(),
             hotkeys: None,
             opacity,
             notifications: cfg.notifications,
@@ -5233,6 +5317,9 @@ impl chrome::Chrome for State {
                 if let Some(p) = &t.prefix {
                     title = format!("[{p}] {title}");
                 }
+                if let Some(m) = &t.mark {
+                    title = format!("{title}{m}");
+                }
                 chrome::ChromeTab { title, badge, icon }
             })
             .collect()
@@ -5411,6 +5498,31 @@ impl chrome::Chrome for State {
             self.publish_panes();
         }
     }
+    fn tab_groups(&self) -> Vec<Option<String>> {
+        self.tabs.iter().map(|t| t.group.clone()).collect()
+    }
+
+    fn on_mark_tab(&mut self, i: usize) {
+        if let Some(t) = self.tabs.get(i) {
+            self.mark_buf = t.mark.clone().unwrap_or_default();
+        }
+        self.mark_renaming = Some(i);
+    }
+
+    fn on_group_tab(&mut self, i: usize) {
+        if let Some(t) = self.tabs.get(i) {
+            self.group_buf = t.group.clone().unwrap_or_default();
+        }
+        self.group_renaming = Some(i);
+    }
+
+    fn on_ungroup_tab(&mut self, i: usize) {
+        if let Some(t) = self.tabs.get_mut(i) {
+            t.group = None;
+        }
+        self.publish_panes();
+    }
+
     fn on_set_prefix(&mut self, i: usize) {
         self.prefix_buf = self
             .tabs
