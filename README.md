@@ -32,7 +32,7 @@ See [application identity and migration](docs/APP-IDENTITY.md).
 The engine and application remain deliberately decoupled for embedding.
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 
-> **Project status — pre-release.** The version is `0.0.2` and the API is not yet
+> **Project status — pre-release.** The version is `0.0.3` and the API is not yet
 > stable. macOS is the primary platform. Windows is built, tested and driven over
 > MTP on real hardware (see [`docs/WINDOWS-DEV.md`](docs/WINDOWS-DEV.md)); Linux
 > builds and passes tests in CI.
