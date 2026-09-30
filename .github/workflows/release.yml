@@ -210,6 +210,8 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+      - name: Collect packages into the release directory
+        run: python3 scripts/build-update-manifest.py artifacts --collect-only
       # Ship the minisign public key so users can verify the `.sig` files.
       - name: Add the signing public key
         run: cp minisign.pub artifacts/

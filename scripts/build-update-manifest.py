@@ -16,7 +16,27 @@ PATTERNS = {
     "linux-x86_64-deb": [r"miaotty_.*_amd64\.deb"],
     "windows-x86_64": [r"miaotty-.*\.msi", r"miaotty-windows-x86_64\.zip"],
 }
-REQUIRED = ("macos-aarch64", "macos-x86_64", "linux-x86_64", "windows-x86_64")
+REQUIRED = ("macos-aarch64", "macos-x86_64", "linux-x86_64", "linux-x86_64-deb", "windows-x86_64")
+
+
+def collect_artifacts(directory):
+    """Flatten upload-artifact's preserved dist/ and target/wix/ directories."""
+    packages = {}
+    for path in sorted(directory.rglob("*")):
+        if not path.is_file() or not path.name.endswith((".zip", ".tar.gz", ".AppImage", ".deb", ".msi", ".sig")):
+            continue
+        if path.name in packages:
+            raise ValueError(f"duplicate artifact filename: {path.name}")
+        packages[path.name] = path
+    # Validate the entire plan before moving any files.
+    for name, source in packages.items():
+        target = directory / name
+        if source != target:
+            source.rename(target)
+    for path in sorted(directory.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+        if path.is_dir() and not any(path.iterdir()):
+            path.rmdir()
+    print(f"collected {len(packages)} artifact files")
 
 
 def build_manifest(directory, tag, repository, require_signatures=False):
@@ -52,10 +72,16 @@ def build_manifest(directory, tag, repository, require_signatures=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
-    parser.add_argument("--tag", required=True)
-    parser.add_argument("--repository", required=True)
+    parser.add_argument("--tag")
+    parser.add_argument("--repository")
+    parser.add_argument("--collect-only", action="store_true")
     parser.add_argument("--require-signatures", action="store_true")
     args = parser.parse_args()
+    if args.collect_only:
+        collect_artifacts(args.directory)
+        return
+    if not args.tag or not args.repository:
+        parser.error("--tag and --repository are required when building a manifest")
     manifest = build_manifest(args.directory, args.tag, args.repository, args.require_signatures)
     text = json.dumps(manifest, indent=2) + "\n"
     (args.directory / "latest.json").write_text(text)

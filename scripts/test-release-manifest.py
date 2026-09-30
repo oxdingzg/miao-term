@@ -25,7 +25,8 @@ class ManifestTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name)
         for name in ("miaotty-macos-arm64.zip", "miaotty-macos-x86_64.zip",
-                     "miaotty-linux-x86_64.tar.gz", "miaotty-windows-x86_64.zip"):
+                     "miaotty-linux-x86_64.tar.gz", "miaotty_0.0.1-1_amd64.deb",
+                     "miaotty-windows-x86_64.zip"):
             (self.directory / name).write_bytes(b"artifact")
 
     def build(self, signed=False):
@@ -59,6 +60,33 @@ class ManifestTests(unittest.TestCase):
             artifact.with_name(artifact.name + ".sig").write_text("signature")
         for entry in self.build(signed=True)["artifacts"].values():
             self.assertEqual(entry["signature"], entry["url"] + ".sig")
+
+    def test_nested_uploads_are_collected_before_signing_and_selection(self):
+        nested = self.directory / "dist"
+        nested.mkdir()
+        deb = self.directory / "miaotty_0.0.1-1_amd64.deb"
+        deb.rename(nested / deb.name)
+        wix = self.directory / "target/wix"
+        wix.mkdir(parents=True)
+        msi = wix / "miaotty-app-0.0.1-x86_64.msi"
+        msi.write_bytes(b"MSI payload")
+        module.collect_artifacts(self.directory)
+        artifacts = self.build()["artifacts"]
+        self.assertTrue(artifacts["windows-x86_64"]["url"].endswith(".msi"))
+        self.assertTrue(artifacts["linux-x86_64-deb"]["url"].endswith(".deb"))
+        self.assertEqual((self.directory / msi.name).read_bytes(), b"MSI payload")
+        self.assertFalse(nested.exists())
+        self.assertFalse(wix.parent.exists())
+
+    def test_collect_rejects_collisions_without_moving_payloads(self):
+        nested = self.directory / "dist"
+        nested.mkdir()
+        duplicate = nested / "miaotty-macos-arm64.zip"
+        duplicate.write_bytes(b"different payload")
+        with self.assertRaisesRegex(ValueError, "duplicate artifact filename"):
+            module.collect_artifacts(self.directory)
+        self.assertEqual(duplicate.read_bytes(), b"different payload")
+        self.assertEqual((self.directory / duplicate.name).read_bytes(), b"artifact")
 
 
 class AppRunTests(unittest.TestCase):
