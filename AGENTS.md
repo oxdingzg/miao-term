@@ -51,13 +51,12 @@ Another session may share this directory.
 
 ## Screenshots for verification
 
-Both hosts can capture themselves without screen-recording permission — useful
+The application can capture itself without screen-recording permission — useful
 for QA and visual diffs when the fix is a rendering change:
 
-- native host: `MIAOTTY_NATIVE_SHOT_AFTER=<secs> ./target/release/miaotty-native`
-  writes `/tmp/native_shot.ppm` and exits.
-- eframe host: `MIAOTTY_SHOT_AFTER=<secs> ./target/release/miaotty` writes
-  `/tmp/eframe_shot.ppm` and exits.
+- `MIAOTTY_SHOT_AFTER=<secs> ./target/release/miaotty` writes
+  `/tmp/miaotty_shot.ppm` and exits. The same flag works with the executable
+  inside `dist/miaotty.app` to verify the packaged application.
 
 PPM is written as binary RGB (the native host swaps channels from its BGRA
 target), so a plain reader can sample pixels directly. Drive the running app with

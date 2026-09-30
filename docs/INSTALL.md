@@ -1,83 +1,57 @@
-# Installing / building
+# Installing / building miaotty
 
-> 简体中文: [`INSTALL.zh-CN.md`](INSTALL.zh-CN.md)
+[简体中文](INSTALL.zh-CN.md)
 
-## Run from source
+miaotty is the native winit/wgpu application formerly named miaotty-native.
+There is one GUI executable and one CLI. See [identity and migration](APP-IDENTITY.md).
 
-```sh
-cargo run -p miaotty-app      # or: cargo build && ./target/debug/miaotty
-```
-
-Requires the Rust stable toolchain (see `rust-toolchain.toml`). First build
-compiles wgpu/glyphon and may take a few minutes.
-
-## macOS app bundle
+## From source
 
 ```sh
-scripts/package-macos.sh              # release build -> dist/miaotty.app
-PROFILE=debug scripts/package-macos.sh
+cargo run --release -p miaotty-app
+cargo build --release -p miaotty-app -p miaotty-cli
+./target/release/miaotty --version
 ```
 
-Produces an ad-hoc-signed `dist/miaotty.app` (the eframe host) and
-`dist/miaotty-native.app` (the native host); each bundle carries both binaries,
-the URL schemes and the application icon. For distribution they are codesigned
-and notarized automatically when the Apple secrets are configured (see
-[Releases](#releases)).
+Rust stable and the platform's wgpu/window-system libraries are required.
+The first build compiles wgpu/glyphon and may take a few minutes.
 
-## Releases
+## macOS
 
-Pushing a `v*` tag runs [`.github/workflows/release.yml`](../.github/workflows/release.yml):
-it builds `miaotty` + `miaotty-cli` + `miaotty-native` on macOS/Linux/Windows and
-attaches a `miaotty.app` zip / Linux tarball / Windows zip to a GitHub Release.
+```sh
+scripts/package-macos.sh
+python3 scripts/smoke-hosts.py --bundle dist/miaotty.app
+bash scripts/install-macos.sh
+```
 
-macOS builds are ad-hoc signed by default; if the repo has `APPLE_CERT_P12` +
-`APPLE_CERT_PASSWORD` + `APPLE_ID` + `APPLE_TEAM_ID` + `APPLE_APP_PASSWORD`
-secrets, the workflow signs with a Developer ID, notarizes and staples instead.
-Linux also builds a `.deb` (via `cargo-deb`, metadata in `miaotty-app/Cargo.toml`)
-and an AppImage (`appimagetool`). Windows ships a zip and an MSI
-(`cargo-wix` / WiX). All packages contain `miaotty`, `miaotty-cli`, and
-`miaotty-native`; AppImage/MSI packaging failures fail the workflow. If
-`WINDOWS_CERT_PFX` + `WINDOWS_CERT_PASSWORD` secrets exist, the MSI is signed
-with `signtool`.
+Produces one ad-hoc-signed `dist/miaotty.app` with `miaotty`, `miaotty-cli`, the
+icon and URL schemes. Installation archives old known bundles, installs miaotty
+and removes the old native launcher without removing user configuration.
+`PROFILE=debug scripts/package-macos.sh` builds a development bundle.
+The installed app uses the macOS system menu bar; a bare binary uses an in-window menu.
 
-Use `gh workflow run release.yml --ref main -f tag=v0.0.1` for a packaging
-rehearsal. It uploads `release-assembled` with the packages, public key and
-`latest.json`, but publishes no GitHub Release. See [`RELEASE.md`](RELEASE.md)
-for the checks and remaining desktop acceptance work.
+## Release packages
 
-## Cross-platform installers
+[release.yml](../.github/workflows/release.yml) requires Apple Silicon macOS,
+Intel macOS, Linux and Windows runner builds. A `v*` tag publishes a release;
+manual dispatch rehearses packaging without publishing.
 
-`dist-workspace.toml` is a [cargo-dist](https://opensource.axo.dev/cargo-dist/)
-scaffold (shell/PowerShell installers + MSI). Run `dist init` then `dist build`
-on a release to generate per-platform artifacts.
+- macOS: a zip containing only `miaotty.app`.
+- Linux: tar, DEB and AppImage, containing `miaotty` and `miaotty-cli`.
+- Windows: zip and MSI, containing `miaotty.exe` and `miaotty-cli.exe`.
 
-## Configuration
+Apple Developer ID signing/notarization, Windows MSI signing and minisign
+artifact signatures use the optional secrets described in [RELEASE.md](RELEASE.md).
+`dist-workspace.toml` remains a cargo-dist scaffold, not the active release pipeline.
 
-- `~/.config/miaotty/config.toml` (or `$XDG_CONFIG_HOME/miaotty/config.toml`) —
-  see [`config.example.toml`](config.example.toml).
-- If there is no miaotty config, ghostty `config` and alacritty
-  `alacritty.toml` are imported automatically.
+## Configuration and links
 
-## Deep links (URL schemes)
+Configuration is `~/.config/miaotty/config.toml`, or
+`$XDG_CONFIG_HOME/miaotty/config.toml`. Ghostty/Alacritty config import and the
+zsh ZDOTDIR integration retain their existing behavior. Existing native and
+eframe session formats are read through the compatibility migration.
 
-Running `miaotty-native.app` also puts the menu in the system menu bar (ADR 0031);
-a bare binary keeps the in-window menu.
-
-The macOS bundles register `miaotty://`, `ssh://` and `x-man-page://` with the OS,
-and the Linux `.desktop` file registers the same three. A link is translated into
-a tab running the matching command.
-
-Because the hosts share one control socket and an inbox beside it, the bundle only
-has to be *installed*: when a link arrives while any host is already running — the
-eframe app or `miaotty-native` — the launching process forwards the intent to it
-and exits, so the running window handles the deep link. That is also how a
-`miaotty-native` session receives OS links without registering anything itself;
-the bundle ships both binaries (`Contents/MacOS/miaotty` and `miaotty-native`).
-
-The Windows MSI registers `miaotty://` only, and deliberately leaves `ssh://` /
-`x-man-page://` alone rather than hijacking them machine-wide.
-
-## Shell integration
-
-miaotty installs a zsh `ZDOTDIR` shim so the shell reports its cwd (OSC 7) and
-command history; the user's dotfiles are untouched. No manual setup needed.
+macOS and Linux register `miaotty://`, `ssh://` and `x-man-page://`.
+Windows MSI registers only `miaotty://`. Subsequent launches forward to the
+running instance through the existing control socket/inbox. The `miaotty://`
+identity remains unchanged.

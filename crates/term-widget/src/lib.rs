@@ -34,6 +34,8 @@ enum HostEvent {
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
+mod session;
+
 const MENU_H: f32 = 24.0;
 const TAB_H: f32 = 30.0;
 const STATUS_H: f32 = 22.0;
@@ -175,17 +177,17 @@ mod appmenu {
 /// Run a native terminal window until it is closed.
 pub fn run(title: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
     // Single instance (ADR 0019): a later launch — a deep link or a second
-    // `miaotty-native <url>` — is handed to the running instance, which drains
+    // `miaotty <url>` — is handed to the running instance, which drains
     // its inbox, and this process exits without opening a window.
     let args: Vec<String> = std::env::args().skip(1).collect();
     let intent = miao_term_ui::launch::Intent::from_args(&args);
     if miao_term_ui::launch::forward_to_running(&intent.encode()) {
-        eprintln!("miaotty-native: forwarded to the running instance");
+        eprintln!("miaotty: forwarded to the running instance");
         return Ok(());
     }
 
     // MTP control plane (ADR 0005): the shell inherits `MIAOTTY_SOCKET`, so
-    // `miaotty-cli`, plugins and agent hooks work exactly as with the eframe app.
+    // `miaotty-cli`, plugins and agent hooks use the same control plane.
     let socket = miao_term_mtp::default_socket();
     std::env::set_var("MIAOTTY_SOCKET", &socket);
     // MIAOTTY_MTP_TOKEN (if set) requires it on every request; MIAOTTY_MTP_ALLOW
@@ -195,13 +197,13 @@ pub fn run(title: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
         miao_term_mtp::ServerState::parse_allow(std::env::var("MIAOTTY_MTP_ALLOW").ok()),
     );
     match miao_term_mtp::serve(&socket, mtp.clone()) {
-        Ok(()) => eprintln!("miaotty-native: MTP host on {}", socket.display()),
-        Err(e) => eprintln!("miaotty-native: MTP host failed: {e}"),
+        Ok(()) => eprintln!("miaotty: MTP host on {}", socket.display()),
+        Err(e) => eprintln!("miaotty: MTP host failed: {e}"),
     }
     if let Some(addr) = miao_term_config::Config::load().remote_listen {
         match miao_term_mtp::serve_tcp(&addr, mtp.clone()) {
-            Ok(()) => eprintln!("miaotty-native: remote MTP access on {addr}"),
-            Err(e) => eprintln!("miaotty-native: remote access disabled: {e}"),
+            Ok(()) => eprintln!("miaotty: remote MTP access on {addr}"),
+            Err(e) => eprintln!("miaotty: remote access disabled: {e}"),
         }
     }
 
@@ -430,8 +432,10 @@ struct State {
     search_hits: Vec<(usize, u16)>,
     search_key: String,
     update_url: Option<String>,
-    update_rx: Option<std::sync::mpsc::Receiver<String>>,
+    update_rx: Option<std::sync::mpsc::Receiver<(String, Option<String>)>>,
     update_msg: Option<String>,
+    update_dialog: bool,
+    update_download_url: Option<String>,
     details_tab: usize,
     details_cwd: Option<std::path::PathBuf>,
     details_data: Option<DetailsData>,
@@ -892,14 +896,14 @@ impl State {
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
-                eprintln!("miaotty-native: picture-in-picture window failed: {e}");
+                eprintln!("miaotty: picture-in-picture window failed: {e}");
                 return;
             }
         };
         let surface = match self.instance.create_surface(window.clone()) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("miaotty-native: pip surface failed: {e}");
+                eprintln!("miaotty: pip surface failed: {e}");
                 return;
             }
         };
@@ -1255,19 +1259,24 @@ impl State {
     }
 
     fn paste(&mut self, text: &str) {
+        if self.read_only {
+            return;
+        }
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
             if let Some(pane) = tab.panes.iter_mut().find(|p| p.id == tab.active) {
-                let body = text.replace('\n', "\r");
-                let bytes = if pane.term.screen().bracketed_paste() {
-                    format!("\x1b[200~{body}\x1b[201~")
-                } else {
-                    body
-                };
-                pane.term.write(bytes.as_bytes());
+                let bytes = input::encode_paste(text, pane.term.screen().bracketed_paste());
+                pane.term.write(&bytes);
                 pane.scroll = 0;
             }
         }
         self.window.request_redraw();
+    }
+
+    fn paste_clipboard(&mut self) {
+        // Image-only clipboards have no text. Still send an empty bracketed
+        // paste: TUIs such as miao use it to read native clipboard attachments.
+        let text = self.egui_state.clipboard_text().unwrap_or_default();
+        self.paste(&text);
     }
 
     /// Forward a mouse event to the pane under the pointer when the running
@@ -1276,6 +1285,9 @@ impl State {
     /// `button`: 0 left, 1 middle, 2 right, 64 wheel-up, 65 wheel-down.
     /// `motion` marks a drag/hover report (bit 5 set, no press/release).
     fn forward_mouse(&mut self, px: f32, py: f32, button: u8, pressed: bool, motion: bool) -> bool {
+        if self.read_only {
+            return false;
+        }
         let scale = self.window.scale_factor() as f32;
         let Some((id, r)) = self.pane_rects().into_iter().find(|(_, r)| {
             px >= r.x * scale
@@ -1748,7 +1760,11 @@ impl State {
             &paint_jobs,
             &screen,
         );
-        if self.shot_now || std::env::var_os("MIAOTTY_NATIVE_SHOT").is_some() {
+        if self.shot_now
+            || std::env::var_os("MIAOTTY_SHOT")
+                .or_else(|| std::env::var_os("MIAOTTY_NATIVE_SHOT"))
+                .is_some()
+        {
             self.capture(
                 &draws,
                 ImageLayer {
@@ -1813,6 +1829,9 @@ impl State {
         }
 
         for ev in &events {
+            if self.egui_ctx.wants_keyboard_input() {
+                break;
+            }
             match ev {
                 egui::Event::Copy => self.copy_selection(&self.egui_ctx),
                 egui::Event::Paste(text) => self.paste(text),
@@ -1828,6 +1847,35 @@ impl State {
     fn chrome(&mut self, ctx: &egui::Context) {
         // Shared, host-agnostic chrome (menu/tabs/sidebar/details/status).
         chrome::render(ctx, self);
+        if self.update_dialog {
+            let mut open = true;
+            egui::Window::new(miao_term_ui::i18n::t(
+                self.lang,
+                "Check for Updates",
+                "检查更新",
+            ))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                if let Some(message) = &self.update_msg {
+                    ui.label(message);
+                }
+                if let Some(url) = &self.update_download_url {
+                    if ui
+                        .button(miao_term_ui::i18n::t(
+                            self.lang,
+                            "Download Update",
+                            "下载更新",
+                        ))
+                        .clicked()
+                    {
+                        open_external(url);
+                    }
+                }
+            });
+            self.update_dialog = open;
+        }
         // Hyperlink hover cue: hand cursor + underline while Cmd/Ctrl is held.
         let link = if self.mods.super_key() || self.mods.control_key() {
             self.link_at_pointer()
@@ -2013,6 +2061,10 @@ impl State {
     }
 
     fn restore_from_value(&mut self, v: &serde_json::Value) -> bool {
+        let Some(value) = session::normalize(v.clone()) else {
+            return false;
+        };
+        let v = &value;
         let Some(tabs) = v.get("tabs").and_then(|t| t.as_array()) else {
             return false;
         };
@@ -2091,10 +2143,16 @@ impl State {
         let Some(path) = session_file() else {
             return false;
         };
-        let Ok(bytes) = std::fs::read(&path) else {
+        let Some(config) = path.parent() else {
             return false;
         };
-        let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        let data = std::env::var_os("XDG_DATA_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/share"))
+            })
+            .map(|p| p.join("miaotty"));
+        let Some(v) = session::load(config, data.as_deref()) else {
             return false;
         };
         self.restore_from_value(&v)
@@ -2553,10 +2611,7 @@ impl State {
                 self.copy_selection(&ctx);
             }
             Cmd::Paste => {
-                let text = self.egui_state.clipboard_text().unwrap_or_default();
-                if !text.is_empty() {
-                    self.paste(&text);
-                }
+                self.paste_clipboard();
             }
             Cmd::Settings => self.show_settings = true,
             Cmd::Quit => {
@@ -2929,7 +2984,7 @@ impl State {
             }
         }
         drop(data);
-        let _ = std::fs::write("/tmp/native_shot.ppm", ppm);
+        let _ = std::fs::write("/tmp/miaotty_shot.ppm", ppm);
         std::process::exit(0);
     }
 
@@ -2961,7 +3016,7 @@ impl State {
         }
     }
 
-    /// Notifications + sleep guard (ADR 0010), mirroring the eframe host.
+    /// Notifications + sleep guard (ADR 0010).
     fn agent_loop(&mut self) {
         if !self.notifications && !self.prevent_sleep {
             return;
@@ -3309,6 +3364,8 @@ impl State {
     }
 
     fn check_updates(&mut self) {
+        self.update_dialog = true;
+        self.update_download_url = None;
         let Some(url) = self.update_url.clone() else {
             self.update_msg = Some("no update URL configured".to_string());
             return;
@@ -3319,19 +3376,28 @@ impl State {
             let out = std::process::Command::new("curl")
                 .args(["-fsSL", "--max-time", "8", &url])
                 .output();
-            let msg = match out {
+            let result = match out {
                 Ok(o) if o.status.success() => {
-                    let m = miao_term_ui::update::parse(&String::from_utf8_lossy(&o.stdout));
-                    let local = env!("CARGO_PKG_VERSION");
-                    if miao_term_ui::update::is_newer(&m.version, local) {
-                        format!("Update available: v{}", m.version)
-                    } else {
-                        format!("Up to date (v{local})")
+                    match miao_term_ui::update::parse_checked(&String::from_utf8_lossy(&o.stdout)) {
+                        Ok(m) => {
+                            let local = env!("CARGO_PKG_VERSION");
+                            if miao_term_ui::update::is_newer(&m.version, local) {
+                                let download =
+                                    m.for_platform().map(|artifact| artifact.url.clone());
+                                (
+                                    format!("Update available: v{} (current: v{local})", m.version),
+                                    download,
+                                )
+                            } else {
+                                (format!("Up to date (v{local})"), None)
+                            }
+                        }
+                        Err(error) => (format!("Update check failed: {error}"), None),
                     }
                 }
-                _ => "Update check failed".to_string(),
+                _ => ("Update check failed".to_string(), None),
             };
-            let _ = tx.send(msg);
+            let _ = tx.send(result);
         });
         self.update_rx = Some(rx);
     }
@@ -3551,7 +3617,7 @@ impl State {
                 true
             }
             Err(e) => {
-                eprintln!("miaotty-native: open failed: {e}");
+                eprintln!("miaotty: open failed: {e}");
                 false
             }
         }
@@ -3694,7 +3760,7 @@ impl State {
                                     )
                                     .selectable(false),
                                 );
-                                let text_id = egui::Id::new("miaotty-native-editor-text");
+                                let text_id = egui::Id::new("miaotty-editor-text");
                                 let mut edit = egui::TextEdit::multiline(&mut ed.text)
                                     .id(text_id)
                                     .code_editor()
@@ -4152,7 +4218,7 @@ impl ApplicationHandler<HostEvent> for Host {
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
-                eprintln!("miaotty-native: create_window failed: {e}");
+                eprintln!("miaotty: create_window failed: {e}");
                 event_loop.exit();
                 return;
             }
@@ -4163,7 +4229,7 @@ impl ApplicationHandler<HostEvent> for Host {
         let surface = match instance.create_surface(window.clone()) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("miaotty-native: create_surface failed: {e}");
+                eprintln!("miaotty: create_surface failed: {e}");
                 event_loop.exit();
                 return;
             }
@@ -4176,7 +4242,7 @@ impl ApplicationHandler<HostEvent> for Host {
             })) {
                 Some(a) => a,
                 None => {
-                    eprintln!("miaotty-native: no wgpu adapter");
+                    eprintln!("miaotty: no wgpu adapter");
                     event_loop.exit();
                     return;
                 }
@@ -4327,6 +4393,8 @@ impl ApplicationHandler<HostEvent> for Host {
             update_url: cfg.update_check_url.clone(),
             update_rx: None,
             update_msg: None,
+            update_dialog: false,
+            update_download_url: None,
             details_tab: std::env::var("MIAOTTY_DETAILS_TAB")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -4355,7 +4423,7 @@ impl ApplicationHandler<HostEvent> for Host {
             let proxy = self.proxy.clone();
             match appmenu::install(state.lang, proxy) {
                 Some(menu) => self.menu = Some(menu),
-                None => eprintln!("miaotty-native: could not install the application menu"),
+                None => eprintln!("miaotty: could not install the application menu"),
             }
         }
         let args: Vec<String> = std::env::args().skip(1).collect();
@@ -4367,7 +4435,7 @@ impl ApplicationHandler<HostEvent> for Host {
                 let _ = proxy.send_event(HostEvent::Hotkey);
             });
             if state.hotkeys.is_none() {
-                eprintln!("miaotty-native: could not register hotkey {spec}");
+                eprintln!("miaotty: could not register hotkey {spec}");
             }
         }
         state.window.request_redraw();
@@ -4397,6 +4465,18 @@ impl ApplicationHandler<HostEvent> for Host {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if let Some(state) = &mut self.state {
+            // The cwd fallback must advance even when an idle/background shell
+            // produces no output. This also keeps pending output draining.
+            let mut changed = false;
+            for tab in &mut state.tabs {
+                for pane in &mut tab.panes {
+                    changed |= pane.term.process_pending();
+                }
+            }
+            if changed {
+                state.window.request_redraw();
+            }
+            let mut wake_at = Instant::now() + Duration::from_millis(500);
             // Launches forwarded by later processes (ADR 0019).
             for line in miao_term_ui::launch::drain_inbox() {
                 let intent = miao_term_ui::launch::Intent::decode(&line);
@@ -4405,8 +4485,9 @@ impl ApplicationHandler<HostEvent> for Host {
             }
             if let Some(rx) = state.update_rx.take() {
                 match rx.try_recv() {
-                    Ok(msg) => {
+                    Ok((msg, download_url)) => {
                         state.update_msg = Some(msg);
+                        state.update_download_url = download_url;
                         state.window.request_redraw();
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) => state.update_rx = Some(rx),
@@ -4428,7 +4509,9 @@ impl ApplicationHandler<HostEvent> for Host {
                 state.window.request_redraw();
             }
             if !state.shot_now {
-                if let Ok(v) = std::env::var("MIAOTTY_NATIVE_SHOT_AFTER") {
+                if let Ok(v) = std::env::var("MIAOTTY_SHOT_AFTER")
+                    .or_else(|_| std::env::var("MIAOTTY_NATIVE_SHOT_AFTER"))
+                {
                     let secs = v.parse::<f64>().unwrap_or(-1.0);
                     if secs >= 0.0 {
                         let at = state.start + Duration::from_secs_f64(secs);
@@ -4437,7 +4520,7 @@ impl ApplicationHandler<HostEvent> for Host {
                             state.window.request_redraw();
                         } else {
                             // Ensure we wake even without focus/blink events.
-                            event_loop.set_control_flow(ControlFlow::WaitUntil(at));
+                            wake_at = wake_at.min(at);
                         }
                     }
                 }
@@ -4448,10 +4531,9 @@ impl ApplicationHandler<HostEvent> for Host {
                     state.last_blink = Instant::now();
                     state.window.request_redraw();
                 }
-                event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + BLINK));
-            } else {
-                event_loop.set_control_flow(ControlFlow::Wait);
+                wake_at = wake_at.min(state.last_blink + BLINK);
             }
+            event_loop.set_control_flow(ControlFlow::WaitUntil(wake_at));
         }
     }
 
@@ -4478,11 +4560,50 @@ impl ApplicationHandler<HostEvent> for Host {
             }
             return;
         }
+        let mut ui_consumed = false;
+        if let WindowEvent::KeyboardInput { event, .. } = &event {
+            if event.state == ElementState::Pressed
+                && !state.egui_ctx.wants_keyboard_input()
+                && terminal_paste_shortcut(
+                    winit_key_kind(event),
+                    state.mods.super_key(),
+                    state.mods.control_key(),
+                    state.mods.shift_key(),
+                    state.mods.alt_key(),
+                )
+            {
+                // egui emits Paste only for nonempty clipboard text. Handle
+                // terminal paste here so image-only pastes reach the PTY too.
+                state.paste_clipboard();
+                return;
+            }
+        }
         if !matches!(event, WindowEvent::RedrawRequested) {
             let resp = state.egui_state.on_window_event(&state.window, &event);
+            ui_consumed = resp.consumed;
             if resp.repaint {
                 state.window.request_redraw();
             }
+        }
+        // Keep coordinates current even when egui owns the pointer. In
+        // particular, dragging an overlay must never start a grid selection.
+        if let WindowEvent::CursorMoved { position, .. } = &event {
+            state.cursor = (position.x, position.y);
+        }
+        let pointer_event = matches!(
+            event,
+            WindowEvent::MouseInput { .. }
+                | WindowEvent::CursorMoved { .. }
+                | WindowEvent::MouseWheel { .. }
+        );
+        let over_terminal = state.pane_rects().iter().any(|(_, r)| {
+            let scale = state.window.scale_factor() as f32;
+            r.contains(state.cursor.0 as f32 / scale, state.cursor.1 as f32 / scale)
+        });
+        let terminal_gesture =
+            state.dragging || state.divider_drag.is_some() || state.mouse_captured.is_some();
+        if pointer_event && !pointer_to_terminal(ui_consumed, over_terminal, terminal_gesture) {
+            return;
         }
         match event {
             WindowEvent::CloseRequested => {
@@ -4528,17 +4649,18 @@ impl ApplicationHandler<HostEvent> for Host {
             WindowEvent::DroppedFile(path) => {
                 let scale = state.window.scale_factor() as f32;
                 let (px, py) = (state.cursor.0 as f32, state.cursor.1 as f32);
-                let over_pane = state.pane_rects().iter().any(|(_, r)| {
-                    px >= r.x * scale
-                        && px < (r.x + r.w) * scale
-                        && py >= r.y * scale
-                        && py < (r.y + r.h) * scale
-                });
-                if over_pane {
+                let over_pane = state
+                    .pane_rects()
+                    .into_iter()
+                    .find(|(_, r)| r.contains(px / scale, py / scale));
+                if over_pane.is_some() && !state.egui_ctx.wants_pointer_input() {
+                    if let Some((id, _)) = over_pane {
+                        if let Some(tab) = state.tabs.get_mut(state.active_tab) {
+                            tab.active = id;
+                        }
+                    }
                     // Drop onto the terminal: paste the shell-quoted path.
-                    let quoted = shell_quote(&path.to_string_lossy());
-                    let pasted = format!("{quoted} ");
-                    state.paste(&pasted);
+                    state.paste(&format!("{} ", shell_quote(&path.to_string_lossy())));
                 } else {
                     state.open_editor(path);
                 }
@@ -4551,6 +4673,28 @@ impl ApplicationHandler<HostEvent> for Host {
                 MouseButton::Left => {
                     let (px, py) = (state.cursor.0 as f32, state.cursor.1 as f32);
                     if es == ElementState::Pressed {
+                        // Clicking a split pane must also move keyboard focus.
+                        let scale = state.window.scale_factor() as f32;
+                        let divider = state
+                            .handles()
+                            .iter()
+                            .any(|h| h.rect.contains(px / scale, py / scale));
+                        if !divider {
+                            if let Some((id, _)) = state
+                                .pane_rects()
+                                .into_iter()
+                                .find(|(_, r)| r.contains(px / scale, py / scale))
+                            {
+                                if let Some(tab) = state.tabs.get_mut(state.active_tab) {
+                                    if tab.active != id {
+                                        tab.active = id;
+                                        state.selection = None;
+                                        state.preedit.clear();
+                                        state.window.request_redraw();
+                                    }
+                                }
+                            }
+                        }
                         // ⌘/Ctrl-click stays a terminal-level link gesture.
                         let linked = if state.mods.super_key() || state.mods.control_key() {
                             match state.link_at_pointer() {
@@ -4605,10 +4749,7 @@ impl ApplicationHandler<HostEvent> for Host {
                             state.selection = None;
                         } else {
                             // Paste.
-                            let text = state.egui_state.clipboard_text().unwrap_or_default();
-                            if !text.is_empty() {
-                                state.paste(&text);
-                            }
+                            state.paste_clipboard();
                         }
                     } else if state.mouse_captured.take() == Some(2) {
                         state.forward_mouse(px, py, 2, false, false);
@@ -4686,8 +4827,18 @@ impl ApplicationHandler<HostEvent> for Host {
                         consumed |= state.forward_mouse(px, py, button, true, false);
                     }
                     if !consumed {
+                        let scale = state.window.scale_factor() as f32;
+                        let hovered = state
+                            .pane_rects()
+                            .into_iter()
+                            .find(|(_, r)| r.contains(px / scale, py / scale))
+                            .map(|(id, _)| id);
                         if let Some(tab) = state.tabs.get_mut(state.active_tab) {
-                            if let Some(pane) = tab.panes.iter_mut().find(|p| p.id == tab.active) {
+                            if let Some(pane) = tab
+                                .panes
+                                .iter_mut()
+                                .find(|p| Some(&p.id) == hovered.as_ref())
+                            {
                                 let max = pane.term.screen().scrollback_len();
                                 if lines > 0 {
                                     pane.scroll = (pane.scroll + lines as usize).min(max);
@@ -4864,6 +5015,23 @@ impl ApplicationHandler<HostEvent> for Host {
             WindowEvent::RedrawRequested => state.render(),
             _ => {}
         }
+    }
+}
+
+fn terminal_paste_shortcut(
+    key: input::KeyKind,
+    super_key: bool,
+    control: bool,
+    shift: bool,
+    alt: bool,
+) -> bool {
+    if alt {
+        return false;
+    }
+    if cfg!(target_os = "macos") {
+        super_key && !control && !shift && matches!(key, input::KeyKind::Char('v' | 'V'))
+    } else {
+        !super_key && control && !shift && matches!(key, input::KeyKind::Char('v' | 'V'))
     }
 }
 
@@ -5076,6 +5244,11 @@ fn render_markdown(
     }
 }
 
+/// A gesture retains ownership until release, even after leaving its pane.
+fn pointer_to_terminal(ui_consumed: bool, over_terminal: bool, terminal_gesture: bool) -> bool {
+    terminal_gesture || (over_terminal && !ui_consumed)
+}
+
 fn git_rows(cwd: &std::path::Path) -> Vec<(String, String)> {
     let out = std::process::Command::new("git")
         .arg("-C")
@@ -5246,11 +5419,11 @@ fn list_recipes() -> Vec<String> {
 }
 
 fn session_file() -> Option<std::path::PathBuf> {
-    window_file().map(|p| p.with_file_name("native-session.json"))
+    window_file().map(|p| p.with_file_name("session.json"))
 }
 
 fn queue_file() -> Option<std::path::PathBuf> {
-    window_file().map(|p| p.with_file_name("native-queue.json"))
+    window_file().map(|p| p.with_file_name("queue.json"))
 }
 
 /// Load the persisted prompt queue (agent Composer drafts).
@@ -5258,7 +5431,8 @@ fn load_queue() -> Vec<String> {
     let Some(path) = queue_file() else {
         return Vec::new();
     };
-    let Ok(bytes) = std::fs::read(&path) else {
+    let read_path = legacy_state_path(&path, "native-queue.json");
+    let Ok(bytes) = std::fs::read(&read_path) else {
         return Vec::new();
     };
     serde_json::from_slice::<serde_json::Value>(&bytes)
@@ -5279,11 +5453,19 @@ fn window_file() -> Option<std::path::PathBuf> {
         .or_else(|| {
             std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config"))
         })?;
-    Some(base.join("miaotty").join("native-window"))
+    Some(base.join("miaotty").join("window"))
+}
+
+fn legacy_state_path(path: &std::path::Path, legacy: &str) -> std::path::PathBuf {
+    if path.exists() {
+        path.to_path_buf()
+    } else {
+        path.with_file_name(legacy)
+    }
 }
 
 fn load_window_size() -> Option<(f32, f32)> {
-    let text = std::fs::read_to_string(window_file()?).ok()?;
+    let text = std::fs::read_to_string(legacy_state_path(&window_file()?, "native-window")).ok()?;
     let mut it = text.split_whitespace();
     let w: f32 = it.next()?.parse().ok()?;
     let h: f32 = it.next()?.parse().ok()?;
@@ -5675,6 +5857,40 @@ impl chrome::Chrome for State {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn terminal_clipboard_shortcut_preserves_application_control_v_on_macos() {
+        use super::{input::KeyKind, terminal_paste_shortcut};
+        assert_eq!(
+            terminal_paste_shortcut(KeyKind::Char('v'), true, false, false, false),
+            cfg!(target_os = "macos")
+        );
+        assert_eq!(
+            terminal_paste_shortcut(KeyKind::Char('v'), false, true, false, false),
+            !cfg!(target_os = "macos")
+        );
+        assert!(!terminal_paste_shortcut(
+            KeyKind::Char('v'),
+            true,
+            false,
+            true,
+            false
+        ));
+        assert!(!terminal_paste_shortcut(
+            KeyKind::Char('v'),
+            true,
+            false,
+            false,
+            true
+        ));
+        assert!(!terminal_paste_shortcut(
+            KeyKind::Char('c'),
+            true,
+            false,
+            false,
+            false
+        ));
+    }
+
+    #[test]
     fn link_detection() {
         let line = "see https://example.com/a?b=1 now";
         assert_eq!(
@@ -5691,6 +5907,60 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn overlay_drag_does_not_start_terminal_selection() {
+        let ctx = egui::Context::default();
+        let mut window_rect = egui::Rect::NOTHING;
+        let mut frame = |events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 700.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                let response = egui::Window::new("Rename Tab")
+                    .default_pos(egui::pos2(300.0, 200.0))
+                    .show(ctx, |ui| {
+                        ui.text_edit_singleline(&mut String::from("shell 1"));
+                    });
+                window_rect = response.unwrap().response.rect;
+            });
+            window_rect
+        };
+        frame(vec![]);
+        let rect = frame(vec![]);
+        let start = rect.min + egui::vec2(40.0, 12.0);
+        frame(vec![egui::Event::PointerMoved(start)]);
+        frame(vec![egui::Event::PointerButton {
+            pos: start,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        assert!(ctx.wants_pointer_input());
+        assert!(!pointer_to_terminal(ctx.wants_pointer_input(), true, false));
+        let end = start + egui::vec2(100.0, 80.0);
+        frame(vec![egui::Event::PointerMoved(end)]);
+        assert!(!pointer_to_terminal(ctx.wants_pointer_input(), true, false));
+        let moved = frame(vec![egui::Event::PointerButton {
+            pos: end,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        assert!(
+            moved.min.distance(rect.min) > 20.0,
+            "the overlay itself must still move"
+        );
+        // Terminal-started drags must receive release outside their pane.
+        assert!(pointer_to_terminal(true, false, true));
+        assert!(!pointer_to_terminal(false, false, false));
+        assert!(pointer_to_terminal(false, true, false));
+    }
 
     fn empty_tab(title: &str) -> Tab {
         Tab {

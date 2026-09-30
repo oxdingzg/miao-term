@@ -21,20 +21,18 @@
   with tabs, panes, side panels, a settings window, shell integration and a
   scriptable control plane.
 
-The application ships as two hosts that share the engine and the chrome:
+**`miaotty` is the single application**, powered by the native `winit` +
+`wgpu` host in `miao-term-widget`. `miaotty-app` provides the executable and
+installer metadata; the host draws the terminal directly and composites egui
+chrome in the same frame. It includes picture-in-picture, hint mode, read-only
+mode and per-pane close buttons. The former `miaotty-native` implementation now
+ships under the `miaotty` name; the eframe application has been retired.
+See [application identity and migration](docs/APP-IDENTITY.md).
 
-- **`miaotty`** (`miaotty-app`) — the feature-complete host, an `eframe`/`egui`
-  application; the grid is drawn through an `egui-wgpu` paint callback.
-- **`miaotty-native`** (`miao-term-widget`) — the newer host with its own
-  `winit` + `wgpu` event loop that draws the grid directly and overlays the egui
-  chrome in the same frame, for lower input latency. It adds picture-in-picture,
-  hint mode, read-only panes and per-pane close buttons.
-
-The engine and the application are deliberately decoupled: the hosts are the
-engine's first consumers, and the engine is designed to be embedded by others.
+The engine and application remain deliberately decoupled for embedding.
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 
-> **Project status — pre-release.** The version is `0.0.1` and the API is not yet
+> **Project status — pre-release.** The version is `0.0.2` and the API is not yet
 > stable. macOS is the primary platform. Windows is built, tested and driven over
 > MTP on real hardware (see [`docs/WINDOWS-DEV.md`](docs/WINDOWS-DEV.md)); Linux
 > builds and passes tests in CI.
@@ -58,7 +56,7 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
   sidebar. Right-clicking a tab or a session opens the same row menu: Rename
   Tab…, Prefix…, Mark…, Group…, Remove from Group (only inside a group),
   Duplicate Tab, Move Up/Down, New Tab, Close Tab, Close Other Tabs and
-  Close Below, in both hosts. A tab's mark is appended to its title and its group
+  Close Below, in miaotty. A tab's mark is appended to its title and its group
   is kept with the session, so both survive a restart. The tab bar draws a divider
   where the group changes. Close Tab, the tab's `×` and session-row middle-click
   close the whole tab, including its splits; the last tab is kept alive.
@@ -84,7 +82,7 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
   `erDiagram` and `pie` Mermaid subsets (or full Mermaid via
   `mermaid-command`).
 - **Inline terminal graphics**: Sixel, Kitty and iTerm2 images are drawn in the
-  grid by both hosts — they scroll with the content and are clipped to the pane.
+  grid by miaotty — they scroll with the content and are clipped to the pane.
   Toggle with `graphics` (on by default).
 - **Recipes**: save and replay a whole workspace; config export.
 - A settings window (`⌘,`): font size/family, opacity, line height, cursor
@@ -102,25 +100,24 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 - zsh shell integration (cwd via OSC 7, command history) installed through a
   `ZDOTDIR` shim — the user's dotfiles are never modified.
 - **URL schemes**: `miaotty://`, `ssh://` and `x-man-page://` open a tab with the
-  matching command; a second launch — of either host — is forwarded to the
+  matching command; a second launch — of miaotty — is forwarded to the
   running instance (single instance, including "focus pane" and "quick"
   intents) through a shared inbox beside the control socket.
 - **Global Quick Terminal hotkey**: `global-hotkey` on macOS/Windows, the
-  `GlobalShortcuts` desktop portal on Linux (plus compositor bindings for
-  sway/hyprland/GNOME and friends).
+  external compositor bindings on Linux (sway/hyprland/GNOME and friends).
 - **Native menu bar on macOS**: the installed `.app` shows File/Edit/View/Shell/
   Agent/Help in the system menu bar — with About/Services/Hide/Quit — and the
   window has no menu strip of its own, like every other macOS terminal
-  (ADR 0031). A bare `miaotty-native` binary keeps the in-window menu. The window
+  (ADR 0031). A bare `miaotty` binary keeps the in-window menu. The window
   itself asks for the dark appearance, so its title bar matches the chrome
   instead of opening as a light strip.
 - **Agent integrations**: detect claude/codex/opencode/miao, install a state hook
   script, copy the snippet that wires it into the agent's own config, and launch
   the agent — the user's agent config is never edited for them. `miao` reports
   its state from a built-in integration, so it needs no hook wiring.
-- **Updates**: check a manifest, download the platform artifact, verify its
-  SHA-256 (and a minisign signature when configured), and on macOS install and
-  relaunch with a rollback helper — see [`docs/decisions`](docs/decisions).
+- **Updates**: check the configured version manifest. Install published packages
+  using the platform installer; automatic download/install UI from the former
+  eframe application is not part of the unified native app.
 - **Remote view/edit**: read and write a remote file over the pane's ssh
   ControlMaster connection, with a zero-install terminfo bootstrap.
 
@@ -136,18 +133,18 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 ## Architecture
 
 The engine is layered so that dependencies point inward only
-(`host → render → core`), and the two hosts share everything above the engine.
+(`host → render → core`), with reusable UI helpers above the engine.
 
 | Crate | Responsibility |
 |-------|----------------|
 | [`miao-term-core`](crates/term-core) | PTY, VT parsing, grid/scrollback, selection, search, OSC, input encoding. No GPU or windowing. |
 | [`miao-term-graphics`](crates/term-graphics) | Inline-graphics stream scanner and decoders (Sixel, Kitty, iTerm2). |
 | [`miao-term-render`](crates/term-render) | `wgpu` + `glyphon` glyph-grid renderer, quad and image pipelines. |
-| [`miao-term-ui`](crates/term-ui) | Host-agnostic UI shared by both hosts: theme, input encoding, selection, split layout, egui chrome, palette, hints, vim, markdown, ssh, update and agent-integration helpers. |
+| [`miao-term-ui`](crates/term-ui) | Host-agnostic UI shared by miaotty: theme, input encoding, selection, split layout, egui chrome, palette, hints, vim, markdown, ssh, update and agent-integration helpers. |
 | [`miao-term-config`](crates/term-config) | Configuration and themes, ghostty/alacritty import, and the View-rule engine. |
 | [`miao-term-mtp`](crates/term-mtp) | MTP protocol, host/client and transport (Unix socket, Windows named pipe, TCP). |
-| [`miao-term-widget`](crates/term-widget) | The `miaotty-native` host: `winit` + `wgpu` render loop that draws the grid directly and composites the egui chrome. |
-| [`miaotty-app`](miaotty-app) | The `miaotty` eframe host: tabs, panes, panels, settings. |
+| [`miao-term-widget`](crates/term-widget) | The native host library for miaotty: `winit` + `wgpu` render loop that draws the grid directly and composites the egui chrome. |
+| [`miaotty-app`](miaotty-app) | The `miaotty` native executable and platform packaging metadata. |
 | [`miaotty-cli`](miaotty-cli) | The `miaotty-cli` control client. |
 
 The hot path — `pty → vt → grid → renderer` — takes no locks and allocates
@@ -182,8 +179,7 @@ git clone https://github.com/oxdingzg/miao-term.git
 cd miao-term
 
 # Build and run the terminal (either host)
-cargo run -p miaotty-app                                        # the eframe host
-cargo run -p miao-term-widget --bin miaotty-native --release    # the native host
+cargo run --release -p miaotty-app
 ```
 
 The first build compiles `wgpu`/`glyphon` and may take a few minutes.
@@ -210,7 +206,7 @@ scripts/package-macos.sh          # -> dist/miaotty.app (ad-hoc signed)
 ```
 
 Release builds are produced by [`.github/workflows/release.yml`](.github/workflows/release.yml)
-on `v*` tags: `miaotty` and `miaotty-cli`, the `miaotty-native` host, the macOS
+on `v*` tags: `miaotty` and `miaotty-cli`, the  the macOS
 app bundle, a Linux `.deb`/AppImage and a Windows MSI.
 [`dist-workspace.toml`](dist-workspace.toml) is a
 [cargo-dist](https://opensource.axo.dev/cargo-dist/) scaffold. See
@@ -347,9 +343,8 @@ version kept in sync as `*.zh-CN.md`.
 Done recently: the Windows named-pipe transport and ConPTY path (verified on
 real hardware), session restore, View rules, Open Quickly, the details panels,
 the agent loop (notifications, sleep guard, prompt queue), recipes, remote
-view/edit over ssh, update download/verify/install, URL schemes, the global
-Quick Terminal hotkey and IME preedit in both hosts, inline graphics in both
-hosts, Mermaid sequence/state/class/ER/pie diagrams, the MTP event stream, i18n,
+view/edit over ssh, version checks, URL schemes, the global
+Quick Terminal hotkey and IME preedit in miaotty, inline graphics in miaotty, Mermaid sequence/state/class/ER/pie diagrams, the MTP event stream, i18n,
 and a performance gate. The CI performance baseline is persisted at
 `benches/perf-baseline.json` and refreshed by nightly/manual runs; comparison is
 report-only, with absolute budgets enforced.
@@ -364,15 +359,11 @@ Still open:
   CI via Mesa software Vulkan (lavapipe) and Windows is driven over MTP on real
   hardware; a real Linux desktop session, the Wayland portal hotkey and the
   Windows IME/GUI paths still need an interactive machine.
-- **Update install (needs hardware)**: implemented on all three platforms
-  (macOS app bundle, Windows MSI/zip helper, Linux AppImage). The MSI and the
-  `.deb` are verified on real hosts; installing an AppImage on a real desktop
-  and the self-replace path still need an end-to-end run (`docs/RELEASE.md`).
-- **Native parity** (`miaotty-native`): argv intents, the forwarding inbox, the
-  Quick Terminal, IME preedit and inline graphics are all in place. macOS now
-  ships a separate `miaotty-native.app` declaring its own URL schemes
-  (`docs/INSTALL.md`). `background-opacity` still works only where the surface
-  offers straight alpha; OS deep-link acceptance needs an installed bundle.
+- **Update install**: automatic self-replacement is future work for the native
+  application; current upgrades use the published platform installers.
+- **Single native application**: miaotty replaces the former dual-host release;
+  see [APP-IDENTITY.md](docs/APP-IDENTITY.md).
+
 - **Inline graphics**: Kitty z-index is not modelled (images paint over the
   grid); anchors are exact up to the scrollback cap and approximate past it
   (alacritty exposes no scroll counter without a patch), and session restore

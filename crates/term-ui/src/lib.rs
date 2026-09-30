@@ -1,5 +1,4 @@
-//! `miao-term-ui` — host-agnostic pieces shared by both miaotty hosts (the
-//! eframe app and the native `winit`+`wgpu` host).
+//! `miao-term-ui` — host-agnostic pieces used by miaotty and embedders.
 //!
 //! Nothing here owns an event loop or a GPU: it is theme, input encoding,
 //! selection, row building for the renderer, the split layout model, and the
@@ -55,10 +54,12 @@ pub fn build_rows(screen: &ATerm, theme: &Theme, cursor: Option<(u16, u16)>) -> 
             let width = width_of(cell.ch);
             let mut buf = [0u8; 4];
             let text = cell.ch.encode_utf8(&mut buf).to_string();
-            let color = if cell.inverse || cursor == Some((row, col)) {
+            let color = if cursor == Some((row, col)) {
                 rgb(theme.bg)
+            } else if cell.inverse {
+                rgb(theme.color(cell.bg, false))
             } else {
-                rgb(theme.color(cell.fg, true))
+                rgb(theme.foreground(cell.fg, cell.bg))
             };
             if width >= 2 {
                 if let Some(rc) = run_col.take() {
@@ -113,5 +114,20 @@ pub fn width_of(c: char) -> u16 {
         2
     } else {
         1
+    }
+}
+
+#[cfg(test)]
+mod row_tests {
+    use super::*;
+
+    #[test]
+    fn inverse_video_uses_the_cells_background_for_text() {
+        let mut screen = ATerm::new(20, 3, 100);
+        screen.process(b"\x1b[31;42;7mX\x1b[0m");
+        let theme = Theme::nord();
+        let rows = build_rows(&screen, &theme, None);
+        assert_eq!(rows[0][0].text, "X");
+        assert_eq!(rows[0][0].color, rgb(theme.palette[2]));
     }
 }

@@ -69,6 +69,22 @@ pub fn parse(text: &str) -> Manifest {
     }
 }
 
+/// Reject malformed responses instead of reporting an invalid version as current.
+pub fn parse_checked(text: &str) -> Result<Manifest, &'static str> {
+    let manifest = parse(text);
+    let parts: Vec<_> = manifest.version.split('.').collect();
+    if parts.len() != 3
+        || parts.iter().any(|part| {
+            part.is_empty()
+                || !part.bytes().all(|b| b.is_ascii_digit())
+                || part.parse::<u32>().is_err()
+        })
+    {
+        return Err("Invalid update manifest version");
+    }
+    Ok(manifest)
+}
+
 #[derive(serde::Deserialize)]
 struct RawManifest {
     version: String,
@@ -330,6 +346,27 @@ mod tests {
         assert!(is_newer("0.2.0", "0.1.9"));
         assert!(!is_newer("0.1.0", "0.1.0"));
         assert!(!is_newer("0.0.9", "0.1.0"));
+    }
+
+    #[test]
+    fn update_check_rejects_failed_or_malformed_responses() {
+        for response in [
+            "",
+            "Not Found",
+            "<html>error</html>",
+            "{}",
+            "{\"version\":\"oops\"}",
+            "0.0",
+            "0.0.2garbage",
+        ] {
+            assert!(parse_checked(response).is_err(), "{response}");
+        }
+        let manifest = parse_checked(r#"{"version":"0.0.3","artifacts":{"macos-aarch64":{"url":"https://example.com/miaotty.zip","sha256":"ab"}}}"#).unwrap();
+        assert!(is_newer(&manifest.version, "0.0.2"));
+        assert_eq!(
+            manifest.artifacts["macos-aarch64"].url,
+            "https://example.com/miaotty.zip"
+        );
     }
 
     #[test]

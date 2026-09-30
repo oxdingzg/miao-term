@@ -1,4 +1,4 @@
-//! Reusable egui chrome widgets, shared by both hosts. They only take plain
+//! Reusable egui chrome widgets for miaotty and embedders. They only take plain
 //! data and return actions, so they are independent of any host's state type.
 
 use crate::theme::{Chrome as ChromeColors, Rgb};
@@ -899,23 +899,25 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
         .frame(panel_frame(&ch, egui::Margin::symmetric(8.0, 2.0)))
         .show(ctx, |ui| {
             ui.visuals_mut().override_text_color = Some(bg_color(ch.text));
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(status).size(11.0));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(
+                    egui::RichText::new(format!("\u{2318}K  {}", t(lang, "commands", "命令")))
+                        .size(11.0)
+                        .color(egui::Color32::from_gray(130)),
+                );
+                if !status_right.is_empty() {
                     ui.label(
-                        egui::RichText::new(format!("\u{2318}K  {}", t(lang, "commands", "命令")))
+                        egui::RichText::new(format!("\u{25cf} {status_right}"))
                             .size(11.0)
-                            .color(egui::Color32::from_gray(130)),
+                            .color(egui::Color32::from_rgb(0xa3, 0xbe, 0x8c)),
                     );
-                    if !status_right.is_empty() {
-                        ui.label(
-                            egui::RichText::new(format!("\u{25cf} {status_right}"))
-                                .size(11.0)
-                                .color(egui::Color32::from_rgb(0xa3, 0xbe, 0x8c)),
-                        );
-                        ui.add_space(10.0);
-                    }
-                });
+                    ui.add_space(10.0);
+                }
+                ui.add_sized(
+                    [ui.available_width(), CHROME_STATUS_H],
+                    egui::Label::new(egui::RichText::new(&status).size(11.0)).truncate(),
+                )
+                .on_hover_text(&status);
             });
         });
 

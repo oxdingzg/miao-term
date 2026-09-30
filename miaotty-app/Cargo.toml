@@ -1,6 +1,6 @@
 [package]
 name = "miaotty-app"
-description = "The miaotty terminal application, built on the miao-term engine"
+description = "The miaotty native terminal application, built on the miao-term engine"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -23,32 +23,13 @@ depends = "$auto"
 assets = [
     ["target/release/miaotty", "usr/bin/miaotty", "755"],
     ["target/release/miaotty-cli", "usr/bin/miaotty-cli", "755"],
-    ["target/release/miaotty-native", "usr/bin/miaotty-native", "755"],
     ["../assets/miaotty.desktop", "usr/share/applications/miaotty.desktop", "644"],
 ]
 
-[target.'cfg(target_os = "linux")'.dependencies]
-# Wayland/X11 global shortcut through the XDG desktop portal (MIT). Pulls zbus +
-# a small tokio runtime, Linux only. See ADR 0026.
-ashpd = { version = "0.12", default-features = false, features = ["tokio"] }
-tokio = { version = "1", default-features = false, features = ["rt"] }
-
-[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
-# System-wide Quick Terminal hotkey (MIT). Linux uses an external binding tool
-# instead, so CI's Linux build does not pull X11/Wayland deps. See ADR 0019.
-global-hotkey = "0.8"
-
 [dependencies]
-miao-term-core = { path = "../crates/term-core" }
-miao-term-render = { path = "../crates/term-render" }
 miao-term-widget = { path = "../crates/term-widget" }
-miao-term-config = { path = "../crates/term-config" }
-miao-term-mtp = { path = "../crates/term-mtp" }
+
+[dev-dependencies]
+miao-term-core = { path = "../crates/term-core" }
 miao-term-ui = { path = "../crates/term-ui" }
-eframe = { version = "0.30.0", features = ["wgpu"] }
-# Raster image loading for Markdown previews (ADR 0020). `image`/`file` only;
-# no `svg`/`resvg` (MPL) per ADR 0006.
-egui_extras = { version = "0.30.0", features = ["image", "file"] }
-unicode-width = "0.2.2"
 serde_json = "1.0.151"
-serde = { version = "1.0.229", features = ["derive"] }

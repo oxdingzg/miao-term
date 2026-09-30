@@ -1,4 +1,4 @@
-//! Command-palette scoring (shared by both hosts).
+//! Reusable command-palette scoring.
 
 /// Rank `label`/`kind` against `query`. `None` = no match; lower is better.
 pub fn score(label: &str, kind: &str, query: &str) -> Option<usize> {

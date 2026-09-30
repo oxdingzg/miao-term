@@ -1,4 +1,4 @@
-//! A deliberately minimal, opt-in vim mode (ADR 0029), shared by both hosts.
+//! A deliberately minimal, opt-in vim mode (ADR 0029).
 //!
 //! The editing model is a set of pure functions over `(text, pos, pending)`;
 //! [`vim_handle`] is the egui glue: in Normal mode it owns the buffer (egui's

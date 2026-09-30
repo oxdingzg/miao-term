@@ -29,8 +29,8 @@ signal — the absolute budgets are the gate.
 |--------|--------|------------------------------|-------|
 | VT parse throughput | ≥ 25 MB/s | 73 MB/s | `crates/term-core/tests/perf.rs` |
 | Screen snapshot (30 rows) | ≤ 2 ms | 0.012 ms | `crates/term-core/tests/perf.rs` |
-| Row build per frame | ≤ 4 ms | 0.12 ms | `miaotty-app` `perf_tests` |
-| Palette rank (10k entries) | ≤ 100 ms | 2.0 ms | `miaotty-app` `perf_tests` |
+| Row build per frame | ≤ 4 ms | 0.12 ms | `miaotty-app/tests/perf.rs` |
+| Palette rank (10k entries) | ≤ 100 ms | 2.0 ms | `miaotty-app/tests/perf.rs` |
 | IPC idle cost | ≈ 0 (no polling) | — | by design |
 | Agent burst | 100 events → 1 repaint | — | by design |
 

@@ -41,7 +41,7 @@
 | D7 | 控制面 `term-mtp` 与引擎解耦(Unix socket / Windows named pipe) | 引擎崩不拖垮 CLI;复用现有协议 |
 | D8 | 先做 app、后抽库;扩展点分阶段 | 由真实需求驱动 API |
 | D9 | 引擎 crate 采用 `Apache-2.0` | 宽松、便于被嵌 |
-| D10 | 第二个宿主 `miaotty-native`(包 `miao-term-widget`):原生 `winit` + `wgpu` 渲染循环;`miaotty-app`(eframe/egui)仍经 `PaintCallback` 绘制网格 | 原生输入到显示延迟;两者共用同一引擎(ADR 0030) |
+| D10 | 单一原生 `miaotty` 主程序调用 `miao-term-widget`（winit + wgpu），旧 eframe 宿主退役 | 统一产品身份与直接绘制；见 APP-IDENTITY.zh-CN.md |
 
 ## 3. 依赖分层(DAG)与规则
 
@@ -60,11 +60,11 @@
         ▼                             │
    term-widget ◄──────────────────────┘   (原生宿主:winit + wgpu)
         ▲
-        └── miaotty-app   (eframe/egui 宿主;依赖全部引擎 crate)
+        └── miaotty-app   (原生主程序;依赖 term-widget)
    miaotty-cli ──► term-mtp
 ```
 
-图里没有画全所有边:`term-widget` 还依赖 `term-core`/`term-render`,`miaotty-app` 依赖全部引擎 crate。
+图里没有画全所有边:`term-widget` 还依赖 `term-core`/`term-render`,`miaotty-app` 调用 `term-widget`。
 工作区共九个成员。
 
 **规则**
@@ -85,11 +85,11 @@
 | `term-graphics` | 内联图形扫描器 + Sixel/Kitty/iTerm2 解码器 | 不碰渲染/GPU/窗口 |
 | `term-core` | PTY、vte 解析、网格/回滚/光标/模式、选区/查找、OSC/CSI 语义、键鼠→字节编码、事件;持有 `term-graphics` 的扫描器 | 不碰 GPU/窗口/配置/业务 |
 | `term-render` | 字形加载/shaping/图集、网格实例化、绘制 pass、damage 增量 | 不管事件循环/输入 |
-| `term-ui` | 两个宿主共用的无宿主 UI:主题、输入编码、选区、分屏布局、egui chrome、调色板、hints、vim、markdown、ssh、update、agent 集成 | 不含窗口/事件循环 |
-| `term-widget` | 原生宿主(`miaotty-native` bin,`crates/term-widget/src/bin/miaotty-native.rs`):winit 事件循环、wgpu surface、输入/IME/剪贴板/拖放、直接自绘网格(ADR 0030) | 不含 tab/面板业务 |
+| `term-ui` | 无宿主 UI:主题、输入编码、选区、分屏布局、egui chrome、调色板、hints、vim、markdown、ssh、update、agent 集成 | 不含窗口/事件循环 |
+| `term-widget` | 原生 host 库（主程序由 miaotty-app 提供）:winit 事件循环、wgpu surface、输入/IME/剪贴板/拖放、直接自绘网格(ADR 0030) | 不重复实现 PTY/parser |
 | `term-config` | 配置模型、主题、ghostty/alacritty 导入 | 不依赖 UI |
 | `term-mtp` | 协议信封、传输、server/client、agent/history 注册表、revision + `core.wait` 长轮询 | 不依赖引擎 |
-| `miaotty-app` | eframe/egui 宿主(`miaotty` bin):窗口/tab/split、左 Tabs、右 Details、徽章、设置、系统集成、hook 安装;网格经 `PaintCallback` | 不重复实现终端内核 |
+| `miaotty-app` | 原生 `miaotty` 入口、命令 help/version 与平台安装包元数据 | 不重复实现终端内核 |
 | `miaotty-cli` | 供脚本/agent 使用的 MTP 客户端 | 不依赖引擎 |
 
 ## 5. 核心类型与 trait(设计草图 —— 未采用)
@@ -100,8 +100,8 @@
 - `term-core`:`Terminal`(PTY + 解析器 + 网格)与 `ATerm`(`alacritty_terminal` 屏幕模型),
   位于 `crates/term-core`。
 - `term-render`:`TermRenderer`、`QuadRenderer`、`ImageRenderer`。
-- 宿主:`miaotty-app` 经 `egui_wgpu::PaintCallback` 驱动网格;
-  `miaotty-native`(在 `term-widget` 内)用 `term-render` 的 pass 直接自绘。
+- 应用：`miaotty-app` 启动 `term-widget`，由后者管理事件循环，
+  经 `term-render` 直接绘制网格并合成 egui 外壳。
 
 ## 6. 线程模型与锁纪律
 

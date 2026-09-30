@@ -17,4 +17,4 @@ and TUIs render instead of showing tofu.
 
 Tabler Icons (MIT) is subset to the glyphs used by the native host's UI icon
 font (`tabler-LICENSE` in this directory) and is the icon font for
-`miaotty-native` / `miao-term-ui`.
+`miaotty` / `miao-term-ui`.

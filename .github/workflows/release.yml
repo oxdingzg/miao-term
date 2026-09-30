@@ -29,17 +29,11 @@ jobs:
           cache-on-failure: true
 
       - name: Build
-        run: cargo build --release -p miaotty-app -p miaotty-cli -p miao-term-widget
+        run: cargo build --release -p miaotty-app -p miaotty-cli
 
       - name: Package (macOS)
         if: runner.os == 'macOS'
         run: PROFILE=release scripts/package-macos.sh
-
-      - name: Package native (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          ARCH=$(uname -m)
-          zip -j "miaotty-native-macos-$ARCH.zip" target/release/miaotty-native
 
       - name: Sign & notarize (macOS, optional)
         if: runner.os == 'macOS'
@@ -59,24 +53,29 @@ jobs:
             security set-key-partition-list -S apple-tool:,apple: -s -k actions tmp.keychain
             IDENTITY=$(security find-identity -v -p codesigning tmp.keychain | awk '{print $2}' | head -1)
             codesign --force --deep --options runtime --sign "$IDENTITY" dist/miaotty.app
-            codesign --force --deep --options runtime --sign "$IDENTITY" dist/miaotty-native.app
-            (cd dist && zip -qry "../miaotty-macos-$ARCH.zip" miaotty.app miaotty-native.app)
+            (cd dist && zip -qry "../miaotty-macos-$ARCH.zip" miaotty.app)
             xcrun notarytool submit "miaotty-macos-$ARCH.zip" \
               --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
               --password "$APPLE_APP_PASSWORD" --wait
             xcrun stapler staple dist/miaotty.app
-            xcrun stapler staple dist/miaotty-native.app
             rm -f "miaotty-macos-$ARCH.zip"
           else
             echo "no signing secrets; shipping ad-hoc signed build"
           fi
-          (cd dist && zip -qry "../miaotty-macos-$ARCH.zip" miaotty.app miaotty-native.app)
+          (cd dist && zip -qry "../miaotty-macos-$ARCH.zip" miaotty.app)
+
+      - name: Verify single macOS application
+        if: runner.os == 'macOS'
+        run: |
+          python3 scripts/check-macos-bundle.py dist/miaotty.app
+          dist/miaotty.app/Contents/MacOS/miaotty --version
+          test ! -e dist/miaotty-native.app
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
         run: |
           mkdir -p dist
-          cp target/release/miaotty target/release/miaotty-cli target/release/miaotty-native dist/
+          cp target/release/miaotty target/release/miaotty-cli dist/
           tar -C dist -czf miaotty-linux-x86_64.tar.gz .
           cargo install cargo-deb --locked
           cargo deb -p miaotty-app --no-build
@@ -89,7 +88,7 @@ jobs:
           AppDir=AppDir
           mkdir -p "$AppDir/usr/bin" "$AppDir/usr/share/applications" \
                    "$AppDir/usr/share/icons/hicolor/256x256/apps"
-          cp target/release/miaotty target/release/miaotty-cli target/release/miaotty-native "$AppDir/usr/bin/"
+          cp target/release/miaotty target/release/miaotty-cli "$AppDir/usr/bin/"
           cp assets/AppRun "$AppDir/AppRun"
           chmod +x "$AppDir/AppRun"
           cat > "$AppDir/miaotty.desktop" <<'EOF'
@@ -117,7 +116,7 @@ jobs:
           dpkg-deb --extract dist/*.deb "$RUNNER_TEMP/deb-check"
           chmod +x miaotty-linux-x86_64.AppImage
           ./miaotty-linux-x86_64.AppImage --appimage-extract
-          for binary in miaotty miaotty-cli miaotty-native; do
+          for binary in miaotty miaotty-cli; do
             test -x "$RUNNER_TEMP/deb-check/usr/bin/$binary"
             test -x "squashfs-root/usr/bin/$binary"
           done
@@ -133,7 +132,6 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item target/release/miaotty.exe dist/
           Copy-Item target/release/miaotty-cli.exe dist/
-          Copy-Item target/release/miaotty-native.exe dist/
           Compress-Archive -Path dist/* -DestinationPath miaotty-windows-x86_64.zip
 
       - name: MSI (Windows)
@@ -159,7 +157,7 @@ jobs:
           if ($install.ExitCode -notin @(0, 3010)) { throw "MSI installation failed: $($install.ExitCode)" }
           try {
             $bin = Join-Path $env:ProgramFiles 'miaotty/bin'
-            foreach ($name in @('miaotty.exe', 'miaotty-cli.exe', 'miaotty-native.exe')) {
+            foreach ($name in @('miaotty.exe', 'miaotty-cli.exe')) {
               if (-not (Test-Path (Join-Path $bin $name))) { throw "Missing installed binary: $name" }
             }
             & (Join-Path $bin 'miaotty-cli.exe') --help
@@ -170,7 +168,7 @@ jobs:
             $uninstall = Start-Process msiexec.exe -ArgumentList @('/x', "`"$msi`"", '/qn', '/norestart') -Wait -PassThru
             if ($uninstall.ExitCode -notin @(0, 3010)) { throw "MSI uninstall failed: $($uninstall.ExitCode)" }
           }
-          if (Test-Path (Join-Path $env:ProgramFiles 'miaotty/bin/miaotty-native.exe')) { throw 'MSI left an installed binary behind' }
+          if (Test-Path (Join-Path $env:ProgramFiles 'miaotty/bin/miaotty.exe')) { throw 'MSI left an installed binary behind' }
 
       - name: Sign MSI (Windows, optional)
         if: runner.os == 'Windows'

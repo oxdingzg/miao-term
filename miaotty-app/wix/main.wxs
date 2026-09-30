@@ -129,14 +129,6 @@
                                 Source='$(var.CargoTargetBinDir)\miaotty-cli.exe'
                                 KeyPath='yes'/>
                         </Component>
-                        <Component Id='binary2' Guid='*'>
-                            <File
-                                Id='exe2'
-                                Name='miaotty-native.exe'
-                                DiskId='1'
-                                Source='$(var.CargoTargetBinDir)\miaotty-native.exe'
-                                KeyPath='yes'/>
-                        </Component>
                     </Directory>
                 </Directory>
             </Directory>
@@ -169,7 +161,6 @@
             
             <ComponentRef Id='binary0'/>
             <ComponentRef Id='binary1'/>
-            <ComponentRef Id='binary2'/>
             <!-- `miaotty://` deep links. `ssh://` and `x-man-page://` are left to
                  the user's choice on Windows rather than hijacked per-machine. -->
             <ComponentRef Id='ProtocolMiaotty'/>

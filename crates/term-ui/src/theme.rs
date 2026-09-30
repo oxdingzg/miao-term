@@ -53,7 +53,7 @@ impl Theme {
 
     /// Resolve an alacritty color to RGB.
     pub fn color(&self, c: TermColor, foreground: bool) -> Rgb {
-        match c {
+        let color = match c {
             TermColor::Spec(s) => Rgb(s.r, s.g, s.b),
             TermColor::Indexed(i) => self.indexed(i),
             TermColor::Named(n) => match n {
@@ -86,7 +86,18 @@ impl Theme {
                     }
                 }
             },
+        };
+        if foreground {
+            readable_foreground(color, self.bg)
+        } else {
+            color
         }
+    }
+
+    /// Resolve text against its cell background, including truecolor paths
+    /// emitted by shell syntax highlighters.
+    pub fn foreground(&self, c: TermColor, background: TermColor) -> Rgb {
+        readable_foreground(self.color(c, false), self.color(background, false))
     }
 
     pub fn indexed(&self, i: u8) -> Rgb {
@@ -102,6 +113,122 @@ impl Theme {
                 Rgb(v, v, v)
             }
         }
+    }
+}
+
+fn luminance(color: Rgb) -> f32 {
+    // Build once: row rendering must not evaluate sRGB powers per cell.
+    static LINEAR: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
+    let linear = LINEAR.get_or_init(|| {
+        std::array::from_fn(|i| {
+            let c = i as f32 / 255.0;
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        })
+    });
+    linear[color.0 as usize] * 0.2126
+        + linear[color.1 as usize] * 0.7152
+        + linear[color.2 as usize] * 0.0722
+}
+
+fn readable_foreground(color: Rgb, bg: Rgb) -> Rgb {
+    let background = luminance(bg);
+    // Dark terminal backgrounds need a readable text contrast. Preserve
+    // brighter backgrounds (e.g. application highlights) and readable colors.
+    let target = (background + 0.05) * 4.5 - 0.05;
+    if background > 0.1 || luminance(color) >= target {
+        return color;
+    }
+    // Mix toward white to retain the path's hue, finding the smallest lift
+    // that meets 4.5:1. Eight iterations suffice for 8-bit channels.
+    let mix = |amount: u16| {
+        let channel = |c: u8| (u16::from(c) + (255 - u16::from(c)) * amount / 255) as u8;
+        Rgb(channel(color.0), channel(color.1), channel(color.2))
+    };
+    let (mut lo, mut hi) = (0, 255);
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if luminance(mix(mid)) >= target {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    mix(hi)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_path_grays_are_readable_without_changing_backgrounds() {
+        for theme in [Theme::nord(), Theme::dracula(), Theme::gruvbox()] {
+            for c in [
+                TermColor::Indexed(0),
+                TermColor::Indexed(8),
+                TermColor::Indexed(234),
+                TermColor::Named(NamedColor::BrightBlack),
+            ] {
+                let Rgb(r, g, b) = theme.color(c, true);
+                assert!(u32::from(r) + u32::from(g) + u32::from(b) >= 360);
+                assert_eq!(
+                    rgb_tuple(theme.color(c, false)),
+                    rgb_tuple(match c {
+                        TermColor::Indexed(i) => theme.indexed(i),
+                        _ => theme.palette[8],
+                    })
+                );
+            }
+        }
+    }
+
+    fn rgb_tuple(c: Rgb) -> (u8, u8, u8) {
+        (c.0, c.1, c.2)
+    }
+
+    #[test]
+    fn dark_shell_paths_reach_renderer_with_readable_contrast() {
+        for mut theme in [Theme::nord(), Theme::dracula(), Theme::gruvbox()] {
+            // A user palette can still contain the traditional dark ANSI blue.
+            theme.palette[4] = Rgb(0, 0, 128);
+            for sgr in ["30", "34", "90", "38;5;19", "38;5;234", "38;2;20;25;65"] {
+                let mut screen = miao_term_core::ATerm::new(40, 2, 100);
+                screen.process(format!("\x1b[{sgr}m/tmp/目录\x1b[0m").as_bytes());
+                let rows = crate::build_rows(&screen, &theme, None);
+                for span in &rows[0] {
+                    if span.text.trim().is_empty() {
+                        continue;
+                    }
+                    let (r, g, b) = span.color;
+                    let contrast = (luminance(Rgb(r, g, b)) + 0.05) / (luminance(theme.bg) + 0.05);
+                    assert!(contrast >= 4.5, "{sgr}: contrast {contrast}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cell_background_and_readable_truecolor_are_preserved() {
+        let theme = Theme::nord();
+        let mut screen = miao_term_core::ATerm::new(10, 2, 100);
+        screen.process(b"\x1b[38;2;180;200;220;48;2;10;20;30mX");
+        let cell = screen.cell(0, 0).unwrap();
+        assert_eq!(rgb_tuple(theme.color(cell.bg, false)), (10, 20, 30));
+        assert_eq!(
+            rgb_tuple(theme.foreground(cell.fg, cell.bg)),
+            (180, 200, 220)
+        );
+
+        screen.process(b"\x1b[38;2;60;60;60;48;2;80;80;80mY");
+        let cell = screen.cell(0, 1).unwrap();
+        let fg = theme.foreground(cell.fg, cell.bg);
+        let bg = theme.color(cell.bg, false);
+        assert!((luminance(fg) + 0.05) / (luminance(bg) + 0.05) >= 4.5);
+        assert_eq!(rgb_tuple(bg), (80, 80, 80));
     }
 }
 

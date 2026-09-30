@@ -228,4 +228,10 @@ mod tests {
         assert_eq!(encode_paste("a\nb", false), b"a\rb");
         assert_eq!(encode_paste("a", true), b"\x1b[200~a\x1b[201~");
     }
+
+    #[test]
+    fn image_only_clipboard_still_notifies_bracketed_paste_application() {
+        assert_eq!(encode_paste("", true), b"\x1b[200~\x1b[201~");
+        assert!(encode_paste("", false).is_empty());
+    }
 }

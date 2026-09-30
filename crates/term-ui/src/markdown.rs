@@ -1,4 +1,4 @@
-//! Markdown helpers shared by both hosts (image syntax + local `file://` URIs).
+//! Markdown helpers (image syntax + local `file://` URIs).
 
 use std::path::Path;
 

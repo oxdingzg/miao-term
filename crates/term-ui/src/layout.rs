@@ -6,6 +6,45 @@ pub enum SplitDir {
     Down,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_resize_and_close_preserve_the_remaining_panes() {
+        let mut layout = Layout::leaf("a");
+        assert!(layout.split("a", "b", SplitDir::Right));
+        assert!(layout.split("b", "c", SplitDir::Down));
+        let area = Rect {
+            x: 10.0,
+            y: 20.0,
+            w: 1000.0,
+            h: 600.0,
+        };
+        assert_eq!(layout.handles(area).len(), 2);
+        layout.set_ratio(&[], 0.3);
+        layout.set_ratio(&[true], 0.7);
+        let rects = layout.rects(area);
+        assert_eq!(
+            rects
+                .iter()
+                .map(|(_, r)| (r.x, r.y, r.w, r.h))
+                .collect::<Vec<_>>(),
+            vec![
+                (10.0, 20.0, 300.0, 600.0),
+                (310.0, 20.0, 700.0, 420.0),
+                (310.0, 440.0, 700.0, 180.0)
+            ]
+        );
+        assert!(!layout.remove("b"));
+        assert_eq!(layout.ids(), vec!["a", "c"]);
+        assert_eq!(layout.handles(area).len(), 1);
+        assert!(!layout.remove("a"));
+        assert_eq!(layout.ids(), vec!["c"]);
+        assert!(layout.handles(area).is_empty());
+    }
+}
+
 /// A rectangle in logical points.
 #[derive(Clone, Copy, Debug)]
 pub struct Rect {

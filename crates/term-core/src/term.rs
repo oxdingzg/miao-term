@@ -34,6 +34,8 @@ pub struct Terminal {
     cols: u16,
     exited: bool,
     cwd: Option<String>,
+    cwd_checked: std::time::Instant,
+    cwd_reported: bool,
     title: Option<String>,
     osc_buf: Vec<u8>,
     scanner: miao_term_graphics::Scanner,
@@ -116,15 +118,30 @@ impl Terminal {
         }
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
+        #[cfg(unix)]
+        if ["LC_ALL", "LC_CTYPE", "LANG"]
+            .iter()
+            .all(|name| std::env::var(name).map_or(true, |value| value.is_empty()))
+        {
+            // Finder and minimal launch environments omit the locale. Bash
+            // otherwise interprets UTF-8 bytes as Meta keys (including Tab).
+            cmd.env(
+                "LC_CTYPE",
+                if cfg!(target_os = "macos") {
+                    "UTF-8"
+                } else {
+                    "C.UTF-8"
+                },
+            );
+        }
         for (k, v) in extra_env {
             cmd.env(k, v);
         }
         for (k, v) in crate::shell::env_for(&shell_path) {
             cmd.env(k, v);
         }
-        if let Some(dir) = cwd {
-            cmd.cwd(dir);
-        } else if let Ok(dir) = std::env::current_dir() {
+        let cwd = cwd.or_else(|| std::env::current_dir().ok());
+        if let Some(dir) = &cwd {
             cmd.cwd(dir);
         }
 
@@ -163,7 +180,9 @@ impl Terminal {
             rows,
             cols,
             exited: false,
-            cwd: None,
+            cwd: cwd.map(|p| p.to_string_lossy().into_owned()),
+            cwd_checked: std::time::Instant::now(),
+            cwd_reported: false,
             title: None,
             osc_buf: Vec::new(),
             scanner: miao_term_graphics::Scanner::new(),
@@ -178,6 +197,18 @@ impl Terminal {
     /// Drain pending PTY output into the screen. Returns true if anything changed.
     pub fn process_pending(&mut self) -> bool {
         let mut changed = false;
+        // Shell hooks may be absent or replaced by user startup files. Query
+        // the local shell itself at a bounded cadence, without spawning tools.
+        if !self.cwd_reported && self.cwd_checked.elapsed() >= std::time::Duration::from_millis(500)
+        {
+            self.cwd_checked = std::time::Instant::now();
+            if let Some(path) = self.pid().and_then(process_cwd) {
+                if self.cwd.as_deref() != Some(path.as_str()) {
+                    self.cwd = Some(path);
+                    changed = true;
+                }
+            }
+        }
         loop {
             match self.rx.try_recv() {
                 Ok(bytes) => changed |= self.feed(&bytes),
@@ -430,6 +461,7 @@ impl Terminal {
                             b"7" => {
                                 if let Some(path) = parse_osc7(payload) {
                                     self.cwd = Some(path);
+                                    self.cwd_reported = true;
                                 }
                             }
                             b"0" | b"2" => self.title = Some(payload.to_string()),
@@ -449,6 +481,48 @@ impl Terminal {
                 }
             }
         }
+    }
+}
+
+fn process_cwd(pid: u32) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut info = std::mem::MaybeUninit::<libc::proc_vnodepathinfo>::zeroed();
+        let size = std::mem::size_of::<libc::proc_vnodepathinfo>();
+        // proc_pidinfo writes this fixed-size structure only on success.
+        let n = unsafe {
+            libc::proc_pidinfo(
+                pid as libc::c_int,
+                libc::PROC_PIDVNODEPATHINFO,
+                0,
+                info.as_mut_ptr().cast(),
+                size as libc::c_int,
+            )
+        };
+        if n as usize != size {
+            return None;
+        }
+        let info = unsafe { info.assume_init() };
+        let bytes: Vec<u8> = info
+            .pvi_cdir
+            .vip_path
+            .iter()
+            .flatten()
+            .map(|&b| b as u8)
+            .take_while(|&b| b != 0)
+            .collect();
+        String::from_utf8(bytes).ok().filter(|s| !s.is_empty())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_link(format!("/proc/{pid}/cwd"))
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = pid;
+        None
     }
 }
 
@@ -494,7 +568,22 @@ fn find_terminator(bytes: &[u8]) -> Option<(usize, usize)> {
 fn parse_osc7(payload: &str) -> Option<String> {
     let rest = payload.strip_prefix("file://")?;
     let slash = rest.find('/')?;
-    Some(rest[slash..].to_string())
+    let bytes = &rest.as_bytes()[slash..];
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = std::str::from_utf8(bytes.get(i + 1..i + 3)?).ok()?;
+            decoded.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            decoded.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(decoded)
+        .ok()
+        .filter(|s| !s.contains('\0'))
 }
 
 #[cfg(test)]
@@ -504,6 +593,53 @@ mod tests {
     fn make() -> Terminal {
         let waker: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(|| {});
         Terminal::new(None, 20, 5, 100, None, &[], waker).expect("spawn shell")
+    }
+
+    #[test]
+    fn osc7_decodes_directory_uri() {
+        assert_eq!(
+            parse_osc7("file://localhost/tmp/a%20b/%E7%9B%AE%E5%BD%95"),
+            Some("/tmp/a b/目录".into())
+        );
+        assert!(parse_osc7("file://localhost/tmp/%00").is_none());
+        assert!(parse_osc7("file://localhost/tmp/%ZZ").is_none());
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn shell_directory_tracks_cd_without_osc_hooks() {
+        let root = std::env::temp_dir().join(format!("miaotty-cwd-{}", std::process::id()));
+        let next = root.join("space 目录");
+        std::fs::create_dir_all(&next).unwrap();
+        let mut term = Terminal::new(
+            Some("/bin/sh".into()),
+            80,
+            24,
+            100,
+            Some(root.clone()),
+            &[],
+            std::sync::Arc::new(|| {}),
+        )
+        .unwrap();
+        assert_eq!(term.cwd(), Some(root.to_string_lossy().as_ref()));
+        term.write("cd 'space 目录'\r".as_bytes());
+        let expected = std::fs::canonicalize(&next)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while term.cwd() != Some(expected.as_str()) && std::time::Instant::now() < deadline {
+            term.process_pending();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(
+            term.cwd(),
+            Some(expected.as_str()),
+            "directory panels must follow a plain shell's cd; screen: {}",
+            term.screen().contents_between(0, 0, 23, 79)
+        );
+        drop(term);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

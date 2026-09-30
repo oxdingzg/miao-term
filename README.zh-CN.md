@@ -19,18 +19,16 @@
 - **`miaotty`** —— 构建在该引擎之上的、开箱即用的终端应用,具备标签、分屏、侧边面板、
   设置窗口、shell 集成以及可脚本化的控制面。
 
-应用以两个 host 的形式发布,二者共享引擎与界面外壳:
+**应用统一为一个 `miaotty`**，使用 `miao-term-widget` 中的原生 `winit` + `wgpu`
+窗口与渲染循环，在同一帧合成 egui 界面。`miaotty-app` 提供主程序及安装包元数据。
+原 `miaotty-native` 现在以 `miaotty` 名称发布，旧 eframe 应用已退役。
+包含画中画、Hint、只读模式和每个 pane 的关闭按钮。
+命名与配置/会话迁移见 [APP-IDENTITY.zh-CN.md](docs/APP-IDENTITY.zh-CN.md)。
 
-- **`miaotty`**(`miaotty-app`)—— 功能完整的 host,一个 `eframe`/`egui` 应用;字符网格经
-  `egui-wgpu` paint callback 绘制。
-- **`miaotty-native`**(`miao-term-widget`)—— 更新的 host,自带 `winit` + `wgpu` 事件循环,
-  直接绘制网格并在同一帧内叠加 egui 外壳,以降低输入延迟。它新增画中画、hint 模式、
-  只读 pane 与每个 pane 的关闭按钮。
-
-引擎与应用被刻意解耦:hosts 是引擎的第一批消费者,而引擎本身设计为可被第三方嵌入。
+引擎与应用保持解耦，供第三方嵌入。
 完整设计见 [`docs/ARCHITECTURE.zh-CN.md`](docs/ARCHITECTURE.zh-CN.md)。
 
-> **项目状态 —— 预发布。** 当前版本为 `0.0.1`,API 尚未稳定。macOS 是主要平台;
+> **项目状态 —— 预发布。** 当前版本为 `0.0.2`,API 尚未稳定。macOS 是主要平台;
 > Windows 已在真实硬件上构建、测试并经 MTP 驱动(见 [`docs/WINDOWS-DEV.zh-CN.md`](docs/WINDOWS-DEV.zh-CN.md));
 > Linux 在 CI 中构建并通过测试。
 
@@ -51,7 +49,7 @@
 - 内联标签栏(图标、Agent 徽章、`+`、`×`、拖拽重排)与 Tabs 侧边栏。右键标签或会话行弹出
   同一套菜单:重命名标签…、前缀…、标记…、分组…、移出分组(仅在分组内时出现)、复制标签、
   上移/下移、新建标签、关闭标签、关闭其他标签、关闭下方标签。标记会附加在标题后,分组随会话
-  一起持久化,重启后仍在。两个 host 均提供这套菜单,标签栏在分组变化处显示分隔线。
+  一起持久化,重启后仍在。应用提供这套菜单,标签栏在分组变化处显示分隔线。
   “关闭标签”、标签的 `×` 与会话行中键关闭整个标签(含全部分屏),但保留最后一个标签。
   `⌘W` / `Ctrl+W` 在分屏标签中仍只关闭当前窗格。
 - 递归分屏树:`⌘D` 向右分屏,`⇧⌘D` 向下分屏,分隔条可拖拽调整比例,每个 pane 都有
@@ -66,7 +64,7 @@
   *Edit in Tab*,以及 CommonMark 渲染(`egui_commonmark`):标题、列表、引用、表格、代码、链接、本地与
   远程图片,外加 `graph`/`flowchart`、`sequenceDiagram`、`stateDiagram`、`classDiagram`、
   `erDiagram` 与 `pie` 的 Mermaid 子集(或经 `mermaid-command` 全量渲染)。
-- **终端内联图片**:Sixel / Kitty / iTerm2 图片由两个 host 直接画在字符网格上——随内容滚动、
+- **终端内联图片**:Sixel / Kitty / iTerm2 图片由 miaotty 直接画在字符网格上——随内容滚动、
   裁剪在 pane 内;用 `graphics` 开关(默认开)。
 - **Recipes**:保存并回放整个工作区;配置导出。
 - 设置窗口(`⌘,`):字号/字体族、透明度、行高、光标样式、主题、agent 徽章、通知、防休眠、
@@ -82,15 +80,14 @@
   正在运行的实例(单实例,含"聚焦 pane""quick"意图)。
 - **macOS 原生菜单栏**:安装的 `.app` 会把 文件/编辑/视图/终端/Agent/帮助 放进系统菜单栏
   (含 About/Services/Hide/Quit),窗口内不再有菜单条,与其它 macOS 终端一致(ADR 0031);
-  裸跑 `miaotty-native` 仍用窗口内菜单。窗口本身请求深色外观,标题栏与界面一致,不再是一条
+  裸跑 `miaotty` 仍用窗口内菜单。窗口本身请求深色外观,标题栏与界面一致,不再是一条
   浅色条。
-- **全局快速终端热键**:macOS/Windows 用 `global-hotkey`,Linux 用 `GlobalShortcuts` 门户
-  (另提供 sway/hyprland/GNOME 等 compositor 绑定)。
+- **全局快速终端热键**:macOS/Windows 用 `global-hotkey`,Linux 使用 sway/hyprland/GNOME 等 compositor 绑定。
 - **Agent 集成**:检测 claude/codex/opencode/miao,安装状态上报 hook 脚本,复制接入该 agent 自身
   配置的片段,并可启动 agent —— 不替用户修改 agent 配置。`miao` 通过内置集成自动上报状态,
   无需接线 hook。
-- **更新**:检查清单、下载本平台产物、校验 SHA-256(配置后另校验 minisign 签名),macOS 上安装
-  并重启(带回滚 helper)—— 见 [`docs/decisions`](docs/decisions/README.zh-CN.md)。
+- **更新**:检查配置的版本清单；通过平台安装包安装新版本。旧 eframe 应用的自动下载/安装
+  界面不属于统一后的 native 应用。
 - **远端 view/edit**:经 pane 的 ssh ControlMaster 连接读/写远端文件,带零安装 terminfo 引导。
 
 **自动化**
@@ -103,18 +100,18 @@
 
 ## 架构
 
-引擎按层组织,依赖只向内指向(`host → render → core`),两个 host 共享引擎之上的全部内容。
+引擎按层组织,依赖只向内指向(`host → render → core`),引擎之上提供可复用的 UI helper。
 
 | Crate | 职责 |
 |-------|------|
 | [`miao-term-core`](crates/term-core) | PTY、VT 解析、网格/回滚、选区、查找、OSC、输入编码。不含 GPU 与窗口。 |
 | [`miao-term-graphics`](crates/term-graphics) | 内联图片流扫描器与解码器(Sixel、Kitty、iTerm2)。 |
 | [`miao-term-render`](crates/term-render) | `wgpu` + `glyphon` 字形网格渲染器,含 quad 与图像管线。 |
-| [`miao-term-ui`](crates/term-ui) | 两个 host 共享的、与 host 无关的 UI:主题、输入编码、选区、分屏布局、egui 外壳、命令面板、hint、vim、markdown、ssh、更新与 agent 集成等 helper。 |
+| [`miao-term-ui`](crates/term-ui) | 与 host 无关的 UI:主题、输入编码、选区、分屏布局、egui 外壳、命令面板、hint、vim、markdown、ssh、更新与 agent 集成等 helper。 |
 | [`miao-term-config`](crates/term-config) | 配置与主题,ghostty/alacritty 导入,以及 View 规则引擎。 |
 | [`miao-term-mtp`](crates/term-mtp) | MTP 协议、host/client 与传输(Unix socket、Windows 命名管道、TCP)。 |
-| [`miao-term-widget`](crates/term-widget) | `miaotty-native` host:`winit` + `wgpu` 渲染循环,直接绘制网格并合成 egui 外壳。 |
-| [`miaotty-app`](miaotty-app) | `miaotty` eframe host:标签、分屏、面板、设置。 |
+| [`miao-term-widget`](crates/term-widget) | miaotty 原生 host 库:`winit` + `wgpu` 渲染循环,直接绘制网格并合成 egui 外壳。 |
+| [`miaotty-app`](miaotty-app) | `miaotty` 原生主程序及平台安装包元数据。 |
 | [`miaotty-cli`](miaotty-cli) | `miaotty-cli` 控制客户端。 |
 
 热路径 —— `pty → vt → grid → renderer` —— 不跨锁,且每帧不做分配。平台差异只出现在负责
@@ -146,9 +143,8 @@ socket/命名管道传输(`src/lib.rs`)。
 git clone https://github.com/oxdingzg/miao-term.git
 cd miao-term
 
-# 构建并运行终端(任选一个 host)
-cargo run -p miaotty-app                                        # eframe host
-cargo run -p miao-term-widget --bin miaotty-native --release    # native host
+# 构建并运行统一的原生终端
+cargo run --release -p miaotty-app
 ```
 
 首次构建会编译 `wgpu`/`glyphon`,可能需要几分钟。
@@ -174,7 +170,7 @@ scripts/package-macos.sh          # -> dist/miaotty.app(ad-hoc 签名)
 ```
 
 发布构建由 [`.github/workflows/release.yml`](.github/workflows/release.yml) 在
-`v*` 标签上生成:`miaotty` 与 `miaotty-cli`、`miaotty-native` host、macOS app bundle、
+`v*` 标签上生成:`miaotty` 与 `miaotty-cli`、macOS app bundle、
 Linux `.deb`/AppImage 以及 Windows MSI。[`dist-workspace.toml`](dist-workspace.toml) 是一份
 [cargo-dist](https://opensource.axo.dev/cargo-dist/) 脚手架。见
 [`docs/INSTALL.zh-CN.md`](docs/INSTALL.zh-CN.md) 与 [`docs/RELEASE.zh-CN.md`](docs/RELEASE.zh-CN.md)。
@@ -300,7 +296,7 @@ miaotty-cli file write --path /tmp/x --data-b64 "AAECAw=="   # 二进制
 
 近期已完成:Windows 命名管道传输与 ConPTY 路径(真实硬件验证)、会话恢复、View 规则、
 Open Quickly、details 面板、agent 闭环(通知、防休眠、提示队列)、Recipes、经 ssh 的远端
-view/edit、更新下载/校验/安装、URL scheme、全局快速终端热键、两个 host 的内联 IME 拼写与
+view/edit、版本检查、URL scheme、全局快速终端热键、应用的内联 IME 拼写与
 终端内联图片、Mermaid 时序/状态/类/ER/饼图、MTP 事件流、i18n,以及性能门。
 CI 性能基线已持久化于 `benches/perf-baseline.json`,由 nightly/手动运行刷新;
 比较仅报告,绝对预算作为门控。
@@ -313,12 +309,9 @@ CI 性能基线已持久化于 `benches/perf-baseline.json`,由 nightly/手动�
 - **平台验证(需要硬件)**:Linux 的 wgpu 渲染路径已在 CI 中通过 Mesa 软件 Vulkan(lavapipe)
   覆盖,Windows 也在真机上经 MTP 驱动;真实 Linux 桌面会话、Wayland 门户热键、Windows 的
   IME/GUI 路径仍需一台交互机器。
-- **更新安装(需要硬件)**:三端均已实现(macOS app bundle、Windows MSI/zip helper、Linux
-  AppImage)。MSI 与 `.deb` 已在真机验证;在真实桌面安装 AppImage 以及自替换路径仍需端到端
-  跑一次(`docs/RELEASE.md`)。
-- **原生版对齐**(`miaotty-native`):argv intent、转发 inbox、快速终端、IME 拼写与内联图片
-  都已具备。macOS 现附带独立的 `miaotty-native.app`,声明自身的 URL scheme(`docs/INSTALL.md`)。
-  `background-opacity` 仍仅在 surface 支持 straight alpha 时生效;系统深链接验收需要已安装的 bundle。
+- **更新安装**:native 应用的自动自替换仍属后续工作；当前通过发布的平台安装包升级。
+- **单一原生应用**:原 native 实现统一以 miaotty 发布；配置和会话保留迁移兼容，
+  见 [APP-IDENTITY.zh-CN.md](docs/APP-IDENTITY.zh-CN.md)。
 - **终端内联图片**:不模拟 Kitty 的 z-index(图片绘制在网格之上);回滚容量内锚定精确,超出后
   为近似(alacritty 不暴露滚动计数,除非打补丁);会话恢复不保留图像(会与恢复的内容不一致)。
 - **Mermaid**:内置子集覆盖 `graph`/`flowchart`、`sequenceDiagram`、`stateDiagram`、

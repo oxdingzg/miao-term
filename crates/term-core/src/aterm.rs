@@ -19,6 +19,7 @@ pub struct CellView {
     pub bg: Color,
     pub inverse: bool,
     pub bold: bool,
+    pub wide_spacer: bool,
 }
 
 struct Dims {
@@ -131,6 +132,7 @@ impl ATerm {
             bg: cell.bg,
             inverse: cell.flags.contains(Flags::INVERSE),
             bold: cell.flags.contains(Flags::BOLD),
+            wide_spacer: cell.flags.contains(Flags::WIDE_CHAR_SPACER),
         })
     }
 
@@ -138,17 +140,18 @@ impl ATerm {
     pub fn contents_between(&self, r1: u16, c1: u16, r2: u16, c2: u16) -> String {
         let mut out = String::new();
         for row in r1..=r2 {
-            let (start, end) = if row == r1 {
-                (c1, self.cols as u16)
-            } else if row == r2 {
-                (0, c2)
+            let start = if row == r1 { c1 } else { 0 };
+            let end = if row == r2 {
+                c2.saturating_add(1).min(self.cols as u16)
             } else {
-                (0, self.cols as u16)
+                self.cols as u16
             };
             let mut line = String::new();
             for col in start..end.max(start) {
                 if let Some(cell) = self.cell(row, col) {
-                    line.push(cell.ch);
+                    if !cell.wide_spacer {
+                        line.push(cell.ch);
+                    }
                 }
             }
             out.push_str(line.trim_end());
@@ -163,12 +166,11 @@ impl ATerm {
     pub fn contents_ansi_between(&self, r1: u16, c1: u16, r2: u16, c2: u16) -> String {
         let mut out = String::new();
         for row in r1..=r2 {
-            let (start, end) = if row == r1 {
-                (c1, self.cols as u16)
-            } else if row == r2 {
-                (0, c2)
+            let start = if row == r1 { c1 } else { 0 };
+            let end = if row == r2 {
+                c2.saturating_add(1).min(self.cols as u16)
             } else {
-                (0, self.cols as u16)
+                self.cols as u16
             };
             let mut line = String::new();
             let (mut cur_fg, mut cur_bg) = (None, None);
@@ -176,6 +178,9 @@ impl ATerm {
                 let Some(cell) = self.cell(row, col) else {
                     continue;
                 };
+                if cell.wide_spacer {
+                    continue;
+                }
                 if cell.fg != Color::Named(NamedColor::Foreground) && Some(cell.fg) != cur_fg {
                     line.push_str(&sgr(cell.fg, false));
                     cur_fg = Some(cell.fg);
@@ -343,5 +348,23 @@ mod tests {
         assert!(term.application_cursor());
         term.process(b"\x1b[?2004h"); // bracketed paste
         assert!(term.bracketed_paste());
+    }
+
+    #[test]
+    fn copying_stops_at_inclusive_selection_end() {
+        let mut term = ATerm::new(30, 3, 100);
+        term.process(b"prefix selected suffix\r\nsecond line");
+        assert_eq!(term.contents_between(0, 7, 0, 14), "selected");
+        assert_eq!(term.contents_between(0, 7, 1, 5), "selected suffix\nsecond");
+        assert_eq!(term.contents_between(0, 7, 0, 7), "s");
+        assert_eq!(term.contents_ansi_between(0, 7, 0, 14), "selected");
+    }
+
+    #[test]
+    fn copying_cjk_does_not_insert_spacer_cells() {
+        let mut term = ATerm::new(30, 3, 100);
+        term.process("目录/file.txt suffix".as_bytes());
+        assert_eq!(term.contents_between(0, 0, 0, 12), "目录/file.txt");
+        assert_eq!(term.contents_ansi_between(0, 0, 0, 12), "目录/file.txt");
     }
 }

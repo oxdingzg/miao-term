@@ -1,0 +1,102 @@
+# UI 与基础功能校验 — 2026-10-01
+
+> 本文是应用统一前的历史审计。当前命名、迁移及单应用安装包冒烟见
+> [APP-IDENTITY.zh-CN.md](APP-IDENTITY.zh-CN.md)；当前脚本只验证 native miaotty。
+
+[English](UI-AUDIT.md)
+
+## 如何复跑
+
+```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets
+cargo test --workspace
+cargo test --release -p miao-term-core -p miaotty-app -- --ignored
+cargo build --release -p miao-term-widget -p miaotty-app -p miaotty-cli
+python3 scripts/smoke-hosts.py
+```
+
+最后一条需要 macOS 桌面和 Swift。脚本依次启动两个 release host，使用独立的
+HOME、配置、数据和运行目录，启动真实 `/bin/sh`，经 CLI 驱动功能并生成 GPU 截图。
+它只激活测试窗口，不注入鼠标或键盘事件。截图、日志、测试文件和 JSON 报告留在
+临时目录，不进入公开仓库。两个 host 的内置截图目的地固定，请勿同时跑两份截图测试。
+
+性能基线比较应与编译、GPU 测试和桌面冒烟分开执行：
+
+```sh
+PERF_ENFORCE=1 cargo test --release -p miao-term-core -p miaotty-app -- --ignored --nocapture --test-threads=1
+```
+
+## 修复与回归检查
+
+- **弹窗拖动穿透**：native 尊重 egui 的事件接管结果及 pane 边界；在弹窗、侧栏、工具栏
+  按下鼠标不会启动终端选区、滚动或鼠标上报。终端自己启动的拖动即使离开 pane，仍能收到释放。
+  新增无窗口事件回放：悬停、按下 Rename Tab 标题、移动、释放，检查弹窗确实移动且事件不归终端。
+- **输入归属**：native 文本组件里的复制/粘贴不再同时发送到 PTY；eframe 在浮层接管交互时
+  阻断终端输入，鼠标滚轮必须悬停在终端上才能滚动终端。
+- **分屏焦点与只读**：native 点击分屏、拖入文件时聚焦目标 pane，滚轮作用于悬停 pane；
+  只读模式同时阻断粘贴和应用鼠标上报。这些守卫完成代码核对，完整 OS 级验收仍待补充。
+- **目录面板**：立即提供 shell 初始目录；macOS/Linux 在没有 OSC 7 时直接查询进程 cwd，
+  有限频率更新，不启动外部工具。收到 OSC 7 后尊重上报目录，兼容远端上下文。
+  OSC URI 中编码的空格和中文正确解码，拒绝错误编码和 NUL。
+- **灰色路径不可读**：提高暗色 ANSI 黑色、亮黑和灰阶前景的可读性；保留显式 RGB 和背景值。
+- **复制边界**：单行复制不再带入选区后的文字，多行包含最后一个选中字符；中文宽字符占位格
+  不再变成复制内容里的空格。双击中文路径也识别宽字符占位格。普通复制和 ANSI 复制都有回归。
+- **反色显示**：反色文字使用该单元格实际背景色。
+- **后台校验计时器**：native 的后台等待不再覆盖自动截图截止时间；空闲时目录检查仍能推进。
+- **长路径布局**：编辑器路径单独一行显示，状态栏长路径截断并提供悬停全文，避免挤压按钮和状态信息。
+
+真实窗口冒烟还捕获了本次添加 eframe 输入保护时引入的 egui 嵌套锁死锁。
+已把 context 查询移出 `input()` 闭包，随后两个 host 都完整跑通。
+这也说明仅有单元测试通过不能作为 UI 完成标准。
+
+## 已验证的范围
+
+| 领域 | 校验证据 | 边界 |
+|---|---|---|
+| VT、回滚、输入编码、图片、配置 | workspace 测试及离屏 GPU 冒烟 | 不代表每条 VT 指令、每种字体样式都正确 |
+| 分屏、调整比例、关闭、标签/会话装饰 | 分屏生命周期及已有菜单/会话测试 | 未穷举 OS 级拖拽和重排 |
+| 选区与复制 | 精确子串、多行、反向选区、中文、ANSI 回归 | OS 剪贴板与输入法联动仍需桌面覆盖 |
+| 浮层鼠标归属 | 确定性的 egui 弹窗拖动事件回放 | 不是完整的 OS 级鼠标回放套件 |
+| 目录跟随 | 真实普通 shell 对含空格/中文路径执行 cd，OSC URI 测试 | 未认证 Windows 目录兜底和远端目录浏览 |
+| 两个 release host | 启动、health、pane 发现/聚焦、真实命令执行、PTY 尺寸、中文文件读写、历史、Agent 状态、view/edit 派发 | 未测试 UI 保存/撤销、真实 SSH 与 Agent 可执行程序 |
+| 实际显示 | 两个 host 新鲜截图，人工核对编辑器测试文件和目录；另核对 native Files 面板 | 脚本自动断言截图新鲜且有内容，不是像素级 UI 正确性断言 |
+| 性能 | 四项绝对预算通过；串行强制基线比较通过 | 未测按键到字形延迟、功耗或保证冷启动时间 |
+
+此次 workspace 跑通 **179 项测试**；普通测试忽略的四项性能测试另行运行。
+最终串行 release 测量约为：VT 解析 **120.6 MB/s**，屏幕快照 **0.0074 ms**，
+行构建 **0.133 ms**，1 万条命令面板排名 **1.429 ms**。
+最初与编译/GPU 活动并发运行时有两项超过基线容差；单独串行复测通过，未调整预算或放宽比例。
+
+Windows 交互式 IME/ConPTY、Linux 实际窗口、安装/升级流程、真实 Agent 集成、
+超大目录响应和长时间输入/渲染延迟仍有独立验收工作。相应流程见
+[WINDOWS-DEV.zh-CN.md](WINDOWS-DEV.zh-CN.md) 和 [RELEASE.zh-CN.md](RELEASE.zh-CN.md)。
+
+## 与 Otty 对比：建议吸收的方向
+
+参考 **appmakes.io 的 Otty**，来源为其[官网](https://otty.sh/)和
+[官方文档](https://docs.otty.sh/agents/agents-overview)，查阅日期 2026-10-01。
+这是文档/代码能力对照，未进行同机 Otty 性能实测；`otty-shell/otty` 是另一个同名产品。
+
+已有交集包括标签/分屏、命令面板、文件查看/编辑、Recipes、Agent 徽章、Composer/队列、
+hint/只读模式和内联图片。后续优先级建议：
+
+1. **P0：可自动验收的 UI。** 引入语义化控件目标和可观察交互状态，覆盖重命名/取消、
+   标签重排、分隔条拖动、编辑器保存、剪贴板焦点和 IME。
+   Otty 有 accessibility/automation 文档，先吸收可测试性比继续堆叠面板更有价值。
+2. **P1：命令与输出上下文。** 参考 [Send to Chat](https://docs.otty.sh/agents/send-to-chat)，
+   引入 OSC 133 命令边界、最近一次命令输出提取、选区发送到 Composer。
+   当前命令历史并不能代替精确的输出边界。
+3. **P1：任务完成与未读状态。** 在 Agent 徽章基础上补通用进程完成/进度、后台未读提示，
+   加入状态转换和重复通知回归。
+4. **P1：可靠会话恢复。** Otty 文档涉及
+   [session recovery](https://docs.otty.sh/workflows/session-recovery) 和 tmux 重连。
+   当前恢复布局/cwd 会重新创建 shell；保住活跃任务需要明确的持久会话策略及断线/重启测试。
+5. **P2：可配置快捷键、pane 拖动吸附。** 现有固定快捷键和分隔条 resize 是基础；
+   扩展布局重组前先验证冲突和事件归属。
+6. **P2：行内建议、Unicode/字体样式。** 参考
+   [autocomplete](https://docs.otty.sh/terminal-features/autocomplete) 和
+   [Unicode/text styles](https://docs.otty.sh/terminal-features/unicode-and-text-styles)。
+   字素簇、粗体/斜体/下划线/删除线、平滑滚动应配视觉与延迟验收；解析器识别标志不等于渲染器正确显示。
+
+以上是后续排序，不代表本次新增了这些功能，也不代表已在本机验证 Otty 的实现。

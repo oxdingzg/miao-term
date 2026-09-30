@@ -1,5 +1,10 @@
 # Releasing
 
+> Current application identity: [APP-IDENTITY.md](APP-IDENTITY.md). The native
+> implementation now ships only as miaotty. Earlier dual-host rehearsals below
+> are historical; the native app currently checks versions, with upgrades via
+> platform installers rather than the removed eframe update-install UI.
+
 How the release pipeline works, what to configure, and how the update chain fits
 together. English default; keep [`RELEASE.zh-CN.md`](RELEASE.zh-CN.md) in sync.
 
@@ -29,15 +34,15 @@ its download URLs become live only after a release with that tag is published.
 
 | Platform | Artifact | Notes |
 |----------|----------|-------|
-| macOS | `miaotty-macos-arm64.zip`, `miaotty-macos-x86_64.zip` (each contains `miaotty.app` and `miaotty-native.app`) | ad-hoc signed; notarized when the Apple secrets are set. Apple Silicon uses `macos-latest`, Intel uses `macos-15-intel` |
+| macOS | `miaotty-macos-arm64.zip`, `miaotty-macos-x86_64.zip` (each contains only `miaotty.app`) | ad-hoc signed; notarized when the Apple secrets are set. Apple Silicon uses `macos-latest`, Intel uses `macos-15-intel` |
 | Linux | `miaotty-linux-x86_64.tar.gz`, `miaotty-linux-x86_64.AppImage`, `dist/*.deb` | AppImage has an explicit `AppRun` entry point |
 | Windows | `miaotty-windows-x86_64.zip`, `miaotty-app-<ver>-x86_64.msi` | MSI installation/uninstallation is exercised on the runner |
 
 Every artifact gets a `.sig` next to it when signing is configured.
 Detached signatures are generated once in the Linux assembly job, after platform
 codesigning, and verified there against the committed public key.
-All app bundles, main application archives, and installers contain the two hosts
-and the CLI; the additional `miaotty-native-macos-*.zip` is a standalone host.
+All app bundles, archives and installers contain one native miaotty application
+and miaotty-cli. No separate native application archive is published.
 All four runner builds and AppImage/MSI packaging are required to succeed.
 
 ## Secrets (all optional)
@@ -127,7 +132,7 @@ Run `python3 scripts/test-release-manifest.py` to check selection and failure ca
 ## MSI (Windows) — verified
 
 The WiX template is committed at [`miaotty-app/wix/main.wxs`](../miaotty-app/wix/main.wxs)
-(it installs `miaotty.exe`, `miaotty-cli.exe`, and `miaotty-native.exe` into
+(it installs `miaotty.exe` and `miaotty-cli.exe` into
 `%ProgramFiles%\miaotty\bin`, adds that directory to the machine `PATH`, and
 registers an uninstall entry). `cargo wix --package miaotty-app` builds it; it
 needs WiX 3.x (chocolatey `wixtoolset`), and must run **from `miaotty-app/`**
@@ -147,9 +152,9 @@ Both installers were checked on real hardware (2026-09-29).
 **Linux `.deb` and AppImage** (Ubuntu 24.04):
 
 ```sh
-cargo build --release -p miaotty-app -p miaotty-cli -p miao-term-widget
+cargo build --release -p miaotty-app -p miaotty-cli
 cargo install cargo-deb --locked && cargo deb -p miaotty-app --no-build
-sudo dpkg -i target/debian/miaotty_*_amd64.deb     # /usr/bin/miaotty{,-cli,-native}
+sudo dpkg -i target/debian/miaotty_*_amd64.deb     # /usr/bin/miaotty{,-cli}
 miaotty-cli ping                                   # runs; errors only because no host
 ```
 
@@ -187,8 +192,16 @@ simply have no `.sig` — verification is optional, not required to install.
 
 ## Acceptance coverage and remaining work
 
+Local single-application verification (2026-10-01): 154 workspace tests,
+nine release/manifest tests, strict clippy, formatting and four enforced release
+performance budgets passed. The single native `miaotty.app` passed identity and
+codesign checks. Both the packaged app and installed app completed the desktop
+smoke, including native split-session migration and pane close/focus. This is
+local macOS evidence; the changed four-runner release pipeline still requires
+its own rehearsal before a new GitHub Release is published.
+
 The release workflow checks Linux package contents and CLI execution, and Windows
-MSI install → three binaries + URL handler → CLI execution → uninstall. These
+MSI install → two binaries + URL handler → CLI execution → uninstall. These
 checks do not establish interactive desktop behavior. The real-host checks above
 describe the earlier two-binary packages, not the new native-host payload.
 
@@ -238,7 +251,7 @@ binary along with the eframe host and CLI.
 |-------|----------------------|--------------------------|
 | AppImage desktop launch | Execute the AppImage, open a pane, use MTP, then exit cleanly | Linux desktop |
 | Wayland shortcut | Grant the portal request; invoke the shortcut with the app unfocused | Wayland desktop |
-| Windows IME, both hosts | Compose CJK text, check candidate position, commit/cancel, switch splits | Interactive Windows desktop |
+| Windows IME, miaotty | Compose CJK text, check candidate position, commit/cancel, switch splits | Interactive Windows desktop |
 | Update self-replace | Download/verify a newer version, install/relaunch, retain workspace; exercise failure recovery | Installed macOS app, Windows MSI/zip, Linux AppImage |
 | Visual acceptance | Capture IME composition and Windows/Linux graphics/Mermaid previews; macOS graphics/previews verified above | Desktop sessions |
 | Platform signing | Verify Developer ID/notarization and MSI Authenticode on shipped artifacts | Apple/Windows signing credentials |

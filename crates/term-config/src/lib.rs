@@ -270,7 +270,9 @@ impl Default for Config {
             prevent_sleep: true,
             badges: Badges::default(),
             language: None,
-            update_check_url: None,
+            update_check_url: Some(
+                "https://github.com/oxdingzg/miao-term/releases/latest/download/latest.json".into(),
+            ),
             editor: None,
             editor_vim: false,
             mermaid_command: None,

@@ -1,5 +1,9 @@
 # 发布
 
+> 当前应用身份见 [APP-IDENTITY.zh-CN.md](APP-IDENTITY.zh-CN.md)：native 实现只以 miaotty 发布。
+> 下文早期双 host 演练属于历史记录；当前 native 只提供版本检查，通过平台安装包升级，
+> 不包含已移除的 eframe 自动更新安装界面。
+
 发布流水线如何工作、需要配置什么,以及更新链如何衔接。英文为默认;请保持
 [`RELEASE.md`](RELEASE.md) 同步。
 
@@ -27,14 +31,14 @@ gh workflow run release.yml --ref main -f tag=v0.0.1
 
 | 平台 | 产物 | 说明 |
 |------|------|------|
-| macOS | `miaotty-macos-arm64.zip`、`miaotty-macos-x86_64.zip`(各含 `miaotty.app` 与 `miaotty-native.app`) | ad-hoc 签名;配置 Apple secrets 后公证。Apple Silicon 用 `macos-latest`,Intel 用 `macos-15-intel` |
+| macOS | `miaotty-macos-arm64.zip`、`miaotty-macos-x86_64.zip`(各含 一个 `miaotty.app`) | ad-hoc 签名;配置 Apple secrets 后公证。Apple Silicon 用 `macos-latest`,Intel 用 `macos-15-intel` |
 | Linux | `miaotty-linux-x86_64.tar.gz`、`miaotty-linux-x86_64.AppImage`、`dist/*.deb` | AppImage 含明确的 `AppRun` 入口 |
 | Windows | `miaotty-windows-x86_64.zip`、`miaotty-app-<ver>-x86_64.msi` | 在 runner 上执行 MSI 安装/卸载验证 |
 
 配置签名后,每个产物旁边会生成 `.sig`。
 分离签名在平台代码签名完成后,由 Linux 汇总作业统一生成,并用已提交的公钥校验。
-所有 app bundle、主应用压缩包与安装包均包含两个 host 和 CLI;
-额外的 `miaotty-native-macos-*.zip` 则只包含独立 native host。
+所有 app bundle、主应用压缩包与安装包均包含一个 native miaotty 主程序和 CLI;
+不再发布独立的 native 应用压缩包。
 四个 runner 的构建与 AppImage/MSI 打包均必须成功。
 
 ## Secrets(全部可选)
@@ -114,7 +118,7 @@ update-check-url = "https://github.com/oxdingzg/miao-term/releases/latest/downlo
 ## MSI(Windows)——已验证
 
 WiX 模板已入库:[`miaotty-app/wix/main.wxs`](../miaotty-app/wix/main.wxs)(把 `miaotty.exe`
-、`miaotty-cli.exe` 与 `miaotty-native.exe` 安装到 `%ProgramFiles%\miaotty\bin`,把该目录加入机器 `PATH`,并注册
+和 `miaotty-cli.exe` 安装到 `%ProgramFiles%\miaotty\bin`,把该目录加入机器 `PATH`,并注册
 卸载项)。用 `cargo wix --package miaotty-app` 构建;需要 WiX 3.x(choco `wixtoolset`),且必须
 **在 `miaotty-app/` 目录内**运行 —— 模板以相对路径引用 `wix\License.rtf`。
 
@@ -131,9 +135,9 @@ WiX 模板已入库:[`miaotty-app/wix/main.wxs`](../miaotty-app/wix/main.wxs)(�
 **Linux `.deb` 与 AppImage**(Ubuntu 24.04):
 
 ```sh
-cargo build --release -p miaotty-app -p miaotty-cli -p miao-term-widget
+cargo build --release -p miaotty-app -p miaotty-cli
 cargo install cargo-deb --locked && cargo deb -p miaotty-app --no-build
-sudo dpkg -i target/debian/miaotty_*_amd64.deb     # /usr/bin/miaotty{,-cli,-native}
+sudo dpkg -i target/debian/miaotty_*_amd64.deb     # /usr/bin/miaotty{,-cli}
 miaotty-cli ping                                   # 可运行;报错仅因无 host
 ```
 
@@ -167,7 +171,13 @@ shasum -a 256 miaotty-macos-arm64.zip   # 与清单里的 "sha256" 比对
 
 ## 验收覆盖与剩余工作
 
-发布工作流检查 Linux 包内容与 CLI 运行,以及 Windows MSI 安装 → 三个二进制 + URL handler
+单应用迁移本地验收（2026-10-01）：154 项 workspace 测试、9 项发布/清单测试、严格
+clippy、格式检查及 4 项强制 release 性能预算通过。单一 native `miaotty.app` 通过身份和
+codesign 检查；打包 app 和实际安装 app 均跑通桌面冒烟，包含 native 分屏会话迁移及
+pane 聚焦/关闭。这是本地 macOS 证据；新的四 runner 发布流水线仍须独立演练后才能发布
+新的 GitHub Release。
+
+发布工作流检查 Linux 包内容与 CLI 运行,以及 Windows MSI 安装 → 两个二进制 + URL handler
 → CLI 运行 → 卸载。这些检查不代表交互桌面体验已验收。上文的真机记录针对旧的双二进制包,
 不代表新增 native host 的安装验证。
 
@@ -204,7 +214,7 @@ macOS 更新 helper 测试对含空格路径的临时 bundle 实际执行替换�
 |------|----------|----------|
 | AppImage 桌面启动 | 直接运行 AppImage,打开 pane,使用 MTP,正常退出 | Linux 桌面 |
 | Wayland 热键 | 授权门户请求;应用无焦点时触发热键 | Wayland 桌面 |
-| Windows IME,两个 host | 输入中日韩组合文本,检查候选框位置、提交/取消、切换分屏 | Windows 交互桌面 |
+| Windows IME,miaotty | 输入中日韩组合文本,检查候选框位置、提交/取消、切换分屏 | Windows 交互桌面 |
 | 更新自替换 | 下载/校验新版,安装/重启,保留工作区;验证失败恢复 | 已安装的 macOS app、Windows MSI/zip、Linux AppImage |
 | 视觉验收 | 截图检查 IME 组合文本及 Windows/Linux 图片/Mermaid 预览;macOS 图片/预览见上文 | 桌面会话 |
 | 平台签名 | 检查分发产物的 Developer ID/公证与 MSI Authenticode | Apple/Windows 签名凭证 |

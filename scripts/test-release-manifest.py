@@ -39,14 +39,32 @@ class ManifestTests(unittest.TestCase):
         self.assertTrue(linux["url"].endswith(".tar.gz"))
         self.assertEqual(linux["sha256"], hashlib.sha256(b"artifact").hexdigest())
 
-    def test_installers_preferred_and_native_zip_not_selected(self):
-        for name in ("miaotty-linux-x86_64.AppImage", "miaotty-app-0.0.1-x86_64.msi",
-                     "miaotty-native-macos-arm64.zip"):
+    def test_installers_preferred(self):
+        for name in ("miaotty-linux-x86_64.AppImage", "miaotty-app-0.0.1-x86_64.msi"):
             (self.directory / name).write_bytes(b"installer")
         artifacts = self.build()["artifacts"]
         self.assertTrue(artifacts["linux-x86_64"]["url"].endswith(".AppImage"))
         self.assertTrue(artifacts["windows-x86_64"]["url"].endswith(".msi"))
         self.assertTrue(artifacts["macos-aarch64"]["url"].endswith("miaotty-macos-arm64.zip"))
+
+    def test_retired_native_artifact_cannot_be_published(self):
+        native = self.directory / "miaotty-native-macos-arm64.zip"
+        native.write_bytes(b"old second app")
+        with self.assertRaisesRegex(ValueError, "retired second application"):
+            self.build()
+        with self.assertRaisesRegex(ValueError, "retired second application"):
+            module.collect_artifacts(self.directory)
+
+    def test_linux_and_windows_installers_have_only_one_gui(self):
+        import tomllib
+        import xml.etree.ElementTree as ET
+        root = Path(__file__).parent.parent
+        cargo = tomllib.loads((root / "miaotty-app/Cargo.toml").read_text())
+        executables = [asset[0] for asset in cargo["package"]["metadata"]["deb"]["assets"] if asset[0].startswith("target/release/")]
+        self.assertEqual(executables, ["target/release/miaotty", "target/release/miaotty-cli"])
+        wix = ET.parse(root / "miaotty-app/wix/main.wxs")
+        names = {file.get("Name") for file in wix.findall(".//{http://schemas.microsoft.com/wix/2006/wi}File") if file.get("Name")}
+        self.assertEqual(names, {"miaotty.exe", "miaotty-cli.exe"})
 
     def test_missing_platform_rejected(self):
         (self.directory / "miaotty-macos-x86_64.zip").unlink()

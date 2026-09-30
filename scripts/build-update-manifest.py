@@ -25,6 +25,8 @@ def collect_artifacts(directory):
     for path in sorted(directory.rglob("*")):
         if not path.is_file() or not path.name.endswith((".zip", ".tar.gz", ".AppImage", ".deb", ".msi", ".sig")):
             continue
+        if path.name.startswith("miaotty-native-"):
+            raise ValueError(f"retired second application artifact: {path.name}")
         if path.name in packages:
             raise ValueError(f"duplicate artifact filename: {path.name}")
         packages[path.name] = path
@@ -43,6 +45,8 @@ def build_manifest(directory, tag, repository, require_signatures=False):
     if not re.fullmatch(r"v\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?", tag):
         raise ValueError("tag must be a version such as v0.0.1")
     files = sorted(path for path in directory.iterdir() if path.is_file())
+    if any(path.name.startswith("miaotty-native-") for path in files):
+        raise ValueError("retired second application artifact in release")
     base = f"https://github.com/{repository}/releases/download/{tag}"
     artifacts = {}
     for platform, patterns in PATTERNS.items():

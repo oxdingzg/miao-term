@@ -48,7 +48,7 @@ engine (`miao-term-*`) is separate from the app (`miaotty-app`), and the control
 | D7 | `term-mtp` decoupled from the engine (Unix socket / Windows named pipe) | A crash in one doesn't take down the other; reuse the protocol |
 | D8 | Build the app first, extract the library later; phase the extension points | Real needs drive the API |
 | D9 | Engine crates licensed `Apache-2.0` | Permissive; easy to embed |
-| D10 | Second host `miaotty-native` (package `miao-term-widget`): a native `winit` + `wgpu` render loop; `miaotty-app` (eframe/egui) keeps the grid via `PaintCallback` | Native input-to-photon latency; both consume the same engine (ADR 0030) |
+| D10 | One native `miaotty` executable delegates to `miao-term-widget` (winit + wgpu); the eframe host is retired | Single product identity and direct rendering; see APP-IDENTITY.md |
 
 ## 3. Layering (DAG) and rules
 
@@ -67,12 +67,12 @@ engine (`miao-term-*`) is separate from the app (`miaotty-app`), and the control
         ▼                             │
    term-widget ◄──────────────────────┘   (native host: winit + wgpu)
         ▲
-        └── miaotty-app   (eframe/egui host; depends on every engine crate)
+        └── miaotty-app   (native executable; depends on term-widget)
    miaotty-cli ──► term-mtp
 ```
 
 Not every edge is drawn: `term-widget` also depends on `term-core`/`term-render`, and
-`miaotty-app` depends on all engine crates. The workspace has nine members.
+`miaotty-app` delegates to `term-widget`. The workspace has nine members.
 
 **Rules**
 - Dependencies point inward only: `widget → render → core`. The one exception is
@@ -92,11 +92,11 @@ Not every edge is drawn: `term-widget` also depends on `term-core`/`term-render`
 | `term-graphics` | Inline-graphics scanner + Sixel/Kitty/iTerm2 decoders | No rendering/GPU/windowing |
 | `term-core` | PTY, vte parsing, grid/scrollback/cursor/modes, selection/search, OSC/CSI semantics, key/mouse→bytes encoding, events; owns the scanner in `term-graphics` | No GPU/window/config/business logic |
 | `term-render` | Font load/shaping/atlas, grid instancing, draw passes, damage increments | No event loop/input |
-| `term-ui` | Host-agnostic UI shared by both hosts: theme, input encoding, selection, split layout, egui chrome, palette, hints, vim, markdown, ssh, update, agent integration | No window/event loop |
-| `term-widget` | Native host (`miaotty-native` bin at `crates/term-widget/src/bin/miaotty-native.rs`): winit event loop, wgpu surface, input/IME/clipboard/drag-drop, direct grid draw (ADR 0030) | No tab/panel business |
+| `term-ui` | Host-agnostic UI: theme, input encoding, selection, split layout, egui chrome, palette, hints, vim, markdown, ssh, update, agent integration | No window/event loop |
+| `term-widget` | Native host library (`miaotty-app` supplies the executable): winit event loop, wgpu surface, input/IME/clipboard/drag-drop, direct grid draw (ADR 0030) | No PTY/parser duplication |
 | `term-config` | Config model, themes, ghostty/alacritty import | No UI |
 | `term-mtp` | Protocol envelope, transport, server/client, agent/history registries, revision + `core.wait` long-poll | No engine dependency |
-| `miaotty-app` | eframe/egui host (`miaotty` bin): Windows/tabs/splits, left Tabs, right Details, badges, settings, OS integration, hook install; grid via `PaintCallback` | No terminal core duplication |
+| `miaotty-app` | Native `miaotty` entry point, command help/version and platform packaging metadata | No terminal core duplication |
 | `miaotty-cli` | MTP client for scripts/agents | No engine dependency |
 
 ## 5. Core types and traits (design sketch — superseded)
@@ -108,8 +108,8 @@ shipped API is:
 - `term-core`: `Terminal` (PTY + parser + grid) and `ATerm` (the `alacritty_terminal`
   screen model), in `crates/term-core`.
 - `term-render`: `TermRenderer`, `QuadRenderer`, `ImageRenderer`.
-- Hosts: `miaotty-app` drives the grid through `egui_wgpu::PaintCallback`;
-  `miaotty-native` (in `term-widget`) draws it directly with the `term-render` passes.
+- Application: `miaotty-app` launches `term-widget`, which owns the event loop
+  and draws the grid directly with `term-render`, compositing egui chrome.
 
 ## 6. Threading model and lock discipline
 

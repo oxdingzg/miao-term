@@ -24,8 +24,8 @@ release 运行它们。预算是绝对值且留出宽裕余量(数量级退化�
 |------|------|------------------------|------|
 | VT 解析吞吐 | ≥ 25 MB/s | 73 MB/s | `crates/term-core/tests/perf.rs` |
 | 屏幕快照(30 行) | ≤ 2 ms | 0.012 ms | `crates/term-core/tests/perf.rs` |
-| 每帧行构建 | ≤ 4 ms | 0.12 ms | `miaotty-app` `perf_tests` |
-| 面板排名(10k 条目) | ≤ 100 ms | 2.0 ms | `miaotty-app` `perf_tests` |
+| 每帧行构建 | ≤ 4 ms | 0.12 ms | `miaotty-app/tests/perf.rs` |
+| 面板排名(10k 条目) | ≤ 100 ms | 2.0 ms | `miaotty-app/tests/perf.rs` |
 | IPC 空闲开销 | ≈ 0(无轮询) | — | 设计如此 |
 | agent 突发 | 100 事件 → 1 重绘 | — | 设计如此 |
 
