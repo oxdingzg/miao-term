@@ -58,8 +58,11 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
   sidebar. Right-clicking a tab or a session opens the same row menu: Rename
   Tab…, Prefix…, Mark…, Group…, Remove from Group (only inside a group),
   Duplicate Tab, Move Up/Down, New Tab, Close Tab, Close Other Tabs and
-  Close Below. A tab's mark is appended to its title and its group is kept with
-  the session, so both survive a restart.
+  Close Below, in both hosts. A tab's mark is appended to its title and its group
+  is kept with the session, so both survive a restart. The tab bar draws a divider
+  where the group changes. Close Tab, the tab's `×` and session-row middle-click
+  close the whole tab, including its splits; the last tab is kept alive.
+  `⌘W` / `Ctrl+W` retains the focused-pane close behavior when a tab is split.
 - A recursive split tree: `⌘D` splits right and `⇧⌘D` splits down, with
   draggable dividers and a close button on every pane. `⌘⇧T` toggles a scratch
   Quick Terminal.

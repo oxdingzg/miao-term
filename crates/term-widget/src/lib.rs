@@ -259,6 +259,43 @@ struct Tab {
     group: Option<String>,
 }
 
+impl Tab {
+    fn session_value(&self) -> serde_json::Value {
+        let panes: Vec<_> = self
+            .panes
+            .iter()
+            .map(|p| serde_json::json!({ "id": p.id, "cwd": p.term.cwd() }))
+            .collect();
+        serde_json::json!({
+            "title": self.title, "active": self.active,
+            "layout": layout_to_json(&self.layout), "panes": panes,
+            "prefix": self.prefix, "mark": self.mark, "group": self.group,
+            "ssh": self.ssh,
+        })
+    }
+
+    fn restore_decorations(&mut self, value: &serde_json::Value) {
+        let text = |key| value.get(key).and_then(|v| v.as_str()).map(str::to_string);
+        self.prefix = text("prefix");
+        self.mark = text("mark");
+        self.group = text("group");
+    }
+}
+
+/// Remove the entire tab, not just its active pane. Keep the last tab alive
+/// and preserve the focused tab when a background tab before it is removed.
+fn remove_whole_tab(tabs: &mut Vec<Tab>, active: &mut usize, i: usize) -> bool {
+    if tabs.len() <= 1 || i >= tabs.len() {
+        return false;
+    }
+    tabs.remove(i);
+    if *active > i {
+        *active -= 1;
+    }
+    *active = (*active).min(tabs.len() - 1);
+    true
+}
+
 /// Background-computed details (git status / directory listing / ports).
 #[derive(Default, Clone)]
 struct DetailsData {
@@ -999,6 +1036,9 @@ impl State {
         let _ = tab.layout.remove(id);
         if tab.panes.is_empty() {
             self.tabs.remove(ti);
+            if ti < self.active_tab {
+                self.active_tab -= 1;
+            }
         } else if tab.active == id {
             tab.active = tab
                 .layout
@@ -1933,24 +1973,7 @@ impl State {
 
     /// Persist tabs/panes/cwd/layout so the next launch restores the session.
     fn session_value(&self) -> serde_json::Value {
-        let mut tabs = Vec::new();
-        for tab in &self.tabs {
-            let panes: Vec<serde_json::Value> = tab
-                .panes
-                .iter()
-                .map(|p| serde_json::json!({ "id": p.id, "cwd": p.term.cwd() }))
-                .collect();
-            tabs.push(serde_json::json!({
-                "title": tab.title,
-                "active": tab.active,
-                "layout": layout_to_json(&tab.layout),
-                "panes": panes,
-                "prefix": tab.prefix,
-                "mark": tab.mark,
-                "group": tab.group,
-                "ssh": tab.ssh,
-            }));
-        }
+        let tabs: Vec<_> = self.tabs.iter().map(Tab::session_value).collect();
         serde_json::json!({
             "active_tab": self.active_tab,
             "tabs": tabs,
@@ -1999,7 +2022,6 @@ impl State {
                 .and_then(|x| x.as_str())
                 .unwrap_or("shell")
                 .to_string();
-            let prefix = t.get("prefix").and_then(|x| x.as_str()).map(str::to_string);
             let ssh = t.get("ssh").and_then(|x| x.as_bool()).unwrap_or(false);
             let mut panes = Vec::new();
             let mut map = std::collections::HashMap::new();
@@ -2030,16 +2052,18 @@ impl State {
                 .map(|old| map.get(old).cloned().unwrap_or_else(|| old.to_string()))
                 .filter(|id| panes.iter().any(|p| &p.id == id))
                 .unwrap_or_else(|| panes[0].id.clone());
-            self.tabs.push(Tab {
+            let mut tab = Tab {
                 layout,
                 panes,
                 active,
                 title,
                 ssh,
-                prefix,
-                mark: t.get("mark").and_then(|m| m.as_str()).map(str::to_string),
-                group: t.get("group").and_then(|g| g.as_str()).map(str::to_string),
-            });
+                prefix: None,
+                mark: None,
+                group: None,
+            };
+            tab.restore_decorations(t);
+            self.tabs.push(tab);
         }
         if self.tabs.is_empty() {
             return false;
@@ -5451,8 +5475,17 @@ impl chrome::Chrome for State {
         }
     }
     fn on_close_tab(&mut self, i: usize) {
-        self.active_tab = i;
-        self.close_pane();
+        let cwd = self.tabs.get(i).and_then(|tab| {
+            tab.panes
+                .iter()
+                .find(|p| p.id == tab.active)
+                .and_then(|p| p.term.cwd().map(std::path::PathBuf::from))
+        });
+        if remove_whole_tab(&mut self.tabs, &mut self.active_tab, i) {
+            self.closed.push(cwd);
+            self.selection = None;
+            self.publish_panes();
+        }
     }
     fn on_rename_tab(&mut self, i: usize) {
         let title = self
@@ -5658,6 +5691,56 @@ mod tests {
     }
 
     use super::*;
+
+    fn empty_tab(title: &str) -> Tab {
+        Tab {
+            layout: Layout::leaf(title),
+            panes: vec![],
+            active: title.into(),
+            title: title.into(),
+            ssh: false,
+            prefix: None,
+            mark: None,
+            group: None,
+        }
+    }
+
+    #[test]
+    fn tab_decorations_round_trip_and_legacy_defaults() {
+        let mut tab = empty_tab("shell");
+        tab.prefix = Some("dev".into());
+        tab.mark = Some("★".into());
+        tab.group = Some("work".into());
+        let encoded = serde_json::to_vec(&tab.session_value()).unwrap();
+        let value = serde_json::from_slice(&encoded).unwrap();
+        let mut restored = empty_tab("shell");
+        restored.restore_decorations(&value);
+        assert_eq!(restored.prefix, tab.prefix);
+        assert_eq!(restored.mark, tab.mark);
+        assert_eq!(restored.group, tab.group);
+        restored.restore_decorations(&serde_json::json!({"title": "legacy"}));
+        assert_eq!(
+            (restored.prefix, restored.mark, restored.group),
+            (None, None, None)
+        );
+    }
+
+    #[test]
+    fn close_tab_removes_all_splits_and_preserves_focus() {
+        let mut split = empty_tab("a");
+        assert!(split.layout.split("a", "b", SplitDir::Right));
+        let mut tabs = vec![split, empty_tab("c"), empty_tab("d")];
+        let mut active = 2;
+        assert!(remove_whole_tab(&mut tabs, &mut active, 0));
+        assert_eq!(tabs.len(), 2);
+        assert_eq!(tabs[active].title, "d");
+        assert_eq!(active, 1);
+        assert!(!remove_whole_tab(&mut tabs, &mut active, 9));
+        assert!(remove_whole_tab(&mut tabs, &mut active, 1));
+        assert_eq!(active, 0);
+        assert!(!remove_whole_tab(&mut tabs, &mut active, 0));
+        assert_eq!(tabs[0].title, "c");
+    }
 
     #[test]
     fn shell_quoting() {

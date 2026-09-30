@@ -209,6 +209,24 @@ were driven over MTP for Kitty inline graphics and Mermaid sequence/pie previews
 with screenshots confirming the output. The eframe chrome now stays dark even
 when the OS uses a light theme, keeping preview text legible.
 
+Local close-out (2026-09-30, working-tree follow-up to `3357aab`): both hosts
+use the same tab/session context-menu widget and group-boundary rule. Native
+now draws the group dividers. Close Tab, tab `×` and session middle-click remove
+the whole split tab; keyboard close retains focused-pane behavior. Regression
+tests cover decoration persistence (including legacy defaults), menu visibility
+and separator positions, focus after tab removal/movement, Close Below, and the
+actual egui divider paint output. fmt, workspace clippy/tests, all four release
+performance budgets, privacy scanning and seven manifest tests passed locally.
+
+The macOS packaging script was also exercised with only its source/output roots
+redirected to keep existing `dist/` artifacts untouched. Both newly built bundles
+contained three binaries and the icon, passed `codesign --verify --deep --strict`
+(ad-hoc signing), and ran CLI help without a host. This is **not** Developer ID
+signing/notarization, GUI interaction acceptance, or a new four-runner rehearsal.
+At this local verification stage, the edits had not yet been committed/pushed
+or exercised by a new remote release workflow. The desktop acceptance items
+below remain open regardless of subsequent packaging success.
+
 The macOS update-helper test executes the swap and missing-download rollback
 against temporary bundles with spaces in their paths, using a test relaunch
 command. Archive selection rejects a native-only download and selects

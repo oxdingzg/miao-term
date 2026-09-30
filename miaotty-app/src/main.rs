@@ -1127,6 +1127,104 @@ impl MiaottyApp {
         self.publish_panes();
     }
 
+    /// Move the tab at `i` one slot up (`delta == -1`) or down (`delta == 1`),
+    /// keeping the tab the user acted on focused.
+    fn move_tab(&mut self, i: usize, delta: isize) {
+        let Some(j) = move_tab_target(self.tabs.len(), i, delta) else {
+            return;
+        };
+        self.tabs.swap(i, j);
+        self.active = active_after_swap(self.active, i, j);
+        self.publish_panes();
+    }
+
+    /// Close every tab below `i` (the shared menu's "Close Below").
+    fn close_below(&mut self, i: usize) {
+        let len = close_below_len(self.tabs.len(), i);
+        if len >= self.tabs.len() {
+            return;
+        }
+        self.tabs.truncate(len);
+        self.active = self.active.min(len - 1);
+        self.selection = None;
+        self.scroll = 0;
+        self.publish_panes();
+    }
+
+    /// Close the whole tab at `i`, regardless of how many panes it splits into
+    /// (the menu's "Close Tab"). The keyboard's close-pane behaviour stays on
+    /// [`Self::close_active`]; the last remaining tab is never removed.
+    fn close_tab(&mut self, i: usize) {
+        if self.tabs.len() <= 1 || i >= self.tabs.len() {
+            return;
+        }
+        let remaining = self.tabs.len() - 1;
+        self.tabs.remove(i);
+        self.active = active_after_remove(self.active, remaining, i);
+        self.selection = None;
+        self.scroll = 0;
+        self.publish_panes();
+    }
+
+    /// Open the rename editor for tab `i`'s `field`, seeding it with the current
+    /// value.
+    fn begin_tab_edit(&mut self, i: usize, field: TabField) {
+        let Some(tab) = self.tabs.get(i) else {
+            return;
+        };
+        let buf = match field {
+            TabField::Title => tab.title.clone(),
+            TabField::Prefix => tab.prefix.clone().unwrap_or_default(),
+            TabField::Mark => tab.mark.clone().unwrap_or_default(),
+            TabField::Group => tab.group.clone().unwrap_or_default(),
+        };
+        self.renaming = Some((i, field));
+        self.rename_buf = buf;
+    }
+
+    /// Apply the actions collected by the shared tab context menu. Both the tab
+    /// bar and the sidebar funnel through here, so they stay identical.
+    fn apply_tab_menu_events(&mut self, ev: miao_term_ui::chrome::TabBarEvents) {
+        if let Some(i) = ev.close {
+            self.close_tab(i);
+        }
+        if let Some(i) = ev.close_others {
+            self.close_other_tabs(i);
+        }
+        if let Some(i) = ev.close_below {
+            self.close_below(i);
+        }
+        if let Some(i) = ev.move_up {
+            self.move_tab(i, -1);
+        }
+        if let Some(i) = ev.move_down {
+            self.move_tab(i, 1);
+        }
+        if let Some(i) = ev.duplicate {
+            self.duplicate_tab(i);
+        }
+        if ev.new_tab {
+            self.new_tab();
+        }
+        if let Some(i) = ev.ungroup {
+            if let Some(tab) = self.tabs.get_mut(i) {
+                tab.group = None;
+            }
+        }
+        if let Some(i) = ev.rename {
+            self.begin_tab_edit(i, TabField::Title);
+        }
+        if let Some(i) = ev.set_prefix {
+            self.begin_tab_edit(i, TabField::Prefix);
+        }
+        if let Some(i) = ev.mark {
+            self.begin_tab_edit(i, TabField::Mark);
+        }
+        if let Some(i) = ev.group {
+            self.begin_tab_edit(i, TabField::Group);
+        }
+    }
+
     fn rename_window(&mut self, ctx: &egui::Context, i: usize, field: TabField) {
         let mut open = true;
         let title = match field {
@@ -1637,7 +1735,7 @@ impl MiaottyApp {
                 Verb::NewTab => self.new_tab(),
                 Verb::SplitRight => self.split_active(SplitDir::Right),
                 Verb::SplitDown => self.split_active(SplitDir::Down),
-                Verb::CloseTab => self.close_active(),
+                Verb::CloseTab => self.close_tab(self.active),
                 Verb::ToggleDetails => self.show_details = !self.show_details,
                 Verb::ToggleSidebar => self.show_sidebar = !self.show_sidebar,
                 Verb::IncreaseFont => self.font_size = (self.font_size + 1.0).min(40.0),
@@ -1829,6 +1927,66 @@ fn opt_text(ui: &mut egui::Ui, opt: &mut Option<String>) -> bool {
         *opt = (!trimmed.is_empty()).then(|| trimmed.to_string());
     }
     changed
+}
+
+/// Map the app's language onto the shared `miao-term-ui` language, so the tab
+/// menu uses the same translations as the native host.
+fn ui_lang(lang: i18n::Lang) -> miao_term_ui::i18n::Lang {
+    match lang {
+        i18n::Lang::En => miao_term_ui::i18n::Lang::En,
+        i18n::Lang::Zh => miao_term_ui::i18n::Lang::Zh,
+    }
+}
+
+/// Attach the context menu shared by the tab bar and the sidebar. It reuses the
+/// native host's table (`miao_term_ui::chrome::tab_menu_items`) verbatim, so
+/// both hosts and both eframe surfaces offer the same entries in the same
+/// order. `has_group` hides "Remove from Group" for ungrouped rows.
+fn tab_row_menu(
+    resp: &egui::Response,
+    lang: i18n::Lang,
+    i: usize,
+    has_group: bool,
+    ev: &mut miao_term_ui::chrome::TabBarEvents,
+) {
+    miao_term_ui::chrome::tab_row_menu(resp, ui_lang(lang), i, has_group, ev);
+}
+
+/// Target slot for a "Move Up" (`delta == -1`) / "Move Down" (`delta == 1`), or
+/// `None` at either end.
+fn move_tab_target(len: usize, i: usize, delta: isize) -> Option<usize> {
+    if delta == 0 || i >= len {
+        return None;
+    }
+    let j = i as isize + delta;
+    (j >= 0 && (j as usize) < len).then_some(j as usize)
+}
+
+/// The active index after swapping slots `a` and `b`: the user follows the tab
+/// they acted on, not the slot it used to occupy.
+fn active_after_swap(active: usize, a: usize, b: usize) -> usize {
+    if active == a {
+        b
+    } else if active == b {
+        a
+    } else {
+        active
+    }
+}
+
+/// The new tab count after "Close Below" on `i` (never grows).
+fn close_below_len(len: usize, i: usize) -> usize {
+    len.min(i + 1)
+}
+
+/// The active index after removing tab `closed`, where `remaining` is the tab
+/// count after the removal.
+fn active_after_remove(active: usize, remaining: usize, closed: usize) -> usize {
+    if active > closed {
+        active - 1
+    } else {
+        active.min(remaining.saturating_sub(1))
+    }
 }
 
 /// The command that resumes a reported agent session, if any. Prefers an
@@ -2787,10 +2945,8 @@ impl MiaottyApp {
         let mut tree_open: Option<PathBuf> = None;
         let mut switch_to: Option<usize> = None;
         let mut close: Option<usize> = None;
-        let mut close_others: Option<usize> = None;
-        let mut duplicate: Option<usize> = None;
-        let mut edit: Option<(usize, TabField, String)> = None;
-        let mut ungroup: Option<usize> = None;
+        // Right-click actions, collected by the shared tab menu.
+        let mut menu_ev = miao_term_ui::chrome::TabBarEvents::default();
         let mut add = false;
         let mut toggle = false;
         let mut settings = false;
@@ -2862,62 +3018,8 @@ impl MiaottyApp {
                         if resp.clicked_by(egui::PointerButton::Middle) && can_close {
                             close = Some(i);
                         }
-                        let fields = (
-                            self.tabs[i].title.clone(),
-                            self.tabs[i].prefix.clone(),
-                            self.tabs[i].mark.clone(),
-                            self.tabs[i].group.clone(),
-                        );
-                        resp.context_menu(|ui| {
-                            if ui.button(self.t("Rename\u{2026}")).clicked() {
-                                edit = Some((i, TabField::Title, fields.0.clone()));
-                                ui.close_menu();
-                            }
-                            if ui.button(self.t("Prefix\u{2026}")).clicked() {
-                                edit = Some((
-                                    i,
-                                    TabField::Prefix,
-                                    fields.1.clone().unwrap_or_default(),
-                                ));
-                                ui.close_menu();
-                            }
-                            if ui.button(self.t("Mark\u{2026}")).clicked() {
-                                edit =
-                                    Some((i, TabField::Mark, fields.2.clone().unwrap_or_default()));
-                                ui.close_menu();
-                            }
-                            if ui.button(self.t("Group\u{2026}")).clicked() {
-                                edit = Some((
-                                    i,
-                                    TabField::Group,
-                                    fields.3.clone().unwrap_or_default(),
-                                ));
-                                ui.close_menu();
-                            }
-                            if fields.3.is_some()
-                                && ui.button(self.t("Remove from Group")).clicked()
-                            {
-                                ungroup = Some(i);
-                                ui.close_menu();
-                            }
-                            if ui.button(self.t("Duplicate")).clicked() {
-                                duplicate = Some(i);
-                                ui.close_menu();
-                            }
-                            if ui.button(self.t("New Tab")).clicked() {
-                                add = true;
-                                ui.close_menu();
-                            }
-                            ui.separator();
-                            if ui.button(self.t("Close Tab")).clicked() {
-                                close = Some(i);
-                                ui.close_menu();
-                            }
-                            if ui.button(self.t("Close Other Tabs")).clicked() {
-                                close_others = Some(i);
-                                ui.close_menu();
-                            }
-                        });
+                        let has_group = self.tabs[i].group.is_some();
+                        tab_row_menu(&resp, self.lang, i, has_group, &mut menu_ev);
                     });
                 }
 
@@ -2957,26 +3059,17 @@ impl MiaottyApp {
             self.show_settings = true;
             self.settings_family = self.font_family.clone().unwrap_or_default();
         }
+        // Right-click menu: the shared table drives both the sidebar and the
+        // tab bar, in the native host's order.
+        self.apply_tab_menu_events(menu_ev);
+        // A session row refers to the whole tab; keyboard close still closes
+        // the focused pane when the tab is split.
         if let Some(i) = close {
-            self.active = i;
-            self.close_active();
-        } else if let Some(i) = close_others {
-            self.close_other_tabs(i);
-        } else if let Some(i) = duplicate {
-            self.duplicate_tab(i);
+            self.close_tab(i);
         } else if let Some(i) = switch_to {
             self.active = i;
             self.selection = None;
             self.scroll = 0;
-        }
-        if let Some(i) = ungroup {
-            if let Some(tab) = self.tabs.get_mut(i) {
-                tab.group = None;
-            }
-        }
-        if let Some((i, field, buf)) = edit {
-            self.renaming = Some((i, field));
-            self.rename_buf = buf;
         }
     }
 
@@ -4743,6 +4836,8 @@ impl MiaottyApp {
         let mut started: Option<usize> = None;
         let mut stopped = false;
         let mut close: Option<usize> = None;
+        // Right-click actions, collected by the shared tab menu.
+        let mut menu_ev = miao_term_ui::chrome::TabBarEvents::default();
         let mut add = false;
 
         egui::TopBottomPanel::top("tabbar")
@@ -4753,14 +4848,14 @@ impl MiaottyApp {
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    let mut prev_group: Option<String> = None;
+                    let groups: Vec<_> = titles.iter().map(|row| row.4.clone()).collect();
                     for (i, (title, color, icon, att, group)) in titles.into_iter().enumerate() {
-                        if i > 0 && group != prev_group {
+                        let has_group = group.is_some();
+                        if miao_term_ui::chrome::tab_group_boundary(&groups, i) {
                             ui.label(
                                 egui::RichText::new("\u{2502}").color(egui::Color32::from_gray(80)),
                             );
                         }
-                        prev_group = group;
                         if att {
                             ui.colored_label(egui::Color32::from_rgb(0xeb, 0xcb, 0x8b), "\u{0021}");
                         }
@@ -4794,6 +4889,7 @@ impl MiaottyApp {
                         if ui.small_button("\u{00d7}").clicked() {
                             close = Some(i);
                         }
+                        tab_row_menu(&resp, self.lang, i, has_group, &mut menu_ev);
                     }
                     if ui.small_button("+").clicked() {
                         add = true;
@@ -4834,12 +4930,15 @@ impl MiaottyApp {
             }
         }
 
+        // Right-click menu: the shared table drives both the tab bar and the
+        // sidebar, in the native host's order.
+        self.apply_tab_menu_events(menu_ev);
+
         if add {
             self.new_tab();
         }
         if let Some(i) = close {
-            self.active = i;
-            self.close_active();
+            self.close_tab(i);
         } else if let Some(i) = click {
             self.active = i;
             self.selection = None;
@@ -5870,6 +5969,7 @@ mod session_tests {
         let json = serde_json::to_string(&ts).unwrap();
         let back: TabSession = serde_json::from_str(&json).unwrap();
         assert_eq!(back.prefix.as_deref(), Some("[w]"));
+        assert_eq!(back.mark.as_deref(), Some("*"));
         assert_eq!(back.group.as_deref(), Some("g"));
     }
 
@@ -6050,6 +6150,77 @@ mod session_tests {
     #[test]
     fn sanitize_recipe_names() {
         assert_eq!(sanitize_name("my work/1"), "my work_1");
+    }
+}
+
+/// Pure logic behind the shared tab context menu (mark/group, move, close).
+#[cfg(test)]
+mod tab_menu_tests {
+    use super::*;
+    use miao_term_ui::chrome::{tab_menu_items, TabMenuAction};
+
+    #[test]
+    fn shared_tab_menu_has_the_expected_entries_in_order() {
+        // Guards the eframe menu against drift in the shared native table.
+        let actions: Vec<Option<TabMenuAction>> = tab_menu_items(miao_term_ui::i18n::Lang::En)
+            .into_iter()
+            .map(|(_, action)| action)
+            .collect();
+        assert_eq!(
+            actions,
+            vec![
+                Some(TabMenuAction::Rename),
+                Some(TabMenuAction::Prefix),
+                Some(TabMenuAction::Mark),
+                Some(TabMenuAction::Group),
+                Some(TabMenuAction::Ungroup),
+                Some(TabMenuAction::Duplicate),
+                None,
+                Some(TabMenuAction::MoveUp),
+                Some(TabMenuAction::MoveDown),
+                None,
+                Some(TabMenuAction::NewTab),
+                None,
+                Some(TabMenuAction::Close),
+                Some(TabMenuAction::CloseOthers),
+                Some(TabMenuAction::CloseBelow),
+            ]
+        );
+    }
+
+    #[test]
+    fn move_target_stops_at_the_ends() {
+        assert_eq!(move_tab_target(3, 0, -1), None);
+        assert_eq!(move_tab_target(3, 2, 1), None);
+        assert_eq!(move_tab_target(3, 1, -1), Some(0));
+        assert_eq!(move_tab_target(3, 1, 1), Some(2));
+        assert_eq!(move_tab_target(0, 0, 1), None);
+        assert_eq!(move_tab_target(3, 1, 0), None);
+    }
+
+    #[test]
+    fn active_follows_the_moved_tab() {
+        assert_eq!(active_after_swap(0, 0, 1), 1);
+        assert_eq!(active_after_swap(1, 0, 1), 0);
+        assert_eq!(active_after_swap(2, 0, 1), 2);
+        assert_eq!(active_after_swap(4, 1, 2), 4);
+    }
+
+    #[test]
+    fn close_below_only_truncates() {
+        assert_eq!(close_below_len(5, 0), 1);
+        assert_eq!(close_below_len(5, 3), 4);
+        assert_eq!(close_below_len(5, 4), 5);
+        assert_eq!(close_below_len(5, 9), 5);
+    }
+
+    #[test]
+    fn active_after_removing_a_whole_tab() {
+        // `remaining` is the tab count after the removal.
+        assert_eq!(active_after_remove(0, 2, 1), 0);
+        assert_eq!(active_after_remove(2, 2, 0), 1);
+        assert_eq!(active_after_remove(1, 2, 1), 1);
+        assert_eq!(active_after_remove(2, 2, 2), 1);
     }
 }
 

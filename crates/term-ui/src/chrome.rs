@@ -111,7 +111,7 @@ pub fn apply_tab_menu(ev: &mut TabBarEvents, i: usize, action: TabMenuAction) {
 
 /// Attach the row menu to a tab/session row. `has_group` hides the
 /// "Remove from Group" entry when the row is not in a group.
-fn tab_row_menu(
+pub fn tab_row_menu(
     resp: &egui::Response,
     lang: Lang,
     i: usize,
@@ -124,7 +124,7 @@ fn tab_row_menu(
                 None => {
                     ui.separator();
                 }
-                Some(TabMenuAction::Ungroup) if !has_group => {}
+                Some(action) if !tab_menu_action_visible(action, has_group) => {}
                 Some(action) => {
                     if ui.button(label).clicked() {
                         apply_tab_menu(ev, i, action);
@@ -134,6 +134,18 @@ fn tab_row_menu(
             }
         }
     });
+}
+
+/// Ungroup is only meaningful for a grouped tab.
+pub fn tab_menu_action_visible(action: TabMenuAction, has_group: bool) -> bool {
+    action != TabMenuAction::Ungroup || has_group
+}
+
+/// A divider belongs between adjacent tabs whose group differs, never before
+/// the first tab. Missing metadata is treated as an ungrouped tab.
+pub fn tab_group_boundary(groups: &[Option<String>], i: usize) -> bool {
+    i > 0
+        && groups.get(i - 1).and_then(|g| g.as_deref()) != groups.get(i).and_then(|g| g.as_deref())
 }
 
 /// A horizontal tab bar: clickable, draggable labels, a close affordance, `+`.
@@ -154,6 +166,16 @@ pub fn tab_bar(
     let text_color = bg_color(ch.text);
     let mut rects: Vec<egui::Rect> = Vec::with_capacity(titles.len());
     for (i, title) in titles.iter().enumerate() {
+        if tab_group_boundary(groups, i) {
+            let (divider, _) = ui.allocate_exact_size(egui::vec2(6.0, 22.0), egui::Sense::hover());
+            ui.painter().line_segment(
+                [
+                    divider.center_top() + egui::vec2(0.0, 3.0),
+                    divider.center_bottom() - egui::vec2(0.0, 3.0),
+                ],
+                egui::Stroke::new(1.0_f32, bg_color(ch.text).gamma_multiply(0.5)),
+            );
+        }
         let icon = icons[i];
         let galley = ui
             .painter()
@@ -290,6 +312,9 @@ pub fn sidebar(
             let resp = ui.selectable_label(i == active, egui::RichText::new(title).size(13.0));
             if resp.clicked() {
                 ev.switch = Some(i);
+            }
+            if titles.len() > 1 && resp.clicked_by(egui::PointerButton::Middle) {
+                ev.close = Some(i);
             }
             tab_row_menu(
                 &resp,
@@ -1112,5 +1137,97 @@ mod tab_menu_tests {
         assert_eq!(ev.group, Some(5));
         apply_tab_menu(&mut ev, 5, TabMenuAction::Ungroup);
         assert_eq!(ev.ungroup, Some(5));
+    }
+
+    #[test]
+    fn group_boundaries_include_entering_and_leaving_groups() {
+        let groups = vec![
+            None,
+            Some("a".into()),
+            Some("a".into()),
+            Some("b".into()),
+            None,
+            None,
+        ];
+        let boundaries: Vec<_> = (0..groups.len())
+            .filter(|&i| tab_group_boundary(&groups, i))
+            .collect();
+        assert_eq!(boundaries, vec![1, 3, 4]);
+        assert!(!tab_group_boundary(&[Some("a".into())], 0));
+        assert!(!tab_group_boundary(&[], 1));
+    }
+
+    #[test]
+    fn menu_visibility_and_separator_positions() {
+        for lang in [Lang::En, Lang::Zh] {
+            let entries = tab_menu_items(lang);
+            let separators: Vec<_> = entries
+                .iter()
+                .enumerate()
+                .filter_map(|(i, (_, action))| action.is_none().then_some(i))
+                .collect();
+            assert_eq!(separators, vec![6, 9, 11]);
+            for (_, action) in entries {
+                if let Some(action) = action {
+                    assert!(tab_menu_action_visible(action, true));
+                    assert_eq!(
+                        tab_menu_action_visible(action, false),
+                        action != TabMenuAction::Ungroup
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn grouped_tab_bar_actually_paints_dividers() {
+        let ctx = egui::Context::default();
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.font_data.insert(
+            "tabler".into(),
+            egui::FontData::from_static(include_bytes!(
+                "../../../assets/fonts/tabler-icons-subset.ttf"
+            ))
+            .into(),
+        );
+        fonts.families.insert(
+            egui::FontFamily::Name("tabler".into()),
+            vec!["tabler".into()],
+        );
+        ctx.set_fonts(fonts);
+        let titles = vec!["one".into(), "two".into(), "three".into()];
+        let icons = vec![crate::icons::Icon::Terminal; 3];
+        let groups = vec![Some("a".into()), Some("a".into()), Some("b".into())];
+        let frame = |groups: &[Option<String>]| {
+            ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        tab_bar(
+                            ui,
+                            &ChromeColors::dark(),
+                            &titles,
+                            &icons,
+                            groups,
+                            0,
+                            Lang::En,
+                        );
+                    });
+                });
+            })
+        };
+        let _ = frame(&groups);
+        let divider_count = |output: egui::FullOutput| {
+            output
+                .shapes
+                .iter()
+                .filter(|shape| {
+                    matches!(&shape.shape, egui::Shape::LineSegment { points, .. }
+                if (points[0].x - points[1].x).abs() < 0.01
+                    && ((points[1].y - points[0].y) - 16.0).abs() < 0.01)
+                })
+                .count()
+        };
+        assert_eq!(divider_count(frame(&groups)), 1);
+        assert_eq!(divider_count(frame(&[None, None, None])), 0);
     }
 }
