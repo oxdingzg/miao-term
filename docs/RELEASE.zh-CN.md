@@ -104,9 +104,11 @@ update-check-url = "https://github.com/oxdingzg/miao-term/releases/latest/downlo
 `linux-aarch64`、`windows-x86_64`。`linux-x86_64-deb` 只是 `.deb` 产物的清单专用键
 (应用从不会请求它),而 `release.yml` 目前不产出 `linux-aarch64` 清单条目。
 
-`scripts/build-update-manifest.py` 要求两种 macOS 架构、Linux 与 Windows 产物齐全,
+`scripts/build-update-manifest.py` 要求两种 macOS 架构、Linux、Windows 与 `.deb` 条目齐全,
 从实际文件计算 SHA-256,优先选择 AppImage/MSI,其次才是压缩包。
 配置 minisign 后缺少签名会使汇总作业失败;所有分离签名均用 `minisign.pub` 校验。
+签名前用 `--collect-only` 把嵌套的 `dist/` 与 `target/wix/` 上传产物收集到发布目录;
+重复文件名直接报错,避免安装包相互覆盖。
 用 `python3 scripts/test-release-manifest.py` 检查产物选择及失败场景。
 
 ## MSI(Windows)——已验证
@@ -169,9 +171,17 @@ shasum -a 256 miaotty-macos-arm64.zip   # 与清单里的 "sha256" 比对
 → CLI 运行 → 卸载。这些检查不代表交互桌面体验已验收。上文的真机记录针对旧的双二进制包,
 不代表新增 native host 的安装验证。
 
-macOS 本地验证(2026-09-30,`9e817a9`):两个 bundle 均通过
+发布演练(2026-09-30,`16b2230`):
+[运行 36663466348](https://github.com/oxdingzg/miao-term/actions/runs/36663466348)
+的四个构建作业与汇总作业全部通过。下载 `release-assembled` 后独立复核:
+五个清单条目的 SHA-256 全部匹配,九个分离签名全部通过;两种 macOS 压缩包均含两个 bundle,
+每个 bundle 有三个二进制和图标;Windows zip 与 Linux tar/deb 均包含三个二进制。
+清单为 Linux 选择 AppImage,为 Windows 选择 MSI。Windows runner 的安装/URL 注册/卸载检查通过。
+本次为手动演练,未创建 GitHub Release。
+
+同一 commit 的 macOS 本地验证:下载解压的两个 bundle 均通过
 `codesign --verify --deep --strict`;fmt、严格 clippy、workspace 测试与四项 release 性能预算均通过。
-安装包内的二进制经 MTP 驱动,两个 host 的 Kitty 内联图片及 Mermaid 时序图/饼图预览均已截图确认。
+下载包内的二进制经 MTP 驱动,两个 host 的 Kitty 内联图片及 Mermaid 时序图/饼图预览均已截图确认。
 eframe 外壳在系统浅色主题下也保持深色,使预览文字可读。
 
 macOS 更新 helper 测试对含空格路径的临时 bundle 实际执行替换与缺失下载时的回滚,
@@ -184,7 +194,7 @@ macOS 更新 helper 测试对含空格路径的临时 bundle 实际执行替换�
 | Wayland 热键 | 授权门户请求;应用无焦点时触发热键 | Wayland 桌面 |
 | Windows IME,两个 host | 输入中日韩组合文本,检查候选框位置、提交/取消、切换分屏 | Windows 交互桌面 |
 | 更新自替换 | 下载/校验新版,安装/重启,保留工作区;验证失败恢复 | 已安装的 macOS app、Windows MSI/zip、Linux AppImage |
-| 视觉验收 | 截图检查两个 host 的内联图片、IME 组合文本与 Mermaid 预览 | 桌面会话 |
+| 视觉验收 | 截图检查 IME 组合文本及 Windows/Linux 图片/Mermaid 预览;macOS 图片/预览见上文 | 桌面会话 |
 | 平台签名 | 检查分发产物的 Developer ID/公证与 MSI Authenticode | Apple/Windows 签名凭证 |
 
 每项桌面检查记录 commit、安装包哈希、命令、结果与截图。

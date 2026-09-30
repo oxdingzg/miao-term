@@ -116,9 +116,12 @@ asks for it), and `release.yml` does not currently emit a `linux-aarch64`
 manifest entry.
 
 `scripts/build-update-manifest.py` requires both macOS architectures, Linux and
-Windows, computes SHA-256 from the actual files, and prefers AppImage/MSI over
-archive fallbacks. When minisign is configured, missing signatures fail the
+Windows plus the `.deb` entry, computes SHA-256 from the actual files, and prefers
+AppImage/MSI over archive fallbacks. When minisign is configured, missing signatures fail the
 assembly job; all detached signatures are verified against `minisign.pub`.
+Before signing, `--collect-only` gathers nested `dist/` and `target/wix/` uploads
+into the release directory and rejects duplicate filenames rather than overwriting
+one package with another.
 Run `python3 scripts/test-release-manifest.py` to check selection and failure cases.
 
 ## MSI (Windows) — verified
@@ -189,10 +192,20 @@ MSI install → three binaries + URL handler → CLI execution → uninstall. Th
 checks do not establish interactive desktop behavior. The real-host checks above
 describe the earlier two-binary packages, not the new native-host payload.
 
-Local macOS verification (2026-09-30, `9e817a9`): both bundles pass
+Release rehearsal (2026-09-30, `16b2230`):
+[run 36663466348](https://github.com/oxdingzg/miao-term/actions/runs/36663466348)
+passed all four build jobs and assembly. The downloaded `release-assembled`
+artifact was independently checked: all five manifest entries matched their
+SHA-256, all nine detached signatures verified, both macOS archives contained two
+bundles with three binaries each and icons, and the Windows zip and Linux tar/deb
+contained all three binaries. The manifest selects AppImage for Linux and MSI for
+Windows. Windows install/URL-handler/uninstall checks passed on the runner. This
+was a manual rehearsal; no GitHub Release was published.
+
+Local macOS verification at the same commit: both downloaded bundles pass
 `codesign --verify --deep --strict`; fmt, strict clippy, workspace tests and all
-four release performance budgets pass. The bundled binaries were driven over
-MTP for Kitty inline graphics and Mermaid sequence/pie previews in both hosts,
+four release performance budgets pass. The binaries from the downloaded archive
+were driven over MTP for Kitty inline graphics and Mermaid sequence/pie previews in both hosts,
 with screenshots confirming the output. The eframe chrome now stays dark even
 when the OS uses a light theme, keeping preview text legible.
 
@@ -209,7 +222,7 @@ binary along with the eframe host and CLI.
 | Wayland shortcut | Grant the portal request; invoke the shortcut with the app unfocused | Wayland desktop |
 | Windows IME, both hosts | Compose CJK text, check candidate position, commit/cancel, switch splits | Interactive Windows desktop |
 | Update self-replace | Download/verify a newer version, install/relaunch, retain workspace; exercise failure recovery | Installed macOS app, Windows MSI/zip, Linux AppImage |
-| Visual acceptance | Capture inline graphics, IME composition and Mermaid previews in both hosts | Desktop session |
+| Visual acceptance | Capture IME composition and Windows/Linux graphics/Mermaid previews; macOS graphics/previews verified above | Desktop sessions |
 | Platform signing | Verify Developer ID/notarization and MSI Authenticode on shipped artifacts | Apple/Windows signing credentials |
 
 Record the commit, package hash, commands, result and screenshots for each desktop
