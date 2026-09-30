@@ -14,7 +14,12 @@ jobs:
       fail-fast: false
       matrix:
         os: [macos-latest, ubuntu-latest, windows-latest]
+        include:
+          # Intel macOS, best-effort: keep a failed run from blocking a release.
+          - os: macos-13
+            experimental: true
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental == true }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -28,7 +33,9 @@ jobs:
 
       - name: Package native (macOS)
         if: runner.os == 'macOS'
-        run: zip -j miaotty-native-macos-arm64.zip target/release/miaotty-native
+        run: |
+          ARCH=$(uname -m)
+          zip -j "miaotty-native-macos-$ARCH.zip" target/release/miaotty-native
 
       - name: Sign & notarize (macOS, optional)
         if: runner.os == 'macOS'
@@ -40,6 +47,7 @@ jobs:
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
           set -e
+          ARCH=$(uname -m)
           if [ -n "$APPLE_CERT_P12" ]; then
             echo "$APPLE_CERT_P12" | base64 --decode > cert.p12
             security create-keychain -p actions tmp.keychain
@@ -47,16 +55,16 @@ jobs:
             security set-key-partition-list -S apple-tool:,apple: -s -k actions tmp.keychain
             IDENTITY=$(security find-identity -v -p codesigning tmp.keychain | awk '{print $2}' | head -1)
             codesign --force --deep --options runtime --sign "$IDENTITY" dist/miaotty.app
-            ditto -c -k --keepParent dist/miaotty.app miaotty-macos-arm64.zip
-            xcrun notarytool submit miaotty-macos-arm64.zip \
+            ditto -c -k --keepParent dist/miaotty.app "miaotty-macos-$ARCH.zip"
+            xcrun notarytool submit "miaotty-macos-$ARCH.zip" \
               --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
               --password "$APPLE_APP_PASSWORD" --wait
             xcrun stapler staple dist/miaotty.app
-            rm -f miaotty-macos-arm64.zip
+            rm -f "miaotty-macos-$ARCH.zip"
           else
             echo "no signing secrets; shipping ad-hoc signed build"
           fi
-          ditto -c -k --keepParent dist/miaotty.app miaotty-macos-arm64.zip
+          ditto -c -k --keepParent dist/miaotty.app "miaotty-macos-$ARCH.zip"
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
@@ -202,7 +210,7 @@ jobs:
 
           # Map artifact filename patterns to the platform keys the app asks for.
           patterns = [
-              ("macos-aarch64", r"miaotty-macos.*\.zip$"),
+              ("macos-aarch64", r"miaotty-macos-arm64\.zip$"),
               ("macos-x86_64", r"miaotty-macos-x86_64.*\.zip$"),
               ("linux-x86_64", r"miaotty-linux.*\.(tar\.gz|AppImage)$"),
               ("linux-x86_64-deb", r"miaotty_.*_amd64\.deb$"),

@@ -19,7 +19,7 @@ artifacts, builds an **update manifest**, and creates a GitHub Release.
 
 | Platform | Artifact | Notes |
 |----------|----------|-------|
-| macOS | `miaotty-macos-arm64.zip` (a `.app`) | ad-hoc signed; notarized when the Apple secrets are set |
+| macOS | `miaotty-macos-arm64.zip`, `miaotty-macos-x86_64.zip` (each a `.app`) | ad-hoc signed; notarized when the Apple secrets are set. Apple Silicon is built on `macos-latest`, Intel on `macos-13` (`continue-on-error`, so a missing Intel runner cannot block a release) |
 | Linux | `miaotty-linux-x86_64.tar.gz`, `miaotty-linux-x86_64.AppImage`, `dist/*.deb` | AppImage is best-effort (`continue-on-error`) |
 | Windows | `miaotty-windows-x86_64.zip`, `miaotty-<ver>-x86_64.msi` | MSI is best-effort (`continue-on-error`) |
 
@@ -167,5 +167,6 @@ simply have no `.sig` — verification is optional, not required to install.
 - Self-replace now covers Windows (MSI/zip helper) and Linux (AppImage helper);
 only the *installation verification* of those paths is still pending (the .deb
 and MSI installs themselves are verified — see above).
-- The macOS zip name is arch-specific today (`arm64`); an Intel build would need
-  `macos-x86_64` and a matching pattern.
+- The Intel macOS build runs on GitHub's `macos-13` runner, which is best-effort:
+  if that image is retired the Apple Silicon zip is still released and the
+  manifest simply has no `macos-x86_64` entry.

@@ -18,7 +18,7 @@ Windows 上构建、按平台打包、可选签名、上传产物、生成**更�
 
 | 平台 | 产物 | 说明 |
 |------|------|------|
-| macOS | `miaotty-macos-arm64.zip`(内含 `.app`) | ad-hoc 签名;配置 Apple secrets 后公证 |
+| macOS | `miaotty-macos-arm64.zip`、`miaotty-macos-x86_64.zip`(各含一个 `.app`) | ad-hoc 签名;配置 Apple secrets 后公证。Apple Silicon 在 `macos-latest` 构建,Intel 在 `macos-13`(`continue-on-error`,故 Intel runner 缺失也不会卡住发布) |
 | Linux | `miaotty-linux-x86_64.tar.gz`、`miaotty-linux-x86_64.AppImage`、`dist/*.deb` | AppImage 为尽力而为(`continue-on-error`) |
 | Windows | `miaotty-windows-x86_64.zip`、`miaotty-<ver>-x86_64.msi` | MSI 为尽力而为(`continue-on-error`) |
 
@@ -150,4 +150,5 @@ shasum -a 256 miaotty-macos-arm64.zip   # 与清单里的 "sha256" 比对
 - **AppImage** 路径为尽力而为,尚未在真实安装场景验证。
 - 自我替换现已覆盖 Windows(MSI/zip helper)与 Linux(AppImage helper);仅这些路径的
   *安装验证*仍待完成(`.deb` 与 MSI 安装本身已验证 —— 见上文)。
-- macOS zip 名称目前带架构(`arm64`);若要做 Intel 构建,需要 `macos-x86_64` 及对应匹配。
+- Intel macOS 构建跑在 GitHub 的 `macos-13` runner 上,属尽力而为:该镜像若退役,仍会发布
+  Apple Silicon 的 zip,只是清单里没有 `macos-x86_64` 条目。
