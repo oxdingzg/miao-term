@@ -46,6 +46,18 @@ Linux 额外产出 `.deb`(用 `cargo-deb`,元数据在 `miaotty-app/Cargo.toml`)
   见 [`config.example.toml`](config.example.toml)。
 - 若没有 miaotty 配置,会自动导入 ghostty `config` 与 alacritty `alacritty.toml`。
 
+## 深链接(URL scheme)
+
+`miaotty.app` 会向系统注册 `miaotty://`、`ssh://` 与 `x-man-page://`;Linux 的 `.desktop`
+文件注册同样三个。链接会被翻译成一个运行对应命令的新标签。
+
+由于两个 host 共用同一个控制 socket 以及其旁的 inbox,只要**装过**这个 bundle 即可:当链接到达
+而任意 host(eframe 版或 `miaotty-native`)正在运行时,启动进程会把 intent 转发给它并退出,
+由正在运行的窗口处理该深链接。这也是 `miaotty-native` 自身无须注册就能接收系统链接的方式;
+bundle 里同时附带两个二进制(`Contents/MacOS/miaotty` 与 `miaotty-native`)。
+
+Windows MSI 只注册 `miaotty://`,故意不接管 `ssh://` / `x-man-page://`,避免在全机器范围抢占。
+
 ## Shell 集成
 
 miaotty 会安装 zsh 的 `ZDOTDIR` shim,让 shell 上报 cwd(OSC 7)与命令历史;用户 dotfiles 不受影响,

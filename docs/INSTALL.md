@@ -51,6 +51,22 @@ on a release to generate per-platform artifacts.
 - If there is no miaotty config, ghostty `config` and alacritty
   `alacritty.toml` are imported automatically.
 
+## Deep links (URL schemes)
+
+`miaotty.app` registers `miaotty://`, `ssh://` and `x-man-page://` with the OS,
+and the Linux `.desktop` file registers the same three. A link is translated into
+a tab running the matching command.
+
+Because the hosts share one control socket and an inbox beside it, the bundle only
+has to be *installed*: when a link arrives while any host is already running — the
+eframe app or `miaotty-native` — the launching process forwards the intent to it
+and exits, so the running window handles the deep link. That is also how a
+`miaotty-native` session receives OS links without registering anything itself;
+the bundle ships both binaries (`Contents/MacOS/miaotty` and `miaotty-native`).
+
+The Windows MSI registers `miaotty://` only, and deliberately leaves `ssh://` /
+`x-man-page://` alone rather than hijacking them machine-wide.
+
 ## Shell integration
 
 miaotty installs a zsh `ZDOTDIR` shim so the shell reports its cwd (OSC 7) and
