@@ -142,7 +142,7 @@
             </Directory>
         </Directory>
 
-        <Component Id='ProtocolMiaotty' Guid='*'>
+        <Component Id='ProtocolMiaotty' Guid='*' Directory='Bin'>
             <RegistryKey Root='HKCR' Key='miaotty'>
                 <RegistryValue Type='string' Value='URL:miaotty Protocol' KeyPath='yes'/>
                 <RegistryValue Name='URL Protocol' Type='string' Value=''/>
