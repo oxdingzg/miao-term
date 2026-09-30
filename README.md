@@ -55,8 +55,10 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 
 **Window and workspace**
 - Inline tab bar (icons, agent badges, `+`, `×`, drag to reorder) plus a Tabs
-  sidebar with a context menu (Rename / Prefix / Mark / Group / Duplicate /
-  Close / Close Other Tabs / Close Below / Remove from Group).
+  sidebar. Right-clicking a tab or a session opens the same row menu: Rename
+  Tab…, Prefix…, Duplicate Tab, Move Up/Down, New Tab, Close Tab, Close Other
+  Tabs and Close Below (the eframe host additionally has Mark / Group /
+  Remove from Group).
 - A recursive split tree: `⌘D` splits right and `⇧⌘D` splits down, with
   draggable dividers and a close button on every pane. `⌘⇧T` toggles a scratch
   Quick Terminal.

@@ -34,6 +34,85 @@ pub struct TabBarEvents {
     pub new_tab: bool,
 }
 
+/// A row action from the right-click menu shared by the tab bar and the session
+/// list (wording follows Otty where the two overlap).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TabMenuAction {
+    Rename,
+    Prefix,
+    Duplicate,
+    MoveUp,
+    MoveDown,
+    NewTab,
+    Close,
+    CloseOthers,
+    CloseBelow,
+}
+
+/// The context-menu entries in order; `None` is a separator.
+pub fn tab_menu_items(lang: Lang) -> Vec<(&'static str, Option<TabMenuAction>)> {
+    vec![
+        (
+            t(lang, "Rename Tab…", "重命名标签…"),
+            Some(TabMenuAction::Rename),
+        ),
+        (t(lang, "Prefix…", "前缀…"), Some(TabMenuAction::Prefix)),
+        (
+            t(lang, "Duplicate Tab", "复制标签"),
+            Some(TabMenuAction::Duplicate),
+        ),
+        ("", None),
+        (t(lang, "Move Up", "上移"), Some(TabMenuAction::MoveUp)),
+        (t(lang, "Move Down", "下移"), Some(TabMenuAction::MoveDown)),
+        ("", None),
+        (t(lang, "New Tab", "新建标签"), Some(TabMenuAction::NewTab)),
+        ("", None),
+        (t(lang, "Close Tab", "关闭标签"), Some(TabMenuAction::Close)),
+        (
+            t(lang, "Close Other Tabs", "关闭其他标签"),
+            Some(TabMenuAction::CloseOthers),
+        ),
+        (
+            t(lang, "Close Below", "关闭下方标签"),
+            Some(TabMenuAction::CloseBelow),
+        ),
+    ]
+}
+
+/// Record the chosen action for tab `i`.
+pub fn apply_tab_menu(ev: &mut TabBarEvents, i: usize, action: TabMenuAction) {
+    match action {
+        TabMenuAction::Rename => ev.rename = Some(i),
+        TabMenuAction::Prefix => ev.set_prefix = Some(i),
+        TabMenuAction::Duplicate => ev.duplicate = Some(i),
+        TabMenuAction::MoveUp => ev.move_up = Some(i),
+        TabMenuAction::MoveDown => ev.move_down = Some(i),
+        TabMenuAction::NewTab => ev.new_tab = true,
+        TabMenuAction::Close => ev.close = Some(i),
+        TabMenuAction::CloseOthers => ev.close_others = Some(i),
+        TabMenuAction::CloseBelow => ev.close_below = Some(i),
+    }
+}
+
+/// Attach the row menu to a tab/session row.
+fn tab_row_menu(resp: &egui::Response, lang: Lang, i: usize, ev: &mut TabBarEvents) {
+    resp.context_menu(|ui| {
+        for (label, action) in tab_menu_items(lang) {
+            match action {
+                None => {
+                    ui.separator();
+                }
+                Some(action) => {
+                    if ui.button(label).clicked() {
+                        apply_tab_menu(ev, i, action);
+                        ui.close_menu();
+                    }
+                }
+            }
+        }
+    });
+}
+
 /// A horizontal tab bar: clickable, draggable labels, a close affordance, `+`.
 pub fn tab_bar(
     ui: &mut egui::Ui,
@@ -102,6 +181,7 @@ pub fn tab_bar(
         if resp.double_clicked() {
             ev.rename = Some(i);
         }
+        tab_row_menu(&resp, lang, i, &mut ev);
         if resp.drag_started() {
             ui.ctx()
                 .memory_mut(|m| m.data.insert_temp(egui::Id::new(DRAG_ID), i));
@@ -137,7 +217,8 @@ pub fn tab_bar(
     ev
 }
 
-/// A vertical session list for the sidebar.
+/// A vertical session list for the sidebar. Returns what the user did; the
+/// right-click menu mirrors the tab bar's ([`tab_menu_items`]).
 #[allow(clippy::too_many_arguments)]
 pub fn sidebar(
     ui: &mut egui::Ui,
@@ -148,8 +229,9 @@ pub fn sidebar(
     metas: &[String],
     active: usize,
     heading: &str,
-) -> Option<usize> {
-    let mut switch = None;
+    lang: Lang,
+) -> TabBarEvents {
+    let mut ev = TabBarEvents::default();
     ui.visuals_mut().selection.bg_fill = bg_color(ch.active);
     ui.visuals_mut().override_text_color = Some(bg_color(ch.text));
     ui.label(section(&format!("{heading} ({})", titles.len())));
@@ -176,8 +258,9 @@ pub fn sidebar(
             }
             let resp = ui.selectable_label(i == active, egui::RichText::new(title).size(13.0));
             if resp.clicked() {
-                switch = Some(i);
+                ev.switch = Some(i);
             }
+            tab_row_menu(&resp, lang, i, &mut ev);
             if let Some(m) = metas.get(i).filter(|m| !m.is_empty()) {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
@@ -189,7 +272,7 @@ pub fn sidebar(
             }
         });
     }
-    switch
+    ev
 }
 
 /// A row of selectable details tabs; returns the newly selected index.
@@ -668,10 +751,19 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
             ))
             .show(ctx, |ui| {
                 let heading = t(lang, "Sessions", "会话");
-                if let Some(i) = sidebar(ui, &ch, &titles, &icons, &badges, &metas, active, heading)
-                {
-                    switch = Some(i);
-                }
+                let ev = sidebar(
+                    ui, &ch, &titles, &icons, &badges, &metas, active, heading, lang,
+                );
+                switch = ev.switch.or(switch);
+                close = ev.close.or(close);
+                rename = ev.rename.or(rename);
+                duplicate = ev.duplicate.or(duplicate);
+                close_others = ev.close_others.or(close_others);
+                close_below = ev.close_below.or(close_below);
+                move_up = ev.move_up.or(move_up);
+                move_down = ev.move_down.or(move_down);
+                set_prefix = ev.set_prefix.or(set_prefix);
+                new_tab = new_tab || ev.new_tab;
             });
     }
 
@@ -845,5 +937,96 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
     }
     if qev.clear {
         host.on_queue_clear();
+    }
+}
+
+#[cfg(test)]
+mod tab_menu_tests {
+    use super::*;
+
+    fn actions(lang: Lang) -> Vec<TabMenuAction> {
+        tab_menu_items(lang)
+            .into_iter()
+            .filter_map(|(_, a)| a)
+            .collect()
+    }
+
+    #[test]
+    fn menu_matches_otty_wording_and_order() {
+        let labels: Vec<&str> = tab_menu_items(Lang::En)
+            .into_iter()
+            .filter(|(l, _)| !l.is_empty())
+            .map(|(l, _)| l)
+            .collect();
+        assert_eq!(
+            labels,
+            vec![
+                "Rename Tab…",
+                "Prefix…",
+                "Duplicate Tab",
+                "Move Up",
+                "Move Down",
+                "New Tab",
+                "Close Tab",
+                "Close Other Tabs",
+                "Close Below",
+            ]
+        );
+        assert_eq!(
+            actions(Lang::En),
+            vec![
+                TabMenuAction::Rename,
+                TabMenuAction::Prefix,
+                TabMenuAction::Duplicate,
+                TabMenuAction::MoveUp,
+                TabMenuAction::MoveDown,
+                TabMenuAction::NewTab,
+                TabMenuAction::Close,
+                TabMenuAction::CloseOthers,
+                TabMenuAction::CloseBelow,
+            ]
+        );
+    }
+
+    #[test]
+    fn both_languages_describe_the_same_menu() {
+        let en = tab_menu_items(Lang::En);
+        let zh = tab_menu_items(Lang::Zh);
+        assert_eq!(en.len(), zh.len());
+        for (i, (en_item, zh_item)) in en.into_iter().zip(zh).enumerate() {
+            assert_eq!(en_item.1, zh_item.1, "item {i} has a different action");
+            assert_eq!(
+                en_item.0.is_empty(),
+                zh_item.0.is_empty(),
+                "item {i}: separators must line up"
+            );
+            if !en_item.0.is_empty() {
+                assert!(!zh_item.0.is_empty(), "item {i} has no Chinese label");
+            }
+        }
+    }
+
+    #[test]
+    fn actions_record_the_right_event() {
+        let mut ev = TabBarEvents::default();
+        apply_tab_menu(&mut ev, 3, TabMenuAction::CloseOthers);
+        assert_eq!(ev.close_others, Some(3));
+        assert_eq!(ev.close, None);
+        apply_tab_menu(&mut ev, 2, TabMenuAction::Close);
+        assert_eq!(ev.close, Some(2));
+        apply_tab_menu(&mut ev, 1, TabMenuAction::MoveUp);
+        assert_eq!(ev.move_up, Some(1));
+        apply_tab_menu(&mut ev, 0, TabMenuAction::MoveDown);
+        assert_eq!(ev.move_down, Some(0));
+        apply_tab_menu(&mut ev, 4, TabMenuAction::Prefix);
+        assert_eq!(ev.set_prefix, Some(4));
+        apply_tab_menu(&mut ev, 4, TabMenuAction::Rename);
+        assert_eq!(ev.rename, Some(4));
+        apply_tab_menu(&mut ev, 4, TabMenuAction::Duplicate);
+        assert_eq!(ev.duplicate, Some(4));
+        apply_tab_menu(&mut ev, 4, TabMenuAction::CloseBelow);
+        assert_eq!(ev.close_below, Some(4));
+        apply_tab_menu(&mut ev, 4, TabMenuAction::NewTab);
+        assert!(ev.new_tab);
     }
 }
