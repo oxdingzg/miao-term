@@ -1,0 +1,5 @@
+#!/bin/sh
+# Resolve the bundle without changing the shell's inherited working directory.
+appdir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+export PATH="$appdir/usr/bin:$PATH"
+exec "$appdir/usr/bin/miaotty" "$@"
