@@ -36,6 +36,16 @@ use winit::window::{Window, WindowId};
 
 mod session;
 
+#[derive(Debug)]
+enum UpdateResult {
+    Current,
+    Available {
+        version: String,
+        url: Option<String>,
+    },
+    Failed(String),
+}
+
 const MENU_H: f32 = 24.0;
 const TAB_H: f32 = 30.0;
 const STATUS_H: f32 = 22.0;
@@ -435,10 +445,10 @@ struct State {
     search_hits: Vec<(usize, u16)>,
     search_key: String,
     update_url: Option<String>,
-    update_rx: Option<std::sync::mpsc::Receiver<(String, Option<String>)>>,
-    update_msg: Option<String>,
+    update_rx: Option<std::sync::mpsc::Receiver<UpdateResult>>,
+    update_result: Option<UpdateResult>,
+    update_notice_until: Option<Instant>,
     update_dialog: bool,
-    update_download_url: Option<String>,
     details_tab: usize,
     details_cwd: Option<std::path::PathBuf>,
     details_data: Option<DetailsData>,
@@ -627,6 +637,17 @@ impl State {
         let proxy = self.proxy.clone();
         let waker: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
             let _ = proxy.send_event(HostEvent::Wake);
+        });
+        // A Finder/Dock launch hands the app `/` as its working directory, so
+        // inheriting the process cwd would drop every pane in the filesystem
+        // root. Only trust it when it names a real place to work, and fall back
+        // to the home directory otherwise; a launch from a terminal keeps the
+        // directory the user typed `miaotty` in.
+        let cwd = cwd.or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .filter(|dir| dir.as_path() != std::path::Path::new("/"))
+                .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from))
         });
         let env = vec![("MIAOTTY_PANE_ID".to_string(), id.clone())];
         Terminal::new(None, cols, rows, 10_000, cwd, &env, waker)
@@ -1851,33 +1872,76 @@ impl State {
         // Shared, host-agnostic chrome (menu/tabs/sidebar/details/status).
         chrome::render(ctx, self);
         if self.update_dialog {
+            use miao_term_ui::i18n::t;
+            let lang = self.lang;
+            let checking = self.update_rx.is_some();
             let mut open = true;
-            egui::Window::new(miao_term_ui::i18n::t(
-                self.lang,
-                "Check for Updates",
-                "检查更新",
-            ))
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| {
-                if let Some(message) = &self.update_msg {
-                    ui.label(message);
-                }
-                if let Some(url) = &self.update_download_url {
-                    if ui
-                        .button(miao_term_ui::i18n::t(
-                            self.lang,
-                            "Download Update",
-                            "下载更新",
-                        ))
-                        .clicked()
-                    {
-                        open_external(url);
+            let mut dismiss = false;
+            let mut retry = false;
+            egui::Window::new(t(lang, "Software Update", "软件更新"))
+                .id(egui::Id::new("software_update"))
+                .open(&mut open)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .collapsible(false)
+                .resizable(false)
+                .default_width(340.0)
+                .show(ctx, |ui| {
+                    ui.add_space(8.0);
+                    if checking {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(t(lang, "Checking for updates…", "正在检查更新…"));
+                        });
+                    } else {
+                        match &self.update_result {
+                            Some(UpdateResult::Available { version, url }) => {
+                                ui.heading(t(lang, "A new version is available", "发现新版本"));
+                                ui.add_space(6.0);
+                                ui.label(format!("miaotty {version}"));
+                                ui.label(format!(
+                                    "{} {}",
+                                    t(lang, "Current version:", "当前版本："),
+                                    env!("CARGO_PKG_VERSION")
+                                ));
+                                if url.is_none() {
+                                    ui.label(t(
+                                        lang,
+                                        "No download is available for this platform.",
+                                        "暂未提供此平台的下载。",
+                                    ));
+                                }
+                            }
+                            Some(UpdateResult::Failed(error)) => {
+                                ui.heading(t(lang, "Unable to check for updates", "无法检查更新"));
+                                ui.add_space(6.0);
+                                ui.label(error);
+                            }
+                            _ => {}
+                        }
                     }
-                }
-            });
-            self.update_dialog = open;
+                    ui.add_space(16.0);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        match &self.update_result {
+                            Some(UpdateResult::Available { url: Some(url), .. }) if !checking => {
+                                if ui.button(t(lang, "Download Update", "下载更新")).clicked() {
+                                    open_external(url);
+                                    dismiss = true;
+                                }
+                            }
+                            Some(UpdateResult::Failed(_)) if !checking => {
+                                retry = ui.button(t(lang, "Try Again", "重试")).clicked();
+                            }
+                            _ => {}
+                        }
+                        dismiss |= ui.button(t(lang, "Close", "关闭")).clicked();
+                    });
+                    ui.add_space(4.0);
+                });
+            self.update_dialog =
+                open && !dismiss && !ctx.input(|i| i.key_pressed(egui::Key::Escape));
+            if retry {
+                self.check_updates();
+            }
         }
         // Hyperlink hover cue: hand cursor + underline while Cmd/Ctrl is held.
         let link = if self.mods.super_key() || self.mods.control_key() {
@@ -1974,7 +2038,9 @@ impl State {
             let hovered = self
                 .pane_rects()
                 .into_iter()
-                .find(|(_, r)| r.contains(self.cursor.0 as f32 / scale, self.cursor.1 as f32 / scale))
+                .find(|(_, r)| {
+                    r.contains(self.cursor.0 as f32 / scale, self.cursor.1 as f32 / scale)
+                })
                 .map(|(_, r)| card_inner(r));
             // Over a pane the drop pastes a shell-quoted path, anywhere else it
             // opens the editor. Which one is about to happen is the whole point
@@ -1992,7 +2058,11 @@ impl State {
                 egui::Rounding::same(4.0),
                 egui::Color32::from_rgba_unmultiplied(ch.accent.0, ch.accent.1, ch.accent.2, 46),
             );
-            painter.rect_stroke(rect, egui::Rounding::same(4.0), egui::Stroke::new(2.0_f32, accent));
+            painter.rect_stroke(
+                rect,
+                egui::Rounding::same(4.0),
+                egui::Stroke::new(2.0_f32, accent),
+            );
         }
         // Host-specific overlay windows.
         self.palette_window(ctx);
@@ -2334,9 +2404,13 @@ impl State {
         if self.read_only {
             s.push_str("   RO");
         }
-        if let Some(m) = &self.update_msg {
+        if self
+            .update_notice_until
+            .is_some_and(|until| Instant::now() < until)
+        {
             s.push_str("   \u{00b7}   ");
-            s.push_str(m);
+            s.push_str(t(l, "You're up to date", "已是最新版本"));
+            s.push_str(concat!(" (v", env!("CARGO_PKG_VERSION"), ")"));
         }
         s
     }
@@ -3394,13 +3468,20 @@ impl State {
     }
 
     fn check_updates(&mut self) {
+        // Reopening an in-flight check must not launch a second request.
         self.update_dialog = true;
-        self.update_download_url = None;
+        self.update_notice_until = None;
+        if self.update_rx.is_some() {
+            return;
+        }
+        self.update_result = None;
         let Some(url) = self.update_url.clone() else {
-            self.update_msg = Some("no update URL configured".to_string());
+            self.update_result = Some(UpdateResult::Failed(
+                miao_term_ui::i18n::t(self.lang, "No update URL configured.", "未配置更新地址。")
+                    .to_string(),
+            ));
             return;
         };
-        self.update_msg = Some("Checking for updates…".to_string());
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let out = std::process::Command::new("curl")
@@ -3410,22 +3491,22 @@ impl State {
                 Ok(o) if o.status.success() => {
                     match miao_term_ui::update::parse_checked(&String::from_utf8_lossy(&o.stdout)) {
                         Ok(m) => {
-                            let local = env!("CARGO_PKG_VERSION");
-                            if miao_term_ui::update::is_newer(&m.version, local) {
-                                let download =
-                                    m.for_platform().map(|artifact| artifact.url.clone());
-                                (
-                                    format!("Update available: v{} (current: v{local})", m.version),
-                                    download,
-                                )
+                            if miao_term_ui::update::is_newer(&m.version, env!("CARGO_PKG_VERSION"))
+                            {
+                                let url = m.for_platform().map(|artifact| artifact.url.clone());
+                                UpdateResult::Available {
+                                    version: m.version,
+                                    url,
+                                }
                             } else {
-                                (format!("Up to date (v{local})"), None)
+                                UpdateResult::Current
                             }
                         }
-                        Err(error) => (format!("Update check failed: {error}"), None),
+                        Err(error) => UpdateResult::Failed(error.to_string()),
                     }
                 }
-                _ => ("Update check failed".to_string(), None),
+                Ok(_) => UpdateResult::Failed("Could not fetch the update manifest.".to_string()),
+                Err(error) => UpdateResult::Failed(error.to_string()),
             };
             let _ = tx.send(result);
         });
@@ -4423,9 +4504,9 @@ impl ApplicationHandler<HostEvent> for Host {
             search_key: String::new(),
             update_url: cfg.update_check_url.clone(),
             update_rx: None,
-            update_msg: None,
+            update_result: None,
+            update_notice_until: None,
             update_dialog: false,
-            update_download_url: None,
             details_tab: std::env::var("MIAOTTY_DETAILS_TAB")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -4516,13 +4597,38 @@ impl ApplicationHandler<HostEvent> for Host {
             }
             if let Some(rx) = state.update_rx.take() {
                 match rx.try_recv() {
-                    Ok((msg, download_url)) => {
-                        state.update_msg = Some(msg);
-                        state.update_download_url = download_url;
+                    Ok(result) => {
+                        if matches!(result, UpdateResult::Current) {
+                            // Successful checks are brief feedback, not a persistent window.
+                            if state.update_dialog {
+                                state.update_notice_until =
+                                    Some(Instant::now() + Duration::from_secs(4));
+                            }
+                            state.update_dialog = false;
+                        }
+                        state.update_result = Some(result);
                         state.window.request_redraw();
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) => state.update_rx = Some(rx),
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        state.update_result = Some(UpdateResult::Failed(
+                            miao_term_ui::i18n::t(
+                                state.lang,
+                                "Update check interrupted.",
+                                "更新检查已中断。",
+                            )
+                            .to_string(),
+                        ));
+                        state.window.request_redraw();
+                    }
+                }
+            }
+            if let Some(until) = state.update_notice_until {
+                if Instant::now() >= until {
+                    state.update_notice_until = None;
+                    state.window.request_redraw();
+                } else {
+                    wake_at = wake_at.min(until);
                 }
             }
             state.poll_details();
