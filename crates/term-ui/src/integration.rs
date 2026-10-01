@@ -324,9 +324,20 @@ mod tests {
             if let Some(pane) = pane {
                 cmd.env("MTTY_PANE_ID", pane);
             }
-            let mut child = cmd.spawn().unwrap();
-            // The hook never waits, so it may exit before reading its input:
-            // a broken pipe here is allowed, a failed hook is not.
+            // A script written a moment ago can be briefly "text file busy":
+            // a test thread that forked meanwhile still holds its write fd.
+            let mut tries = 0;
+            let mut child = loop {
+                match cmd.spawn() {
+                    // ETXTBSY is 26 on Linux and macOS (ErrorKind::ExecutableFileBusy needs Rust 1.83).
+                    Err(e) if e.raw_os_error() == Some(26) && tries < 50 => {
+                        tries += 1;
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                    }
+                    other => break other.unwrap(),
+                }
+            };
+            // The hook never waits, so it may exit before reading its input.
             let _ = child.stdin.take().unwrap().write_all(stdin.as_bytes());
             assert!(child.wait().unwrap().success());
         };
