@@ -147,7 +147,7 @@ feature-by-feature review of the native host code for this baseline.
 | zsh shell integration (OSC 7, history) | Works | bash / fish / PowerShell not covered |
 | URL schemes and single-instance forwarding | Partial | Command-line URLs work; macOS URL events from a browser/Finder are not handled |
 | MTP control plane and `mtty-cli` | Works | Covered by the real-window smoke |
-| Version check | Works | Check only, no install; `update-pubkey` unused |
+| Version check and update | Works | SHA-256 and a required minisign signature are checked in process; macOS install-and-relaunch checked end to end; AppImage/Windows unit-tested only |
 | English / Chinese UI | Partial | Some details-panel rows are still English |
 
 ## 4. Roadmap and execution batches
@@ -285,7 +285,11 @@ verified on its own:
   drop, menus) **[owner + hardware]**.
 - [ ] **B4.2** Apple notarization and Windows MSI signing **[owner +
   credentials]**.
-- [ ] **B4.3** Auto-update: download, `update-pubkey` signature check, replace.
+- [x] **B4.3** Auto-update: download, `update-pubkey` signature check, replace.
+  (Release key built in. On the Mac mini a packaged app installed and relaunched
+  a test-signed release, and tampered packages were refused by checksum and by
+  signature; the published v0.0.5 package verifies against the repository key.
+  The AppImage and Windows helpers have not run on real desktops yet.)
 - [ ] **B4.4** Shell integration for bash / fish / PowerShell.
 - [ ] **B4.5** Optional end-to-end-encrypted sync, off by default.
 

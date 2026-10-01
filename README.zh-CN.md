@@ -102,8 +102,10 @@
   安装状态上报 hook 脚本,并复制可直接合并的配置 —— Claude Code(`~/.claude/settings.json`)
   与 codex(`~/.codex/hooks.json`)的 `hooks` JSON、opencode 的插件文件。不替用户修改 agent 配置;
   hook 只为运行在 mtty pane 内的 agent 上报。`miao` 通过内置集成自动上报状态,无需接线 hook。
-- **更新**:检查配置的版本清单；通过平台安装包安装新版本。旧 eframe 应用的自动下载/安装
-  界面不属于统一后的 native 应用。
+- **更新**:*检查更新* 读取版本清单;*下载更新* 获取本平台安装包,在程序内校验 SHA-256 与 minisign 签名
+  (使用内置的发布公钥,或 `update-pubkey`);未签名或校验不符的下载会被删除,绝不安装。*安装并重启*(或命令面板
+  的 *更新并重启*,一步完成)在 macOS 上替换 app 并在失败时回滚,替换正在运行的 AppImage,或运行 Windows MSI;
+  deb 与 tarball 安装则打开已校验的下载交给包管理器。
 - **主机库**:保存在 `~/.config/mtty/hosts.toml` 的主机(名称、地址、用户、端口、分组、标签、跳板机)
   显示在侧栏与 Open Quickly 中;*主机…* 可搜索、添加、删除(需确认),并导入 `~/.ssh/config` 中的具体
   `Host` 条目 —— 导入的主机按别名连接,ssh 对该条目的所有配置都会生效。`mtty://host/<名称>` 可从脚本或
@@ -349,7 +351,8 @@ CI 性能基线已持久化于 `benches/perf-baseline.json`,由 nightly/手动�
 - **平台验证(需要硬件)**:Linux 的 wgpu 渲染路径已在 CI 中通过 Mesa 软件 Vulkan(lavapipe)
   覆盖,Windows 也在真机上经 MTP 驱动;真实 Linux 桌面会话、Wayland 门户热键、Windows 的
   IME/GUI 路径仍需一台交互机器。
-- **更新安装**:native 应用的自动自替换仍属后续工作；当前通过发布的平台安装包升级。
+- **更新安装**:macOS 替换流程已用打包后的 app 与测试签名的发布包做过端到端验证(篡改的包会被拒绝);
+  AppImage 与 Windows 辅助脚本有单元测试,尚未在这两类桌面上实际运行。
 - **单一原生应用**:原 native 实现统一以 mtty 发布；配置和会话保留迁移兼容，
   见 [APP-IDENTITY.zh-CN.md](docs/APP-IDENTITY.zh-CN.md)。
 - **终端内联图片**:不模拟 Kitty 的 z-index(图片绘制在网格之上);回滚容量内锚定精确,超出后

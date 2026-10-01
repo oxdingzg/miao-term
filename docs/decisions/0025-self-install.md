@@ -44,6 +44,15 @@ waits for our PID and then swaps the app:
 
 The generators are pure functions and unit-tested on every platform.
 
+## Addendum (B4.3, native app)
+
+The single native app (ADR 0032) lost this flow when the eframe host was
+removed; B4.3 restores it in `term-ui/src/install.rs` with `sh` quoting, and
+`update::download_verified` now checks minisign signatures in process
+(`minisign-verify`) against the built-in release key, so a signature is
+required rather than skipped when the `minisign` tool is missing. The palette's
+*Update and Relaunch* runs check, download, verification and install in one go.
+
 ## Consequences
 
 - The update path is end-to-end on macOS: check → download → verify → install →
