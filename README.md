@@ -123,10 +123,13 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
   (ADR 0031). A bare `mtty` binary keeps the in-window menu. The window
   itself asks for the dark appearance, so its title bar matches the chrome
   instead of opening as a light strip.
-- **Agent integrations**: detect claude/codex/opencode/miao, install a state hook
-  script and show the snippet that wires it into the agent's own config — the
-  user's agent config is never edited for them. `miao` reports
-  its state from a built-in integration, so it needs no hook wiring.
+- **Agent integrations**: detect claude/codex/opencode/miao and launch them in a
+  new tab (Settings or the command palette); install a state hook script and
+  copy a ready-to-merge config — `hooks` JSON for Claude Code
+  (`~/.claude/settings.json`) and codex (`~/.codex/hooks.json`), a plugin file
+  for opencode. The user's agent config is never edited for them, and hooks
+  only report for agents running inside an mtty pane. `miao` reports its state
+  from a built-in integration, so it needs no hook wiring.
 - **Updates**: check the configured version manifest. Install published packages
   using the platform installer; automatic download/install UI from the former
   eframe application is not part of the unified native app.

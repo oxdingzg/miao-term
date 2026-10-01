@@ -90,9 +90,10 @@
   裸跑 `mtty` 仍用窗口内菜单。窗口本身请求深色外观,标题栏与界面一致,不再是一条
   浅色条。
 - **全局快速终端热键**:macOS/Windows 用 `global-hotkey`,Linux 使用 sway/hyprland/GNOME 等 compositor 绑定。
-- **Agent 集成**:检测 claude/codex/opencode/miao,安装状态上报 hook 脚本,并显示接入该 agent
-  自身配置的片段 —— 不替用户修改 agent 配置。`miao` 通过内置集成自动上报状态,
-  无需接线 hook。
+- **Agent 集成**:检测 claude/codex/opencode/miao,并可在新标签中启动(设置或命令面板);
+  安装状态上报 hook 脚本,并复制可直接合并的配置 —— Claude Code(`~/.claude/settings.json`)
+  与 codex(`~/.codex/hooks.json`)的 `hooks` JSON、opencode 的插件文件。不替用户修改 agent 配置;
+  hook 只为运行在 mtty pane 内的 agent 上报。`miao` 通过内置集成自动上报状态,无需接线 hook。
 - **更新**:检查配置的版本清单；通过平台安装包安装新版本。旧 eframe 应用的自动下载/安装
   界面不属于统一后的 native 应用。
 - **SSH 会话与远端 view/edit**:*新建 SSH 会话…* 遵循 `~/.ssh/config`,复用 ControlMaster 连接,
