@@ -80,8 +80,20 @@ pub fn parse_ssh_g(text: &str) -> Resolved {
     out
 }
 
+/// A new SSH session for user input: the tab title and the command to type
+/// into a fresh pane. The target is passed to ssh exactly as typed: ssh
+/// applies `~/.ssh/config` itself, and options under `Host <alias>` only match
+/// the alias, never the resolved hostname. Nothing here blocks on a process
+/// beyond a cached local `infocmp`.
+pub fn session_command(input: &str) -> Option<(String, String)> {
+    let target = Target::parse(input)?;
+    let cmd = command(&target, &bootstrap("xterm-256color"));
+    Some((target.destination(), cmd))
+}
+
 /// Resolve a target through the user's ssh config, falling back to the typed
-/// values when `ssh -G` is unavailable.
+/// values when `ssh -G` is unavailable. Runs a process: keep it off the UI
+/// thread, and connect with the typed target (see [`session_command`]).
 pub fn resolve(target: &Target) -> Target {
     let output = Command::new("ssh")
         .args(["-G", &target.destination()])
@@ -144,11 +156,22 @@ pub fn bootstrap_with(terminfo_b64: Option<&str>, term: &str) -> String {
 /// the plain `xterm-256color` bootstrap.
 pub fn bootstrap(term: &str) -> String {
     const MAX_EMBED: usize = 384;
-    let entry = Command::new("infocmp").args(["-x", term]).output().ok();
-    let b64 = entry
-        .filter(|o| o.status.success() && !o.stdout.is_empty())
-        .map(|o| base64_encode(&o.stdout))
-        .filter(|s| s.len() <= MAX_EMBED);
+    // The local terminfo entry does not change while we run: look it up once.
+    static CACHE: std::sync::Mutex<Vec<(String, Option<String>)>> =
+        std::sync::Mutex::new(Vec::new());
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let b64 = match cache.iter().find(|(t, _)| t == term) {
+        Some((_, b64)) => b64.clone(),
+        None => {
+            let entry = Command::new("infocmp").args(["-x", term]).output().ok();
+            let b64 = entry
+                .filter(|o| o.status.success() && !o.stdout.is_empty())
+                .map(|o| base64_encode(&o.stdout))
+                .filter(|s| s.len() <= MAX_EMBED);
+            cache.push((term.to_string(), b64.clone()));
+            b64
+        }
+    };
     bootstrap_with(b64.as_deref(), term)
 }
 
@@ -264,6 +287,17 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn sessions_connect_with_the_typed_alias() {
+        // `Host work` options (IdentityFile, ProxyJump, …) only apply when ssh
+        // is given the alias itself, so it must not be replaced by a hostname.
+        let (title, cmd) = session_command("deploy@work:2200").unwrap();
+        assert_eq!(title, "deploy@work");
+        assert!(cmd.contains(" -p 2200 "), "{cmd}");
+        assert!(cmd.contains("'deploy@work'"), "{cmd}");
+        assert!(session_command("  ").is_none());
+    }
 
     #[test]
     fn parses_targets() {

@@ -182,7 +182,7 @@ verified on its own:
     hotkey snippets, ControlPath and UI text say mtty.
   - Acceptance: unit tests for migration, environment and schemes; an old hook
     script reports state from a new pane (smoke).
-- [x] **B1.2 Build and packaging** — `ee12822`: `package-macos.sh` + `check-macos-bundle.py` + `smoke-hosts.py --bundle` pass; `test-release-manifest.py` passes 9 tests; the release-workflow rehearsal awaits the owner.
+- [x] **B1.2 Build and packaging** — `ee12822`: `package-macos.sh` + `check-macos-bundle.py` + `smoke-hosts.py --bundle` pass; `test-release-manifest.py` passes 9 tests; the release-workflow rehearsal (run 36830274914) passes on all four runners, including MSI install/uninstall with both schemes and the deb aliases.
   - Dirs and packages: `miaotty-app` → `mtty-app` (binary `mtty`),
     `miaotty-cli` → `mtty-cli`.
   - macOS: `mtty.app`, `dev.mtty.terminal`, URL scheme registration; the
@@ -206,7 +206,7 @@ verified on its own:
 
 ### M0 Stabilize: turn "Partial" into "Works"
 
-- [ ] **B0.1 Nothing blocks the UI thread**: `ssh -G`, remote read/write,
+- [x] **B0.1 Nothing blocks the UI thread** (also fixed: SSH sessions connect with the typed alias; options under `Host <alias>` were not applied before): `ssh -G`, remote read/write,
   `mermaid-command` and Files directory reads become background tasks with a
   loading state; the details panel polls only while visible; Ports includes
   child processes; non-git directories are reported as such. Acceptance:
