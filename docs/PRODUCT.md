@@ -246,7 +246,7 @@ verified on its own:
 - [x] **B2.4 Worktree tasks** (4 integration tests on temporary repositories; the tasks window and the new-task dialog checked in real-window captures via `MTTY_QA_COMMAND`): a task = `git worktree add` + branch + agent pane;
   task list, diff view, merge or discard (destructive steps confirm).
   Acceptance: integration tests against a temporary repository.
-- [ ] **B2.5 Attention and miao**: clicking a notification jumps to its pane;
+- [x] **B2.5 Attention and miao** (osascript notifications cannot report clicks, so activating mtty within two minutes of a notification jumps to its pane; the background `!`/✓/• marks were checked in a real-window capture; the miao plugin reads `MTTY_*`, miao commit `f596c592a`): clicking a notification jumps to its pane;
   unread/finished marks on background tabs; the miao plugin reads `MTTY_*`
   (miao repository, separate commit). Acceptance: transition unit tests; miao
   plugin tests.

@@ -81,7 +81,10 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 - **Composer** (`⌘⇧E`) and a **prompt queue**: a queued prompt targets the pane
   it was queued from and is typed in when that pane's agent turns idle, one per
   transition (it survives restarts; Send now takes it out of the queue);
-  **notifications** and a **sleep guard** driven by agent state.
+  **notifications** and a **sleep guard** driven by agent state. Background tabs
+  are marked when their agent needs input or failed (`!`), finished (✓) or
+  printed something (•); bringing mtty forward soon after a notification shows
+  the pane it was about.
 - **Reader/editor**: read-only preview with line numbers, edit mode with a
   gutter and an opt-in minimal vim mode (`editor-vim`). A failed save is shown
   and keeps the buffer modified; closing unsaved changes asks for a second
