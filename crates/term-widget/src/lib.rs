@@ -490,6 +490,10 @@ fn window_body<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R 
         .inner
 }
 
+fn t_lang(lang: miao_term_ui::i18n::Lang, en: &'static str, zh: &'static str) -> &'static str {
+    miao_term_ui::i18n::t(lang, en, zh)
+}
+
 /// The palette label for launching an agent.
 fn launch_label(lang: miao_term_ui::i18n::Lang, agent: &str) -> &'static str {
     use miao_term_ui::i18n::t;
@@ -710,6 +714,32 @@ struct TasksView {
     confirm: Option<(usize, bool)>,
 }
 
+/// The Snippets window: search, the add form, hosts picked for a run.
+#[derive(Default)]
+struct SnippetsView {
+    filter: String,
+    form: miao_term_config::snippets::Snippet,
+    form_tags: String,
+    /// Saved host names to run the chosen snippet on.
+    hosts: std::collections::BTreeSet<String>,
+    confirm_delete: Option<usize>,
+}
+
+/// An ssh command that runs `command` on a host in a terminal tab (its
+/// output stays visible; the tab returns to the local shell afterwards).
+fn remote_run_command(destination: &str, options: &[String], command: &str) -> String {
+    let mut cmd = String::from("ssh -t");
+    for option in options {
+        cmd.push(' ');
+        cmd.push_str(&shell_quote(option));
+    }
+    cmd.push(' ');
+    cmd.push_str(&shell_quote(destination));
+    cmd.push(' ');
+    cmd.push_str(&shell_quote(command));
+    cmd
+}
+
 /// The SFTP window (B3.4): this machine on the left, the host on the right.
 struct SftpView {
     title: String,
@@ -883,6 +913,12 @@ struct State {
     host_book_error: Option<String>,
     hosts_view: Option<HostsView>,
     sftp_view: Option<SftpView>,
+    /// Typed input goes to every pane of the active tab (B3.5).
+    broadcast: bool,
+    /// Saved command snippets (B3.5); an unreadable file blocks saving.
+    snippet_book: miao_term_config::snippets::SnippetBook,
+    snippet_book_error: Option<String>,
+    snippets_view: Option<SnippetsView>,
     /// Running port forwards by (host name, rule spec) (B3.3).
     tunnels: HashMap<(String, String), miao_term_ui::forward::Tunnel>,
     remote_dialog: Option<(String, String)>,
@@ -1787,6 +1823,15 @@ impl State {
                 }
                 pane.term.write(bytes);
                 pane.scroll = 0;
+            }
+            // Broadcast (B3.5): the same input to every other pane of the tab.
+            if self.broadcast {
+                let active = tab.active.clone();
+                for pane in tab.panes.iter_mut().filter(|p| p.id != active) {
+                    pane.reconnect = None;
+                    pane.term.write(bytes);
+                    pane.scroll = 0;
+                }
             }
         }
         self.window.request_redraw();
@@ -2733,6 +2778,7 @@ impl State {
         self.tasks_window(ctx);
         self.hosts_window(ctx);
         self.sftp_window(ctx);
+        self.snippets_window(ctx);
         self.remote_dialog_window(ctx);
         self.composer_window(ctx);
         self.quick_window(ctx);
@@ -3102,6 +3148,9 @@ impl State {
         if panes > 1 {
             s.push_str(&format!("   {} {panes}", t(l, "panes", "分屏")));
         }
+        if self.broadcast {
+            s.push_str("   BROADCAST");
+        }
         if !self.tunnels.is_empty() {
             s.push_str(&format!("   \u{21c4} {}", self.tunnels.len()));
         }
@@ -3130,6 +3179,9 @@ enum Cmd {
     Hosts,
     /// SFTP for the active ssh tab (B3.4).
     SftpCurrent,
+    /// Snippets and broadcast input (B3.5).
+    Snippets,
+    ToggleBroadcast,
     /// Agent tasks in git worktrees (B2.4).
     NewTask,
     Tasks,
@@ -3195,6 +3247,15 @@ impl State {
             (Cmd::NewTab, t(l, "New Tab", "新建标签")),
             (Cmd::Composer, "Composer"),
             (Cmd::Hosts, t(l, "Hosts…", "主机…")),
+            (Cmd::Snippets, t(l, "Snippets…", "命令片段…")),
+            (
+                Cmd::ToggleBroadcast,
+                t(
+                    l,
+                    "Broadcast Input to All Panes in Tab",
+                    "向本标签所有分屏广播输入",
+                ),
+            ),
             (
                 Cmd::SftpCurrent,
                 t(
@@ -3374,6 +3435,24 @@ impl State {
                         .into(),
                     ),
                 }
+            }
+            Cmd::Snippets => {
+                self.reload_snippets();
+                self.reload_hosts();
+                self.snippets_view = Some(SnippetsView::default());
+            }
+            Cmd::ToggleBroadcast => {
+                self.broadcast = !self.broadcast;
+                let msg = if self.broadcast {
+                    t_lang(
+                        self.lang,
+                        "Broadcast on: typing goes to every pane of this tab",
+                        "广播已开启:输入会发送到本标签的所有分屏",
+                    )
+                } else {
+                    t_lang(self.lang, "Broadcast off", "广播已关闭")
+                };
+                self.show_notice(msg.to_string());
             }
             Cmd::Hosts => {
                 self.reload_hosts();
@@ -4334,6 +4413,7 @@ impl State {
             Tab(usize),
             Pane(usize, String),
             Host(usize),
+            Snippet(usize),
             File(String),
             Dir(String),
             Path(std::path::PathBuf),
@@ -4373,6 +4453,13 @@ impl State {
                     format!("{agent} \u{00b7} {state} \u{00b7} {title}"),
                 ))
             })
+            .collect();
+        let snippets: Vec<(usize, String)> = self
+            .snippet_book
+            .snippets
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (i, format!("{} \u{00b7} {}", s.name, s.command)))
             .collect();
         let saved_hosts: Vec<(usize, String)> = self
             .host_book
@@ -4433,6 +4520,16 @@ impl State {
                     ));
                 }
             }
+            for (i, label) in &snippets {
+                if let Some(s) = miao_term_ui::palette::score(label, "snippet", &q) {
+                    rows.push((
+                        s,
+                        freq(label),
+                        format!("\u{276f} {label}"),
+                        Pick::Snippet(*i),
+                    ));
+                }
+            }
             for (i, label) in &saved_hosts {
                 if let Some(s) = miao_term_ui::palette::score(label, "host ssh", &q) {
                     rows.push((s, freq(label), format!("\u{21c4} {label}"), Pick::Host(*i)));
@@ -4469,6 +4566,7 @@ impl State {
                 Pick::Tab(i) => Pick::Tab(*i),
                 Pick::Pane(i, id) => Pick::Pane(*i, id.clone()),
                 Pick::Host(i) => Pick::Host(*i),
+                Pick::Snippet(i) => Pick::Snippet(*i),
                 Pick::File(n) => Pick::File(n.clone()),
                 Pick::Dir(n) => Pick::Dir(n.clone()),
                 Pick::Path(p) => Pick::Path(p.clone()),
@@ -4496,6 +4594,11 @@ impl State {
                 Pick::Host(i) => {
                     if let Some(host) = self.host_book.hosts.get(i).cloned() {
                         self.open_host(&host);
+                    }
+                }
+                Pick::Snippet(i) => {
+                    if let Some(sn) = self.snippet_book.snippets.get(i).cloned() {
+                        self.run_snippet_here(&sn.command);
                     }
                 }
                 Pick::Pane(i, id) => {
@@ -4766,6 +4869,219 @@ impl State {
             return;
         };
         self.open_ssh_command(title, cmd, input.trim().to_string());
+    }
+
+    fn reload_snippets(&mut self) {
+        match miao_term_config::snippets::SnippetBook::load() {
+            Ok(book) => {
+                self.snippet_book = book;
+                self.snippet_book_error = None;
+            }
+            Err(e) => {
+                self.show_notice(e.clone());
+                self.snippet_book_error = Some(e);
+            }
+        }
+    }
+
+    fn save_snippets(&mut self) -> bool {
+        let result = match self.snippet_book_error.clone() {
+            Some(e) => Err(e),
+            None => self.snippet_book.save(),
+        };
+        if let Err(e) = result {
+            let msg = format!(
+                "{}: {e}",
+                t_lang(self.lang, "Snippets not saved", "片段未保存")
+            );
+            self.show_notice(msg);
+            return false;
+        }
+        true
+    }
+
+    /// Type a snippet into the active pane (with Enter), like a typed command.
+    fn run_snippet_here(&mut self, command: &str) {
+        self.write_input(format!("{command}\r").as_bytes());
+    }
+
+    fn snippets_window(&mut self, ctx: &egui::Context) {
+        use miao_term_ui::i18n::t;
+        let lang = self.lang;
+        let Some(mut view) = self.snippets_view.take() else {
+            return;
+        };
+        let mut open = true;
+        let mut run_here: Option<usize> = None;
+        let mut run_hosts: Option<usize> = None;
+        let mut delete: Option<usize> = None;
+        let mut add = false;
+        let host_names: Vec<String> = self
+            .host_book
+            .sorted()
+            .into_iter()
+            .map(|(_, h)| h.name.clone())
+            .collect();
+        app_window(t(lang, "Snippets", "命令片段"), ctx)
+            .open(&mut open)
+            .default_size([600.0, 460.0])
+            .show(ctx, |ui| {
+                window_body(ui, |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut view.filter)
+                            .hint_text(t(lang, "Search snippets…", "搜索片段…"))
+                            .desired_width(280.0),
+                    );
+                    if self.snippet_book.snippets.is_empty() {
+                        ui.label(t(
+                            lang,
+                            "No snippets yet. Add one below.",
+                            "还没有片段,可在下方添加。",
+                        ));
+                    }
+                    for (i, sn) in self.snippet_book.snippets.iter().enumerate() {
+                        if !sn.matches(&view.filter) {
+                            continue;
+                        }
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(&sn.name).strong());
+                            if !sn.tags.is_empty() {
+                                ui.label(egui::RichText::new(sn.tags.join(", ")).size(11.0));
+                            }
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if view.confirm_delete == Some(i) {
+                                        if ui.button(t(lang, "Cancel", "取消")).clicked() {
+                                            view.confirm_delete = None;
+                                        }
+                                        if ui
+                                            .button(t(lang, "Confirm delete", "确认删除"))
+                                            .clicked()
+                                        {
+                                            delete = Some(i);
+                                        }
+                                    } else {
+                                        if ui.button(t(lang, "Delete…", "删除…")).clicked() {
+                                            view.confirm_delete = Some(i);
+                                        }
+                                        if ui
+                                            .add_enabled(
+                                                !view.hosts.is_empty(),
+                                                egui::Button::new(t(
+                                                    lang,
+                                                    "Run on hosts",
+                                                    "在所选主机上运行",
+                                                )),
+                                            )
+                                            .clicked()
+                                        {
+                                            run_hosts = Some(i);
+                                        }
+                                        if ui.button(t(lang, "Run here", "在此运行")).clicked()
+                                        {
+                                            run_here = Some(i);
+                                        }
+                                    }
+                                },
+                            );
+                        });
+                        ui.label(egui::RichText::new(&sn.command).monospace().size(12.0));
+                    }
+                    ui.separator();
+                    if !host_names.is_empty() {
+                        ui.label(t(
+                            lang,
+                            "Hosts for \"Run on hosts\":",
+                            "\"在所选主机上运行\"的目标主机:",
+                        ));
+                        ui.horizontal_wrapped(|ui| {
+                            for name in &host_names {
+                                let mut on = view.hosts.contains(name);
+                                if ui.checkbox(&mut on, name).changed() {
+                                    if on {
+                                        view.hosts.insert(name.clone());
+                                    } else {
+                                        view.hosts.remove(name);
+                                    }
+                                }
+                            }
+                        });
+                        ui.separator();
+                    }
+                    ui.collapsing(t(lang, "Add snippet", "添加片段"), |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(t(lang, "Name", "名称"));
+                            ui.text_edit_singleline(&mut view.form.name);
+                        });
+                        ui.label(t(lang, "Command", "命令"));
+                        ui.add(
+                            egui::TextEdit::multiline(&mut view.form.command)
+                                .code_editor()
+                                .desired_rows(3)
+                                .desired_width(ui.available_width()),
+                        );
+                        ui.horizontal(|ui| {
+                            ui.label(t(lang, "Tags", "标签"));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut view.form_tags)
+                                    .hint_text("ops, db"),
+                            );
+                        });
+                        let ok = !view.form.name.trim().is_empty()
+                            && !view.form.command.trim().is_empty();
+                        if ui
+                            .add_enabled(ok, egui::Button::new(t(lang, "Save snippet", "保存片段")))
+                            .clicked()
+                        {
+                            add = true;
+                        }
+                    });
+                });
+            });
+        if let Some(i) = run_here.and_then(|i| self.snippet_book.snippets.get(i).cloned()) {
+            self.run_snippet_here(&i.command);
+        }
+        if let Some(sn) = run_hosts.and_then(|i| self.snippet_book.snippets.get(i).cloned()) {
+            let hosts: Vec<_> = self
+                .host_book
+                .hosts
+                .iter()
+                .filter(|h| view.hosts.contains(&h.name))
+                .cloned()
+                .collect();
+            for host in hosts {
+                let cmd = remote_run_command(&host.destination(), &host.ssh_options(), &sn.command);
+                self.run_in_new_tab(&format!("{} @ {}", sn.name, host.name), &cmd);
+            }
+        }
+        if let Some(i) = delete {
+            if i < self.snippet_book.snippets.len() {
+                let removed = self.snippet_book.snippets.remove(i);
+                if !self.save_snippets() {
+                    self.snippet_book.snippets.insert(i, removed);
+                }
+            }
+            view.confirm_delete = None;
+        }
+        if add {
+            let mut sn = std::mem::take(&mut view.form);
+            sn.name = sn.name.trim().to_string();
+            sn.command = sn.command.trim().to_string();
+            sn.tags = view
+                .form_tags
+                .split(',')
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect();
+            view.form_tags.clear();
+            self.snippet_book.upsert(sn);
+            self.save_snippets();
+        }
+        if open {
+            self.snippets_view = Some(view);
+        }
     }
 
     fn open_sftp(&mut self, title: String, remote: miao_term_ui::sftp::Remote) {
@@ -7269,6 +7585,10 @@ impl ApplicationHandler<HostEvent> for Host {
             hosts_view: None,
             tunnels: HashMap::new(),
             sftp_view: None,
+            broadcast: false,
+            snippet_book: Default::default(),
+            snippet_book_error: None,
+            snippets_view: None,
             remote_dialog: None,
             editor_vim: cfg.editor_vim,
             vim: cfg.editor_vim.then(miao_term_ui::vim::VimRuntime::default),
@@ -7370,6 +7690,7 @@ impl ApplicationHandler<HostEvent> for Host {
         state.apply_launch(&intent);
         state.saved_settings = state.settings_values();
         state.reload_hosts();
+        state.reload_snippets();
         // QA: run a palette command by its English label at startup, so
         // windows that only open from the palette can be captured.
         if let Some(label) = miao_term_config::env("QA_COMMAND") {
@@ -9514,6 +9835,26 @@ mod tests {
             "clamped"
         );
         assert_eq!(parse_panel_widths("1100 720 x NaN"), (SIDEBAR_W, DETAILS_W));
+    }
+
+    #[test]
+    fn snippets_run_on_hosts_through_one_quoted_ssh_command() {
+        let command = "df -h | grep '/dev' && echo \"$HOME\"";
+        let cmd = remote_run_command("deploy@203.0.113.5", &["-p".into(), "2222".into()], command);
+        let args = cmd.strip_prefix("ssh -t ").unwrap();
+        // The shell must split it back into exactly these arguments.
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("for a in {args}; do printf '%s\\0' \"$a\"; done"))
+            .output()
+            .unwrap();
+        let parsed: Vec<String> = String::from_utf8(out.stdout)
+            .unwrap()
+            .split('\0')
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        assert_eq!(parsed, ["-p", "2222", "deploy@203.0.113.5", command]);
     }
 
     #[test]

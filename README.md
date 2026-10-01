@@ -161,6 +161,11 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
   `~/.ssh/config`, reuses a ControlMaster connection and bootstraps terminfo with
   nothing installed remotely; *View/Edit Remote File…* reads and writes over that
   connection (the host of the active ssh tab is filled in).
+- **Snippets and broadcast**: *Snippets…* keeps commands in
+  `~/.config/mtty/snippets.toml` (name, command, tags) to run in the current
+  pane or on several saved hosts (a tab each); Open Quickly finds them too.
+  *Broadcast Input to All Panes in Tab* types into every split at once (the
+  status line says BROADCAST).
 - **SFTP**: a two-pane file browser (this machine | the host) from Hosts, the
   palette for the active ssh tab, or `mtty://sftp/<name>`: browse, upload
   (also by dropping files on the window), download with progress, rename,

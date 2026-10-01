@@ -267,7 +267,7 @@ verified on its own:
   through the local port, the port closed after Stop.
 - [x] **B3.4 SFTP** (OpenSSH sftp in batch mode, keeping ssh config, jump hosts, the agent and ControlMaster; real round-trip test; checked on a real Linux Wayland desktop; download progress is read off the local file, uploads show a busy state without a percentage): two-pane browser, upload/download, drag and drop, progress,
   rename/permissions; remote editing reuses the pane's connection.
-- [ ] **B3.5 Snippets and broadcast**: a command library run in the current pane
+- [x] **B3.5 Snippets and broadcast** (on several hosts a snippet runs as `ssh -t host 'command'` in a tab each, quoting checked by letting sh split it; broadcast goes through the keyboard path, which MTP cannot drive, so it awaits a desktop check): a command library run in the current pane
   or on several hosts; broadcast input to several panes.
 - [ ] **B3.6 FTP/FTPS and persistent sessions**: FTP/FTPS in the same browser
   (plaintext flagged); optional tmux/mosh reconnect.
