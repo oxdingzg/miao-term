@@ -425,6 +425,78 @@ fn ssh_host(target: &str) -> String {
         .unwrap_or_else(|| target.to_string())
 }
 
+/// The split divider under a pointer given in physical pixels, if any.
+fn divider_at(
+    handles: Vec<miao_term_ui::layout::Handle>,
+    px: f32,
+    py: f32,
+    scale: f32,
+) -> Option<miao_term_ui::layout::Handle> {
+    handles.into_iter().find(|h| {
+        px >= h.rect.x * scale
+            && px < (h.rect.x + h.rect.w) * scale
+            && py >= h.rect.y * scale
+            && py < (h.rect.y + h.rect.h) * scale
+    })
+}
+
+/// The split ratio while dragging a divider of `dir` across `area` (logical
+/// points) to a pointer in physical pixels. `Layout::set_ratio` clamps it.
+fn divider_ratio(dir: SplitDir, area: Rect, px: f32, py: f32, scale: f32) -> f32 {
+    match dir {
+        SplitDir::Right => (px / scale - area.x) / area.w.max(1.0),
+        SplitDir::Down => (py / scale - area.y) / area.h.max(1.0),
+    }
+}
+
+/// What a modal text dialog did this frame.
+#[derive(Debug, PartialEq, Eq)]
+enum DialogOutcome {
+    Open,
+    Commit,
+    Cancel,
+}
+
+/// The Rename Tab dialog: Enter or the button commits, Escape or the close
+/// box cancels. A free function so it can be driven by replayed input.
+fn rename_dialog(
+    ctx: &egui::Context,
+    lang: miao_term_ui::i18n::Lang,
+    buf: &mut String,
+) -> DialogOutcome {
+    let mut open = true;
+    let mut commit = false;
+    egui::Window::new(miao_term_ui::i18n::t(lang, "Rename Tab", "重命名标签"))
+        .id(egui::Id::new("rename_tab_dialog"))
+        .collapsible(false)
+        .open(&mut open)
+        .show(ctx, |ui| {
+            let resp = ui.add(egui::TextEdit::singleline(buf).id(egui::Id::new("rename_tab_text")));
+            // Check Enter before re-taking focus: Enter makes the field give it up,
+            // and taking it back first would hide that (`lost_focus` stays false).
+            let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if !enter {
+                resp.request_focus();
+            }
+            if enter {
+                commit = true;
+            }
+            if ui
+                .button(miao_term_ui::i18n::t(lang, "Rename", "重命名"))
+                .clicked()
+            {
+                commit = true;
+            }
+        });
+    if commit {
+        DialogOutcome::Commit
+    } else if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        DialogOutcome::Cancel
+    } else {
+        DialogOutcome::Open
+    }
+}
+
 /// The automatic title new tabs get (`shell 3`), as opposed to a chosen one.
 fn is_default_title(title: &str) -> bool {
     title
@@ -3185,7 +3257,11 @@ impl State {
                     ))
                     .desired_width(420.0),
             );
-            resp.request_focus();
+            // Enter makes the field give up focus; check it before re-taking focus.
+            let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if !enter {
+                resp.request_focus();
+            }
             let q = query.to_lowercase();
             let mut rows: Vec<(usize, Cmd, &'static str)> = cmds
                 .iter()
@@ -3213,7 +3289,7 @@ impl State {
                     chosen = Some(rows[i].1);
                 }
             }
-            if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            if enter {
                 chosen = rows.get(self.palette_idx).map(|(_, c, _)| *c);
             }
             if esc {
@@ -3755,7 +3831,11 @@ impl State {
                         ))
                         .desired_width(420.0),
                 );
-                r.request_focus();
+                // Enter makes the field give up focus; check it before re-taking focus.
+                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if !enter {
+                    r.request_focus();
+                }
                 let q = query.to_lowercase();
                 let freq = |p: &str| std::cmp::Reverse(*counts.get(p).unwrap_or(&0));
                 let mut rows: Vec<(usize, std::cmp::Reverse<u32>, String, Pick)> = Vec::new();
@@ -3813,7 +3893,7 @@ impl State {
                         chosen = Some(clone_pick(pick));
                     }
                 }
-                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                if enter {
                     if let Some((_, _, _, p)) = rows.first() {
                         chosen = Some(clone_pick(p));
                     }
@@ -3934,8 +4014,13 @@ impl State {
                         .hint_text(miao_term_ui::i18n::t(self.lang, "search…", "搜索…"))
                         .desired_width(260.0),
                 );
-                r.request_focus();
-                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                // Check Enter before re-taking focus: Enter makes the field give it up,
+                // and taking it back first would hide that (`lost_focus` stays false).
+                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if !enter {
+                    r.request_focus();
+                }
+                if enter {
                     step = if ui.input(|i| i.modifiers.shift) {
                         -1
                     } else {
@@ -4116,8 +4201,13 @@ impl State {
                     .hint_text("[user@]host[:port]")
                     .desired_width(280.0),
             );
-            r.request_focus();
-            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            // Check Enter before re-taking focus: Enter makes the field give it up,
+            // and taking it back first would hide that (`lost_focus` stays false).
+            let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if !enter {
+                r.request_focus();
+            }
+            if enter {
                 connect = true;
             }
             if ui
@@ -4346,8 +4436,13 @@ impl State {
                         .hint_text("/path/to/file")
                         .desired_width(360.0),
                 );
-                r.request_focus();
-                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                // Check Enter before re-taking focus: Enter makes the field give it up,
+                // and taking it back first would hide that (`lost_focus` stays false).
+                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if !enter {
+                    r.request_focus();
+                }
+                if enter {
                     do_open = true;
                 }
                 if ui
@@ -4697,8 +4792,13 @@ impl State {
             .open(&mut open)
             .show(ctx, |ui| {
                 let r = ui.text_edit_singleline(&mut buf);
-                r.request_focus();
-                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                // Check Enter before re-taking focus: Enter makes the field give it up,
+                // and taking it back first would hide that (`lost_focus` stays false).
+                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if !enter {
+                    r.request_focus();
+                }
+                if enter {
                     commit = true;
                 }
                 if ui
@@ -4742,8 +4842,13 @@ impl State {
             .open(&mut open)
             .show(ctx, |ui| {
                 let r = ui.text_edit_singleline(&mut text);
-                r.request_focus();
-                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                // Check Enter before re-taking focus: Enter makes the field give it up,
+                // and taking it back first would hide that (`lost_focus` stays false).
+                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if !enter {
+                    r.request_focus();
+                }
+                if enter {
                     commit = true;
                 }
                 if ui
@@ -4773,27 +4878,10 @@ impl State {
     }
 
     fn rename_window(&mut self, ctx: &egui::Context, i: usize) {
-        let mut open = true;
         let mut buf = std::mem::take(&mut self.rename_buf);
-        let mut commit = false;
-        egui::Window::new(miao_term_ui::i18n::t(self.lang, "Rename Tab", "重命名标签"))
-            .collapsible(false)
-            .open(&mut open)
-            .show(ctx, |ui| {
-                let resp = ui.text_edit_singleline(&mut buf);
-                resp.request_focus();
-                if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    commit = true;
-                }
-                if ui
-                    .button(miao_term_ui::i18n::t(self.lang, "Rename", "重命名"))
-                    .clicked()
-                {
-                    commit = true;
-                }
-            });
+        let outcome = rename_dialog(ctx, self.lang, &mut buf);
         self.rename_buf = buf;
-        if commit {
+        if outcome == DialogOutcome::Commit {
             if let Some(tab) = self.tabs.get_mut(i) {
                 // An empty name goes back to the automatic title.
                 let name = self.rename_buf.trim().to_string();
@@ -4805,7 +4893,7 @@ impl State {
             self.renaming = None;
             self.publish_panes();
         }
-        if !open {
+        if outcome == DialogOutcome::Cancel {
             self.renaming = None;
         }
     }
@@ -5695,13 +5783,7 @@ impl ApplicationHandler<HostEvent> for Host {
                             } else {
                                 // Prefer a divider under the pointer, else a selection.
                                 let scale = state.window.scale_factor() as f32;
-                                let hit = state.handles().into_iter().find(|h| {
-                                    px >= h.rect.x * scale
-                                        && px < (h.rect.x + h.rect.w) * scale
-                                        && py >= h.rect.y * scale
-                                        && py < (h.rect.y + h.rect.h) * scale
-                                });
-                                match hit {
+                                match divider_at(state.handles(), px, py, scale) {
                                     Some(h) => state.divider_drag = Some((h.path, h.dir, h.area)),
                                     None => {
                                         state.dragging = true;
@@ -5757,10 +5839,7 @@ impl ApplicationHandler<HostEvent> for Host {
                 let scale = state.window.scale_factor() as f32;
                 let (px, py) = (position.x as f32, position.y as f32);
                 if let Some((path, dir, area)) = state.divider_drag.clone() {
-                    let r = match dir {
-                        SplitDir::Right => (px / scale - area.x) / area.w.max(1.0),
-                        SplitDir::Down => (py / scale - area.y) / area.h.max(1.0),
-                    };
+                    let r = divider_ratio(dir, area, px, py, scale);
                     if let Some(tab) = state.tabs.get_mut(state.active_tab) {
                         tab.layout.set_ratio(&path, r);
                     }
@@ -7093,6 +7172,128 @@ mod tests {
         assert!(pointer_to_terminal(true, false, true));
         assert!(!pointer_to_terminal(false, false, false));
         assert!(pointer_to_terminal(false, true, false));
+    }
+
+    /// Run one egui frame with replayed input.
+    fn replay(ctx: &egui::Context, events: Vec<egui::Event>, mut ui: impl FnMut(&egui::Context)) {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1000.0, 700.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| ui(ctx));
+    }
+
+    fn key(key: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn rename_dialog_commits_on_enter_and_cancels_on_escape() {
+        use miao_term_ui::i18n::Lang;
+        let ctx = egui::Context::default();
+        let mut buf = String::new();
+        let mut outcome = DialogOutcome::Open;
+        let mut frame = |events: Vec<egui::Event>, buf: &mut String| {
+            replay(&ctx, events, |ctx| {
+                outcome_set(&mut outcome, rename_dialog(ctx, Lang::En, buf))
+            });
+            std::mem::replace(&mut outcome, DialogOutcome::Open)
+        };
+        fn outcome_set(slot: &mut DialogOutcome, value: DialogOutcome) {
+            *slot = value;
+        }
+        assert_eq!(frame(vec![], &mut buf), DialogOutcome::Open);
+        assert_eq!(
+            frame(vec![egui::Event::Text("api 服务".into())], &mut buf),
+            DialogOutcome::Open
+        );
+        assert_eq!(buf, "api 服务", "typing reaches the focused field");
+        assert_eq!(
+            frame(vec![key(egui::Key::Enter)], &mut buf),
+            DialogOutcome::Commit
+        );
+
+        let mut other = String::from("keep");
+        frame(vec![], &mut other);
+        assert_eq!(
+            frame(vec![key(egui::Key::Escape)], &mut other),
+            DialogOutcome::Cancel
+        );
+        assert_eq!(other, "keep");
+    }
+
+    #[test]
+    fn a_paste_routed_to_a_focused_field_lands_there() {
+        // Menu Paste is pushed into egui's input when a field has focus
+        // (`State::edit_in_text_field`); the field must receive it.
+        let ctx = egui::Context::default();
+        let mut text = String::from("a");
+        let mut wants = false;
+        let mut frame = |events: Vec<egui::Event>, text: &mut String| {
+            replay(&ctx, events, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.add(egui::TextEdit::singleline(text).id(egui::Id::new("field")))
+                        .request_focus();
+                });
+                wants = ctx.wants_keyboard_input();
+            });
+            wants
+        };
+        frame(vec![], &mut text);
+        assert!(
+            frame(vec![], &mut text),
+            "a focused field wants the keyboard"
+        );
+        frame(vec![egui::Event::Paste("bc".into())], &mut text);
+        assert!(text.contains("bc"), "{text:?}");
+    }
+
+    #[test]
+    fn dragging_a_split_divider_resizes_the_panes() {
+        let mut layout = Layout::leaf("a");
+        assert!(layout.split("a", "b", SplitDir::Right));
+        let area = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 1000.0,
+            h: 600.0,
+        };
+        let scale = 2.0;
+        let handle = &layout.handles(area)[0];
+        let (px, py) = (
+            (handle.rect.x + handle.rect.w / 2.0) * scale,
+            (handle.rect.y + handle.rect.h / 2.0) * scale,
+        );
+        let hit = divider_at(layout.handles(area), px, py, scale).expect("press on the divider");
+        assert!(divider_at(layout.handles(area), 10.0, 10.0, scale).is_none());
+        // Drag to 70% of the width (physical pixels at 2x).
+        let r = divider_ratio(hit.dir, hit.area, 1400.0, py, scale);
+        layout.set_ratio(&hit.path, r);
+        let rects = layout.rects(area);
+        let a = rects.iter().find(|(id, _)| id == "a").unwrap().1;
+        assert!((a.w - 700.0).abs() < 2.0, "{a:?}");
+        // Dragging past the edge is clamped.
+        layout.set_ratio(
+            &hit.path,
+            divider_ratio(hit.dir, hit.area, 5000.0, py, scale),
+        );
+        let a = layout
+            .rects(area)
+            .into_iter()
+            .find(|(id, _)| id == "a")
+            .unwrap()
+            .1;
+        assert!(a.w <= 900.0 + 2.0, "{a:?}");
     }
 
     fn empty_tab(title: &str) -> Tab {

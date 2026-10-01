@@ -226,7 +226,7 @@ verified on its own:
   command/host matching, `views.json` hot reload; Open Quickly lists files and
   agents; the remaining English strings in the details panel are translated.
   Acceptance: rule-engine unit tests and a screenshot check.
-- [ ] **B0.5 Automatable UI acceptance**: semantic control targets plus
+- [x] **B0.5 Automatable UI acceptance** (the tab bar exports each tab's rect as a test target; replay tests cover tab drag-reorder, divider drag, rename commit on Enter / cancel on Escape and a paste landing in a focused field; the replay found that Enter did nothing in 8 input fields, now fixed; editor save is unit-tested): semantic control targets plus
   windowless event replay for rename/cancel, tab reorder, divider drag, editor
   save and clipboard focus. Acceptance: the new replay tests run in CI.
 
