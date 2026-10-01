@@ -67,6 +67,8 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
   where the group changes. Close Tab, the tab's `×` and session-row middle-click
   close the whole tab, including its splits; the last tab is kept alive.
   `⌘W` / `Ctrl+W` retains the focused-pane close behavior when a tab is split.
+- Both side panels can be resized by dragging their edge; the widths are kept
+  with the window size.
 - A recursive split tree: `⌘D` splits right and `⇧⌘D` splits down, with
   draggable dividers and a close button on every pane. `⌘⇧T` toggles a scratch
   Quick Terminal.
@@ -144,11 +146,17 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 - **Updates**: check the configured version manifest. Install published packages
   using the platform installer; automatic download/install UI from the former
   eframe application is not part of the unified native app.
+- **Host library**: hosts saved in `~/.config/mtty/hosts.toml` (name, address,
+  user, port, group, tags, jump host) are listed in the sidebar and in Open
+  Quickly; *Hosts…* searches, adds, deletes (confirmed) and imports the concrete
+  `Host` entries of `~/.ssh/config`, which then connect by alias so every option
+  ssh has for them applies. `mtty://host/<name>` connects from a script or
+  launcher. No passwords or keys are stored.
 - **SSH sessions and remote view/edit**: *New SSH Session…* honours
   `~/.ssh/config`, reuses a ControlMaster connection and bootstraps terminfo with
   nothing installed remotely; *View/Edit Remote File…* reads and writes over that
-  connection (host typed in the dialog). Host library, SFTP and port forwarding
-  are on the roadmap ([`docs/PRODUCT.md`](docs/PRODUCT.md)).
+  connection (host typed in the dialog). SFTP and port forwarding are on the
+  roadmap ([`docs/PRODUCT.md`](docs/PRODUCT.md)).
 
 **Automation**
 - The **MTP control plane** over a per-user Unix socket (a named pipe on

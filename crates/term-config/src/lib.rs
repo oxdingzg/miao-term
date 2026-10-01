@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+pub mod hosts;
 pub mod view;
 
 /// The application's directory name under the XDG bases (ADR 0032).
