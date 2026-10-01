@@ -1,6 +1,6 @@
 # miao-term Architecture
 
-> A cross-platform (macOS / Linux / Windows) terminal **engine** plus the `miaotty`
+> A cross-platform (macOS / Linux / Windows) terminal **engine** plus the `mtty`
 > application built on it.
 > This is the pre-implementation design. **Locked** items are decisions; changing
 > one requires an ADR under `docs/decisions/`.
@@ -10,7 +10,7 @@
 
 **`portable-pty` + `alacritty_terminal` + `vte` as the core, `winit` + `wgpu` for the
 window and drawing, the terminal grid self-drawn and the surrounding UI in egui; the
-engine (`miao-term-*`) is separate from the app (`miaotty-app`), and the control plane
+engine (`miao-term-*`) is separate from the app (`mtty-app`), and the control plane
 (MTP) is decoupled from the engine.**
 
 ## 1. Goals · Non-goals · Constraints
@@ -19,9 +19,9 @@ engine (`miao-term-*`) is separate from the app (`miaotty-app`), and the control
 - One codebase on three platforms, **including Windows (ConPTY)**.
 - Hot-path performance at Alacritty's level: input latency P95 ≤ 16 ms (target ≤ 8 ms),
   first frame ≤ 100 ms, no dropped frames while scrolling, idle CPU ≈ 0.
-- The engine is embeddable; `miaotty-app` is its first consumer (the only in-repo example is
+- The engine is embeddable; `mtty-app` is its first consumer (the only in-repo example is
   `crates/term-render/examples/pipeline_probe.rs`, a render-pipeline probe).
-- Reuse the existing control plane: `mtp` types, `miaotty-cli`, plugins, agent/shell hooks.
+- Reuse the existing control plane: `mtp` types, `mtty-cli`, plugins, agent/shell hooks.
 
 **Non-goals (for now)**
 - Matching Ghostty's rendering polish or config ecosystem; macOS-only integrations
@@ -48,7 +48,7 @@ engine (`miao-term-*`) is separate from the app (`miaotty-app`), and the control
 | D7 | `term-mtp` decoupled from the engine (Unix socket / Windows named pipe) | A crash in one doesn't take down the other; reuse the protocol |
 | D8 | Build the app first, extract the library later; phase the extension points | Real needs drive the API |
 | D9 | Engine crates licensed `Apache-2.0` | Permissive; easy to embed |
-| D10 | One native `miaotty` executable delegates to `miao-term-widget` (winit + wgpu); the eframe host is retired | Single product identity and direct rendering; see APP-IDENTITY.md |
+| D10 | One native `mtty` executable delegates to `miao-term-widget` (winit + wgpu); the eframe host is retired | Single product identity and direct rendering; see APP-IDENTITY.md |
 
 ## 3. Layering (DAG) and rules
 
@@ -67,12 +67,12 @@ engine (`miao-term-*`) is separate from the app (`miaotty-app`), and the control
         ▼                             │
    term-widget ◄──────────────────────┘   (native host: winit + wgpu)
         ▲
-        └── miaotty-app   (native executable; depends on term-widget)
-   miaotty-cli ──► term-mtp
+        └── mtty-app   (native executable; depends on term-widget)
+   mtty-cli ──► term-mtp
 ```
 
 Not every edge is drawn: `term-widget` also depends on `term-core`/`term-render`, and
-`miaotty-app` delegates to `term-widget`. The workspace has nine members.
+`mtty-app` delegates to `term-widget`. The workspace has nine members.
 
 **Rules**
 - Dependencies point inward only: `widget → render → core`. The one exception is
@@ -93,11 +93,11 @@ Not every edge is drawn: `term-widget` also depends on `term-core`/`term-render`
 | `term-core` | PTY, vte parsing, grid/scrollback/cursor/modes, selection/search, OSC/CSI semantics, key/mouse→bytes encoding, events; owns the scanner in `term-graphics` | No GPU/window/config/business logic |
 | `term-render` | Font load/shaping/atlas, grid instancing, draw passes, damage increments | No event loop/input |
 | `term-ui` | Host-agnostic UI: theme, input encoding, selection, split layout, egui chrome, palette, hints, vim, markdown, ssh, update, agent integration | No window/event loop |
-| `term-widget` | Native host library (`miaotty-app` supplies the executable): winit event loop, wgpu surface, input/IME/clipboard/drag-drop, direct grid draw (ADR 0030) | No PTY/parser duplication |
+| `term-widget` | Native host library (`mtty-app` supplies the executable): winit event loop, wgpu surface, input/IME/clipboard/drag-drop, direct grid draw (ADR 0030) | No PTY/parser duplication |
 | `term-config` | Config model, themes, ghostty/alacritty import | No UI |
 | `term-mtp` | Protocol envelope, transport, server/client, agent/history registries, revision + `core.wait` long-poll | No engine dependency |
-| `miaotty-app` | Native `miaotty` entry point, command help/version and platform packaging metadata | No terminal core duplication |
-| `miaotty-cli` | MTP client for scripts/agents | No engine dependency |
+| `mtty-app` | Native `mtty` entry point, command help/version and platform packaging metadata | No terminal core duplication |
+| `mtty-cli` | MTP client for scripts/agents | No engine dependency |
 
 ## 5. Core types and traits (design sketch — superseded)
 
@@ -108,7 +108,7 @@ shipped API is:
 - `term-core`: `Terminal` (PTY + parser + grid) and `ATerm` (the `alacritty_terminal`
   screen model), in `crates/term-core`.
 - `term-render`: `TermRenderer`, `QuadRenderer`, `ImageRenderer`.
-- Application: `miaotty-app` launches `term-widget`, which owns the event loop
+- Application: `mtty-app` launches `term-widget`, which owns the event loop
   and draws the grid directly with `term-render`, compositing egui chrome.
 
 ## 6. Threading model and lock discipline
@@ -172,7 +172,7 @@ Use Alacritty's proven model (`FairMutex<Term>` + `EventListener`); do not inven
 | Concern | Abstraction | macOS/Linux | Windows |
 |---------|-------------|-------------|---------|
 | PTY | `trait Pty` | `forkpty` | **ConPTY** |
-| Transport | `mtp::transport` | Unix socket | `\\.\pipe\miaotty` |
+| Transport | `mtp::transport` | Unix socket | `\\.\pipe\mtty` |
 | Clipboard | `trait Clipboard` | NSPasteboard / X11-Wayland | Win32 clipboard |
 | Fonts | `term-render::font` | CoreText / fontconfig | DirectWrite (`font-kit`) |
 | IME | `widget::input` | native | **TSF** (highest risk, see §19) |
@@ -190,22 +190,22 @@ Use Alacritty's proven model (`FairMutex<Term>` + `EventListener`); do not inven
 ## 12. Control plane (MTP)
 
 - `term-mtp` implements the server; the local transport is a Unix socket
-  (`$XDG_RUNTIME_DIR/miaotty.sock`, falling back to `$TMPDIR/miaotty.sock`) or a Windows named pipe.
+  (`$XDG_RUNTIME_DIR/mtty.sock`, falling back to `$TMPDIR/mtty.sock`) or a Windows named pipe.
 - Remote access: `remote-listen = addr:port` also serves the control plane over TCP; it
-  **requires** `MIAOTTY_MTP_TOKEN`, and the client sends that token on every request.
-- Reuse the existing `mtp` messages and `miaotty-cli`; **in-process UI talks to the registries directly**,
+  **requires** `MTTY_MTP_TOKEN`, and the client sends that token on every request.
+- Reuse the existing `mtp` messages and `mtty-cli`; **in-process UI talks to the registries directly**,
   external callers go over the socket/pipe.
 - Methods: `core.ping/health/wait/subscribe`, `agent.state.*`, `history.*`,
   `pane.list/send/run/focus/close`, `app.view/edit` (open a file in the reader/editor),
-  `file.read/write` (offset/length, base64, 2 MB cap; optional token via `MIAOTTY_MTP_TOKEN`).
+  `file.read/write` (offset/length, base64, 2 MB cap; optional token via `MTTY_MTP_TOKEN`).
 - Change notification comes in two forms: a **revision counter** with the `core.wait` long-poll
   (returns as soon as the revision moves past the caller's value), and **server-push** via
   `core.subscribe`, which upgrades the connection to a stream of `{"kind":"event", …}` lines for
-  the topics `agent.state`, `panes` and `history` (`miaotty-cli events`). `cwd.changed` is not
+  the topics `agent.state`, `panes` and `history` (`mtty-cli events`). `cwd.changed` is not
   emitted.
 - Transport: `interprocess` (local socket / named pipe); TCP for `remote-listen`.
 
-## 13. Application layer (miaotty-app)
+## 13. Application layer (mtty-app)
 
 - Model: `Window → Tab[] → SplitTree<Surface>`; a surface is one terminal instance (core + render view).
 - Window: one OS window holds a set of tabs; splits are a tree inside a tab (ours, not OS tabs).
@@ -233,7 +233,7 @@ Use Alacritty's proven model (`FairMutex<Term>` + `EventListener`); do not inven
 - **Conformance**: no `vttest`/`esctest`/`cargo-fuzz` harness has been added; parser behavior is
   covered by the crates' own unit tests.
 - **Integration**: spawn a real shell, feed byte sequences, assert grid/events.
-- **Performance gate (ubuntu-latest only)**: `cargo test --release -p miao-term-core -p miaotty-app -- --ignored`
+- **Performance gate (ubuntu-latest only)**: `cargo test --release -p miao-term-core -p mtty-app -- --ignored`
   plus `scripts/check-perf-baseline.py`. Budgets: input latency P95 ≤ 16 ms, first frame ≤ 100 ms,
   no dropped frames on a large `cat`, idle CPU ≈ 0.
 - **CI** (`.github/workflows/ci.yml`): jobs `changes`, `privacy`, `lint`, `check-linux`

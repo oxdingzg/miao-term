@@ -36,7 +36,7 @@ everyone to re-sync, and rotate any credentials involved.
 - `cargo fmt --all --check`
 - `cargo clippy --workspace --all-targets`
 - `cargo test --workspace`
-- Performance gate (release): `cargo test --release -p miao-term-core -p miaotty-app -- --ignored`
+- Performance gate (release): `cargo test --release -p miao-term-core -p mtty-app -- --ignored`
 - Windows real-host checks: `docs/WINDOWS-DEV.md` (IME needs an interactive desktop).
 - Packaging/release: `.github/workflows/release.yml` (four runner builds and AppImage/MSI are required; manual dispatch rehearses without publishing).
 
@@ -54,10 +54,10 @@ Another session may share this directory.
 The application can capture itself without screen-recording permission — useful
 for QA and visual diffs when the fix is a rendering change:
 
-- `MIAOTTY_SHOT_AFTER=<secs> ./target/release/miaotty` writes
-  `/tmp/miaotty_shot.ppm` and exits. The same flag works with the executable
-  inside `dist/miaotty.app` to verify the packaged application.
+- `MTTY_SHOT_AFTER=<secs> ./target/release/mtty` writes
+  `/tmp/mtty_shot.ppm` and exits. The same flag works with the executable
+  inside `dist/mtty.app` to verify the packaged application.
 
 PPM is written as binary RGB (the native host swaps channels from its BGRA
 target), so a plain reader can sample pixels directly. Drive the running app with
-`miaotty-cli pane run --pane <id> --data ...` while the capture deadline runs.
+`mtty-cli pane run --pane <id> --data ...` while the capture deadline runs.

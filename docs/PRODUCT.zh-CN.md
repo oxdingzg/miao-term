@@ -22,8 +22,9 @@
 ### 1.1 命名
 
 - 正式产品名:**mtty**。仓库与可嵌入引擎仍叫 **miao-term**。
-- 当前可执行文件、bundle、配置目录、socket、环境变量、URL scheme 仍为 `miaotty`。
-  改名是里程碑 M1 的独立任务(见 §4),必须带迁移,不能在功能开发中顺手改。
+- 可执行文件 `mtty` / `mtty-cli`,bundle `mtty.app`(`dev.mtty.terminal`),配置目录
+  `~/.config/mtty`,环境变量 `MTTY_*`,URL scheme `mtty://`。v0.0.5 及之前名为 `miaotty`,
+  兼容规则见 [ADR 0032](decisions/0032-rename-mtty.zh-CN.md)。
 
 ### 1.2 目标用户与核心场景
 
@@ -126,7 +127,7 @@
 | 配置文件 + ghostty / alacritty 导入 | 可用 | 本次修复:语法错误的 `config.toml` 会在状态栏提示原因 |
 | zsh shell 集成(OSC 7、命令历史) | 可用 | bash / fish / PowerShell 未覆盖 |
 | URL scheme 与单实例转发 | 部分 | 命令行传入可用;macOS 浏览器/Finder 发来的 URL 事件未处理 |
-| MTP 控制面与 `miaotty-cli` | 可用 | 真实窗口冒烟覆盖 |
+| MTP 控制面与 `mtty-cli` | 可用 | 真实窗口冒烟覆盖 |
 | 版本检查 | 可用 | 只检查,不自动安装;`update-pubkey` 未使用 |
 | 中英界面 | 部分 | details 面板部分行仍是英文 |
 
@@ -142,14 +143,14 @@
 
 ### M1 品牌统一:mtty(设计见 [ADR 0032](decisions/0032-rename-mtty.zh-CN.md))
 
-- [ ] **B1.1 运行时改名与兼容层**
+- [x] **B1.1 运行时改名与兼容层** — `ee12822`:迁移/环境变量/socket 链接/scheme 单测;冒烟覆盖旧配置复制、两套 pane 变量、旧式 hook 上报、旧 socket 路径。
   - `miao-term-config`:`config_dir()`、`migrate_legacy_config()`(复制一次、不覆盖、不删旧目录)、`env()`(`MTTY_*` 优先、回退 `MIAOTTY_*`)。
   - 所有路径改走 `config_dir()`:config、views、hooks、launch inbox、session/queue/window/recipes。
   - MTP:默认 socket `mtty.sock` + `miaotty.sock` 兼容链接;Windows 管道 `mtty`;令牌/能力环境变量双读。
   - pane 环境:同时导出 `MTTY_*` 与 `MIAOTTY_*`,`MTTY_CLI`/`MIAOTTY_CLI` 指向同目录 CLI 的绝对路径。
   - URL scheme `mtty://` 与 `miaotty://` 都接受;hook 脚本、shell shim、热键片段、ControlPath、界面文字改为 mtty。
   - 验收:迁移/环境变量/scheme 单元测试;旧 hook 脚本在新 pane 中上报状态成功(冒烟)。
-- [ ] **B1.2 构建与打包**
+- [x] **B1.2 构建与打包** — `ee12822`:`package-macos.sh` + `check-macos-bundle.py` + `smoke-hosts.py --bundle` 通过,`test-release-manifest.py` 9 项通过;release 工作流演练待所有者触发。
   - 目录与包:`miaotty-app` → `mtty-app`(二进制 `mtty`),`miaotty-cli` → `mtty-cli`。
   - macOS:`mtty.app`、`dev.mtty.terminal`、URL scheme 注册;安装脚本归档并移除旧 `miaotty.app`。
   - Linux:deb 包 `mtty`(Replaces/Conflicts/Provides `miaotty`)、兼容符号链接、`.desktop`、AppImage。

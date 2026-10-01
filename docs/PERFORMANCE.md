@@ -7,13 +7,13 @@ deterministically in CI. Machine-readable values and measured baselines are in
 ## The gate
 
 ```sh
-cargo test --release -p miao-term-core -p miao-term-graphics -p miaotty-app -- --ignored
+cargo test --release -p miao-term-core -p miao-term-graphics -p mtty-app -- --ignored
 ```
 
 Perf tests are `#[ignore]`d so the normal test run stays fast; the `perf` CI job
 runs them in release on `ubuntu-latest`. Budgets are absolute with generous
 headroom (an order-of-magnitude regression fails, runner jitter does not).
-`MIAOTTY_PERF_SCALE` (default `1.0`) relaxes every budget by a factor on slow
+`MTTY_PERF_SCALE` (default `1.0`) relaxes every budget by a factor on slow
 machines. Each metric is also checked against the recorded **baseline** in
 `budgets.json` with a `regression_pct` (ADR 0023), so drift fails, not just
 cliffs. The `perf` job additionally compares against a **durable CI baseline** tracked at
@@ -29,8 +29,8 @@ signal — the absolute budgets are the gate.
 |--------|--------|------------------------------|-------|
 | VT parse throughput | ≥ 25 MB/s | 73 MB/s | `crates/term-core/tests/perf.rs` |
 | Screen snapshot (30 rows) | ≤ 2 ms | 0.012 ms | `crates/term-core/tests/perf.rs` |
-| Row build per frame | ≤ 4 ms | 0.12 ms | `miaotty-app/tests/perf.rs` |
-| Palette rank (10k entries) | ≤ 100 ms | 2.0 ms | `miaotty-app/tests/perf.rs` |
+| Row build per frame | ≤ 4 ms | 0.12 ms | `mtty-app/tests/perf.rs` |
+| Palette rank (10k entries) | ≤ 100 ms | 2.0 ms | `mtty-app/tests/perf.rs` |
 | IPC idle cost | ≈ 0 (no polling) | — | by design |
 | Agent burst | 100 events → 1 repaint | — | by design |
 
@@ -84,7 +84,7 @@ not cross-machine guarantees.
 | Ranking allocations (including result vector/sort) | 30,012 / 711,592 B | 12 / 186,032 B |
 | ASCII scoring alone (10k) | — | zero allocations |
 
-`miaotty-app/tests/perf_allocations.rs` adds release gates to the command above:
+`mtty-app/tests/perf_allocations.rs` adds release gates to the command above:
 row building must stay below 600 allocations/reallocations for this 100×30
 workload, and 10k ASCII scores must allocate nothing. Thread-local counters
 exclude other threads' allocation noise. Normal tests cover queue backpressure,
@@ -165,8 +165,8 @@ memory, so buffer capacity and RSS are reported separately.
 ### Reproduce
 
 ```sh
-cargo test --release -p miao-term-core -p miao-term-graphics -p miaotty-app -- --ignored --nocapture
-cargo build --release -p miaotty-app -p miaotty-cli
+cargo test --release -p miao-term-core -p miao-term-graphics -p mtty-app -- --ignored --nocapture
+cargo build --release -p mtty-app -p mtty-cli
 python3 scripts/profile-input.py --mode fragments
 python3 scripts/profile-input.py --mode images
 # Use --binary <old-binary> to compare a saved pre-change executable.

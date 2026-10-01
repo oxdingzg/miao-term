@@ -1,6 +1,6 @@
 # Bundled fonts
 
-These fonts are bundled with `miao-term` (the `miaotty` app) and embedded into
+These fonts are bundled with `miao-term` (the `mtty` app) and embedded into
 the binary by `miao-term-render`. They are **not** covered by the project's
 Apache-2.0 license; each keeps its own license.
 
@@ -17,4 +17,4 @@ and TUIs render instead of showing tofu.
 
 Tabler Icons (MIT) is subset to the glyphs used by the native host's UI icon
 font (`tabler-LICENSE` in this directory) and is the icon font for
-`miaotty` / `miao-term-ui`.
+`mtty` / `miao-term-ui`.

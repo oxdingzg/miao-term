@@ -2,21 +2,21 @@
 
 > English (default): [`ARCHITECTURE.md`](ARCHITECTURE.md)
 
-> 跨平台(macOS / Linux / Windows)终端**引擎** + `miaotty` 应用的整体架构。
+> 跨平台(macOS / Linux / Windows)终端**引擎** + `mtty` 应用的整体架构。
 > 本文是**实现前的定稿设计**;所有"锁定"条目即为决策,变更须走 `docs/decisions/` 的 ADR。
 
 ## 0. 范围与一句话
 
-一句话:**`portable-pty` + `alacritty_terminal` + `vte` 做内核,`winit` + `wgpu` 做窗口与绘制,终端网格自绘、周边 UI 用 egui;引擎(`miao-term-*`)与应用(`miaotty-app`)分离,控制面(MTP)与引擎解耦。**
+一句话:**`portable-pty` + `alacritty_terminal` + `vte` 做内核,`winit` + `wgpu` 做窗口与绘制,终端网格自绘、周边 UI 用 egui;引擎(`miao-term-*`)与应用(`mtty-app`)分离,控制面(MTP)与引擎解耦。**
 
 ## 1. 目标 · 非目标 · 约束
 
 **目标**
 - 三平台同一套代码,含 **Windows(ConPTY)**。
 - 热路径性能对齐 Alacritty 量级:输入延迟 P95 ≤ 16ms(目标 ≤ 8ms)、首帧 ≤ 100ms、滚动不丢帧、空闲 CPU ≈ 0。
-- 引擎可被第三方嵌入;`miaotty-app` 是第一个消费者(仓库里唯一的示例是
+- 引擎可被第三方嵌入;`mtty-app` 是第一个消费者(仓库里唯一的示例是
   `crates/term-render/examples/pipeline_probe.rs`,一个渲染管线探针)。
-- 复用现有控制面:`mtp` 类型、`miaotty-cli`、插件、agent/shell hooks。
+- 复用现有控制面:`mtp` 类型、`mtty-cli`、插件、agent/shell hooks。
 
 **非目标(现阶段)**
 - 复刻 Ghostty 的渲染精细度与配置生态;macOS 专属集成(AppleScript/Sparkle)。
@@ -41,7 +41,7 @@
 | D7 | 控制面 `term-mtp` 与引擎解耦(Unix socket / Windows named pipe) | 引擎崩不拖垮 CLI;复用现有协议 |
 | D8 | 先做 app、后抽库;扩展点分阶段 | 由真实需求驱动 API |
 | D9 | 引擎 crate 采用 `Apache-2.0` | 宽松、便于被嵌 |
-| D10 | 单一原生 `miaotty` 主程序调用 `miao-term-widget`（winit + wgpu），旧 eframe 宿主退役 | 统一产品身份与直接绘制；见 APP-IDENTITY.zh-CN.md |
+| D10 | 单一原生 `mtty` 主程序调用 `miao-term-widget`（winit + wgpu），旧 eframe 宿主退役 | 统一产品身份与直接绘制；见 APP-IDENTITY.zh-CN.md |
 
 ## 3. 依赖分层(DAG)与规则
 
@@ -60,11 +60,11 @@
         ▼                             │
    term-widget ◄──────────────────────┘   (原生宿主:winit + wgpu)
         ▲
-        └── miaotty-app   (原生主程序;依赖 term-widget)
-   miaotty-cli ──► term-mtp
+        └── mtty-app   (原生主程序;依赖 term-widget)
+   mtty-cli ──► term-mtp
 ```
 
-图里没有画全所有边:`term-widget` 还依赖 `term-core`/`term-render`,`miaotty-app` 调用 `term-widget`。
+图里没有画全所有边:`term-widget` 还依赖 `term-core`/`term-render`,`mtty-app` 调用 `term-widget`。
 工作区共九个成员。
 
 **规则**
@@ -86,11 +86,11 @@
 | `term-core` | PTY、vte 解析、网格/回滚/光标/模式、选区/查找、OSC/CSI 语义、键鼠→字节编码、事件;持有 `term-graphics` 的扫描器 | 不碰 GPU/窗口/配置/业务 |
 | `term-render` | 字形加载/shaping/图集、网格实例化、绘制 pass、damage 增量 | 不管事件循环/输入 |
 | `term-ui` | 无宿主 UI:主题、输入编码、选区、分屏布局、egui chrome、调色板、hints、vim、markdown、ssh、update、agent 集成 | 不含窗口/事件循环 |
-| `term-widget` | 原生 host 库（主程序由 miaotty-app 提供）:winit 事件循环、wgpu surface、输入/IME/剪贴板/拖放、直接自绘网格(ADR 0030) | 不重复实现 PTY/parser |
+| `term-widget` | 原生 host 库（主程序由 mtty-app 提供）:winit 事件循环、wgpu surface、输入/IME/剪贴板/拖放、直接自绘网格(ADR 0030) | 不重复实现 PTY/parser |
 | `term-config` | 配置模型、主题、ghostty/alacritty 导入 | 不依赖 UI |
 | `term-mtp` | 协议信封、传输、server/client、agent/history 注册表、revision + `core.wait` 长轮询 | 不依赖引擎 |
-| `miaotty-app` | 原生 `miaotty` 入口、命令 help/version 与平台安装包元数据 | 不重复实现终端内核 |
-| `miaotty-cli` | 供脚本/agent 使用的 MTP 客户端 | 不依赖引擎 |
+| `mtty-app` | 原生 `mtty` 入口、命令 help/version 与平台安装包元数据 | 不重复实现终端内核 |
+| `mtty-cli` | 供脚本/agent 使用的 MTP 客户端 | 不依赖引擎 |
 
 ## 5. 核心类型与 trait(设计草图 —— 未采用)
 
@@ -100,7 +100,7 @@
 - `term-core`:`Terminal`(PTY + 解析器 + 网格)与 `ATerm`(`alacritty_terminal` 屏幕模型),
   位于 `crates/term-core`。
 - `term-render`:`TermRenderer`、`QuadRenderer`、`ImageRenderer`。
-- 应用：`miaotty-app` 启动 `term-widget`，由后者管理事件循环，
+- 应用：`mtty-app` 启动 `term-widget`，由后者管理事件循环，
   经 `term-render` 直接绘制网格并合成 egui 外壳。
 
 ## 6. 线程模型与锁纪律
@@ -154,7 +154,7 @@
 | 关注点 | 抽象 | macOS/Linux | Windows |
 |--------|------|-------------|---------|
 | PTY | `trait Pty` | `forkpty` | **ConPTY** |
-| 传输 | `mtp::transport` | Unix socket | `\\.\pipe\miaotty` |
+| 传输 | `mtp::transport` | Unix socket | `\\.\pipe\mtty` |
 | 剪贴板 | `trait Clipboard` | NSPasteboard / X11-Wayland | Win32 clipboard |
 | 字体 | `term-render::font` | CoreText / fontconfig | DirectWrite(`font-kit`) |
 | IME | `widget::input` | 原生 | **TSF**(风险最高,见 §19) |
@@ -171,20 +171,20 @@
 
 ## 12. 控制面(MTP)
 
-- `term-mtp` 实现 server;本地传输:Unix socket(`$XDG_RUNTIME_DIR/miaotty.sock`,回退到
-  `$TMPDIR/miaotty.sock`)或 Windows named pipe。
+- `term-mtp` 实现 server;本地传输:Unix socket(`$XDG_RUNTIME_DIR/mtty.sock`,回退到
+  `$TMPDIR/mtty.sock`)或 Windows named pipe。
 - 远程访问:`remote-listen = addr:port` 会额外用 TCP 提供控制面;它**要求**设置
-  `MIAOTTY_MTP_TOKEN`,客户端每个请求都要带上该令牌。
-- 复用现有 `mtp` 报文与 `miaotty-cli`;**进程内 UI 直连注册表**,外部走 socket/pipe。
+  `MTTY_MTP_TOKEN`,客户端每个请求都要带上该令牌。
+- 复用现有 `mtp` 报文与 `mtty-cli`;**进程内 UI 直连注册表**,外部走 socket/pipe。
 - 方法面:`core.ping/health/wait/subscribe`、`agent.state.*`、`history.*`、
   `pane.list/send/run/focus/close`、`app.view/edit`(在查看器/编辑器中打开文件)、
-  `file.read/write`(offset/length、base64、上限 2 MB;可选 `MIAOTTY_MTP_TOKEN` 令牌)。
+  `file.read/write`(offset/length、base64、上限 2 MB;可选 `MTTY_MTP_TOKEN` 令牌)。
 - 变更通知有两种:**revision 计数**配 `core.wait` 长轮询(一旦 revision 超过调用方给的值即返回),
   以及 `core.subscribe` 的**服务端推送**——把连接升级为 `{"kind":"event", …}` 行流,覆盖
-  `agent.state`、`panes`、`history` 三个 topic(`miaotty-cli events`)。不发送 `cwd.changed`。
+  `agent.state`、`panes`、`history` 三个 topic(`mtty-cli events`)。不发送 `cwd.changed`。
 - 传输:`interprocess`(本地 socket / named pipe);`remote-listen` 走 TCP。
 
-## 13. 应用层(miaotty-app)
+## 13. 应用层(mtty-app)
 
 - 模型:`Window → Tab[] → SplitTree<Surface>`;surface = 一个终端实例(core+render 视图)。
 - 窗口:一个 OS 窗口承载一个 tab 集;分屏是 tab 内的树(自研,非 OS 标签)。
@@ -208,7 +208,7 @@
 
 - **一致性**:尚未接入 `vttest`/`esctest`/`cargo-fuzz`;解析行为由各 crate 自身的单元测试覆盖。
 - **集成**:真起 shell,喂字节序列,断言网格/事件。
-- **性能门(仅 ubuntu-latest)**:`cargo test --release -p miao-term-core -p miaotty-app -- --ignored`
+- **性能门(仅 ubuntu-latest)**:`cargo test --release -p miao-term-core -p mtty-app -- --ignored`
   加 `scripts/check-perf-baseline.py`。预算:输入延迟 P95 ≤ 16ms、首帧 ≤ 100ms、
   `cat` 大文件不丢帧、空闲 CPU ≈ 0。
 - **CI**(`.github/workflows/ci.yml`):jobs 为 `changes`、`privacy`、`lint`、`check-linux`(`cargo check --workspace`)、

@@ -2,7 +2,7 @@
 
 一个 pane 的标签标题、图标与徽章由 *View 规则引擎* 从上下文推导
 (设计见 [ADR 0007](./decisions/0007-view-rule-engine.zh-CN.md))。规则存放于
-`~/.config/miaotty/views.json`(JSON),也可在 **设置 → View rules** 中编辑,
+`~/.config/mtty/views.json`(JSON),也可在 **设置 → View rules** 中编辑,
 并带实时预览。
 
 ```jsonc

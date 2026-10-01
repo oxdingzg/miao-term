@@ -1,5 +1,5 @@
-# miaotty config — copy to ~/.config/miaotty/config.toml
-# (or $XDG_CONFIG_HOME/miaotty/config.toml). All keys are optional.
+# mtty config — copy to ~/.config/mtty/config.toml
+# (or $XDG_CONFIG_HOME/mtty/config.toml). All keys are optional.
 
 font-size = 13                   # default
 # font-family = "JetBrains Mono"   # any installed family; "JetBrains Mono" is the default
@@ -14,10 +14,10 @@ font-size = 13                   # default
 # editor = "code --wait"            # command used by "Edit in Tab"
 # mermaid-command = "mmdc"          # render ```mermaid blocks with mermaid-cli (else a built-in subset)
 # graphics = true                  # inline terminal graphics (Sixel / Kitty / iTerm2)
-# remote-listen = "127.0.0.1:7273"   # serve the MTP control plane over TCP (needs MIAOTTY_MTP_TOKEN)
+# remote-listen = "127.0.0.1:7273"   # serve the MTP control plane over TCP (needs MTTY_MTP_TOKEN)
 # language = "zh"                  # UI language ("en" default; also reads $LANG)
 # update-pubkey = "RW…"            # minisign public key; enables signature checks
-# update-check-url = "https://example.com/miaotty/latest.json"
+# update-check-url = "https://example.com/mtty/latest.json"
 #   JSON manifest: {"version":"0.2.0","artifacts":{"macos-aarch64":{"url":"…","sha256":"…"}}}
 #   A plain document whose first line is the version also works.
 

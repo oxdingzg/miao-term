@@ -17,17 +17,22 @@
 
 - a **terminal engine** — `miao-term-core` owns the hot path from the PTY to the
   screen and depends on no windowing or GPU code;
-- **`miaotty`** — a batteries-included terminal application built on that engine,
+- **`mtty`** — a batteries-included terminal application built on that engine,
   with tabs, panes, side panels, a settings window, shell integration and a
   scriptable control plane.
 
-**`miaotty` is the single application**, powered by the native `winit` +
-`wgpu` host in `miao-term-widget`. `miaotty-app` provides the executable and
+**`mtty` is the single application**, powered by the native `winit` +
+`wgpu` host in `miao-term-widget`. `mtty-app` provides the executable and
 installer metadata; the host draws the terminal directly and composites egui
 chrome in the same frame. It includes picture-in-picture, hint mode, read-only
-mode and per-pane close buttons. The former `miaotty-native` implementation now
-ships under the `miaotty` name; the eframe application has been retired.
-See [application identity and migration](docs/APP-IDENTITY.md).
+mode and per-pane close buttons.
+
+> **Renamed from miaotty.** The application was called `miaotty` up to v0.0.5.
+> mtty copies `~/.config/miaotty` on first start, reads `MIAOTTY_*` variables,
+> still answers `miaotty://` links and the old socket path, and exports the
+> old pane variables so installed hooks and miao keep working — see
+> [ADR 0032](docs/decisions/0032-rename-mtty.md) and
+> [application identity and migration](docs/APP-IDENTITY.md).
 
 The engine and application remain deliberately decoupled for embedding.
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
@@ -57,7 +62,7 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
   sidebar. Right-clicking a tab or a session opens the same row menu: Rename
   Tab…, Prefix…, Mark…, Group…, Remove from Group (only inside a group),
   Duplicate Tab, Move Up/Down, New Tab, Close Tab, Close Other Tabs and
-  Close Below, in miaotty. A tab's mark is appended to its title and its group
+  Close Below, in mtty. A tab's mark is appended to its title and its group
   is kept with the session, so both survive a restart. The tab bar draws a divider
   where the group changes. Close Tab, the tab's `×` and session-row middle-click
   close the whole tab, including its splits; the last tab is kept alive.
@@ -85,7 +90,7 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
   `erDiagram` and `pie` Mermaid subsets (or full Mermaid via
   `mermaid-command`).
 - **Inline terminal graphics**: Sixel, Kitty and iTerm2 images are drawn in the
-  grid by miaotty — they scroll with the content and are clipped to the pane.
+  grid by mtty — they scroll with the content and are clipped to the pane.
   Toggle with `graphics` (on by default).
 - **Recipes**: save and replay a whole workspace.
 - A settings window (`⌘,`): font size/family, opacity, line height, cursor
@@ -95,17 +100,17 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
   reported in the status line and never overwritten.
 
 **Configuration and integration**
-- Configuration at `~/.config/miaotty/config.toml`: font size, font family,
+- Configuration at `~/.config/mtty/config.toml`: font size, font family,
   opacity, line height, cursor style, theme, colors, `language` (English or
   Simplified Chinese), `editor`, agent toggles, `quick-terminal-hotkey`,
   `update-check-url` / `update-pubkey` — see
   [`docs/config.example.toml`](docs/config.example.toml).
 - Automatic import of ghostty `config` and alacritty `alacritty.toml` when no
-  miaotty config exists.
+  mtty config exists.
 - zsh shell integration (cwd via OSC 7, command history) installed through a
   `ZDOTDIR` shim — the user's dotfiles are never modified.
-- **URL schemes**: `miaotty://`, `ssh://` and `x-man-page://` open a tab with the
-  matching command; a second launch — of miaotty — is forwarded to the
+- **URL schemes**: `mtty://`, `ssh://` and `x-man-page://` open a tab with the
+  matching command; a second launch — of mtty — is forwarded to the
   running instance (single instance, including "focus pane" and "quick"
   intents) through a shared inbox beside the control socket, and a plain second
   launch brings the window forward. URLs arrive as command-line arguments;
@@ -115,7 +120,7 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 - **Native menu bar on macOS**: the installed `.app` shows File/Edit/View/Shell/
   Agent/Help in the system menu bar — with About/Services/Hide/Quit — and the
   window has no menu strip of its own, like every other macOS terminal
-  (ADR 0031). A bare `miaotty` binary keeps the in-window menu. The window
+  (ADR 0031). A bare `mtty` binary keeps the in-window menu. The window
   itself asks for the dark appearance, so its title bar matches the chrome
   instead of opening as a light strip.
 - **Agent integrations**: detect claude/codex/opencode/miao, install a state hook
@@ -136,7 +141,7 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
   Windows): `core.ping/health`, `agent.state.*`, `history.*`,
   `pane.list/send/run/focus/close`, `app.view/edit` (open a file in the app) and
   `file.read/write` (bounded to 2 MB).
-- **`miaotty-cli`**, a cross-platform client for the control plane.
+- **`mtty-cli`**, a cross-platform client for the control plane.
 
 ---
 
@@ -150,12 +155,12 @@ The engine is layered so that dependencies point inward only
 | [`miao-term-core`](crates/term-core) | PTY, VT parsing, grid/scrollback, selection, search, OSC, input encoding. No GPU or windowing. |
 | [`miao-term-graphics`](crates/term-graphics) | Inline-graphics stream scanner and decoders (Sixel, Kitty, iTerm2). |
 | [`miao-term-render`](crates/term-render) | `wgpu` + `glyphon` glyph-grid renderer, quad and image pipelines. |
-| [`miao-term-ui`](crates/term-ui) | Host-agnostic UI shared by miaotty: theme, input encoding, selection, split layout, egui chrome, palette, hints, vim, markdown, ssh, update and agent-integration helpers. |
+| [`miao-term-ui`](crates/term-ui) | Host-agnostic UI shared by mtty: theme, input encoding, selection, split layout, egui chrome, palette, hints, vim, markdown, ssh, update and agent-integration helpers. |
 | [`miao-term-config`](crates/term-config) | Configuration and themes, ghostty/alacritty import, and the View-rule engine. |
 | [`miao-term-mtp`](crates/term-mtp) | MTP protocol, host/client and transport (Unix socket, Windows named pipe, TCP). |
-| [`miao-term-widget`](crates/term-widget) | The native host library for miaotty: `winit` + `wgpu` render loop that draws the grid directly and composites the egui chrome. |
-| [`miaotty-app`](miaotty-app) | The `miaotty` native executable and platform packaging metadata. |
-| [`miaotty-cli`](miaotty-cli) | The `miaotty-cli` control client. |
+| [`miao-term-widget`](crates/term-widget) | The native host library for mtty: `winit` + `wgpu` render loop that draws the grid directly and composites the egui chrome. |
+| [`mtty-app`](mtty-app) | The `mtty` native executable and platform packaging metadata. |
+| [`mtty-cli`](mtty-cli) | The `mtty-cli` control client. |
 
 The hot path — `pty → vt → grid → renderer` — takes no locks and allocates
 nothing per frame. Platform differences are confined to small `#[cfg]`-guarded
@@ -189,7 +194,7 @@ git clone https://github.com/oxdingzg/miao-term.git
 cd miao-term
 
 # Build and run the terminal (either host)
-cargo run --release -p miaotty-app
+cargo run --release -p mtty-app
 ```
 
 The first build compiles `wgpu`/`glyphon` and may take a few minutes.
@@ -212,11 +217,11 @@ and manual dispatches. Docs-only pushes skip the compile and lint jobs.
 ### Packaging
 
 ```sh
-scripts/package-macos.sh          # -> dist/miaotty.app (ad-hoc signed)
+scripts/package-macos.sh          # -> dist/mtty.app (ad-hoc signed)
 ```
 
 Release builds are produced by [`.github/workflows/release.yml`](.github/workflows/release.yml)
-on `v*` tags: `miaotty` and `miaotty-cli`, the  the macOS
+on `v*` tags: `mtty` and `mtty-cli`, the  the macOS
 app bundle, a Linux `.deb`/AppImage and a Windows MSI.
 [`dist-workspace.toml`](dist-workspace.toml) is a
 [cargo-dist](https://opensource.axo.dev/cargo-dist/) scaffold. See
@@ -226,8 +231,8 @@ app bundle, a Linux `.deb`/AppImage and a Windows MSI.
 
 ## Configuration
 
-miaotty reads `~/.config/miaotty/config.toml` (or
-`$XDG_CONFIG_HOME/miaotty/config.toml`). Every key is optional; see
+mtty reads `~/.config/mtty/config.toml` (or
+`$XDG_CONFIG_HOME/mtty/config.toml`). Every key is optional; see
 [`docs/config.example.toml`](docs/config.example.toml) for the full reference.
 
 ```toml
@@ -244,12 +249,12 @@ palette    = ["#3b4252", "#bf616a", "#a3be8c", "#ebcb8b",
               "#81a1c1", "#b48ead", "#8fbcbb", "#eceff4"]
 ```
 
-If no miaotty config exists, ghostty's `config` and alacritty's
+If no mtty config exists, ghostty's `config` and alacritty's
 `alacritty.toml` are imported automatically.
 
 ### Shell integration
 
-On startup, miaotty installs a zsh `ZDOTDIR` shim that reports the working
+On startup, mtty installs a zsh `ZDOTDIR` shim that reports the working
 directory (OSC 7) and command history. The shim is written to a private,
 user-only directory and restores the user's real `ZDOTDIR`, so existing dotfiles
 are left untouched. No manual setup is required.
@@ -258,51 +263,51 @@ are left untouched. No manual setup is required.
 
 ## Control plane
 
-The **MTP** (miaotty terminal protocol) control plane speaks newline-delimited
-JSON over `$XDG_RUNTIME_DIR/miaotty.sock` (falling back to `$TMPDIR`), and the
+The **MTP** (mtty terminal protocol) control plane speaks newline-delimited
+JSON over `$XDG_RUNTIME_DIR/mtty.sock` (falling back to `$TMPDIR`), and the
 socket is created with owner-only permissions. The shell inherits
-`MIAOTTY_SOCKET` and `MIAOTTY_PANE_ID`. Every response carries a state
+`MTTY_SOCKET` and `MTTY_PANE_ID`. Every response carries a state
 `revision`; `core.wait` blocks until it moves past a given value, and
 `core.subscribe` upgrades a connection to an event stream (`agent.state`,
 `panes`, `history`) so a client can follow changes without polling in a loop.
 
-`miaotty-cli` is the reference client:
+`mtty-cli` is the reference client:
 
 ```sh
-miaotty-cli ping
-miaotty-cli wait --since 42               # block until the state revision moves
-miaotty-cli events                        # stream state changes as JSON lines
-miaotty-cli events --topic agent.state    # ... filtered to one topic
-miaotty-cli pane list
-miaotty-cli pane run --pane ID --data "echo hello"
-miaotty-cli pane focus --pane ID
-miaotty-cli state claude --state processing --pane ID
-miaotty-cli state list
-miaotty-cli history add --command "cargo test" --cwd "$PWD"
-miaotty-cli history list --pane ID
-miaotty-cli view /path/to/file            # open it read-only in the app
-miaotty-cli edit /path/to/file            # open it in the editor
-miaotty-cli file read  --path /etc/hosts  # bounded to 2 MB per call
-miaotty-cli file read  --path app.bin --base64 --offset 0 --length 65536
-miaotty-cli file write --path /tmp/x --data "hello"
-miaotty-cli file write --path /tmp/x --data-b64 "AAECAw=="   # binary
+mtty-cli ping
+mtty-cli wait --since 42               # block until the state revision moves
+mtty-cli events                        # stream state changes as JSON lines
+mtty-cli events --topic agent.state    # ... filtered to one topic
+mtty-cli pane list
+mtty-cli pane run --pane ID --data "echo hello"
+mtty-cli pane focus --pane ID
+mtty-cli state claude --state processing --pane ID
+mtty-cli state list
+mtty-cli history add --command "cargo test" --cwd "$PWD"
+mtty-cli history list --pane ID
+mtty-cli view /path/to/file            # open it read-only in the app
+mtty-cli edit /path/to/file            # open it in the editor
+mtty-cli file read  --path /etc/hosts  # bounded to 2 MB per call
+mtty-cli file read  --path app.bin --base64 --offset 0 --length 65536
+mtty-cli file write --path /tmp/x --data "hello"
+mtty-cli file write --path /tmp/x --data-b64 "AAECAw=="   # binary
 ```
 
 **Remote access**: set `remote-listen = "127.0.0.1:7273"` (and
-`MIAOTTY_MTP_TOKEN`) to serve the control plane over TCP; connect with
-`miaotty-cli --socket tcp://host:7273`. Without a token the TCP listener refuses
+`MTTY_MTP_TOKEN`) to serve the control plane over TCP; connect with
+`mtty-cli --socket tcp://host:7273`. Without a token the TCP listener refuses
 to start. Note the control plane runs commands in your shell, so keep the token
 secret (and prefer a loopback/listen address you trust, or an ssh tunnel).
 
-If the host was started with `MIAOTTY_MTP_TOKEN`, requests must carry it; the CLI
-picks it up from the same variable. `MIAOTTY_MTP_ALLOW` (comma-separated, e.g.
+If the host was started with `MTTY_MTP_TOKEN`, requests must carry it; the CLI
+picks it up from the same variable. `MTTY_MTP_ALLOW` (comma-separated, e.g.
 `core.basic,file.read,history.read`) restricts which capabilities are accepted —
 anything else returns `forbidden`. Unset means everything is allowed, and
 `core.basic` (ping/health) is always allowed so clients can discover the host;
 `ping` reports the effective set in `allowed`. The socket can be forwarded over
 ssh (`ssh -R /tmp/fwd.sock:<host socket>`) so a remote client drives the host.
 
-Pass `--socket PATH` or set `MIAOTTY_SOCKET` to target a non-default socket.
+Pass `--socket PATH` or set `MTTY_SOCKET` to target a non-default socket.
 
 ---
 
@@ -352,8 +357,7 @@ version kept in sync as `*.zh-CN.md`.
 
 ## Roadmap
 
-The product direction for **mtty** (the official product name; the code,
-binaries and config still use `miaotty` until the rename milestone), the
+The product direction for **mtty**, the
 verified feature baseline and the milestone plan live in
 [`docs/PRODUCT.md`](docs/PRODUCT.md).
 
@@ -361,7 +365,7 @@ Done recently: the Windows named-pipe transport and ConPTY path (verified on
 real hardware), session restore, View rules, Open Quickly, the details panels,
 the agent loop (notifications, sleep guard, prompt queue), recipes, remote
 view/edit over ssh, version checks, URL schemes, the global
-Quick Terminal hotkey and IME preedit in miaotty, inline graphics in miaotty, Mermaid sequence/state/class/ER/pie diagrams, the MTP event stream, i18n,
+Quick Terminal hotkey and IME preedit in mtty, inline graphics in mtty, Mermaid sequence/state/class/ER/pie diagrams, the MTP event stream, i18n,
 and a performance gate. The CI performance baseline is persisted at
 `benches/perf-baseline.json` and refreshed by nightly/manual runs; comparison is
 report-only, with absolute budgets enforced.
@@ -378,7 +382,7 @@ Still open:
   Windows IME/GUI paths still need an interactive machine.
 - **Update install**: automatic self-replacement is future work for the native
   application; current upgrades use the published platform installers.
-- **Single native application**: miaotty replaces the former dual-host release;
+- **Single native application**: mtty replaces the former dual-host release;
   see [APP-IDENTITY.md](docs/APP-IDENTITY.md).
 
 - **Inline graphics**: Kitty z-index is not modelled (images paint over the
