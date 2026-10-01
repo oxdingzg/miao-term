@@ -378,10 +378,45 @@ struct Editor {
     remote: Option<(String, String)>,
     /// Closing with unsaved changes was requested once; the next close discards.
     close_armed: bool,
+    /// A remote save is running in the background.
+    saving: bool,
+    /// Close once the running remote save succeeds (vim `:wq`).
+    quit_after_save: bool,
+}
+
+/// Work finished on a background thread. Network and process work never runs
+/// on the UI thread; the result comes back through `State::jobs_rx`.
+enum JobDone {
+    RemoteRead {
+        dest: String,
+        path: String,
+        result: std::io::Result<Vec<u8>>,
+    },
+    DirListed {
+        dir: std::path::PathBuf,
+        entries: Vec<FileEntry>,
+    },
+    RemoteWrite {
+        dest: String,
+        path: String,
+        /// The buffer as written; edits made meanwhile stay "modified".
+        text: String,
+        result: std::io::Result<()>,
+    },
+}
+
+/// What a save request led to.
+#[derive(Debug, PartialEq, Eq)]
+enum SaveOutcome {
+    Saved,
+    Failed,
+    /// A remote write is running; its result arrives as a [`JobDone`].
+    Pending,
 }
 
 impl Editor {
-    /// Write the buffer (locally or over ssh); it is marked clean only on success.
+    /// Write a local buffer; it is marked clean only on success. Remote buffers
+    /// are written in the background (see `State::save_editor`).
     fn write(&mut self) -> std::io::Result<()> {
         if self.readonly {
             return Err(std::io::Error::new(
@@ -389,15 +424,22 @@ impl Editor {
                 "read-only",
             ));
         }
-        match &self.remote {
-            Some((dest, path)) => {
-                miao_term_ui::ssh::write_remote(dest, path, self.text.as_bytes())?
-            }
-            None => std::fs::write(&self.path, &self.text)?,
+        if self.remote.is_some() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "remote files are written in the background",
+            ));
         }
-        self.original = self.text.clone();
-        self.close_armed = false;
+        std::fs::write(&self.path, &self.text)?;
+        self.mark_saved(self.text.clone());
         Ok(())
+    }
+
+    /// Record that `written` reached the file.
+    fn mark_saved(&mut self, written: String) {
+        self.original = written;
+        self.close_armed = false;
+        self.saving = false
     }
 
     /// Whether a close may proceed. Unsaved changes arm the first request and
@@ -494,6 +536,8 @@ struct State {
     hints: Vec<miao_term_ui::hints::Hint>,
     tree_expanded: std::collections::HashSet<std::path::PathBuf>,
     tree_children: HashMap<std::path::PathBuf, Vec<FileEntry>>,
+    /// Directories being listed in the background.
+    tree_loading: std::collections::HashSet<std::path::PathBuf>,
     files_filter: String,
     prefix_renaming: Option<usize>,
     prefix_buf: String,
@@ -525,6 +569,11 @@ struct State {
     update_notice_until: Option<Instant>,
     /// A transient status-line message (failed saves, opens) and its expiry.
     notice: Option<(String, Instant)>,
+    /// Background work results (see [`JobDone`]).
+    jobs_tx: std::sync::mpsc::Sender<JobDone>,
+    jobs_rx: std::sync::mpsc::Receiver<JobDone>,
+    /// Agent CLIs found on PATH, and when that was checked.
+    agents_detected: Option<(Instant, Vec<bool>)>,
     /// Settings as last loaded/saved, to write back only what changed.
     saved_settings: Vec<(&'static str, String)>,
     /// Where settings came from when there was no config.toml.
@@ -930,21 +979,30 @@ impl State {
     }
 
     /// Lazily load a directory and (transitively) its expanded subdirectories.
+    /// List `dir` in the background (a network mount or a huge directory must
+    /// not stall the UI); [`State::tree_listed`] stores the result.
     fn load_tree(&mut self, dir: &std::path::Path) {
-        if self.tree_children.contains_key(dir) {
+        if self.tree_children.contains_key(dir) || !self.tree_loading.insert(dir.to_path_buf()) {
             return;
         }
-        let entries = files_rows(dir);
-        let subdirs: Vec<std::path::PathBuf> = entries
+        let dir = dir.to_path_buf();
+        self.spawn_job(move || {
+            let entries = files_rows(&dir);
+            JobDone::DirListed { dir, entries }
+        });
+    }
+
+    fn tree_listed(&mut self, dir: std::path::PathBuf, entries: Vec<FileEntry>) {
+        self.tree_loading.remove(&dir);
+        let expanded: Vec<std::path::PathBuf> = entries
             .iter()
             .filter(|f| f.is_dir)
             .map(|f| dir.join(&f.name))
+            .filter(|d| self.tree_expanded.contains(d))
             .collect();
-        self.tree_children.insert(dir.to_path_buf(), entries);
-        if self.tree_expanded.contains(dir) {
-            for s in subdirs {
-                self.load_tree(&s);
-            }
+        self.tree_children.insert(dir, entries);
+        for sub in expanded {
+            self.load_tree(&sub);
         }
     }
 
@@ -962,6 +1020,7 @@ impl State {
                 .clicked()
             {
                 self.tree_children.clear();
+                self.tree_loading.clear();
                 self.ensure_details();
             }
         });
@@ -970,6 +1029,14 @@ impl State {
             return;
         };
         self.load_tree(&root);
+        if !self.tree_children.contains_key(&root) {
+            ui.label(
+                egui::RichText::new(t(lang, "Loading…", "加载中…"))
+                    .size(12.0)
+                    .color(egui::Color32::from_gray(132)),
+            );
+            return;
+        }
         let filter = self.files_filter.to_lowercase();
         let mut open_file = None;
         let mut toggle = None;
@@ -2393,12 +2460,16 @@ impl State {
     }
 
     /// Kick off a background refresh of git/files/ports for the active cwd.
+    /// While the details panel is hidden only git runs (the status line shows
+    /// the branch), and less often.
     fn ensure_details(&mut self) {
         let Some(cwd) = self.cwd() else {
             return;
         };
-        let fresh = self.details_cwd.as_deref() == Some(cwd.as_path())
-            && self.details_at.elapsed() < Duration::from_secs(2);
+        let full = self.show_details;
+        let interval = Duration::from_secs(if full { 2 } else { 10 });
+        let same_dir = self.details_cwd.as_deref() == Some(cwd.as_path());
+        let fresh = same_dir && self.details_at.elapsed() < interval;
         if fresh || self.details_rx.is_some() {
             return;
         }
@@ -2406,11 +2477,18 @@ impl State {
         let proxy = self.proxy.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         let cwd2 = cwd.clone();
+        let previous = self.details_data.clone().filter(|_| same_dir);
         std::thread::spawn(move || {
+            let (files, ports) = if full {
+                (files_rows(&cwd2), pid.map(ports_rows).unwrap_or_default())
+            } else {
+                let keep = previous.unwrap_or_default();
+                (keep.files, keep.ports)
+            };
             let data = DetailsData {
                 git: git_rows(&cwd2),
-                files: files_rows(&cwd2),
-                ports: pid.map(ports_rows).unwrap_or_default(),
+                files,
+                ports,
             };
             let _ = tx.send((cwd2, data));
             let _ = proxy.send_event(HostEvent::Wake);
@@ -2806,7 +2884,7 @@ impl State {
             }
             Cmd::OpenFile => self.show_open = true,
             Cmd::Save => {
-                self.save_editor();
+                let _ = self.save_editor();
             }
             Cmd::Copy => {
                 if !self.edit_in_text_field(egui::Event::Copy) {
@@ -2930,6 +3008,24 @@ impl State {
         let mut notifications = self.notifications;
         let mut prevent_sleep = self.prevent_sleep;
         let mut install_agent: Option<&'static str> = None;
+        // Scanning PATH is file-system work: refresh it at most every 5 s,
+        // not on every frame the window is open.
+        if self
+            .agents_detected
+            .as_ref()
+            .map_or(true, |(at, _)| at.elapsed() > Duration::from_secs(5))
+        {
+            let found = miao_term_ui::integration::AGENTS
+                .iter()
+                .map(|a| miao_term_ui::integration::detected(a.bin))
+                .collect();
+            self.agents_detected = Some((Instant::now(), found));
+        }
+        let detected = self
+            .agents_detected
+            .as_ref()
+            .map(|(_, d)| d.clone())
+            .unwrap_or_default();
         let current_theme = self.theme_name.clone();
         let mut chosen_theme: Option<&'static str> = None;
         egui::Window::new(miao_term_ui::i18n::t(self.lang, "Settings", "设置"))
@@ -2999,13 +3095,9 @@ impl State {
                             "Agent integrations",
                             "Agent 集成",
                         ));
-                        for a in miao_term_ui::integration::AGENTS {
+                        for (a, found) in miao_term_ui::integration::AGENTS.iter().zip(&detected) {
                             ui.horizontal(|ui| {
-                                ui.label(if miao_term_ui::integration::detected(a.bin) {
-                                    "\u{25cf}"
-                                } else {
-                                    "\u{25cb}"
-                                });
+                                ui.label(if *found { "\u{25cf}" } else { "\u{25cb}" });
                                 ui.label(a.name);
                                 if ui
                                     .button(miao_term_ui::i18n::t(
@@ -3684,15 +3776,12 @@ impl State {
     }
 
     fn open_ssh(&mut self, input: &str) {
-        let Some(target) = miao_term_ui::ssh::Target::parse(input) else {
+        let Some((title, cmd)) = miao_term_ui::ssh::session_command(input) else {
             return;
         };
-        let resolved = miao_term_ui::ssh::resolve(&target);
-        let cmd =
-            miao_term_ui::ssh::command(&resolved, &miao_term_ui::ssh::bootstrap("xterm-256color"));
         self.new_tab();
         if let Some(tab) = self.tabs.last_mut() {
-            tab.title = resolved.destination();
+            tab.title = title;
             tab.ssh = true;
             let active = tab.active.clone();
             if let Some(pane) = tab.panes.iter_mut().find(|p| p.id == active) {
@@ -3781,27 +3870,15 @@ impl State {
         if do_open {
             let (dest, path) = (dest.clone(), path.clone());
             self.remote_dialog = None;
-            match miao_term_ui::ssh::read_remote(&dest, &path) {
-                Ok(bytes) => {
-                    let text = String::from_utf8_lossy(&bytes).to_string();
-                    self.editor = Some(Editor {
-                        path: std::path::PathBuf::from(&path),
-                        original: text.clone(),
-                        text,
-                        preview: path.ends_with(".md"),
-                        readonly: false,
-                        remote: Some((dest, path)),
-                        close_armed: false,
-                    });
-                }
-                Err(e) => {
-                    let msg = format!(
-                        "{} {dest}:{path}: {e}",
-                        miao_term_ui::i18n::t(self.lang, "Remote read failed", "读取远端文件失败")
-                    );
-                    self.show_notice(msg);
-                }
-            }
+            let msg = format!(
+                "{} {dest}:{path}…",
+                miao_term_ui::i18n::t(self.lang, "Opening", "正在打开")
+            );
+            self.show_notice(msg);
+            self.spawn_job(move || {
+                let result = miao_term_ui::ssh::read_remote(&dest, &path);
+                JobDone::RemoteRead { dest, path, result }
+            });
         } else if !open {
             self.remote_dialog = None;
         }
@@ -3897,6 +3974,8 @@ impl State {
                     readonly,
                     remote: None,
                     close_armed: false,
+                    saving: false,
+                    quit_after_save: false,
                 });
                 self.vim_for.clear();
                 self.recent_files.retain(|p| p != &key);
@@ -4006,7 +4085,16 @@ impl State {
                         &mut ed.preview,
                         miao_term_ui::i18n::t(self.lang, "Markdown preview", "Markdown 预览"),
                     );
-                    if modified && !ed.readonly {
+                    if ed.saving {
+                        ui.label(
+                            egui::RichText::new(miao_term_ui::i18n::t(
+                                self.lang,
+                                "saving…",
+                                "保存中…",
+                            ))
+                            .color(egui::Color32::from_gray(150)),
+                        );
+                    } else if modified && !ed.readonly {
                         ui.label(
                             egui::RichText::new(miao_term_ui::i18n::t(
                                 self.lang,
@@ -4082,11 +4170,25 @@ impl State {
                     }
                 }
             });
-        let saved = !save || self.save_editor();
-        if quit && saved {
-            self.editor = None;
-            self.vim = None;
-            return;
+        let outcome = if save {
+            self.save_editor()
+        } else {
+            SaveOutcome::Saved
+        };
+        if quit {
+            match outcome {
+                SaveOutcome::Saved => {
+                    self.editor = None;
+                    self.vim = None;
+                    return;
+                }
+                SaveOutcome::Pending => {
+                    if let Some(ed) = self.editor.as_mut() {
+                        ed.quit_after_save = true;
+                    }
+                }
+                SaveOutcome::Failed => {}
+            }
         }
         if !open {
             self.close_editor();
@@ -4095,19 +4197,121 @@ impl State {
 
     /// Write the editor buffer (locally or over ssh). The buffer is marked
     /// clean only when the write succeeds; a failure stays visible.
-    fn save_editor(&mut self) -> bool {
+    fn save_editor(&mut self) -> SaveOutcome {
         let Some(ed) = self.editor.as_mut() else {
-            return false;
+            return SaveOutcome::Failed;
         };
+        if let (Some((dest, path)), false) = (ed.remote.clone(), ed.readonly) {
+            if !ed.saving {
+                ed.saving = true;
+                let text = ed.text.clone();
+                self.spawn_job(move || {
+                    let result = miao_term_ui::ssh::write_remote(&dest, &path, text.as_bytes());
+                    JobDone::RemoteWrite {
+                        dest,
+                        path,
+                        text,
+                        result,
+                    }
+                });
+            }
+            return SaveOutcome::Pending;
+        }
         match ed.write() {
-            Ok(()) => true,
+            Ok(()) => SaveOutcome::Saved,
             Err(e) => {
                 let msg = format!(
                     "{}: {e}",
                     miao_term_ui::i18n::t(self.lang, "Save failed", "保存失败")
                 );
                 self.show_notice(msg);
-                false
+                SaveOutcome::Failed
+            }
+        }
+    }
+
+    /// Run `work` on a background thread; its result is handled by
+    /// [`State::finish_job`] on the UI thread.
+    fn spawn_job(&self, work: impl FnOnce() -> JobDone + Send + 'static) {
+        let tx = self.jobs_tx.clone();
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(work());
+            let _ = proxy.send_event(HostEvent::Wake);
+        });
+    }
+
+    fn poll_jobs(&mut self) {
+        while let Ok(done) = self.jobs_rx.try_recv() {
+            self.finish_job(done);
+            self.window.request_redraw();
+        }
+    }
+
+    fn finish_job(&mut self, done: JobDone) {
+        use miao_term_ui::i18n::t;
+        match done {
+            JobDone::DirListed { dir, entries } => self.tree_listed(dir, entries),
+            JobDone::RemoteRead { dest, path, result } => match result {
+                Ok(bytes) => {
+                    let text = String::from_utf8_lossy(&bytes).to_string();
+                    self.editor = Some(Editor {
+                        path: std::path::PathBuf::from(&path),
+                        original: text.clone(),
+                        text,
+                        preview: path.ends_with(".md"),
+                        readonly: false,
+                        remote: Some((dest, path)),
+                        close_armed: false,
+                        saving: false,
+                        quit_after_save: false,
+                    });
+                    self.notice = None;
+                }
+                Err(e) => {
+                    let msg = format!(
+                        "{} {dest}:{path}: {e}",
+                        t(self.lang, "Remote read failed", "读取远端文件失败")
+                    );
+                    self.show_notice(msg);
+                }
+            },
+            JobDone::RemoteWrite {
+                dest,
+                path,
+                text,
+                result,
+            } => {
+                let target = Some((dest.clone(), path.clone()));
+                let Some(ed) = self.editor.as_mut().filter(|ed| ed.remote == target) else {
+                    // The editor moved on; still report a failure.
+                    if let Err(e) = result {
+                        let msg = format!(
+                            "{} {dest}:{path}: {e}",
+                            t(self.lang, "Save failed", "保存失败")
+                        );
+                        self.show_notice(msg);
+                    }
+                    return;
+                };
+                ed.saving = false;
+                match result {
+                    Ok(()) => {
+                        ed.mark_saved(text);
+                        if ed.quit_after_save {
+                            self.editor = None;
+                            self.vim = None;
+                        }
+                    }
+                    Err(e) => {
+                        ed.quit_after_save = false;
+                        let msg = format!(
+                            "{} {dest}:{path}: {e}",
+                            t(self.lang, "Save failed", "保存失败")
+                        );
+                        self.show_notice(msg);
+                    }
+                }
             }
         }
     }
@@ -4631,6 +4835,7 @@ impl ApplicationHandler<HostEvent> for Host {
         };
         let (cw, ch) = State::cell_size(font_size, line_ratio, font_family.as_deref());
 
+        let (jobs_tx, jobs_rx) = std::sync::mpsc::channel();
         let mut state = State {
             window,
             proxy: self.proxy.clone(),
@@ -4693,7 +4898,13 @@ impl ApplicationHandler<HostEvent> for Host {
                     .map(|p| p.with_file_name("mermaid-cache"))
                     .unwrap_or_default(),
                 cmd: cfg.mermaid_command.clone(),
-                cache: std::collections::HashMap::new(),
+                cache: Default::default(),
+                wake: {
+                    let proxy = self.proxy.clone();
+                    Some(Arc::new(move || {
+                        let _ = proxy.send_event(HostEvent::Wake);
+                    }))
+                },
             },
             recent_files: Vec::new(),
             open_counts: HashMap::new(),
@@ -4703,6 +4914,7 @@ impl ApplicationHandler<HostEvent> for Host {
             hints: Vec::new(),
             tree_expanded: std::collections::HashSet::new(),
             tree_children: HashMap::new(),
+            tree_loading: std::collections::HashSet::new(),
             files_filter: String::new(),
             prefix_renaming: None,
             prefix_buf: String::new(),
@@ -4731,6 +4943,9 @@ impl ApplicationHandler<HostEvent> for Host {
             update_result: None,
             update_notice_until: None,
             notice: None,
+            jobs_tx,
+            jobs_rx,
+            agents_detected: None,
             saved_settings: Vec::new(),
             config_imported_from: cfg.imported_from,
             update_dialog: false,
@@ -4845,6 +5060,7 @@ impl ApplicationHandler<HostEvent> for Host {
                 state.apply_launch(&intent);
                 state.window.request_redraw();
             }
+            state.poll_jobs();
             if let Some(rx) = state.update_rx.take() {
                 match rx.try_recv() {
                     Ok(result) => {
@@ -5603,12 +5819,18 @@ fn mouse_report(
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// External Mermaid rendering (opt-in via `mermaid-command`) with a cache.
+/// A diagram slot: `None` while the external renderer runs, then its result.
+type MmdSlot = Option<Option<std::path::PathBuf>>;
+
+/// External Mermaid rendering (opt-in via `mermaid-command`) with a cache. The
+/// renderer runs on a background thread; until it finishes the built-in subset
+/// (or a placeholder) is shown, and `wake` repaints once the image is ready.
 #[derive(Default)]
 struct Mmd {
     dir: std::path::PathBuf,
     cmd: Option<String>,
-    cache: std::collections::HashMap<u64, Option<std::path::PathBuf>>,
+    cache: Arc<std::sync::Mutex<std::collections::HashMap<u64, MmdSlot>>>,
+    wake: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl Mmd {
@@ -5618,12 +5840,25 @@ impl Mmd {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         source.hash(&mut h);
         let key = h.finish();
-        if let Some(v) = self.cache.get(&key) {
-            return v.clone();
+        let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(slot) = cache.get(&key) {
+            return slot.clone().flatten();
         }
-        let img = miao_term_ui::mermaid::render_external(source, &cmd, &self.dir);
-        self.cache.insert(key, img.clone());
-        img
+        cache.insert(key, None);
+        drop(cache);
+        let (shared, dir, wake) = (self.cache.clone(), self.dir.clone(), self.wake.clone());
+        let source = source.to_string();
+        std::thread::spawn(move || {
+            let img = miao_term_ui::mermaid::render_external(&source, &cmd, &dir);
+            shared
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(key, Some(img));
+            if let Some(wake) = wake {
+                wake();
+            }
+        });
+        None
     }
 }
 
@@ -5698,7 +5933,15 @@ fn git_rows(cwd: &std::path::Path) -> Vec<(String, String)> {
     let Ok(out) = out else {
         return vec![("git".into(), "unavailable".into())];
     };
-    let text = String::from_utf8_lossy(&out.stdout);
+    parse_git_status(out.status.success(), &String::from_utf8_lossy(&out.stdout))
+}
+
+/// Rows for `git status --porcelain=v1 -b`. A failed status (outside a
+/// repository) is reported as such, never as "clean".
+fn parse_git_status(success: bool, text: &str) -> Vec<(String, String)> {
+    if !success {
+        return vec![("git".into(), "not a git repository".into())];
+    }
     let mut rows = Vec::new();
     for line in text.lines().take(200) {
         if let Some(branch) = line.strip_prefix("## ") {
@@ -5713,9 +5956,39 @@ fn git_rows(cwd: &std::path::Path) -> Vec<(String, String)> {
     rows
 }
 
+/// The pane's shell and every process below it: dev servers usually run as
+/// children (`npm run dev`, `cargo run`), not as the shell itself.
+fn process_tree(root: u32, ps_output: &str) -> Vec<u32> {
+    let pairs: Vec<(u32, u32)> = ps_output
+        .lines()
+        .filter_map(|line| {
+            let mut cols = line.split_whitespace();
+            Some((cols.next()?.parse().ok()?, cols.next()?.parse().ok()?))
+        })
+        .collect();
+    let mut tree = vec![root];
+    let mut i = 0;
+    while i < tree.len() && tree.len() < 512 {
+        let parent = tree[i];
+        for (pid, ppid) in &pairs {
+            if *ppid == parent && !tree.contains(pid) {
+                tree.push(*pid);
+            }
+        }
+        i += 1;
+    }
+    tree
+}
+
 fn ports_rows(pid: u32) -> Vec<(String, String)> {
+    let ps = std::process::Command::new("ps")
+        .args(["-A", "-o", "pid=,ppid="])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+    let pids: Vec<String> = process_tree(pid, &ps).iter().map(u32::to_string).collect();
     let out = std::process::Command::new("lsof")
-        .args(["-nP", "-iTCP", "-sTCP:LISTEN", "-a", "-p", &pid.to_string()])
+        .args(["-nP", "-iTCP", "-sTCP:LISTEN", "-a", "-p", &pids.join(",")])
         .output();
     let Ok(out) = out else {
         return vec![("ports".into(), "lsof unavailable".into())];
@@ -6467,6 +6740,8 @@ mod tests {
             readonly: false,
             remote: None,
             close_armed: false,
+            saving: false,
+            quit_after_save: false,
         }
     }
 
@@ -6489,6 +6764,49 @@ mod tests {
             "edited"
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn remote_buffers_are_never_written_on_the_ui_thread() {
+        let mut ed = editor_at(std::path::PathBuf::from("/etc/hosts"));
+        ed.remote = Some(("host".into(), "/etc/hosts".into()));
+        let err = ed.write().unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::Unsupported);
+        assert_eq!(ed.original, "original");
+
+        // A background save records what it wrote; later edits stay modified.
+        ed.saving = true;
+        let written = ed.text.clone();
+        ed.text.push_str(" and more");
+        ed.mark_saved(written);
+        assert!(!ed.saving);
+        assert_eq!(ed.original, "edited");
+        assert_ne!(ed.text, ed.original);
+    }
+
+    #[test]
+    fn git_status_outside_a_repository_is_not_clean() {
+        assert_eq!(
+            parse_git_status(false, ""),
+            vec![("git".to_string(), "not a git repository".to_string())]
+        );
+        assert_eq!(
+            parse_git_status(true, "## main\n"),
+            vec![("branch".to_string(), "main".to_string())]
+        );
+        assert_eq!(
+            parse_git_status(true, ""),
+            vec![("status".to_string(), "clean".to_string())]
+        );
+    }
+
+    #[test]
+    fn ports_follow_the_shell_s_descendants() {
+        let ps = "  1     0\n 10     1\n 11    10\n 12    11\n 20     1\n 13    10\n";
+        let mut tree = process_tree(10, ps);
+        tree.sort();
+        assert_eq!(tree, vec![10, 11, 12, 13]);
+        assert_eq!(process_tree(99, ps), vec![99]);
     }
 
     #[test]

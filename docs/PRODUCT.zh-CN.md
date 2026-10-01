@@ -150,7 +150,7 @@
   - pane 环境:同时导出 `MTTY_*` 与 `MIAOTTY_*`,`MTTY_CLI`/`MIAOTTY_CLI` 指向同目录 CLI 的绝对路径。
   - URL scheme `mtty://` 与 `miaotty://` 都接受;hook 脚本、shell shim、热键片段、ControlPath、界面文字改为 mtty。
   - 验收:迁移/环境变量/scheme 单元测试;旧 hook 脚本在新 pane 中上报状态成功(冒烟)。
-- [x] **B1.2 构建与打包** — `ee12822`:`package-macos.sh` + `check-macos-bundle.py` + `smoke-hosts.py --bundle` 通过,`test-release-manifest.py` 9 项通过;release 工作流演练待所有者触发。
+- [x] **B1.2 构建与打包** — `ee12822`:`package-macos.sh` + `check-macos-bundle.py` + `smoke-hosts.py --bundle` 通过,`test-release-manifest.py` 9 项通过;release 工作流演练(run 36830274914)四个 runner 全部通过,含 MSI 安装/卸载与两个 scheme、deb 兼容别名。
   - 目录与包:`miaotty-app` → `mtty-app`(二进制 `mtty`),`miaotty-cli` → `mtty-cli`。
   - macOS:`mtty.app`、`dev.mtty.terminal`、URL scheme 注册;安装脚本归档并移除旧 `miaotty.app`。
   - Linux:deb 包 `mtty`(Replaces/Conflicts/Provides `miaotty`)、兼容符号链接、`.desktop`、AppImage。
@@ -165,7 +165,7 @@
 
 ### M0 稳定化:把"部分"变成"可用"
 
-- [ ] **B0.1 UI 线程不阻塞**:`ssh -G`、远端读写、`mermaid-command`、Files 目录读取改为后台任务 +
+- [x] **B0.1 UI 线程不阻塞**(另修:SSH 会话改用用户输入的别名连接,`Host 别名` 下的配置此前不生效):`ssh -G`、远端读写、`mermaid-command`、Files 目录读取改为后台任务 +
   加载状态;details 面板只在可见时轮询;Ports 覆盖子进程;非 git 目录如实显示。
   验收:后台任务单元测试;冒烟中打开远端/大目录时界面帧不停顿(日志计时)。
 - [ ] **B0.2 工作区正确性**:新分屏/标签继承目录;复制标签保留标记与分组;关闭其他/下方可重开;
