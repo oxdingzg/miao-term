@@ -10914,6 +10914,60 @@ mod tests {
     }
 
     #[test]
+    fn markdown_table_cells_wrap_inside_the_preview() {
+        // A long cell used to be truncated at the window edge (egui truncates
+        // text in horizontal layouts), so scrolling could not reveal it.
+        let ctx = egui::Context::default();
+        let md = "| Product | For | What |\n|---|---|---|\n| Gateway | Developers | \
+            one account and one key reach forty model vendors, billed per token, \
+            routed to the cheapest or fastest channel, failing over to a backup \
+            channel automatically END |\n";
+        let mut cache = egui_commonmark::CommonMarkCache::default();
+        let mut last = None;
+        for _ in 0..3 {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(500.0, 400.0),
+                )),
+                ..Default::default()
+            };
+            let mut size = None;
+            let output = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let o = egui::ScrollArea::both()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            egui_commonmark::CommonMarkViewer::new().show(ui, &mut cache, md);
+                        });
+                    size = Some((o.content_size, o.inner_rect));
+                });
+            });
+            last = Some((output, size.unwrap()));
+        }
+        let (output, (content, viewport)) = last.unwrap();
+        assert!(
+            content.x <= viewport.width() + 1.0,
+            "the table fits the preview: {content:?} in {viewport:?}"
+        );
+        let shown: String = output
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Text(t) => Some(
+                    t.galley
+                        .rows
+                        .iter()
+                        .flat_map(|r| r.glyphs.iter().map(|g| g.chr))
+                        .collect::<String>(),
+                ),
+                _ => None,
+            })
+            .collect();
+        assert!(shown.contains("END"), "the whole cell is laid out: {shown}");
+    }
+
+    #[test]
     fn windows_with_wide_content_can_be_resized_both_ways() {
         // A long unwrapped line (a Markdown code block) and a full-width text
         // field used to pin the window at the widest size.

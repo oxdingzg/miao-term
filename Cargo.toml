@@ -25,3 +25,4 @@ opt-level = 3
 # for a process without an application icon. See vendor/muda/PATCHES.miao.md.
 [patch.crates-io]
 muda = { path = "vendor/muda" }
+egui_commonmark = { path = "vendor/egui_commonmark" }
