@@ -28,7 +28,7 @@
 引擎与应用保持解耦，供第三方嵌入。
 完整设计见 [`docs/ARCHITECTURE.zh-CN.md`](docs/ARCHITECTURE.zh-CN.md)。
 
-> **项目状态 —— 预发布。** 当前版本为 `0.0.3`,API 尚未稳定。macOS 是主要平台;
+> **项目状态 —— 预发布。** 当前版本为 `0.0.4`,API 尚未稳定。macOS 是主要平台;
 > Windows 已在真实硬件上构建、测试并经 MTP 驱动(见 [`docs/WINDOWS-DEV.zh-CN.md`](docs/WINDOWS-DEV.zh-CN.md));
 > Linux 在 CI 中构建并通过测试。
 
