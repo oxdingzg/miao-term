@@ -32,3 +32,9 @@ muda = { version = "0.15", default-features = false }
 # Both are already in the tree through winit/muda.
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString"] }
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+# File drops on Wayland (winit 0.30 has them only for X11). The same crates
+# winit uses, sharing its connection through the system libwayland.
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system"] }

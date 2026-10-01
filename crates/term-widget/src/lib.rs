@@ -37,6 +37,8 @@ use winit::window::{Window, WindowId};
 #[cfg(target_os = "macos")]
 mod macos_url;
 mod session;
+#[cfg(all(unix, not(target_os = "macos")))]
+mod wayland_dnd;
 
 #[derive(Debug)]
 enum UpdateResult {
@@ -931,6 +933,9 @@ struct State {
     /// Mouse button currently forwarded to the application (0/1/2), if any.
     mouse_captured: Option<u8>,
     cursor: (f64, f64),
+    /// File drops on native Wayland (winit handles X11's).
+    #[cfg(all(unix, not(target_os = "macos")))]
+    dnd: Option<wayland_dnd::Dnd>,
     /// Inline IME composition text (not yet committed to the shell).
     preedit: String,
     /// Where the IME candidate window was last anchored (logical points).
@@ -2085,10 +2090,21 @@ impl State {
         true
     }
 
+    /// The clipboard as text. On Wayland it is read through our data device:
+    /// GNOME sends the selection to only one device per client, ours (see
+    /// `wayland_dnd`).
+    fn clipboard_text(&mut self) -> Option<String> {
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if let Some(dnd) = self.dnd.as_mut() {
+            return dnd.selection_text();
+        }
+        self.egui_state.clipboard_text()
+    }
+
     fn paste_clipboard(&mut self) {
         // Image-only clipboards have no text. Still send an empty bracketed
         // paste: TUIs such as miao use it to read native clipboard attachments.
-        let text = self.egui_state.clipboard_text().unwrap_or_default();
+        let text = self.clipboard_text().unwrap_or_default();
         self.paste(&text);
     }
 
@@ -3804,7 +3820,7 @@ impl State {
                 }
             }
             Cmd::PasteEscaped => {
-                let text = self.egui_state.clipboard_text().unwrap_or_default();
+                let text = self.clipboard_text().unwrap_or_default();
                 if !text.is_empty() {
                     let escaped = shell_escape_text(&text);
                     self.paste(&escaped);
@@ -3952,7 +3968,7 @@ impl State {
                 }
             }
             Cmd::Paste => {
-                let text = self.egui_state.clipboard_text().unwrap_or_default();
+                let text = self.clipboard_text().unwrap_or_default();
                 if !self.edit_in_text_field(egui::Event::Paste(text)) {
                     self.paste_clipboard();
                 }
@@ -5393,6 +5409,51 @@ impl State {
             }
             Err(e) => self.update_install = UpdateInstall::Failed(e),
         }
+    }
+
+    /// A file dropped on the window (X11 through winit, Wayland through
+    /// `wayland_dnd`), at the pointer position in `self.cursor`.
+    fn drop_file(&mut self, path: std::path::PathBuf) {
+        self.dropping = false;
+        // Onto the SFTP window: upload to its remote folder.
+        let scale = self.window.scale_factor() as f32;
+        let at = egui::pos2(self.cursor.0 as f32 / scale, self.cursor.1 as f32 / scale);
+        if self.sftp_view.as_ref().is_some_and(|v| v.rect.contains(at)) {
+            self.sftp_upload(vec![path]);
+            self.window.request_redraw();
+            return;
+        }
+        let scale = self.window.scale_factor() as f32;
+        let (px, py) = (self.cursor.0 as f32, self.cursor.1 as f32);
+        let over_pane = self
+            .pane_rects()
+            .into_iter()
+            .find(|(_, r)| r.contains(px / scale, py / scale));
+        // A directory never reaches the editor: `read_to_string` fails
+        // with EISDIR and leaves only a line on stderr, so a dragged
+        // folder looked like it did nothing at all. Pasting the path is
+        // what a dropped folder means in a terminal, so it always goes
+        // to the pane; only a file outside one opens in the editor.
+        // Whether a floating egui layer (a dialog, the editor, a popup) is at
+        // the drop point. Asked of the drop position itself: during a drag
+        // the window gets no pointer motion, so egui's own pointer state is
+        // stale (a Wayland drop on the terminal opened the editor).
+        let over_ui = self
+            .egui_ctx
+            .layer_id_at(egui::pos2(px / scale, py / scale))
+            .is_some_and(|layer| layer.order != egui::Order::Background);
+        if path.is_dir() || (over_pane.is_some() && !over_ui) {
+            if let Some((id, _)) = over_pane {
+                if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                    tab.active = id;
+                }
+            }
+            // Drop onto the terminal: paste the shell-quoted path.
+            self.paste(&format!("{} ", shell_quote(&path.to_string_lossy())));
+        } else {
+            self.open_editor(path);
+        }
+        self.window.request_redraw();
     }
 
     /// A local change: sync in a moment rather than at the next minute.
@@ -8288,8 +8349,24 @@ impl ApplicationHandler<HostEvent> for Host {
         let (cw, ch) = State::cell_size(font_size, line_ratio, font_family.as_deref());
 
         let (jobs_tx, jobs_rx) = std::sync::mpsc::channel();
+        // winit implements file drops only for X11; on Wayland we listen on
+        // its connection ourselves.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let dnd = {
+            use winit::raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
+            match window.display_handle().map(|h| h.as_raw()) {
+                // SAFETY: winit's live wl_display; the window (and with it
+                // the connection) outlives State's fields.
+                Ok(RawDisplayHandle::Wayland(h)) => unsafe {
+                    wayland_dnd::Dnd::new(h.display.as_ptr())
+                },
+                _ => None,
+            }
+        };
         let mut state = State {
             window,
+            #[cfg(all(unix, not(target_os = "macos")))]
+            dnd,
             proxy: self.proxy.clone(),
             surface,
             device,
@@ -8537,6 +8614,27 @@ impl ApplicationHandler<HostEvent> for Host {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if let Some(state) = &mut self.state {
+            #[cfg(all(unix, not(target_os = "macos")))]
+            {
+                let events = state.dnd.as_mut().map(|d| d.poll()).unwrap_or_default();
+                let scale = state.window.scale_factor();
+                for event in events {
+                    match event {
+                        wayland_dnd::DropEvent::Hover { x, y } => {
+                            state.cursor = (x * scale, y * scale);
+                            state.dropping = true;
+                        }
+                        wayland_dnd::DropEvent::Leave => state.dropping = false,
+                        wayland_dnd::DropEvent::Drop { paths, x, y } => {
+                            state.cursor = (x * scale, y * scale);
+                            for path in paths {
+                                state.drop_file(path);
+                            }
+                        }
+                    }
+                    state.window.request_redraw();
+                }
+            }
             // The cwd fallback must advance even when an idle/background shell
             // produces no output. This also keeps pending output draining.
             let mut changed = false;
@@ -8723,7 +8821,34 @@ impl ApplicationHandler<HostEvent> for Host {
         // instead of the shell, until a click elsewhere. Tab reaches egui only
         // while one of its widgets already has the focus (dialog fields).
         let terminal_tab = keeps_tab_from_egui(&event, state.egui_ctx.wants_keyboard_input());
-        if !matches!(event, WindowEvent::RedrawRequested) && !terminal_tab {
+        // A paste into an egui text field on Wayland: egui's own clipboard no
+        // longer sees the selection (see `clipboard_text`), so read it here
+        // and hand egui the text instead of the key.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let field_paste = state.dnd.is_some()
+            && state.egui_ctx.wants_keyboard_input()
+            && matches!(&event, WindowEvent::KeyboardInput { event: k, .. }
+            if k.state == ElementState::Pressed
+                && terminal_paste_shortcut(
+                    winit_key_kind(k),
+                    state.mods.super_key(),
+                    state.mods.control_key(),
+                    state.mods.shift_key(),
+                    state.mods.alt_key(),
+                ));
+        #[cfg(not(all(unix, not(target_os = "macos"))))]
+        let field_paste = false;
+        if field_paste {
+            if let Some(text) = state.clipboard_text().filter(|t| !t.is_empty()) {
+                state
+                    .egui_state
+                    .egui_input_mut()
+                    .events
+                    .push(egui::Event::Paste(text));
+            }
+            state.window.request_redraw();
+        }
+        if !matches!(event, WindowEvent::RedrawRequested) && !terminal_tab && !field_paste {
             let resp = state.egui_state.on_window_event(&state.window, &event);
             // Just outside a side panel egui does not claim the pointer, but a
             // press on its resize edge must drag the edge, not select text.
@@ -8802,44 +8927,7 @@ impl ApplicationHandler<HostEvent> for Host {
                     state.write_input(text.as_bytes());
                 }
             }
-            WindowEvent::DroppedFile(path) => {
-                state.dropping = false;
-                // Onto the SFTP window: upload to its remote folder.
-                let scale = state.window.scale_factor() as f32;
-                let at = egui::pos2(state.cursor.0 as f32 / scale, state.cursor.1 as f32 / scale);
-                if state
-                    .sftp_view
-                    .as_ref()
-                    .is_some_and(|v| v.rect.contains(at))
-                {
-                    state.sftp_upload(vec![path]);
-                    state.window.request_redraw();
-                    return;
-                }
-                let scale = state.window.scale_factor() as f32;
-                let (px, py) = (state.cursor.0 as f32, state.cursor.1 as f32);
-                let over_pane = state
-                    .pane_rects()
-                    .into_iter()
-                    .find(|(_, r)| r.contains(px / scale, py / scale));
-                // A directory never reaches the editor: `read_to_string` fails
-                // with EISDIR and leaves only a line on stderr, so a dragged
-                // folder looked like it did nothing at all. Pasting the path is
-                // what a dropped folder means in a terminal, so it always goes
-                // to the pane; only a file outside one opens in the editor.
-                if path.is_dir() || (over_pane.is_some() && !state.egui_ctx.wants_pointer_input()) {
-                    if let Some((id, _)) = over_pane {
-                        if let Some(tab) = state.tabs.get_mut(state.active_tab) {
-                            tab.active = id;
-                        }
-                    }
-                    // Drop onto the terminal: paste the shell-quoted path.
-                    state.paste(&format!("{} ", shell_quote(&path.to_string_lossy())));
-                } else {
-                    state.open_editor(path);
-                }
-                state.window.request_redraw();
-            }
+            WindowEvent::DroppedFile(path) => state.drop_file(path),
             WindowEvent::HoveredFile(_) => {
                 state.dropping = true;
                 state.window.request_redraw();

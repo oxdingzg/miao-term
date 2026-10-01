@@ -287,10 +287,13 @@ verified on its own:
   uinput): typing, menus and menu actions work; pinyin IME preedit, candidate
   placement and commit work; the Quick Terminal hotkey works through a GNOME
   custom shortcut running `mtty --quick` (GNOME 46 has no GlobalShortcuts
-  portal). **Found:** dropping files does nothing on native Wayland (winit
-  0.30 implements drops only for X11; under XWayland the drop pastes the
-  quoted path); app shortcuts use Super on Linux/Windows, where the desktop
-  owns most Super combinations, and the hints show ⌘. Windows: pending.
+  portal). **Found and fixed:** dropping files did nothing on native Wayland
+  (winit 0.30 implements drops only for X11), now handled through our own
+  `wl_data_device`, which also reads the clipboard because GNOME serves one
+  data device per client; app shortcuts used Super, which the desktop owns,
+  now Ctrl+Shift based (see the README table); Tab in the terminal moved
+  egui's focus to the File menu and swallowed further typing. Windows:
+  pending.
 - [ ] **B4.2** Apple notarization and Windows MSI signing **[owner +
   credentials]**.
 - [x] **B4.3** Auto-update: download, `update-pubkey` signature check, replace.
