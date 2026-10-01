@@ -154,7 +154,9 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
   launcher. No passwords or keys are stored. *Hosts…* also shows the ssh agent's
   keys, checks a host's key against `known_hosts` (unknown keys show their
   fingerprints to compare before trusting; a changed key is refused), and runs
-  `ssh-keygen` / `ssh-copy-id` in a terminal tab.
+  `ssh-keygen` / `ssh-copy-id` in a terminal tab. Each host keeps port forwards
+  (`-L`, `-R`, `-D` SOCKS) that start and stop from there and show whether they
+  run or why ssh gave up; the status line counts them.
 - **SSH sessions and remote view/edit**: *New SSH Session…* honours
   `~/.ssh/config`, reuses a ControlMaster connection and bootstraps terminfo with
   nothing installed remotely; *View/Edit Remote File…* reads and writes over that

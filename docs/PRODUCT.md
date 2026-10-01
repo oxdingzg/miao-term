@@ -260,8 +260,11 @@ verified on its own:
 - [x] **B3.2 Safe connections** (an interactive ssh asks about host keys itself; the host library checks in the background: known / unknown (fingerprints, trust after comparing) / changed (refused); "known" checked against a real host; key generation and ssh-copy-id run in a terminal tab, so mtty never handles a passphrase): known_hosts confirmation on first connect and
   fingerprint change; ssh-agent status and key generation; no plaintext
   passwords.
-- [ ] **B3.3 Port forwarding**: L/R/D rules managed through the ControlMaster
-  (`ssh -O forward/cancel`), stored with the host, with visible state.
+- [x] **B3.3 Port forwarding**: L/R/D rules stored with the host; each runs as
+  an `ssh -N` owned by mtty (`ExitOnForwardFailure`), with visible state, ending
+  with mtty (not the shared ControlMaster, whose 60 s ControlPersist would drop
+  forwards). End to end against a real host: the remote sshd banner read
+  through the local port, the port closed after Stop.
 - [ ] **B3.4 SFTP**: two-pane browser, upload/download, drag and drop, progress,
   rename/permissions; remote editing reuses the pane's connection.
 - [ ] **B3.5 Snippets and broadcast**: a command library run in the current pane

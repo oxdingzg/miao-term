@@ -7,6 +7,7 @@
 
 pub mod agentloop;
 pub mod chrome;
+pub mod forward;
 pub mod hints;
 pub mod hostkeys;
 pub mod hotkey;

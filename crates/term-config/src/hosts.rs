@@ -42,6 +42,81 @@ pub struct Host {
     /// A jump host (`ssh -J`), for hosts not described in `~/.ssh/config`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub jump: Option<String>,
+    /// Saved port forwards (B3.3).
+    #[serde(default, skip_serializing_if = "Vec::is_empty", rename = "forward")]
+    pub forwards: Vec<Forward>,
+}
+
+/// One port forward, in ssh's own notation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Forward {
+    pub kind: ForwardKind,
+    /// `[bind:]port:host:hostport` for local/remote, `[bind:]port` for dynamic.
+    pub spec: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ForwardKind {
+    /// `-L`: a local port reaches a host as seen from the server.
+    Local,
+    /// `-R`: a port on the server reaches a host as seen from here.
+    Remote,
+    /// `-D`: a local SOCKS proxy through the server.
+    Dynamic,
+}
+
+impl ForwardKind {
+    pub fn flag(self) -> &'static str {
+        match self {
+            ForwardKind::Local => "-L",
+            ForwardKind::Remote => "-R",
+            ForwardKind::Dynamic => "-D",
+        }
+    }
+}
+
+impl Forward {
+    /// Check the spec's shape before handing it to ssh.
+    pub fn validate(&self) -> Result<(), String> {
+        let spec = self.spec.trim();
+        if spec.is_empty() || spec.chars().any(char::is_whitespace) {
+            return Err("empty or contains spaces".into());
+        }
+        // Split on ':' outside [ipv6] brackets.
+        let mut parts = Vec::new();
+        let mut depth = 0;
+        let mut start = 0;
+        for (i, c) in spec.char_indices() {
+            match c {
+                '[' => depth += 1,
+                ']' => depth -= 1,
+                ':' if depth == 0 => {
+                    parts.push(&spec[start..i]);
+                    start = i + 1;
+                }
+                _ => {}
+            }
+        }
+        parts.push(&spec[start..]);
+        let port_ok = |p: &str| p.parse::<u16>().is_ok_and(|n| n > 0);
+        let ok = match (self.kind, parts.as_slice()) {
+            (ForwardKind::Dynamic, [port]) | (ForwardKind::Dynamic, [_, port]) => port_ok(port),
+            (ForwardKind::Local | ForwardKind::Remote, [port, host, hport])
+            | (ForwardKind::Local | ForwardKind::Remote, [_, port, host, hport]) => {
+                port_ok(port) && !host.is_empty() && port_ok(hport)
+            }
+            _ => false,
+        };
+        if ok {
+            Ok(())
+        } else {
+            Err(match self.kind {
+                ForwardKind::Dynamic => "use [bind:]port, e.g. 1080".into(),
+                _ => "use [bind:]port:host:hostport, e.g. 8080:localhost:80".into(),
+            })
+        }
+    }
 }
 
 impl Host {
@@ -266,5 +341,50 @@ Match host foo
         assert_eq!(added, 1, "an existing name is kept as configured");
         let order: Vec<_> = book.sorted().iter().map(|(_, h)| h.name.clone()).collect();
         assert_eq!(order, ["work", "web-1"], "ungrouped first, then by group");
+    }
+
+    #[test]
+    fn forward_specs_follow_ssh_notation() {
+        let f = |kind, spec: &str| {
+            Forward {
+                kind,
+                spec: spec.into(),
+            }
+            .validate()
+        };
+        assert!(f(ForwardKind::Local, "8080:localhost:80").is_ok());
+        assert!(f(ForwardKind::Local, "127.0.0.1:8080:db.internal:5432").is_ok());
+        assert!(f(ForwardKind::Remote, "9000:[::1]:9000").is_ok());
+        assert!(f(ForwardKind::Dynamic, "1080").is_ok());
+        assert!(f(ForwardKind::Dynamic, "localhost:1080").is_ok());
+        for bad in [
+            "",
+            "8080",
+            "8080:host",
+            "0:h:80",
+            "x:h:80",
+            "8080:h:99999",
+            "80 80:h:1",
+        ] {
+            assert!(f(ForwardKind::Local, bad).is_err(), "{bad:?}");
+        }
+        assert!(f(ForwardKind::Dynamic, "8080:h:80").is_err());
+        let host = Host {
+            name: "db".into(),
+            forwards: vec![Forward {
+                kind: ForwardKind::Local,
+                spec: "5432:localhost:5432".into(),
+            }],
+            ..Default::default()
+        };
+        let text = toml::to_string_pretty(&HostBook {
+            hosts: vec![host.clone()],
+        })
+        .unwrap();
+        assert!(
+            text.contains("[[host.forward]]") && text.contains("kind = \"local\""),
+            "{text}"
+        );
+        assert_eq!(toml::from_str::<HostBook>(&text).unwrap().hosts[0], host);
     }
 }
