@@ -82,13 +82,18 @@ mtty instead.
   navigation keys, and F1–F12 / Insert as xterm sequences.
 
 **Window and workspace**
-- Inline tab bar (icons, agent badges, `+`, `×`, drag to reorder) plus a Tabs
-  sidebar. Right-clicking a tab or a session opens the same row menu: Rename
+- Otty-style frame: the session sidebar runs the full window height (icons,
+  agent badges, `+`, drag to reorder); the row beside its header shows the
+  active tab's title with the panel and font controls at the top right. On
+  macOS the title bar is transparent, so the traffic lights sit in the sidebar
+  header and that row moves the window (double-click zooms). With the sidebar
+  hidden the row shows the inline tab bar (`+`, `×`, drag to reorder)
+  instead. Right-clicking a tab or a session opens the same row menu: Rename
   Tab…, Prefix…, Mark…, Group…, Remove from Group (only inside a group),
   Duplicate Tab, Move Up/Down, New Tab, Close Tab, Close Other Tabs and
   Close Below, in mtty. A tab's mark is appended to its title and its group
-  is kept with the session, so both survive a restart. The tab bar draws a divider
-  where the group changes. Close Tab, the tab's `×` and session-row middle-click
+  is kept with the session, so both survive a restart. The session list and tab bar draw
+  a divider where the group changes. Close Tab, the tab's `×` and session-row middle-click
   close the whole tab, including its splits; the last tab is kept alive.
   `⌘W` / `Ctrl+W` retains the focused-pane close behavior when a tab is split.
 - Both side panels can be resized by dragging their edge; the widths are kept

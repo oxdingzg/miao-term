@@ -98,7 +98,7 @@ feature-by-feature review of the native host code for this baseline.
 
 | Feature | Status | Notes |
 |---|---|---|
-| Tab bar: drag reorder, `+`, `×`, row menu (rename/prefix/mark/group/duplicate/move/close others/close below) | Works | Duplicate drops mark and group; Close Others/Below are not reopenable |
+| Session sidebar (full height) and tab bar (sidebar hidden): drag reorder, `+`, `×`, row menu (rename/prefix/mark/group/duplicate/move/close others/close below) | Works | Duplicate drops mark and group; Close Others/Below are not reopenable |
 | Split tree `⌘D` / `⇧⌘D`, divider drag, per-pane close | Works | New splits/tabs do not inherit the current directory |
 | Quick Terminal `⌘⇧T`, reopen closed tab `⌘⇧Z` | Works | Reopen restores the directory only |
 | Global Quick Terminal hotkey | Works | Fixed now: one press did two things (switch to Quick, then hide the window) |
