@@ -39,3 +39,4 @@ Docs are English by default; keep a Simplified Chinese version in sync
 | [0029](./0029-vim-mode.md) | A minimal, opt-in vim mode | accepted |
 | [0030](./0030-native-render-loop.md) | Native render loop (self-drawn grid) | accepted |
 | [0031](./0031-native-app-menu.md) | Application menu in the macOS menu bar | accepted |
+| [0032](./0032-rename-mtty.md) | The application is renamed mtty | Accepted |

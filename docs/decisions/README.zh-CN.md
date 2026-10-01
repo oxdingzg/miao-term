@@ -40,3 +40,4 @@
 | [0029](./0029-vim-mode.zh-CN.md) | 极小、可选的 vim 模式 | 已接受 |
 | [0030](./0030-native-render-loop.zh-CN.md) | 原生渲染循环（自绘网格） | 已接受 |
 | [0031](./0031-native-app-menu.zh-CN.md) | 把应用菜单放进 macOS 菜单栏 | 已接受 |
+| [0032](./0032-rename-mtty.zh-CN.md) | 应用正式更名为 mtty | 已接受 |
