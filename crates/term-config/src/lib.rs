@@ -17,31 +17,90 @@ pub const APP_DIR: &str = "mtty";
 /// The former name, read for compatibility only (ADR 0032).
 pub const LEGACY_APP_DIR: &str = "miaotty";
 
-fn xdg_base(var: &str, home_rel: &str) -> Option<PathBuf> {
+/// The user's home directory: `$HOME`, or on Windows (which has no `HOME`
+/// unless a Unix-like shell sets one) `%USERPROFILE%`.
+pub fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .filter(|h| !h.is_empty())
+        .or_else(|| {
+            cfg!(windows)
+                .then(|| std::env::var_os("USERPROFILE"))
+                .flatten()
+                .filter(|h| !h.is_empty())
+        })
+        .map(PathBuf::from)
+}
+
+fn env_path(var: &str) -> Option<PathBuf> {
     std::env::var_os(var)
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(home_rel)))
 }
 
-/// `$XDG_CONFIG_HOME/mtty` (default `~/.config/mtty`): config and saved state.
+/// The directory that holds `mtty/` (and the pre-rename `miaotty/`).
+///
+/// An explicit `$XDG_*_HOME` wins. On Windows the default is the platform
+/// folder (`%APPDATA%` for config, `%LOCALAPPDATA%` for data): Windows has no
+/// `HOME` unless a Unix-like shell sets one, and without it mtty had no config
+/// directory at all (config.toml, hosts, snippets and sessions were ignored).
+/// A `$HOME/.config/mtty` that already exists keeps being used, so a setup
+/// made under Git Bash is not lost. Elsewhere: `$HOME/<home_rel>`.
+fn base_dir(
+    xdg: Option<PathBuf>,
+    windows_folder: Option<PathBuf>,
+    home: Option<PathBuf>,
+    home_rel: &str,
+    is_windows: bool,
+    exists: &dyn Fn(&Path) -> bool,
+) -> Option<PathBuf> {
+    if xdg.is_some() {
+        return xdg;
+    }
+    let home_based = home.map(|h| h.join(home_rel));
+    if is_windows {
+        let keep_home = home_based
+            .as_ref()
+            .is_some_and(|h| exists(&h.join(APP_DIR)) || exists(&h.join(LEGACY_APP_DIR)));
+        if !keep_home {
+            if let Some(folder) = windows_folder {
+                return Some(folder);
+            }
+        }
+    }
+    home_based
+}
+
+fn xdg_base(var: &str, home_rel: &str, windows_var: &str) -> Option<PathBuf> {
+    base_dir(
+        env_path(var),
+        env_path(windows_var),
+        std::env::var_os("HOME").map(PathBuf::from),
+        home_rel,
+        cfg!(windows),
+        &|p: &Path| p.is_dir(),
+    )
+}
+
+/// mtty's config and saved state: `$XDG_CONFIG_HOME/mtty`, by default
+/// `~/.config/mtty`, or `%APPDATA%\mtty` on Windows.
 pub fn config_dir() -> Option<PathBuf> {
-    Some(xdg_base("XDG_CONFIG_HOME", ".config")?.join(APP_DIR))
+    Some(xdg_base("XDG_CONFIG_HOME", ".config", "APPDATA")?.join(APP_DIR))
 }
 
 /// The pre-rename config directory, `$XDG_CONFIG_HOME/miaotty`.
 pub fn legacy_config_dir() -> Option<PathBuf> {
-    Some(xdg_base("XDG_CONFIG_HOME", ".config")?.join(LEGACY_APP_DIR))
+    Some(xdg_base("XDG_CONFIG_HOME", ".config", "APPDATA")?.join(LEGACY_APP_DIR))
 }
 
-/// `$XDG_DATA_HOME/mtty` (default `~/.local/share/mtty`).
+/// `$XDG_DATA_HOME/mtty` (default `~/.local/share/mtty`, or
+/// `%LOCALAPPDATA%\mtty` on Windows).
 pub fn data_dir() -> Option<PathBuf> {
-    Some(xdg_base("XDG_DATA_HOME", ".local/share")?.join(APP_DIR))
+    Some(xdg_base("XDG_DATA_HOME", ".local/share", "LOCALAPPDATA")?.join(APP_DIR))
 }
 
 /// The pre-rename data directory (the retired eframe app kept its session here).
 pub fn legacy_data_dir() -> Option<PathBuf> {
-    Some(xdg_base("XDG_DATA_HOME", ".local/share")?.join(LEGACY_APP_DIR))
+    Some(xdg_base("XDG_DATA_HOME", ".local/share", "LOCALAPPDATA")?.join(LEGACY_APP_DIR))
 }
 
 /// An environment setting by its unprefixed name: `MTTY_<name>`, falling back
@@ -432,21 +491,21 @@ struct AlacrittyConfig {
 fn alacritty_config_path() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+        .or_else(|| home_dir().map(|h| h.join(".config")))?;
     Some(base.join("alacritty").join("alacritty.toml"))
 }
 
 fn ghostty_config_path() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+        .or_else(|| home_dir().map(|h| h.join(".config")))?;
     Some(base.join("ghostty").join("config"))
 }
 
 /// `~/x` relative to the home directory; other paths unchanged.
 pub fn expand_home(path: &str) -> PathBuf {
-    match (path.strip_prefix("~/"), std::env::var_os("HOME")) {
-        (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
+    match (path.strip_prefix("~/"), home_dir()) {
+        (Some(rest), Some(home)) => home.join(rest),
         _ => PathBuf::from(path),
     }
 }
@@ -831,6 +890,67 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn config_lives_in_the_platform_folder_on_windows() {
+        let p = |s: &str| Some(PathBuf::from(s));
+        let none = |_: &Path| false;
+        // An explicit XDG directory always wins.
+        assert_eq!(
+            base_dir(
+                p("/x"),
+                p(r"C:\Users\me\AppData\Roaming"),
+                p("/h"),
+                ".config",
+                true,
+                &none
+            ),
+            p("/x")
+        );
+        // Windows without HOME (the usual case): %APPDATA%.
+        assert_eq!(
+            base_dir(
+                None,
+                p(r"C:\Users\me\AppData\Roaming"),
+                None,
+                ".config",
+                true,
+                &none
+            ),
+            p(r"C:\Users\me\AppData\Roaming")
+        );
+        // A HOME set by Git Bash does not move a new user's config…
+        assert_eq!(
+            base_dir(
+                None,
+                p("C:/AppData"),
+                p("C:/Users/me"),
+                ".config",
+                true,
+                &none
+            ),
+            p("C:/AppData")
+        );
+        // …but an existing ~/.config/mtty keeps being used.
+        let home_has_mtty = |path: &Path| path.ends_with(".config/mtty");
+        assert_eq!(
+            base_dir(
+                None,
+                p("C:/AppData"),
+                p("C:/Users/me"),
+                ".config",
+                true,
+                &home_has_mtty
+            ),
+            Some(PathBuf::from("C:/Users/me").join(".config"))
+        );
+        // Elsewhere nothing changes.
+        assert_eq!(
+            base_dir(None, p("/ignored"), p("/home/me"), ".config", false, &none),
+            p("/home/me/.config")
+        );
+        assert_eq!(base_dir(None, None, None, ".config", false, &none), None);
+    }
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("mtty-config-{name}-{}", std::process::id()));

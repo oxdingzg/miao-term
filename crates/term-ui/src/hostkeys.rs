@@ -156,8 +156,8 @@ pub fn trust(destination: &str, options: &[String]) -> Result<(), String> {
     if keys(&scanned).is_empty() {
         return Err("no host key received".into());
     }
-    let home = std::env::var_os("HOME").ok_or("no home directory")?;
-    let dir = std::path::PathBuf::from(home).join(".ssh");
+    let home = miao_term_config::home_dir().ok_or("no home directory")?;
+    let dir = home.join(".ssh");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let mut file = std::fs::OpenOptions::new()
         .create(true)

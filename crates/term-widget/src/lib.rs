@@ -1352,7 +1352,7 @@ impl State {
             std::env::current_dir()
                 .ok()
                 .filter(|dir| dir.as_path() != std::path::Path::new("/"))
-                .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from))
+                .or_else(miao_term_config::home_dir)
         });
         // Both names: installed hooks and miao read the former one (ADR 0032).
         let env = vec![
@@ -5813,7 +5813,7 @@ impl State {
     fn open_files(&mut self, title: String, remote: miao_term_ui::sftp::Endpoint) {
         let local_dir = self
             .active_cwd_for_new()
-            .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from))
+            .or_else(miao_term_config::home_dir)
             .unwrap_or_else(|| std::path::PathBuf::from("/"));
         self.sftp_view = Some(SftpView {
             title,
