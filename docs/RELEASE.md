@@ -1,7 +1,7 @@
 # Releasing
 
 > Current application identity: [APP-IDENTITY.md](APP-IDENTITY.md). The native
-> implementation now ships only as miaotty. Earlier dual-host rehearsals below
+> implementation now ships only as mtty. Earlier dual-host rehearsals below
 > are historical; the native app currently checks versions, with upgrades via
 > platform installers rather than the removed eframe update-install UI.
 
@@ -34,15 +34,15 @@ its download URLs become live only after a release with that tag is published.
 
 | Platform | Artifact | Notes |
 |----------|----------|-------|
-| macOS | `miaotty-macos-arm64.zip`, `miaotty-macos-x86_64.zip` (each contains only `miaotty.app`) | ad-hoc signed; notarized when the Apple secrets are set. Apple Silicon uses `macos-latest`, Intel uses `macos-15-intel` |
-| Linux | `miaotty-linux-x86_64.tar.gz`, `miaotty-linux-x86_64.AppImage`, `dist/*.deb` | AppImage has an explicit `AppRun` entry point |
-| Windows | `miaotty-windows-x86_64.zip`, `miaotty-app-<ver>-x86_64.msi` | MSI installation/uninstallation is exercised on the runner |
+| macOS | `mtty-macos-arm64.zip`, `mtty-macos-x86_64.zip` (each contains only `mtty.app`) | ad-hoc signed; notarized when the Apple secrets are set. Apple Silicon uses `macos-latest`, Intel uses `macos-15-intel` |
+| Linux | `mtty-linux-x86_64.tar.gz`, `mtty-linux-x86_64.AppImage`, `dist/*.deb` | AppImage has an explicit `AppRun` entry point |
+| Windows | `mtty-windows-x86_64.zip`, `mtty-app-<ver>-x86_64.msi` | MSI installation/uninstallation is exercised on the runner |
 
 Every artifact gets a `.sig` next to it when signing is configured.
 Detached signatures are generated once in the Linux assembly job, after platform
 codesigning, and verified there against the committed public key.
-All app bundles, archives and installers contain one native miaotty application
-and miaotty-cli. No separate native application archive is published.
+All app bundles, archives and installers contain one native mtty application
+and mtty-cli. No separate native application archive is published.
 All four runner builds and AppImage/MSI packaging are required to succeed.
 
 ## Secrets (all optional)
@@ -93,9 +93,9 @@ The release job writes `latest.json` and attaches it to the release:
   "version": "0.1.0",
   "artifacts": {
     "macos-aarch64": {
-      "url": "https://github.com/oxdingzg/miao-term/releases/download/v0.1.0/miaotty-macos-arm64.zip",
+      "url": "https://github.com/oxdingzg/miao-term/releases/download/v0.1.0/mtty-macos-arm64.zip",
       "sha256": "…",
-      "signature": "https://github.com/oxdingzg/miao-term/releases/download/v0.1.0/miaotty-macos-arm64.zip.sig"
+      "signature": "https://github.com/oxdingzg/miao-term/releases/download/v0.1.0/mtty-macos-arm64.zip.sig"
     },
     "linux-x86_64": { "url": "…AppImage", "sha256": "…" },
     "windows-x86_64": { "url": "…msi", "sha256": "…" }
@@ -131,15 +131,15 @@ Run `python3 scripts/test-release-manifest.py` to check selection and failure ca
 
 ## MSI (Windows) — verified
 
-The WiX template is committed at [`miaotty-app/wix/main.wxs`](../miaotty-app/wix/main.wxs)
-(it installs `miaotty.exe` and `miaotty-cli.exe` into
-`%ProgramFiles%\miaotty\bin`, adds that directory to the machine `PATH`, and
-registers an uninstall entry). `cargo wix --package miaotty-app` builds it; it
-needs WiX 3.x (chocolatey `wixtoolset`), and must run **from `miaotty-app/`**
+The WiX template is committed at [`mtty-app/wix/main.wxs`](../mtty-app/wix/main.wxs)
+(it installs `mtty.exe` and `mtty-cli.exe` into
+`%ProgramFiles%\mtty\bin`, adds that directory to the machine `PATH`, and
+registers an uninstall entry). `cargo wix --package mtty-app` builds it; it
+needs WiX 3.x (chocolatey `wixtoolset`), and must run **from `mtty-app/`**
 because the template references `wix\License.rtf` relatively.
 
 Verified end to end on a real Windows 11 host (2026-09-29): build → `msiexec /i`
-→ both binaries on disk + PATH entry + "miaotty 0.0.0" uninstall entry → the
+→ both binaries on disk + PATH entry + "mtty 0.0.0" uninstall entry → the
 installed app launches → `msiexec /x` removes the directory.
 
 
@@ -152,16 +152,16 @@ Both installers were checked on real hardware (2026-09-29).
 **Linux `.deb` and AppImage** (Ubuntu 24.04):
 
 ```sh
-cargo build --release -p miaotty-app -p miaotty-cli
-cargo install cargo-deb --locked && cargo deb -p miaotty-app --no-build
-sudo dpkg -i target/debian/miaotty_*_amd64.deb     # /usr/bin/miaotty{,-cli}
-miaotty-cli ping                                   # runs; errors only because no host
+cargo build --release -p mtty-app -p mtty-cli
+cargo install cargo-deb --locked && cargo deb -p mtty-app --no-build
+sudo dpkg -i target/debian/mtty_*_amd64.deb     # /usr/bin/mtty{,-cli}
+mtty-cli ping                                   # runs; errors only because no host
 ```
 
 The AppImage needs a **real 256x256 icon** — `appimagetool` refuses a 1x1
 placeholder, and the desktop file must carry an `Icon=` key — so the pipeline
 generates one with `scripts/make-icon.py` (standard library only). Result:
-`miaotty-linux-x86_64.AppImage` containing `miaotty` and `miaotty-cli`, and it
+`mtty-linux-x86_64.AppImage` containing `mtty` and `mtty-cli`, and it
 extracts cleanly (`--appimage-extract`).
 
 **Not verified**: the GUI itself. The machine's X displays belong to the login
@@ -174,17 +174,17 @@ app). A real desktop session or a GPU is needed for that.
 Fetch the artifact, its `.sig`, and the published public key (`minisign.pub`):
 
 ```sh
-curl -fsSLO https://github.com/oxdingzg/miao-term/releases/download/v0.1.0/miaotty-macos-arm64.zip
-curl -fsSLO https://github.com/oxdingzg/miao-term/releases/download/v0.1.0/miaotty-macos-arm64.zip.sig
+curl -fsSLO https://github.com/oxdingzg/miao-term/releases/download/v0.1.0/mtty-macos-arm64.zip
+curl -fsSLO https://github.com/oxdingzg/miao-term/releases/download/v0.1.0/mtty-macos-arm64.zip.sig
 curl -fsSLO https://github.com/oxdingzg/miao-term/releases/download/v0.1.0/minisign.pub
-minisign -Vm miaotty-macos-arm64.zip -p minisign.pub      # -> "Signature and comment signature verified"
+minisign -Vm mtty-macos-arm64.zip -p minisign.pub      # -> "Signature and comment signature verified"
 ```
 
 The manifest ([`latest.json`](#update-manifest)) carries both a `sha256` and a
 `signature` URL per artifact, so a downloader can check either or both:
 
 ```sh
-shasum -a 256 miaotty-macos-arm64.zip   # compare with the manifest's "sha256"
+shasum -a 256 mtty-macos-arm64.zip   # compare with the manifest's "sha256"
 ```
 
 Nothing is signed until `MINISIGN_SECRET_KEY` is configured, so unsigned releases
@@ -194,7 +194,7 @@ simply have no `.sig` — verification is optional, not required to install.
 
 Local single-application verification (2026-10-01): 154 workspace tests,
 nine release/manifest tests, strict clippy, formatting and four enforced release
-performance budgets passed. The single native `miaotty.app` passed identity and
+performance budgets passed. The single native `mtty.app` passed identity and
 codesign checks. Both the packaged app and installed app completed the desktop
 smoke, including native split-session migration and pane close/focus. This is
 local macOS evidence. The single-application pipeline subsequently published
@@ -254,7 +254,7 @@ below remain open regardless of subsequent packaging success.
 The macOS update-helper test executes the swap and missing-download rollback
 against temporary bundles with spaces in their paths, using a test relaunch
 command. Archive selection rejects a native-only download and selects
-`miaotty.app` from a dual-bundle archive. These are component checks, not a real
+`mtty.app` from a dual-bundle archive. These are component checks, not a real
 download/install/relaunch acceptance. Windows zip updates also replace the native
 binary along with the eframe host and CLI.
 
@@ -262,7 +262,7 @@ binary along with the eframe host and CLI.
 |-------|----------------------|--------------------------|
 | AppImage desktop launch | Execute the AppImage, open a pane, use MTP, then exit cleanly | Linux desktop |
 | Wayland shortcut | Grant the portal request; invoke the shortcut with the app unfocused | Wayland desktop |
-| Windows IME, miaotty | Compose CJK text, check candidate position, commit/cancel, switch splits | Interactive Windows desktop |
+| Windows IME, mtty | Compose CJK text, check candidate position, commit/cancel, switch splits | Interactive Windows desktop |
 | Update self-replace | Download/verify a newer version, install/relaunch, retain workspace; exercise failure recovery | Installed macOS app, Windows MSI/zip, Linux AppImage |
 | Visual acceptance | Capture IME composition and Windows/Linux graphics/Mermaid previews; macOS graphics/previews verified above | Desktop sessions |
 | Platform signing | Verify Developer ID/notarization and MSI Authenticode on shipped artifacts | Apple/Windows signing credentials |

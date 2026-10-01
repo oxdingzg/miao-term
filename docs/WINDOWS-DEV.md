@@ -1,6 +1,6 @@
 # Windows dev / verification
 
-How to build, test and smoke-test miaotty on a Windows machine. English default;
+How to build, test and smoke-test mtty on a Windows machine. English default;
 keep [`WINDOWS-DEV.zh-CN.md`](WINDOWS-DEV.zh-CN.md) in sync.
 
 Nothing here is host-specific: use your own ssh alias and paths. Which machine we
@@ -52,7 +52,7 @@ Remove-Item -Recurse -Force "$env:USERPROFILE\miao-term" -ErrorAction SilentlyCo
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\miao-term\scripts\windows-verify.ps1"
 ```
 
-It builds `miaotty` + `miaotty-cli`, runs the engine/MTP tests, then starts the
+It builds `mtty` + `mtty-cli`, runs the engine/MTP tests, then starts the
 app and drives it over MTP (`ping`, `file write`, `file read`, `view`).
 
 Last run (this project's Windows box, 2026-09-29): build OK, the engine/MTP

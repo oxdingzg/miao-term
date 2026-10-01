@@ -2,7 +2,7 @@
 
 A pane's tab title, icon and badge are derived from its context by the *view
 rule engine* (design: [ADR 0007](./decisions/0007-view-rule-engine.md)). Rules
-live in `~/.config/miaotty/views.json` (JSON) and are also editable from
+live in `~/.config/mtty/views.json` (JSON) and are also editable from
 **Settings → View rules**, with a live preview.
 
 ```jsonc

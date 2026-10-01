@@ -27,9 +27,10 @@ visible and steerable, and remote hosts should feel as easy as local folders.**
 
 - Official product name: **mtty**. The repository and embeddable engine stay
   **miao-term**.
-- Binaries, bundle, config directory, socket, environment variables and URL
-  scheme are still `miaotty`. The rename is its own task in milestone M1 (see
-  §4), with migration — never a drive-by change inside feature work.
+- Binaries `mtty` / `mtty-cli`, bundle `mtty.app` (`dev.mtty.terminal`),
+  config directory `~/.config/mtty`, environment `MTTY_*`, URL scheme
+  `mtty://`. Up to v0.0.5 the name was `miaotty`; compatibility rules are in
+  [ADR 0032](decisions/0032-rename-mtty.md).
 
 ### 1.2 Users and core scenarios
 
@@ -145,7 +146,7 @@ feature-by-feature review of the native host code for this baseline.
 | Config file + ghostty / alacritty import | Works | Fixed now: a `config.toml` with syntax errors is reported with the reason |
 | zsh shell integration (OSC 7, history) | Works | bash / fish / PowerShell not covered |
 | URL schemes and single-instance forwarding | Partial | Command-line URLs work; macOS URL events from a browser/Finder are not handled |
-| MTP control plane and `miaotty-cli` | Works | Covered by the real-window smoke |
+| MTP control plane and `mtty-cli` | Works | Covered by the real-window smoke |
 | Version check | Works | Check only, no install; `update-pubkey` unused |
 | English / Chinese UI | Partial | Some details-panel rows are still English |
 
@@ -167,7 +168,7 @@ verified on its own:
 
 ### M1 One brand: mtty (design: [ADR 0032](decisions/0032-rename-mtty.md))
 
-- [ ] **B1.1 Runtime rename and compatibility layer**
+- [x] **B1.1 Runtime rename and compatibility layer** — `ee12822`: unit tests for migration, environment, socket link and schemes; the smoke covers the config copy, both pane environment sets, a pre-rename hook and the former socket path.
   - `miao-term-config`: `config_dir()`, `migrate_legacy_config()` (copy once,
     never overwrite, never delete the old directory), `env()` (`MTTY_*` first,
     then `MIAOTTY_*`).
@@ -181,7 +182,7 @@ verified on its own:
     hotkey snippets, ControlPath and UI text say mtty.
   - Acceptance: unit tests for migration, environment and schemes; an old hook
     script reports state from a new pane (smoke).
-- [ ] **B1.2 Build and packaging**
+- [x] **B1.2 Build and packaging** — `ee12822`: `package-macos.sh` + `check-macos-bundle.py` + `smoke-hosts.py --bundle` pass; `test-release-manifest.py` passes 9 tests; the release-workflow rehearsal awaits the owner.
   - Dirs and packages: `miaotty-app` → `mtty-app` (binary `mtty`),
     `miaotty-cli` → `mtty-cli`.
   - macOS: `mtty.app`, `dev.mtty.terminal`, URL scheme registration; the

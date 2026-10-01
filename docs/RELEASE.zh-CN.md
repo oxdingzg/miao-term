@@ -1,6 +1,6 @@
 # 发布
 
-> 当前应用身份见 [APP-IDENTITY.zh-CN.md](APP-IDENTITY.zh-CN.md)：native 实现只以 miaotty 发布。
+> 当前应用身份见 [APP-IDENTITY.zh-CN.md](APP-IDENTITY.zh-CN.md)：native 实现只以 mtty 发布。
 > 下文早期双 host 演练属于历史记录；当前 native 只提供版本检查，通过平台安装包升级，
 > 不包含已移除的 eframe 自动更新安装界面。
 
@@ -31,13 +31,13 @@ gh workflow run release.yml --ref main -f tag=v0.0.1
 
 | 平台 | 产物 | 说明 |
 |------|------|------|
-| macOS | `miaotty-macos-arm64.zip`、`miaotty-macos-x86_64.zip`(各含 一个 `miaotty.app`) | ad-hoc 签名;配置 Apple secrets 后公证。Apple Silicon 用 `macos-latest`,Intel 用 `macos-15-intel` |
-| Linux | `miaotty-linux-x86_64.tar.gz`、`miaotty-linux-x86_64.AppImage`、`dist/*.deb` | AppImage 含明确的 `AppRun` 入口 |
-| Windows | `miaotty-windows-x86_64.zip`、`miaotty-app-<ver>-x86_64.msi` | 在 runner 上执行 MSI 安装/卸载验证 |
+| macOS | `mtty-macos-arm64.zip`、`mtty-macos-x86_64.zip`(各含 一个 `mtty.app`) | ad-hoc 签名;配置 Apple secrets 后公证。Apple Silicon 用 `macos-latest`,Intel 用 `macos-15-intel` |
+| Linux | `mtty-linux-x86_64.tar.gz`、`mtty-linux-x86_64.AppImage`、`dist/*.deb` | AppImage 含明确的 `AppRun` 入口 |
+| Windows | `mtty-windows-x86_64.zip`、`mtty-app-<ver>-x86_64.msi` | 在 runner 上执行 MSI 安装/卸载验证 |
 
 配置签名后,每个产物旁边会生成 `.sig`。
 分离签名在平台代码签名完成后,由 Linux 汇总作业统一生成,并用已提交的公钥校验。
-所有 app bundle、主应用压缩包与安装包均包含一个 native miaotty 主程序和 CLI;
+所有 app bundle、主应用压缩包与安装包均包含一个 native mtty 主程序和 CLI;
 不再发布独立的 native 应用压缩包。
 四个 runner 的构建与 AppImage/MSI 打包均必须成功。
 
@@ -84,9 +84,9 @@ GitHub Secrets 是**只写**的:设了 `MINISIGN_SECRET_KEY` 之后,UI/API 都�
   "version": "0.1.0",
   "artifacts": {
     "macos-aarch64": {
-      "url": "https://github.com/oxdingzg/miao-term/releases/download/v0.1.0/miaotty-macos-arm64.zip",
+      "url": "https://github.com/oxdingzg/miao-term/releases/download/v0.1.0/mtty-macos-arm64.zip",
       "sha256": "…",
-      "signature": "https://github.com/oxdingzg/miao-term/releases/download/v0.1.0/miaotty-macos-arm64.zip.sig"
+      "signature": "https://github.com/oxdingzg/miao-term/releases/download/v0.1.0/mtty-macos-arm64.zip.sig"
     },
     "linux-x86_64": { "url": "…AppImage", "sha256": "…" },
     "windows-x86_64": { "url": "…msi", "sha256": "…" }
@@ -117,13 +117,13 @@ update-check-url = "https://github.com/oxdingzg/miao-term/releases/latest/downlo
 
 ## MSI(Windows)——已验证
 
-WiX 模板已入库:[`miaotty-app/wix/main.wxs`](../miaotty-app/wix/main.wxs)(把 `miaotty.exe`
-和 `miaotty-cli.exe` 安装到 `%ProgramFiles%\miaotty\bin`,把该目录加入机器 `PATH`,并注册
-卸载项)。用 `cargo wix --package miaotty-app` 构建;需要 WiX 3.x(choco `wixtoolset`),且必须
-**在 `miaotty-app/` 目录内**运行 —— 模板以相对路径引用 `wix\License.rtf`。
+WiX 模板已入库:[`mtty-app/wix/main.wxs`](../mtty-app/wix/main.wxs)(把 `mtty.exe`
+和 `mtty-cli.exe` 安装到 `%ProgramFiles%\mtty\bin`,把该目录加入机器 `PATH`,并注册
+卸载项)。用 `cargo wix --package mtty-app` 构建;需要 WiX 3.x(choco `wixtoolset`),且必须
+**在 `mtty-app/` 目录内**运行 —— 模板以相对路径引用 `wix\License.rtf`。
 
 已在真实 Windows 11 主机端到端验证(2026-09-29):构建 → `msiexec /i` → 两个二进制落盘 + PATH
-条目 + "miaotty 0.0.0" 卸载项 → 已安装的 app 能启动 → `msiexec /x` 后目录被清除。
+条目 + "mtty 0.0.0" 卸载项 → 已安装的 app 能启动 → `msiexec /x` 后目录被清除。
 
 
 ## 验证安装包
@@ -135,15 +135,15 @@ WiX 模板已入库:[`miaotty-app/wix/main.wxs`](../miaotty-app/wix/main.wxs)(�
 **Linux `.deb` 与 AppImage**(Ubuntu 24.04):
 
 ```sh
-cargo build --release -p miaotty-app -p miaotty-cli
-cargo install cargo-deb --locked && cargo deb -p miaotty-app --no-build
-sudo dpkg -i target/debian/miaotty_*_amd64.deb     # /usr/bin/miaotty{,-cli}
-miaotty-cli ping                                   # 可运行;报错仅因无 host
+cargo build --release -p mtty-app -p mtty-cli
+cargo install cargo-deb --locked && cargo deb -p mtty-app --no-build
+sudo dpkg -i target/debian/mtty_*_amd64.deb     # /usr/bin/mtty{,-cli}
+mtty-cli ping                                   # 可运行;报错仅因无 host
 ```
 
 AppImage 需要**真正的 256x256 图标** —— `appimagetool` 拒绝 1x1 占位图,且桌面文件必须带
 `Icon=` 键 —— 因此流水线用 `scripts/make-icon.py`(仅标准库)生成图标。结果:
-`miaotty-linux-x86_64.AppImage` 内含 `miaotty` 与 `miaotty-cli`,并可正常提取
+`mtty-linux-x86_64.AppImage` 内含 `mtty` 与 `mtty-cli`,并可正常提取
 (`--appimage-extract`)。
 
 **未验证**:GUI 本体。该机器的 X 显示属于登录界面(无授权 cookie),而在 `xvfb` + 软件
@@ -155,16 +155,16 @@ Vulkan(lavapipe)下 `wgpu` 报 `Invalid surface`(离屏软件 Vulkan 的限制,�
 下载产物、它的 `.sig`,以及发布的公钥(`minisign.pub`):
 
 ```sh
-curl -fsSLO https://github.com/oxdingzg/miao-term/releases/download/v0.1.0/miaotty-macos-arm64.zip
-curl -fsSLO https://github.com/oxdingzg/miao-term/releases/download/v0.1.0/miaotty-macos-arm64.zip.sig
+curl -fsSLO https://github.com/oxdingzg/miao-term/releases/download/v0.1.0/mtty-macos-arm64.zip
+curl -fsSLO https://github.com/oxdingzg/miao-term/releases/download/v0.1.0/mtty-macos-arm64.zip.sig
 curl -fsSLO https://github.com/oxdingzg/miao-term/releases/download/v0.1.0/minisign.pub
-minisign -Vm miaotty-macos-arm64.zip -p minisign.pub      # -> "Signature and comment signature verified"
+minisign -Vm mtty-macos-arm64.zip -p minisign.pub      # -> "Signature and comment signature verified"
 ```
 
 清单([`latest.json`](#更新清单))为每个产物同时提供 `sha256` 与 `signature` URL，可二者择一或都校验:
 
 ```sh
-shasum -a 256 miaotty-macos-arm64.zip   # 与清单里的 "sha256" 比对
+shasum -a 256 mtty-macos-arm64.zip   # 与清单里的 "sha256" 比对
 ```
 
 未配置 `MINISIGN_SECRET_KEY` 时不会签名，因此未签名的发布没有 `.sig` —— 校验是可选的，安装并不要求。
@@ -172,7 +172,7 @@ shasum -a 256 miaotty-macos-arm64.zip   # 与清单里的 "sha256" 比对
 ## 验收覆盖与剩余工作
 
 单应用迁移本地验收（2026-10-01）：154 项 workspace 测试、9 项发布/清单测试、严格
-clippy、格式检查及 4 项强制 release 性能预算通过。单一 native `miaotty.app` 通过身份和
+clippy、格式检查及 4 项强制 release 性能预算通过。单一 native `mtty.app` 通过身份和
 codesign 检查；打包 app 和实际安装 app 均跑通桌面冒烟，包含 native 分屏会话迁移及
 pane 聚焦/关闭。这是本地 macOS 证据。后续单应用流水线已在 `03848e4` 成功发布
 v0.0.4：[运行 36794301755](https://github.com/oxdingzg/miao-term/actions/runs/36794301755)
@@ -214,14 +214,14 @@ CLI help 无 host 也可运行。这**不代表** Developer ID 签名/公证、G
 后续即使打包成功,下表中的桌面验收项也仍保留为待完成。
 
 macOS 更新 helper 测试对含空格路径的临时 bundle 实际执行替换与缺失下载时的回滚,
-重启命令由测试替身记录。压缩包选择测试拒绝 native-only 下载,并从双 bundle 包选择 `miaotty.app`。
+重启命令由测试替身记录。压缩包选择测试拒绝 native-only 下载,并从双 bundle 包选择 `mtty.app`。
 这些是组件验证,不代表真实的下载/安装/重启验收。Windows zip 更新同时替换 native、eframe 与 CLI。
 
 | 检查 | 验收标准 | 仍需环境 |
 |------|----------|----------|
 | AppImage 桌面启动 | 直接运行 AppImage,打开 pane,使用 MTP,正常退出 | Linux 桌面 |
 | Wayland 热键 | 授权门户请求;应用无焦点时触发热键 | Wayland 桌面 |
-| Windows IME,miaotty | 输入中日韩组合文本,检查候选框位置、提交/取消、切换分屏 | Windows 交互桌面 |
+| Windows IME,mtty | 输入中日韩组合文本,检查候选框位置、提交/取消、切换分屏 | Windows 交互桌面 |
 | 更新自替换 | 下载/校验新版,安装/重启,保留工作区;验证失败恢复 | 已安装的 macOS app、Windows MSI/zip、Linux AppImage |
 | 视觉验收 | 截图检查 IME 组合文本及 Windows/Linux 图片/Mermaid 预览;macOS 图片/预览见上文 | 桌面会话 |
 | 平台签名 | 检查分发产物的 Developer ID/公证与 MSI Authenticode | Apple/Windows 签名凭证 |

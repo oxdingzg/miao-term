@@ -16,14 +16,17 @@
 `miao-term` 在一个仓库里包含两件事:
 
 - **终端引擎** —— `miao-term-core` 负责从 PTY 到屏幕的热路径,不依赖任何窗口或 GPU 代码;
-- **`miaotty`** —— 构建在该引擎之上的、开箱即用的终端应用,具备标签、分屏、侧边面板、
+- **`mtty`** —— 构建在该引擎之上的、开箱即用的终端应用,具备标签、分屏、侧边面板、
   设置窗口、shell 集成以及可脚本化的控制面。
 
-**应用统一为一个 `miaotty`**，使用 `miao-term-widget` 中的原生 `winit` + `wgpu`
-窗口与渲染循环，在同一帧合成 egui 界面。`miaotty-app` 提供主程序及安装包元数据。
-原 `miaotty-native` 现在以 `miaotty` 名称发布，旧 eframe 应用已退役。
+**应用统一为一个 `mtty`**，使用 `miao-term-widget` 中的原生 `winit` + `wgpu`
+窗口与渲染循环，在同一帧合成 egui 界面。`mtty-app` 提供主程序及安装包元数据。
 包含画中画、Hint、只读模式和每个 pane 的关闭按钮。
-命名与配置/会话迁移见 [APP-IDENTITY.zh-CN.md](docs/APP-IDENTITY.zh-CN.md)。
+
+> **由 miaotty 更名而来。** v0.0.5 及之前应用名为 `miaotty`。mtty 首次启动会复制
+> `~/.config/miaotty`,读取 `MIAOTTY_*` 环境变量,继续响应 `miaotty://` 链接与旧 socket 路径,
+> 并在 pane 中导出旧变量,已安装的 hook 与 miao 无需修改 —— 见
+> [ADR 0032](docs/decisions/0032-rename-mtty.zh-CN.md) 与 [APP-IDENTITY.zh-CN.md](docs/APP-IDENTITY.zh-CN.md)。
 
 引擎与应用保持解耦，供第三方嵌入。
 完整设计见 [`docs/ARCHITECTURE.zh-CN.md`](docs/ARCHITECTURE.zh-CN.md)。
@@ -66,7 +69,7 @@
   保存失败会提示且保持"已修改";有未保存修改时需再次关闭才会丢弃。CommonMark 渲染
   (`egui_commonmark`):标题、列表、引用、表格、代码、链接、远程图片,外加 `graph`/`flowchart`、`sequenceDiagram`、`stateDiagram`、`classDiagram`、
   `erDiagram` 与 `pie` 的 Mermaid 子集(或经 `mermaid-command` 全量渲染)。
-- **终端内联图片**:Sixel / Kitty / iTerm2 图片由 miaotty 直接画在字符网格上——随内容滚动、
+- **终端内联图片**:Sixel / Kitty / iTerm2 图片由 mtty 直接画在字符网格上——随内容滚动、
   裁剪在 pane 内;用 `graphics` 开关(默认开)。
 - **Recipes**:保存并回放整个工作区。
 - 设置窗口(`⌘,`):字号/字体族、透明度、行高、光标样式、主题、内联图片、通知、防休眠与
@@ -74,17 +77,17 @@
   `config.toml` 会在状态栏提示,且不会被覆盖。
 
 **配置与集成**
-- 配置位于 `~/.config/miaotty/config.toml`:字号、字体族、透明度、行高、光标样式、主题、配色、
+- 配置位于 `~/.config/mtty/config.toml`:字号、字体族、透明度、行高、光标样式、主题、配色、
   `language`(英文或简体中文)、`editor`、agent 开关、`quick-terminal-hotkey`、
   `update-check-url` / `update-pubkey` —— 见 [`docs/config.example.toml`](docs/config.example.toml)。
-- 当不存在 miaotty 配置时,自动导入 ghostty 的 `config` 与 alacritty 的 `alacritty.toml`。
+- 当不存在 mtty 配置时,自动导入 ghostty 的 `config` 与 alacritty 的 `alacritty.toml`。
 - zsh shell 集成(经 OSC 7 上报 cwd、命令历史),通过 `ZDOTDIR` shim 安装 —— 不修改用户点文件。
-- **URL scheme**:`miaotty://`、`ssh://`、`x-man-page://` 会用对应命令新开标签;二次启动会转发给
+- **URL scheme**:`mtty://`、`ssh://`、`x-man-page://` 会用对应命令新开标签;二次启动会转发给
   正在运行的实例(单实例,含"聚焦 pane""quick"意图),无参数的二次启动会把窗口带到前台。
   URL 目前经命令行参数传入;macOS 从浏览器/Finder 发来的 URL 事件尚未处理。
 - **macOS 原生菜单栏**:安装的 `.app` 会把 文件/编辑/视图/终端/Agent/帮助 放进系统菜单栏
   (含 About/Services/Hide/Quit),窗口内不再有菜单条,与其它 macOS 终端一致(ADR 0031);
-  裸跑 `miaotty` 仍用窗口内菜单。窗口本身请求深色外观,标题栏与界面一致,不再是一条
+  裸跑 `mtty` 仍用窗口内菜单。窗口本身请求深色外观,标题栏与界面一致,不再是一条
   浅色条。
 - **全局快速终端热键**:macOS/Windows 用 `global-hotkey`,Linux 使用 sway/hyprland/GNOME 等 compositor 绑定。
 - **Agent 集成**:检测 claude/codex/opencode/miao,安装状态上报 hook 脚本,并显示接入该 agent
@@ -100,7 +103,7 @@
 - **MTP 控制面**,经 per-user Unix socket(Windows 为命名管道):
   `core.ping/health`、`agent.state.*`、`history.*`、`pane.list/send/run/focus/close`,
   以及 `app.view/edit`(在应用中打开文件)与 `file.read/write`(上限 2 MB)。
-- **`miaotty-cli`**,跨平台的控制面客户端。
+- **`mtty-cli`**,跨平台的控制面客户端。
 
 ---
 
@@ -116,9 +119,9 @@
 | [`miao-term-ui`](crates/term-ui) | 与 host 无关的 UI:主题、输入编码、选区、分屏布局、egui 外壳、命令面板、hint、vim、markdown、ssh、更新与 agent 集成等 helper。 |
 | [`miao-term-config`](crates/term-config) | 配置与主题,ghostty/alacritty 导入,以及 View 规则引擎。 |
 | [`miao-term-mtp`](crates/term-mtp) | MTP 协议、host/client 与传输(Unix socket、Windows 命名管道、TCP)。 |
-| [`miao-term-widget`](crates/term-widget) | miaotty 原生 host 库:`winit` + `wgpu` 渲染循环,直接绘制网格并合成 egui 外壳。 |
-| [`miaotty-app`](miaotty-app) | `miaotty` 原生主程序及平台安装包元数据。 |
-| [`miaotty-cli`](miaotty-cli) | `miaotty-cli` 控制客户端。 |
+| [`miao-term-widget`](crates/term-widget) | mtty 原生 host 库:`winit` + `wgpu` 渲染循环,直接绘制网格并合成 egui 外壳。 |
+| [`mtty-app`](mtty-app) | `mtty` 原生主程序及平台安装包元数据。 |
+| [`mtty-cli`](mtty-cli) | `mtty-cli` 控制客户端。 |
 
 热路径 —— `pty → vt → grid → renderer` —— 不跨锁,且每帧不做分配。平台差异只出现在负责
 相应关注点的 crate 中少量 `#[cfg]` 守卫的代码块里:`term-core` 的 PTY 派生
@@ -150,7 +153,7 @@ git clone https://github.com/oxdingzg/miao-term.git
 cd miao-term
 
 # 构建并运行统一的原生终端
-cargo run --release -p miaotty-app
+cargo run --release -p mtty-app
 ```
 
 首次构建会编译 `wgpu`/`glyphon`,可能需要几分钟。
@@ -172,11 +175,11 @@ Linux 与 macOS 的 `cargo check` 以及隐私扫描;完整的三平台
 ### 打包
 
 ```sh
-scripts/package-macos.sh          # -> dist/miaotty.app(ad-hoc 签名)
+scripts/package-macos.sh          # -> dist/mtty.app(ad-hoc 签名)
 ```
 
 发布构建由 [`.github/workflows/release.yml`](.github/workflows/release.yml) 在
-`v*` 标签上生成:`miaotty` 与 `miaotty-cli`、macOS app bundle、
+`v*` 标签上生成:`mtty` 与 `mtty-cli`、macOS app bundle、
 Linux `.deb`/AppImage 以及 Windows MSI。[`dist-workspace.toml`](dist-workspace.toml) 是一份
 [cargo-dist](https://opensource.axo.dev/cargo-dist/) 脚手架。见
 [`docs/INSTALL.zh-CN.md`](docs/INSTALL.zh-CN.md) 与 [`docs/RELEASE.zh-CN.md`](docs/RELEASE.zh-CN.md)。
@@ -185,8 +188,8 @@ Linux `.deb`/AppImage 以及 Windows MSI。[`dist-workspace.toml`](dist-workspac
 
 ## 配置
 
-miaotty 读取 `~/.config/miaotty/config.toml`(或
-`$XDG_CONFIG_HOME/miaotty/config.toml`)。所有键均可选;完整参考见
+mtty 读取 `~/.config/mtty/config.toml`(或
+`$XDG_CONFIG_HOME/mtty/config.toml`)。所有键均可选;完整参考见
 [`docs/config.example.toml`](docs/config.example.toml)。
 
 ```toml
@@ -203,12 +206,12 @@ palette    = ["#3b4252", "#bf616a", "#a3be8c", "#ebcb8b",
               "#81a1c1", "#b48ead", "#8fbcbb", "#eceff4"]
 ```
 
-若不存在 miaotty 配置,会自动导入 ghostty 的 `config` 与 alacritty 的
+若不存在 mtty 配置,会自动导入 ghostty 的 `config` 与 alacritty 的
 `alacritty.toml`。
 
 ### Shell 集成
 
-启动时,miaotty 会安装一个 zsh `ZDOTDIR` shim,用于上报工作目录(OSC 7)与命令历史。
+启动时,mtty 会安装一个 zsh `ZDOTDIR` shim,用于上报工作目录(OSC 7)与命令历史。
 shim 写入一个仅当前用户可访问的私有目录,并会恢复用户真实的 `ZDOTDIR`,因此现有
 点文件不受影响,无需手动配置。
 
@@ -216,45 +219,45 @@ shim 写入一个仅当前用户可访问的私有目录,并会恢复用户真�
 
 ## 控制面
 
-**MTP**(miaotty terminal protocol)控制面在 `$XDG_RUNTIME_DIR/miaotty.sock`
+**MTP**(mtty terminal protocol)控制面在 `$XDG_RUNTIME_DIR/mtty.sock`
 (回退到 `$TMPDIR`)上使用换行分隔的 JSON,且 socket 以仅属主可访问的权限创建。
-shell 会继承 `MIAOTTY_SOCKET` 与 `MIAOTTY_PANE_ID`。每个响应都带状态 `revision`;
+shell 会继承 `MTTY_SOCKET` 与 `MTTY_PANE_ID`。每个响应都带状态 `revision`;
 `core.wait` 会阻塞到该值超过给定值后再返回;`core.subscribe` 则把连接升级为事件流
 (`agent.state`、`panes`、`history`),客户端据此跟踪 agent 状态、pane 或历史,无需轮询。
 
-`miaotty-cli` 是参考客户端:
+`mtty-cli` 是参考客户端:
 
 ```sh
-miaotty-cli ping
-miaotty-cli wait --since 42               # 阻塞直到状态 revision 变化
-miaotty-cli events                        # 以 JSON 行流式输出状态变化
-miaotty-cli events --topic agent.state    # ...仅订阅某个 topic
-miaotty-cli pane list
-miaotty-cli pane run --pane ID --data "echo hello"
-miaotty-cli pane focus --pane ID
-miaotty-cli state claude --state processing --pane ID
-miaotty-cli state list
-miaotty-cli history add --command "cargo test" --cwd "$PWD"
-miaotty-cli history list --pane ID
-miaotty-cli view /path/to/file            # 在应用中以只读方式打开
-miaotty-cli edit /path/to/file            # 在编辑器中打开
-miaotty-cli file read  --path /etc/hosts  # 单次上限 2 MB
-miaotty-cli file read  --path app.bin --base64 --offset 0 --length 65536
-miaotty-cli file write --path /tmp/x --data "hello"
-miaotty-cli file write --path /tmp/x --data-b64 "AAECAw=="   # 二进制
+mtty-cli ping
+mtty-cli wait --since 42               # 阻塞直到状态 revision 变化
+mtty-cli events                        # 以 JSON 行流式输出状态变化
+mtty-cli events --topic agent.state    # ...仅订阅某个 topic
+mtty-cli pane list
+mtty-cli pane run --pane ID --data "echo hello"
+mtty-cli pane focus --pane ID
+mtty-cli state claude --state processing --pane ID
+mtty-cli state list
+mtty-cli history add --command "cargo test" --cwd "$PWD"
+mtty-cli history list --pane ID
+mtty-cli view /path/to/file            # 在应用中以只读方式打开
+mtty-cli edit /path/to/file            # 在编辑器中打开
+mtty-cli file read  --path /etc/hosts  # 单次上限 2 MB
+mtty-cli file read  --path app.bin --base64 --offset 0 --length 65536
+mtty-cli file write --path /tmp/x --data "hello"
+mtty-cli file write --path /tmp/x --data-b64 "AAECAw=="   # 二进制
 ```
 
-**远程访问**:设 `remote-listen = "127.0.0.1:7273"`(并设 `MIAOTTY_MTP_TOKEN`)即可用 TCP 暴露控制
-平面,客户端 `miaotty-cli --socket tcp://host:7273` 连接;**没令牌时 TCP 监听会拒绝启动**。注意控制平面
+**远程访问**:设 `remote-listen = "127.0.0.1:7273"`(并设 `MTTY_MTP_TOKEN`)即可用 TCP 暴露控制
+平面,客户端 `mtty-cli --socket tcp://host:7273` 连接;**没令牌时 TCP 监听会拒绝启动**。注意控制平面
 能在你的 shell 里执行命令,令牌务必保密(并尽量只监听 loopback 或走 ssh 隧道)。
 
-若 host 以 `MIAOTTY_MTP_TOKEN` 启动,请求必须携带该令牌;CLI 会从同一环境变量读取。
-`MIAOTTY_MTP_ALLOW`(逗号分隔,如 `core.basic,file.read,history.read`)限定允许的能力,其余返回
+若 host 以 `MTTY_MTP_TOKEN` 启动,请求必须携带该令牌;CLI 会从同一环境变量读取。
+`MTTY_MTP_ALLOW`(逗号分隔,如 `core.basic,file.read,history.read`)限定允许的能力,其余返回
 `forbidden`;不设=全允许,`core.basic`(ping/health)始终允许以便客户端发现 host,`ping` 会在
 `allowed` 里报告生效能力集。socket 可经 ssh 转发(`ssh -R /tmp/fwd.sock:<host socket>`),从而让远端
 客户端驱动 host。
 
-使用 `--socket PATH` 或设置 `MIAOTTY_SOCKET` 可指定非默认 socket。
+使用 `--socket PATH` 或设置 `MTTY_SOCKET` 可指定非默认 socket。
 
 ---
 
@@ -302,7 +305,7 @@ miaotty-cli file write --path /tmp/x --data-b64 "AAECAw=="   # 二进制
 
 ## 路线图
 
-**mtty**(正式产品名;在改名里程碑完成前,代码、可执行文件与配置仍使用 `miaotty`)的产品方向、
+**mtty** 的产品方向、
 已验证的功能基线与里程碑计划见 [`docs/PRODUCT.zh-CN.md`](docs/PRODUCT.zh-CN.md)。
 
 近期已完成:Windows 命名管道传输与 ConPTY 路径(真实硬件验证)、会话恢复、View 规则、
@@ -321,7 +324,7 @@ CI 性能基线已持久化于 `benches/perf-baseline.json`,由 nightly/手动�
   覆盖,Windows 也在真机上经 MTP 驱动;真实 Linux 桌面会话、Wayland 门户热键、Windows 的
   IME/GUI 路径仍需一台交互机器。
 - **更新安装**:native 应用的自动自替换仍属后续工作；当前通过发布的平台安装包升级。
-- **单一原生应用**:原 native 实现统一以 miaotty 发布；配置和会话保留迁移兼容，
+- **单一原生应用**:原 native 实现统一以 mtty 发布；配置和会话保留迁移兼容，
   见 [APP-IDENTITY.zh-CN.md](docs/APP-IDENTITY.zh-CN.md)。
 - **终端内联图片**:不模拟 Kitty 的 z-index(图片绘制在网格之上);回滚容量内锚定精确,超出后
   为近似(alacritty 不暴露滚动计数,除非打补丁);会话恢复不保留图像(会与恢复的内容不一致)。

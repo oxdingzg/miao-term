@@ -1,6 +1,6 @@
 # Windows 开发 / 验证
 
-如何在 Windows 机器上构建、测试与冒烟验证 miaotty。英文为默认;请保持
+如何在 Windows 机器上构建、测试与冒烟验证 mtty。英文为默认;请保持
 [`WINDOWS-DEV.md`](WINDOWS-DEV.md) 同步。
 
 本文不含任何主机专有信息:使用你自己的 ssh 别名与路径。我们具体用哪台机器、怎么连,
@@ -50,7 +50,7 @@ Remove-Item -Recurse -Force "$env:USERPROFILE\miao-term" -ErrorAction SilentlyCo
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\miao-term\scripts\windows-verify.ps1"
 ```
 
-它会构建 `miaotty` + `miaotty-cli`,跑引擎/MTP 测试,然后启动应用并经 MTP 驱动它
+它会构建 `mtty` + `mtty-cli`,跑引擎/MTP 测试,然后启动应用并经 MTP 驱动它
 (`ping`、`file write`、`file read`、`view`)。
 
 本项目 Windows 机器最近一次(2026-09-29):构建成功、引擎/MTP 测试通过、应用能启动,`ping`

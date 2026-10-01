@@ -7,12 +7,12 @@
 ## 门
 
 ```sh
-cargo test --release -p miao-term-core -p miao-term-graphics -p miaotty-app -- --ignored
+cargo test --release -p miao-term-core -p miao-term-graphics -p mtty-app -- --ignored
 ```
 
 性能测试标记为 `#[ignore]`,故常规测试保持快速;`perf` CI 作业在 `ubuntu-latest` 上以
 release 运行它们。预算是绝对值且留出宽裕余量(数量级退化会失败,runner 抖动不会)。
-`MIAOTTY_PERF_SCALE`(默认 `1.0`)可在慢机器上按倍数放宽所有预算。每个指标还会与
+`MTTY_PERF_SCALE`(默认 `1.0`)可在慢机器上按倍数放宽所有预算。每个指标还会与
 `budgets.json` 里记录的**基线**按 `regression_pct` 比较(ADR 0023),故漂移也会失败,而不只是断崖。`perf` 作业还会与仓库内持久的 **CI 基线** [`benches/perf-baseline.json`](../benches/perf-baseline.json)
 比较(ADR 0028):`main` 上的 nightly/手动运行会用本次测量重写该文件并提交,因此不受缓存淘汰
 与 runner 镜像变更影响。比较仅**报告**,因为 runner 抖动(同一份代码 1.8x)远大于信号——
@@ -24,8 +24,8 @@ release 运行它们。预算是绝对值且留出宽裕余量(数量级退化�
 |------|------|------------------------|------|
 | VT 解析吞吐 | ≥ 25 MB/s | 73 MB/s | `crates/term-core/tests/perf.rs` |
 | 屏幕快照(30 行) | ≤ 2 ms | 0.012 ms | `crates/term-core/tests/perf.rs` |
-| 每帧行构建 | ≤ 4 ms | 0.12 ms | `miaotty-app/tests/perf.rs` |
-| 面板排名(10k 条目) | ≤ 100 ms | 2.0 ms | `miaotty-app/tests/perf.rs` |
+| 每帧行构建 | ≤ 4 ms | 0.12 ms | `mtty-app/tests/perf.rs` |
+| 面板排名(10k 条目) | ≤ 100 ms | 2.0 ms | `mtty-app/tests/perf.rs` |
 | IPC 空闲开销 | ≈ 0(无轮询) | — | 设计如此 |
 | agent 突发 | 100 事件 → 1 重绘 | — | 设计如此 |
 
@@ -71,7 +71,7 @@ CPU 使用率、进程 RSS 或端到端帧耗时。分配统计包含 realloc；
 | 面板排序分配（含结果向量与排序） | 30,012 次 / 711,592 B | 12 次 / 186,032 B |
 | ASCII 评分本身（10k） | — | 0 次分配 |
 
-新增 `miaotty-app/tests/perf_allocations.rs`，纳入上面的 release gate：100×30 行构建
+新增 `mtty-app/tests/perf_allocations.rs`，纳入上面的 release gate：100×30 行构建
 须少于 600 次分配/realloc，10k ASCII 评分须零分配。线程局部计数隔离其他线程的
 分配噪声。普通测试覆盖队列满时的背压、分批处理后的续调度/EOF/顺序，以及动画
 换帧的定时边界。整进程 RSS、功耗与 Windows 交互延迟仍需真实宿主测量。
@@ -147,8 +147,8 @@ CPU 场景工作时间约减少 95%；大量图片的 RSS 增量减少约 32 MiB
 ### 复现与门禁
 
 ```sh
-cargo test --release -p miao-term-core -p miao-term-graphics -p miaotty-app -- --ignored --nocapture
-cargo build --release -p miaotty-app -p miaotty-cli
+cargo test --release -p miao-term-core -p miao-term-graphics -p mtty-app -- --ignored --nocapture
+cargo build --release -p mtty-app -p mtty-cli
 python3 scripts/profile-input.py --mode fragments
 python3 scripts/profile-input.py --mode images
 # 比较保留的旧二进制时，指定 --binary <old-binary>。
