@@ -706,6 +706,8 @@ struct HostsView {
     form_port: String,
     /// The ssh agent, checked when the window opens (B3.2).
     agent: Option<miao_term_ui::hostkeys::Agent>,
+    /// The add-forward form: host name, kind and spec.
+    new_forward: Option<(String, miao_term_config::hosts::ForwardKind, String)>,
     /// Host key checks by host name: `None` while running.
     keys: HashMap<String, Option<Result<miao_term_ui::hostkeys::HostKey, String>>>,
 }
@@ -842,6 +844,8 @@ struct State {
     host_book: miao_term_config::hosts::HostBook,
     host_book_error: Option<String>,
     hosts_view: Option<HostsView>,
+    /// Running port forwards by (host name, rule spec) (B3.3).
+    tunnels: HashMap<(String, String), miao_term_ui::forward::Tunnel>,
     remote_dialog: Option<(String, String)>,
     editor_vim: bool,
     vim: Option<miao_term_ui::vim::VimRuntime>,
@@ -3058,6 +3062,9 @@ impl State {
         if panes > 1 {
             s.push_str(&format!("   {} {panes}", t(l, "panes", "分屏")));
         }
+        if !self.tunnels.is_empty() {
+            s.push_str(&format!("   \u{21c4} {}", self.tunnels.len()));
+        }
         if self.read_only {
             s.push_str("   RO");
         }
@@ -4712,6 +4719,15 @@ impl State {
         let mut trust_key: Option<usize> = None;
         let mut copy_key: Option<usize> = None;
         let mut new_key = false;
+        // (host index, rule index, start?) / (host index, rule index) / host index
+        let mut toggle_forward: Option<(usize, usize, bool)> = None;
+        let mut remove_forward: Option<(usize, usize)> = None;
+        let mut add_forward: Option<usize> = None;
+        let tunnel_states: HashMap<(String, String), miao_term_ui::forward::TunnelState> = self
+            .tunnels
+            .iter_mut()
+            .map(|(k, t)| (k.clone(), t.state()))
+            .collect();
         let rows: Vec<(usize, miao_term_config::hosts::Host)> = self
             .host_book
             .sorted()
@@ -4831,6 +4847,91 @@ impl State {
                                 }
                             });
                         });
+                        let title = format!(
+                            "{} ({})",
+                            t(lang, "Port forwards", "端口转发"),
+                            host.forwards.len()
+                        );
+                        egui::CollapsingHeader::new(title)
+                            .id_salt(("forwards", &host.name))
+                            .show(ui, |ui| {
+                                use miao_term_config::hosts::ForwardKind;
+                                use miao_term_ui::forward::TunnelState;
+                                for (r, fwd) in host.forwards.iter().enumerate() {
+                                    let key = (host.name.clone(), fwd.spec.clone());
+                                    let state = tunnel_states.get(&key);
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "{} {}",
+                                                fwd.kind.flag(),
+                                                fwd.spec
+                                            ))
+                                            .monospace(),
+                                        );
+                                        match state {
+                                            Some(TunnelState::Running) => {
+                                                ui.label(
+                                                    egui::RichText::new(t(lang, "\u{25cf} running", "\u{25cf} 运行中"))
+                                                        .color(egui::Color32::from_rgb(0xa3, 0xbe, 0x8c)),
+                                                );
+                                                if ui.small_button(t(lang, "Stop", "停止")).clicked() {
+                                                    toggle_forward = Some((*i, r, false));
+                                                }
+                                            }
+                                            other => {
+                                                if let Some(TunnelState::Exited(msg)) = other {
+                                                    ui.label(
+                                                        egui::RichText::new(msg)
+                                                            .size(11.0)
+                                                            .color(egui::Color32::from_rgb(0xbf, 0x61, 0x6a)),
+                                                    );
+                                                }
+                                                if ui.small_button(t(lang, "Start", "启动")).clicked() {
+                                                    toggle_forward = Some((*i, r, true));
+                                                }
+                                                if ui.small_button(t(lang, "Remove", "删除")).clicked() {
+                                                    remove_forward = Some((*i, r));
+                                                }
+                                            }
+                                        }
+                                    });
+                                }
+                                let form = view
+                                    .new_forward
+                                    .get_or_insert_with(|| (host.name.clone(), ForwardKind::Local, String::new()));
+                                if form.0 != host.name {
+                                    *form = (host.name.clone(), ForwardKind::Local, String::new());
+                                }
+                                ui.horizontal(|ui| {
+                                    egui::ComboBox::from_id_salt(("fwd-kind", &host.name))
+                                        .selected_text(form.1.flag())
+                                        .width(48.0)
+                                        .show_ui(ui, |ui| {
+                                            ui.selectable_value(&mut form.1, ForwardKind::Local, "-L local");
+                                            ui.selectable_value(&mut form.1, ForwardKind::Remote, "-R remote");
+                                            ui.selectable_value(&mut form.1, ForwardKind::Dynamic, "-D SOCKS");
+                                        });
+                                    let hint = if form.1 == ForwardKind::Dynamic {
+                                        "1080"
+                                    } else {
+                                        "8080:localhost:80"
+                                    };
+                                    ui.add(egui::TextEdit::singleline(&mut form.2).hint_text(hint).desired_width(200.0));
+                                    let candidate = miao_term_config::hosts::Forward {
+                                        kind: form.1,
+                                        spec: form.2.trim().to_string(),
+                                    };
+                                    let check = candidate.validate();
+                                    if ui
+                                        .add_enabled(check.is_ok(), egui::Button::new(t(lang, "Add", "添加")))
+                                        .on_disabled_hover_text(check.err().unwrap_or_default())
+                                        .clicked()
+                                    {
+                                        add_forward = Some(*i);
+                                    }
+                                });
+                            });
                         if let Some(state) = view.keys.get(&host.name) {
                             use miao_term_ui::hostkeys::HostKey;
                             let red = egui::Color32::from_rgb(0xbf, 0x61, 0x6a);
@@ -4940,6 +5041,55 @@ impl State {
         if let Some(i) = connect {
             if let Some(host) = self.host_book.hosts.get(i).cloned() {
                 self.open_host(&host);
+            }
+        }
+        if let Some((h, r, start)) = toggle_forward {
+            if let Some(host) = self.host_book.hosts.get(h).cloned() {
+                if let Some(fwd) = host.forwards.get(r) {
+                    let key = (host.name.clone(), fwd.spec.clone());
+                    if start {
+                        match miao_term_ui::forward::Tunnel::start(
+                            &host.destination(),
+                            &host.ssh_options(),
+                            fwd,
+                        ) {
+                            Ok(tunnel) => {
+                                self.tunnels.insert(key, tunnel);
+                            }
+                            Err(e) => self.show_notice(format!("{}: {e}", fwd.spec)),
+                        }
+                    } else {
+                        self.tunnels.remove(&key);
+                    }
+                }
+            }
+        }
+        if let Some((h, r)) = remove_forward {
+            if let Some(host) = self.host_book.hosts.get_mut(h) {
+                if r < host.forwards.len() {
+                    let removed = host.forwards.remove(r);
+                    let name = host.name.clone();
+                    self.tunnels.remove(&(name, removed.spec.clone()));
+                    if !self.save_hosts() {
+                        if let Some(host) = self.host_book.hosts.get_mut(h) {
+                            host.forwards.insert(r, removed);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(h) = add_forward {
+            if let Some((_, kind, spec)) = view.new_forward.take() {
+                let fwd = miao_term_config::hosts::Forward {
+                    kind,
+                    spec: spec.trim().to_string(),
+                };
+                if let Some(host) = self.host_book.hosts.get_mut(h) {
+                    if !host.forwards.contains(&fwd) {
+                        host.forwards.push(fwd);
+                        self.save_hosts();
+                    }
+                }
             }
         }
         if let Some(host) = check_key.and_then(|i| self.host_book.hosts.get(i).cloned()) {
@@ -6491,6 +6641,7 @@ impl ApplicationHandler<HostEvent> for Host {
             host_book: Default::default(),
             host_book_error: None,
             hosts_view: None,
+            tunnels: HashMap::new(),
             remote_dialog: None,
             editor_vim: cfg.editor_vim,
             vim: cfg.editor_vim.then(miao_term_ui::vim::VimRuntime::default),

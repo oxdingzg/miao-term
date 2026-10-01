@@ -197,7 +197,7 @@
 - [x] **B3.1 主机库**(一台真实 Linux 主机端到端:导入的别名经 `~/.ssh/config` 的 ProxyJump 连接,经 `mtty://host/<名称>` 打开并在远端执行命令核对;侧栏 HOSTS 截图核对):`hosts.toml`(名称、地址、用户、端口、分组、标签、跳板机)、从 `~/.ssh/config`
   导入、侧栏主机列表、命令面板搜索、双击连接。验收:解析/导入单测,冒烟连接本机 sshd 或容器 **[需测试主机]**。
 - [x] **B3.2 安全连接**(交互式 ssh 由 ssh 自身确认主机密钥;主机库提供后台检查:已知/未知(显示指纹,核对后信任)/已变化(拒绝);真实主机验证"已知";密钥生成与 ssh-copy-id 在终端标签中进行,mtty 不经手口令):known_hosts 首次连接/指纹变化确认界面;ssh-agent 状态与密钥生成;不保存明文密码。
-- [ ] **B3.3 端口转发**:经 ControlMaster `ssh -O forward/cancel` 管理 L/R/D 规则,随主机保存,状态可见。
+- [x] **B3.3 端口转发**:L/R/D 规则随主机保存;每条规则一个由 mtty 管理的 `ssh -N`(`ExitOnForwardFailure`),状态可见、随 mtty 退出而结束(不复用 ControlMaster:其 60 秒 ControlPersist 会让转发随之消失)。真实主机端到端:经本地端口读到远端 sshd 握手,停止后端口关闭。
 - [ ] **B3.4 SFTP**:双栏文件浏览、上传下载、拖放、进度、重命名/权限;远端编辑复用 pane 连接。
 - [ ] **B3.5 Snippets 与广播**:命令片段库,在当前 pane 或多台主机执行;多 pane 广播输入。
 - [ ] **B3.6 FTP/FTPS 与持久会话**:FTP/FTPS 共用文件浏览(明文提示);可选 tmux/mosh 重连。
