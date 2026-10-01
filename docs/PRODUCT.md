@@ -283,6 +283,14 @@ verified on its own:
 
 - [ ] **B4.1** Real Windows/Linux desktop acceptance (IME, hotkey, drag and
   drop, menus) **[owner + hardware]**.
+  Linux, 2026-10-01 (Ubuntu 24.04, GNOME 46, Wayland, input injected through
+  uinput): typing, menus and menu actions work; pinyin IME preedit, candidate
+  placement and commit work; the Quick Terminal hotkey works through a GNOME
+  custom shortcut running `mtty --quick` (GNOME 46 has no GlobalShortcuts
+  portal). **Found:** dropping files does nothing on native Wayland (winit
+  0.30 implements drops only for X11; under XWayland the drop pastes the
+  quoted path); app shortcuts use Super on Linux/Windows, where the desktop
+  owns most Super combinations, and the hints show ⌘. Windows: pending.
 - [ ] **B4.2** Apple notarization and Windows MSI signing **[owner +
   credentials]**.
 - [x] **B4.3** Auto-update: download, `update-pubkey` signature check, replace.
