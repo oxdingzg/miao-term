@@ -56,18 +56,16 @@ pub fn parse(body: &[u8]) -> KittyCmd {
 
 /// Decode a display command into an image (`a=T` / `a=p`), or a frame (`a=f`).
 pub fn decode(cmd: &KittyCmd, max_pixels: usize) -> Option<Image> {
-    use base64::Engine;
-    let b64: Vec<u8> = cmd
-        .data
-        .iter()
-        .copied()
-        .filter(|b| !b.is_ascii_whitespace())
-        .collect();
-    let raw = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
+    if let Some((w, h)) = cmd.size {
+        if (w as usize).checked_mul(h as usize)? > max_pixels {
+            return None;
+        }
+    }
+    let raw = crate::decode_base64(&cmd.data)?;
     if cmd.format == 100 {
         return decode_bitmap(&raw, 100, cmd.compressed, max_pixels);
     }
-    let inflated = if cmd.compressed {
+    let mut inflated = if cmd.compressed {
         use std::io::Read;
         let mut out = Vec::new();
         flate2::read::ZlibDecoder::new(&raw[..])
@@ -89,14 +87,26 @@ pub fn decode(cmd: &KittyCmd, max_pixels: usize) -> Option<Image> {
     if inflated.len() < w as usize * h as usize * channels {
         return None;
     }
-    let mut rgba = Vec::with_capacity(w as usize * h as usize * 4);
-    for px in inflated
-        .chunks_exact(channels)
-        .take(w as usize * h as usize)
-    {
-        rgba.extend_from_slice(&px[..3]);
-        rgba.push(if channels == 4 { px[3] } else { 255 });
-    }
+    let rgba = if channels == 4 {
+        // The base64 decoder already produced owned RGBA bytes. Reuse them
+        // instead of copying a full image into another pixel buffer.
+        let needed = w as usize * h as usize * 4;
+        inflated.truncate(needed);
+        if inflated.capacity() > needed.saturating_mul(2).max(64 * 1024) {
+            inflated.shrink_to_fit();
+        }
+        inflated
+    } else {
+        let mut rgba = Vec::with_capacity(w as usize * h as usize * 4);
+        for px in inflated
+            .chunks_exact(channels)
+            .take(w as usize * h as usize)
+        {
+            rgba.extend_from_slice(&px[..3]);
+            rgba.push(255);
+        }
+        rgba
+    };
     Some(Image {
         width: w,
         height: h,
@@ -149,6 +159,29 @@ mod tests {
         let img = decode(&cmd, 100).unwrap();
         assert_eq!((img.width, img.height), (2, 1));
         assert_eq!(img.rgba, vec![0, 0, 0, 255, 255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn rgba_reuse_preserves_pixels_with_whitespace_compression_and_trailing_data() {
+        use base64::Engine;
+        use std::io::Write;
+        let raw = [1, 2, 3, 4, 5, 6, 7, 8, 99];
+        for compressed in [false, true] {
+            let bytes = if compressed {
+                let mut encoder =
+                    flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+                encoder.write_all(&raw).unwrap();
+                encoder.finish().unwrap()
+            } else {
+                raw.to_vec()
+            };
+            let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+            let mut cmd = parse(format!("a=T,f=32,s=2x1;{encoded}").as_bytes());
+            cmd.compressed = compressed;
+            cmd.data.insert(2, b'\n');
+            assert_eq!(decode(&cmd, 2).unwrap().rgba, raw[..8]);
+            assert!(decode(&cmd, 1).is_none());
+        }
     }
 
     #[test]

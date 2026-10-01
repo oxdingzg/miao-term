@@ -18,9 +18,15 @@ type Fallible<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 /// image without threading the cell size through the engine.
 const NOMINAL_CELL_H: u32 = 16;
 
-/// Upper bound on a pending OSC 7 sequence held between chunks. Terminal output
-/// is untrusted, so an unterminated sequence must not grow this buffer forever.
+/// Maximum host metadata payload retained as a title or working directory.
 const MAX_OSC: usize = 8 * 1024;
+
+const PTY_READ_BYTES: usize = 8192;
+// Backpressure bounds queued output to 256 KiB per pane, plus one reader chunk.
+const PTY_QUEUE_CHUNKS: usize = 32;
+// Yield between chunks so a continuously writing child cannot monopolize the UI.
+const PTY_DRAIN_BYTES: usize = 64 * 1024;
+const PTY_DRAIN_BUDGET: std::time::Duration = std::time::Duration::from_millis(4);
 
 /// A running terminal: a child shell on a PTY plus the parsed screen state.
 pub struct Terminal {
@@ -30,6 +36,7 @@ pub struct Terminal {
     #[allow(dead_code)]
     child: Box<dyn Child + Send + Sync>,
     rx: Receiver<Vec<u8>>,
+    waker: std::sync::Arc<dyn Fn() + Send + Sync>,
     rows: u16,
     cols: u16,
     exited: bool,
@@ -37,15 +44,11 @@ pub struct Terminal {
     cwd_checked: std::time::Instant,
     cwd_reported: bool,
     title: Option<String>,
-    osc_buf: Vec<u8>,
     scanner: miao_term_graphics::Scanner,
     graphics: crate::graphics::GraphicsLayer,
     graphics_enabled: bool,
     scrollback: usize,
     cell_px: (u16, u16),
-    /// Pending bytes scanned for a ConPTY cursor-position query (DSR, `ESC[6n`),
-    /// which must be answered or the Windows shell stalls before it runs anything.
-    dsr_buf: Vec<u8>,
 }
 
 /// Closing the PTY can block: on Windows `ClosePseudoConsole` waits for the
@@ -151,10 +154,10 @@ impl Terminal {
         let mut reader = pair.master.try_clone_reader()?;
         let writer = pair.master.take_writer()?;
 
-        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(PTY_QUEUE_CHUNKS);
         let waker_thread = waker.clone();
         thread::spawn(move || {
-            let mut buf = [0u8; 8192];
+            let mut buf = [0u8; PTY_READ_BYTES];
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
@@ -177,6 +180,7 @@ impl Terminal {
             writer,
             child,
             rx,
+            waker,
             rows,
             cols,
             exited: false,
@@ -184,13 +188,11 @@ impl Terminal {
             cwd_checked: std::time::Instant::now(),
             cwd_reported: false,
             title: None,
-            osc_buf: Vec::new(),
             scanner: miao_term_graphics::Scanner::new(),
             graphics: crate::graphics::GraphicsLayer::new(),
             graphics_enabled: true,
             scrollback,
             cell_px: (0, 0),
-            dsr_buf: Vec::new(),
         })
     }
 
@@ -209,9 +211,20 @@ impl Terminal {
                 }
             }
         }
+        let deadline = std::time::Instant::now() + PTY_DRAIN_BUDGET;
+        let mut drained = 0;
         loop {
             match self.rx.try_recv() {
-                Ok(bytes) => changed |= self.feed(&bytes),
+                Ok(bytes) => {
+                    drained += bytes.len();
+                    changed |= self.feed(&bytes);
+                    if drained >= PTY_DRAIN_BYTES || std::time::Instant::now() >= deadline {
+                        // A queued continuation is essential: the reader can be
+                        // blocked on a full queue and unable to send a new wake.
+                        (self.waker)();
+                        break;
+                    }
+                }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     self.exited = true;
@@ -223,29 +236,42 @@ impl Terminal {
         changed
     }
 
-    /// Feed one chunk: OSC/DSR scanning on the raw bytes, text to the VT parser,
-    /// graphics payloads to the image layer.
+    /// Feed one chunk through the shared control scanner: borrowed text to VT,
+    /// ordered metadata/DSR notifications and graphics to their host handlers.
     fn feed(&mut self, bytes: &[u8]) -> bool {
         let mut changed = false;
         let mut line_feeds = 0usize;
-        self.scan_osc(bytes);
-        self.answer_dsr(bytes);
-        for seg in self.scanner.feed(bytes) {
-            match seg {
-                miao_term_graphics::Segment::Text(t) => {
-                    if !t.is_empty() {
-                        line_feeds += count_line_feeds(&t);
-                        self.screen.process(&t);
+        // Move the scanner out temporarily so callbacks can update the screen,
+        // metadata, images, and PTY writer without an intermediate segment Vec.
+        let mut scanner = std::mem::take(&mut self.scanner);
+        scanner.feed_with(bytes, |event| {
+            match event {
+                miao_term_graphics::StreamEvent::Text(text) => {
+                    if !text.is_empty() {
+                        // Image-anchor accounting has no purpose in text-only
+                        // panes. Avoid an additional full-byte scan in that case.
+                        if !self.graphics.images.is_empty() {
+                            line_feeds += count_line_feeds(text);
+                        }
+                        self.screen.process(text);
                         changed = true;
                     }
                 }
-                miao_term_graphics::Segment::Graphics(g) => {
+                miao_term_graphics::StreamEvent::Graphics(graphic) => {
                     if self.graphics_enabled {
-                        changed |= self.handle_graphic(g);
+                        changed |= self.handle_graphic(graphic);
                     }
                 }
+                miao_term_graphics::StreamEvent::Osc(payload) => self.observe_osc(payload),
+                miao_term_graphics::StreamEvent::CursorReport => {
+                    // Respond at the query's position in the stream, after any
+                    // preceding text has updated the cursor (including ConPTY).
+                    let (row, col) = self.screen.cursor();
+                    self.write(format!("\x1b[{};{}R", row + 1, col + 1).as_bytes());
+                }
             }
-        }
+        });
+        self.scanner = scanner;
         // Keep image anchors aligned with content. Up to the ring cap this is
         // exact (the buffer grows); past it the grid rotates without growing, so
         // approximate with the line feeds seen in this chunk.
@@ -286,7 +312,7 @@ impl Terminal {
             gfx::Graphic::Kitty(cmd) => {
                 let move_now = cmd.move_cursor && matches!(cmd.action, 'T' | 'p');
                 let rows_hint = cmd.rows;
-                let before = self.graphics.images.len();
+                let before = self.graphics.images.last().map(|image| image.id);
                 let view_offset = self.screen.scroll_offset() as i32;
                 // `a=p` places at an explicit cell (viewport row y, column x).
                 let (anchor, place_col) = match (cmd.action, cmd.cell_x, cmd.cell_y) {
@@ -294,7 +320,13 @@ impl Terminal {
                     _ => (line, col),
                 };
                 let changed = self.graphics.kitty(cmd, anchor, place_col, view_offset);
-                if move_now && self.graphics.images.len() > before {
+                if move_now
+                    && self
+                        .graphics
+                        .images
+                        .last()
+                        .is_some_and(|image| Some(image.id) != before)
+                {
                     let rows = rows_hint
                         .map(u32::from)
                         .or_else(|| {
@@ -412,74 +444,31 @@ impl Terminal {
         self.title.as_deref()
     }
 
-    /// Answer ConPTY's cursor-position query (DSR `ESC[6n`) with `ESC[<row>;<col>R`.
-    ///
-    /// Windows ConPTY emits this on startup and the console app blocks until the
-    /// terminal replies; without it the Windows shell never produces output.
-    fn answer_dsr(&mut self, bytes: &[u8]) {
-        self.dsr_buf.extend_from_slice(bytes);
-        while let Some(idx) = find_subslice(&self.dsr_buf, b"\x1b[6n") {
-            let (row, col) = self.screen.cursor();
-            let reply = format!("\x1b[{};{}R", row + 1, col + 1);
-            self.dsr_buf.drain(..idx + 4);
-            self.write(reply.as_bytes());
+    /// Observe a complete OSC from the shared stream scanner, without copying
+    /// raw PTY chunks into a second protocol buffer.
+    fn observe_osc(&mut self, bytes: &[u8]) {
+        if bytes.len() > MAX_OSC {
+            return;
         }
-        // Keep a short tail in case the sequence is split across chunks.
-        let keep = 3.min(self.dsr_buf.len());
-        let drain = self.dsr_buf.len() - keep;
-        self.dsr_buf.drain(..drain);
-    }
-
-    /// Scan a chunk for OSC 7 (`ESC ] 7 ; file://host/path BEL|ST`) and update `cwd`.
-    fn scan_osc(&mut self, bytes: &[u8]) {
-        self.osc_buf.extend_from_slice(bytes);
-        loop {
-            let Some(start) = find_subslice(&self.osc_buf, b"\x1b]") else {
-                // Keep a short tail in case the prefix is split across chunks.
-                let keep = 2.min(self.osc_buf.len());
-                let drain = self.osc_buf.len() - keep;
-                self.osc_buf.drain(..drain);
-                return;
-            };
-            let after = start + 2;
-            let Some(semi_rel) = self.osc_buf[after..].iter().position(|&b| b == b';') else {
-                if self.osc_buf.len() - start > MAX_OSC {
-                    self.osc_buf.clear();
-                } else {
-                    self.osc_buf.drain(..start);
-                }
-                return;
-            };
-            let semi = after + semi_rel;
-            let code = self.osc_buf[after..semi].to_vec();
-            match find_terminator(&self.osc_buf[semi + 1..]) {
-                Some((end, term_len)) => {
-                    if let Ok(payload) =
-                        std::str::from_utf8(&self.osc_buf[semi + 1..semi + 1 + end])
-                    {
-                        match code.as_slice() {
-                            b"7" => {
-                                if let Some(path) = parse_osc7(payload) {
-                                    self.cwd = Some(path);
-                                    self.cwd_reported = true;
-                                }
-                            }
-                            b"0" | b"2" => self.title = Some(payload.to_string()),
-                            _ => {}
-                        }
-                    }
-                    self.osc_buf.drain(..semi + 1 + end + term_len);
-                }
-                None => {
-                    // No terminator yet: keep the pending sequence bounded.
-                    if self.osc_buf.len() - start > MAX_OSC {
-                        self.osc_buf.clear();
-                    } else {
-                        self.osc_buf.drain(..start);
-                    }
-                    return;
+        let Some(semi) = bytes.iter().position(|&b| b == b';') else {
+            return;
+        };
+        let code = &bytes[..semi];
+        if !matches!(code, b"0" | b"2" | b"7") {
+            return;
+        }
+        let Ok(payload) = std::str::from_utf8(&bytes[semi + 1..]) else {
+            return;
+        };
+        match code {
+            b"7" => {
+                if let Some(path) = parse_osc7(payload) {
+                    self.cwd = Some(path);
+                    self.cwd_reported = true;
                 }
             }
+            b"0" | b"2" => self.title = Some(payload.to_string()),
+            _ => {}
         }
     }
 }
@@ -546,25 +535,6 @@ fn count_line_feeds(bytes: &[u8]) -> usize {
     n
 }
 
-fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack.windows(needle.len()).position(|w| w == needle)
-}
-
-/// Returns (payload_len, terminator_len) for BEL or ESC `\`.
-fn find_terminator(bytes: &[u8]) -> Option<(usize, usize)> {
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == 0x07 {
-            return Some((i, 1));
-        }
-        if bytes[i] == 0x1b && bytes.get(i + 1) == Some(&b'\\') {
-            return Some((i, 2));
-        }
-        i += 1;
-    }
-    None
-}
-
 fn parse_osc7(payload: &str) -> Option<String> {
     let rest = payload.strip_prefix("file://")?;
     let slash = rest.find('/')?;
@@ -593,6 +563,103 @@ mod tests {
     fn make() -> Terminal {
         let waker: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(|| {});
         Terminal::new(None, 20, 5, 100, None, &[], waker).expect("spawn shell")
+    }
+
+    #[test]
+    #[ignore = "release full input-path benchmark"]
+    fn full_input_path_throughput() {
+        let mut term = make();
+        let line = b"\x1b[31mhello\x1b[0m world \x1b[1;32mfoo\x1b[0m bar 1234567890\r\n";
+        let mut data = Vec::with_capacity(16 << 20);
+        while data.len() < 16 << 20 {
+            data.extend_from_slice(line);
+        }
+        for chunk in data[..64 * 1024].chunks(8192) {
+            term.feed(chunk);
+        }
+        let start = std::time::Instant::now();
+        for chunk in data.chunks(8192) {
+            term.feed(chunk);
+        }
+        let mbps = data.len() as f64 / 1e6 / start.elapsed().as_secs_f64();
+        println!("full input path (8 KiB chunks): {mbps:.2} MB/s");
+        let scale = std::env::var("MIAOTTY_PERF_SCALE")
+            .ok()
+            .and_then(|value| value.parse::<f64>().ok())
+            .unwrap_or(1.0);
+        assert!(mbps > 15.0 / scale, "full input-path throughput regression");
+    }
+
+    #[test]
+    fn output_queue_backpressure_and_drain_continuation() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let mut term = make();
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let notified = Arc::clone(&wakes);
+        term.waker = Arc::new(move || {
+            notified.fetch_add(1, Ordering::Relaxed);
+        });
+        let (tx, rx) = mpsc::sync_channel(PTY_QUEUE_CHUNKS);
+        term.rx = rx;
+        for _ in 0..PTY_QUEUE_CHUNKS {
+            tx.try_send(vec![b'x'; PTY_READ_BYTES]).unwrap();
+        }
+        assert!(matches!(
+            tx.try_send(b"\r\ndrain complete".to_vec()),
+            Err(mpsc::TrySendError::Full(_))
+        ));
+        assert!(term.process_pending());
+        assert!(
+            wakes.load(Ordering::Relaxed) > 0,
+            "yield must schedule continuation"
+        );
+        assert!(!term.exited());
+        tx.try_send(b"\r\ndrain complete".to_vec()).unwrap();
+        drop(tx);
+        // Even with no further producer wakes, the queued continuation drains
+        // all output in order and eventually observes EOF.
+        for _ in 0..PTY_QUEUE_CHUNKS + 2 {
+            term.process_pending();
+            if term.exited() {
+                break;
+            }
+        }
+        assert!(term.exited());
+        assert!(term
+            .screen()
+            .contents_between(0, 0, 4, 19)
+            .contains("drain complete"));
+    }
+
+    #[test]
+    fn unified_stream_updates_metadata_and_replies_at_the_query_position() {
+        use std::sync::{Arc, Mutex};
+        struct Replies(Arc<Mutex<Vec<u8>>>);
+        impl Write for Replies {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let stream = b"abc\x1b[6n\r\nxy\x1b[6n\x1b]2;new title\x1b\\\x1b]7;file://localhost/tmp/a%20b\x07done";
+        for chunk_size in [1, 2, 3, 4, 8, stream.len()] {
+            let mut term = make();
+            let replies = Arc::new(Mutex::new(Vec::new()));
+            term.writer = Box::new(Replies(Arc::clone(&replies)));
+            for chunk in stream.chunks(chunk_size) {
+                term.feed(chunk);
+            }
+            assert_eq!(&*replies.lock().unwrap(), b"\x1b[1;4R\x1b[2;3R");
+            assert_eq!(term.title(), Some("new title"));
+            assert_eq!(term.cwd(), Some("/tmp/a b"));
+            assert_eq!(term.screen.line_text(0), "abc");
+            assert_eq!(term.screen.line_text(1), "xydone");
+        }
     }
 
     #[test]
@@ -663,6 +730,17 @@ mod tests {
         assert_eq!((imgs[0].image.width, imgs[0].image.height), (2, 2));
         assert_eq!(&imgs[0].image.rgba[..4], &[255, 0, 0, 255]);
         assert_eq!((imgs[0].cols, imgs[0].rows), (Some(8), Some(8)));
+    }
+
+    #[test]
+    fn kitty_cursor_advance_survives_old_image_eviction() {
+        let mut term = make();
+        term.graphics.max_image_bytes = 4;
+        for id in [1, 2] {
+            term.feed_for_test(format!("\x1b_Ga=T,f=24,s=1x1,C=0,i={id};AAAA\x1b\\").as_bytes());
+            assert_eq!(term.graphics.images.len(), 1);
+            assert_eq!(term.screen.cursor().0, id as u16);
+        }
     }
 
     #[test]

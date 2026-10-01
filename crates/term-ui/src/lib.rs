@@ -52,8 +52,6 @@ pub fn build_rows(screen: &ATerm, theme: &Theme, cursor: Option<(u16, u16)>) -> 
                 continue;
             };
             let width = width_of(cell.ch);
-            let mut buf = [0u8; 4];
-            let text = cell.ch.encode_utf8(&mut buf).to_string();
             let color = if cursor == Some((row, col)) {
                 rgb(theme.bg)
             } else if cell.inverse {
@@ -65,22 +63,22 @@ pub fn build_rows(screen: &ATerm, theme: &Theme, cursor: Option<(u16, u16)>) -> 
                 if let Some(rc) = run_col.take() {
                     spans.push(Span::new(rc, std::mem::take(&mut run_text), run_color));
                 }
-                spans.push(Span::new(col, text, color));
+                spans.push(Span::new(col, cell.ch.to_string(), color));
                 col += 2;
             } else {
                 if let Some(rc) = run_col {
                     if run_color == color {
-                        run_text.push_str(&text);
+                        run_text.push(cell.ch);
                     } else {
                         spans.push(Span::new(rc, std::mem::take(&mut run_text), run_color));
                         run_col = Some(col);
                         run_color = color;
-                        run_text = text;
+                        run_text.push(cell.ch);
                     }
                 } else {
                     run_col = Some(col);
                     run_color = color;
-                    run_text = text;
+                    run_text.push(cell.ch);
                 }
                 col += 1;
             }

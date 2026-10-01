@@ -4,6 +4,8 @@
 //! crate owns the font system, glyph atlas, and the glyphon text pipeline. It
 //! draws into the same `wgpu` device/queue/surface as egui.
 
+use std::collections::HashMap;
+
 use glyphon::{
     Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache,
     TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
@@ -38,7 +40,8 @@ pub struct TermRenderer {
     atlas: TextAtlas,
     renderer: TextRenderer,
     viewport: Viewport,
-    buffers: Vec<Buffer>,
+    buffers: HashMap<String, Buffer>,
+    layout: Option<(f32, f32, Option<String>)>,
     frames: u64,
 }
 
@@ -94,7 +97,8 @@ impl TermRenderer {
             atlas,
             renderer,
             viewport,
-            buffers: Vec::new(),
+            buffers: HashMap::new(),
+            layout: None,
             frames: 0,
         }
     }
@@ -112,7 +116,7 @@ impl TermRenderer {
         cell_width: f32,
         left: f32,
         top: f32,
-        default_color: (u8, u8, u8),
+        _default_color: (u8, u8, u8),
         family: Option<&str>,
         rows: &[Vec<Span>],
     ) {
@@ -152,55 +156,56 @@ impl TermRenderer {
             bottom: pixels.1 as i32,
         };
 
-        // One buffer per span, positioned at an exact cell column, so wide (CJK)
-        // glyphs whose advance isn't exactly 2 cells can't drift the row.
-        let total: usize = rows.iter().map(|r| r.len()).sum();
-        while self.buffers.len() < total {
-            self.buffers
-                .push(Buffer::new(&mut self.font_system, metrics));
+        // Cache by text, not span index: scrolling and color/cursor changes
+        // must not invalidate shaping. Repeated CJK glyphs share one layout.
+        // Color belongs to TextArea, so it never becomes part of the cache key.
+        let layout = (font_size, line_height, family.map(str::to_owned));
+        if self.layout.as_ref() != Some(&layout) {
+            self.buffers.clear();
+            self.layout = Some(layout);
         }
-
-        let mut positions: Vec<(f32, f32)> = Vec::with_capacity(total);
-        let mut idx = 0usize;
-        for (row_idx, row) in rows.iter().enumerate() {
-            for span in row {
-                let buffer = &mut self.buffers[idx];
-                idx += 1;
-                buffer.set_metrics(&mut self.font_system, metrics);
+        for span in rows.iter().flatten() {
+            if !self.buffers.contains_key(&span.text) {
+                let mut buffer = Buffer::new(&mut self.font_system, metrics);
                 buffer.set_size(&mut self.font_system, None, None);
-                let attrs = Attrs::new().family(fam).color(Color::rgb(
-                    span.color.0,
-                    span.color.1,
-                    span.color.2,
-                ));
-                // `Shaping::Advanced` is required for font fallback: `Basic`
-                // renders glyphs missing from the primary font as tofu.
-                buffer.set_rich_text(
+                // Advanced shaping retains fallback for CJK and symbols.
+                buffer.set_text(
                     &mut self.font_system,
-                    std::iter::once((span.text.as_str(), attrs)),
+                    &span.text,
                     Attrs::new().family(fam),
                     Shaping::Advanced,
                 );
-                positions.push((
-                    left_px + span.col as f32 * cell_px,
-                    top_px + row_idx as f32 * line_px,
-                ));
+                buffer.shape_until_scroll(&mut self.font_system, false);
+                self.buffers.insert(span.text.clone(), buffer);
             }
         }
-
-        let areas: Vec<TextArea> = self
-            .buffers
+        // Only the visible frame is retained. Streaming output cannot grow
+        // this cache indefinitely; keep its allocation bounded after a resize.
+        let visible: std::collections::HashSet<&str> = rows
             .iter()
-            .take(total)
-            .zip(positions.iter())
-            .map(|(buffer, (x, y))| TextArea {
-                buffer,
-                left: *x,
-                top: *y,
-                scale,
-                bounds,
-                default_color: Color::rgb(default_color.0, default_color.1, default_color.2),
-                custom_glyphs: &[],
+            .flatten()
+            .map(|span| span.text.as_str())
+            .collect();
+        self.buffers
+            .retain(|text, _| visible.contains(text.as_str()));
+        if self.buffers.capacity() > self.buffers.len().max(64) * 4 {
+            self.buffers.shrink_to(self.buffers.len().max(64) * 2);
+        }
+
+        let buffers = &self.buffers;
+        let areas: Vec<TextArea> = rows
+            .iter()
+            .enumerate()
+            .flat_map(|(row_idx, row)| {
+                row.iter().map(move |span| TextArea {
+                    buffer: &buffers[&span.text],
+                    left: left_px + span.col as f32 * cell_px,
+                    top: top_px + row_idx as f32 * line_px,
+                    scale,
+                    bounds,
+                    default_color: Color::rgb(span.color.0, span.color.1, span.color.2),
+                    custom_glyphs: &[],
+                })
             })
             .collect();
 
@@ -850,11 +855,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 mod gpu_tests {
     use super::*;
 
-    /// Headless smoke test: render a quad + a glyph row offscreen and assert the
-    /// pipeline produces output. Skips itself when no GPU adapter is available
-    /// (e.g. a CI runner without a driver), so it is safe to run in CI.
-    #[test]
-    fn offscreen_render_smoke() {
+    fn gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
         let Some(adapter) =
             pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
@@ -863,7 +864,7 @@ mod gpu_tests {
                 std::env::var_os("MIAO_REQUIRE_GPU").is_none(),
                 "MIAO_REQUIRE_GPU is set but no wgpu adapter is available"
             );
-            return;
+            return None;
         };
         let Ok((device, queue)) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None))
@@ -872,6 +873,113 @@ mod gpu_tests {
                 std::env::var_os("MIAO_REQUIRE_GPU").is_none(),
                 "MIAO_REQUIRE_GPU is set but no wgpu device could be created"
             );
+            return None;
+        };
+
+        Some((device, queue))
+    }
+
+    #[test]
+    #[ignore = "release GPU performance gate"]
+    fn unchanged_grid_reuses_shaping() {
+        let Some((device, queue)) = gpu() else {
+            return;
+        };
+        let mut renderer = TermRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let mut rows: Vec<Vec<Span>> = (0..50)
+            .map(|row| {
+                let mut spans = vec![Span::new(
+                    0,
+                    format!("row {row:02}: terminal streaming output"),
+                    (255, 255, 255),
+                )];
+                for col in (40..100).step_by(2) {
+                    spans.push(Span::new(col, "中", (180, 200, 220)));
+                }
+                spans
+            })
+            .collect();
+        let prepare = |renderer: &mut TermRenderer, rows: &[Vec<Span>], size| {
+            renderer.prepare(
+                &device,
+                &queue,
+                (1200, 1000),
+                1.0,
+                size,
+                20.0,
+                10.0,
+                0.0,
+                0.0,
+                (255, 255, 255),
+                Some("JetBrains Mono"),
+                rows,
+            );
+        };
+        prepare(&mut renderer, &rows, 14.0);
+        assert_eq!(
+            renderer.buffers.len(),
+            51,
+            "duplicate CJK spans must share layout"
+        );
+        let glyphs = renderer.buffers["中"].lines[0]
+            .layout_opt()
+            .as_ref()
+            .unwrap()
+            .as_ptr();
+        // Moving and recoloring a span should reuse its actual glyph layout.
+        rows[0][1].col += 2;
+        rows[0][1].color = (255, 0, 0);
+        prepare(&mut renderer, &rows, 14.0);
+        assert_eq!(
+            renderer.buffers["中"].lines[0]
+                .layout_opt()
+                .as_ref()
+                .unwrap()
+                .as_ptr(),
+            glyphs
+        );
+
+        let start = std::time::Instant::now();
+        for _ in 0..30 {
+            prepare(&mut renderer, &rows, 14.0);
+        }
+        let cached = start.elapsed();
+        let start = std::time::Instant::now();
+        for _ in 0..30 {
+            renderer.buffers.clear();
+            prepare(&mut renderer, &rows, 14.0);
+        }
+        let cold = start.elapsed();
+        eprintln!("grid prepare: cached={cached:?}, forced reshaping={cold:?}");
+        assert!(cached < cold, "cache must reduce preparation time");
+        // Streaming unique strings and changing font metrics must release old layouts.
+        for i in 0..100 {
+            prepare(
+                &mut renderer,
+                &[vec![Span::new(0, format!("stream {i}"), (255, 255, 255))]],
+                16.0,
+            );
+            assert_eq!(renderer.buffers.len(), 1);
+        }
+        assert!(renderer.buffers.capacity() <= 256);
+        assert_eq!(
+            renderer
+                .buffers
+                .values()
+                .next()
+                .unwrap()
+                .metrics()
+                .font_size,
+            16.0
+        );
+    }
+
+    /// Headless smoke test: render a quad + a glyph row offscreen and assert the
+    /// pipeline produces output. Skips itself when no GPU adapter is available
+    /// (e.g. a CI runner without a driver), so it is safe to run in CI.
+    #[test]
+    fn offscreen_render_smoke() {
+        let Some((device, queue)) = gpu() else {
             return;
         };
 

@@ -260,7 +260,9 @@ impl ATerm {
             return None;
         }
         Some((
-            mode.contains(TermMode::MOUSE_REPORT_CLICK),
+            // Drag and all-motion protocols include button presses/releases;
+            // Alacritty stores these protocols as mutually exclusive bits.
+            mode.intersects(TermMode::MOUSE_MODE),
             mode.contains(TermMode::MOUSE_MOTION),
             mode.contains(TermMode::MOUSE_DRAG),
             mode.contains(TermMode::SGR_MOUSE),
@@ -299,6 +301,22 @@ fn sgr(c: Color, bg: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mouse_tracking_protocols_include_clicks() {
+        for (protocol, motion, drag) in [
+            (1000, false, false),
+            (1002, false, true),
+            (1003, true, false),
+        ] {
+            let mut term = ATerm::new(20, 3, 100);
+            assert_eq!(term.mouse_reporting(), None);
+            term.process(format!("\x1b[?{protocol}h\x1b[?1006h").as_bytes());
+            assert_eq!(term.mouse_reporting(), Some((true, motion, drag, true)));
+            term.process(format!("\x1b[?{protocol}l").as_bytes());
+            assert_eq!(term.mouse_reporting(), None);
+        }
+    }
 
     #[test]
     fn parses_plain_text() {

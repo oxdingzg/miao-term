@@ -87,81 +87,204 @@ impl Segment {
     }
 }
 
-/// Streaming scanner for graphics sequences.
+/// Borrowed stream events. Text and OSC slices are valid only during the
+/// callback; graphics commands own their decoded protocol parameters/payload.
+/// OSC is a notification followed by either Text or Graphics for that sequence.
+pub enum StreamEvent<'a> {
+    Text(&'a [u8]),
+    Graphics(Graphic),
+    Osc(&'a [u8]),
+    CursorReport,
+}
+
+/// Streaming scanner for graphics sequences and host-side control notifications.
+/// Only an incomplete control sequence is buffered. Ordinary output is borrowed
+/// directly, and each new fragment of a pending sequence is scanned once.
 #[derive(Default)]
 pub struct Scanner {
     buf: Vec<u8>,
+    #[cfg(test)]
+    inspected: usize,
 }
+
+const RETAINED_BUFFER_BYTES: usize = 64 * 1024;
+const CURSOR_QUERY: &[u8] = b"\x1b[6n";
 
 impl Scanner {
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Feed a chunk of PTY output; returns the segments it completed.
+    /// Owned compatibility API. Hosts should use `feed_with` to avoid copying
+    /// ordinary terminal output and to receive OSC/DSR notifications in order.
     pub fn feed(&mut self, bytes: &[u8]) -> Vec<Segment> {
-        self.buf.extend_from_slice(bytes);
         let mut out = Vec::new();
-        let mut i = 0usize;
-        while i < self.buf.len() {
-            // Find the next introducer: ESC P (DCS), ESC _ (APC), ESC ] (OSC).
-            let intro = find_intro(&self.buf[i..]).map(|k| i + k);
-            let Some(start) = intro else {
-                break;
-            };
-            let esc = self.buf[start];
-            let tag = self.buf[start + 1];
-            let is_osc = tag == b']';
-            let body_start = start + 2;
-            let Some((end, term_len)) = find_terminator(&self.buf, body_start, is_osc) else {
-                // Incomplete: hold from `start` (bounded).
-                if start > i {
-                    out.push(Segment::Text(self.buf[i..start].to_vec()));
-                }
-                if self.buf.len() - start > MAX_SEQUENCE {
-                    // Malicious/unterminated: give it back as text.
-                    out.push(Segment::Text(self.buf[start..].to_vec()));
-                    self.buf.clear();
-                    return out;
-                }
-                self.buf.drain(..start);
-                return out;
-            };
-            let payload = &self.buf[body_start..end];
-            match classify(payload) {
-                Some(g) => {
-                    if start > i {
-                        out.push(Segment::Text(self.buf[i..start].to_vec()));
-                    }
-                    out.push(Segment::Graphics(g));
-                }
-                None => {
-                    // Unknown sequence: keep as text so other features work.
-                    out.push(Segment::Text(self.buf[i..end + term_len].to_vec()));
-                }
-            }
-            i = end + term_len;
-            let _ = esc;
-        }
-        if i < self.buf.len() {
-            out.push(Segment::Text(self.buf[i..].to_vec()));
-        }
-        self.buf.clear();
+        self.feed_with(bytes, |event| match event {
+            StreamEvent::Text(text) => out.push(Segment::Text(text.to_vec())),
+            StreamEvent::Graphics(graphic) => out.push(Segment::Graphics(graphic)),
+            StreamEvent::CursorReport => out.push(Segment::Text(CURSOR_QUERY.to_vec())),
+            StreamEvent::Osc(_) => {}
+        });
         out
+    }
+
+    /// Visit complete events in stream order without allocating for plain text.
+    pub fn feed_with(&mut self, mut bytes: &[u8], mut emit: impl FnMut(StreamEvent<'_>)) {
+        while !bytes.is_empty() {
+            if !self.buf.is_empty() {
+                // A trailing ESC may be the introducer of a split sequence.
+                if self.buf.len() == 1 {
+                    if matches!(bytes[0], b'P' | b'_' | b']' | b'[') {
+                        self.buf.push(bytes[0]);
+                        bytes = &bytes[1..];
+                    } else {
+                        emit(StreamEvent::Text(&self.buf));
+                        self.reset();
+                        continue;
+                    }
+                }
+                if self.buf[1] == b'[' {
+                    // Only DSR is intercepted; other CSI stays in the VT parser.
+                    while self.buf.len() < CURSOR_QUERY.len() && !bytes.is_empty() {
+                        if bytes[0] != CURSOR_QUERY[self.buf.len()] {
+                            break;
+                        }
+                        self.buf.push(bytes[0]);
+                        bytes = &bytes[1..];
+                    }
+                    if self.buf.len() == CURSOR_QUERY.len() {
+                        emit(StreamEvent::CursorReport);
+                        self.reset();
+                    } else if !bytes.is_empty() {
+                        emit(StreamEvent::Text(&self.buf));
+                        self.reset();
+                    }
+                    continue;
+                }
+                // Search only the new bytes, including ST split at ESC | '\'.
+                // Never rescan the accumulated image payload.
+                let is_osc = self.buf[1] == b']';
+                let terminator = if self.buf.last() == Some(&0x1b) && bytes.first() == Some(&b'\\')
+                {
+                    Some((0, 1))
+                } else {
+                    find_terminator(bytes, 0, is_osc)
+                };
+                #[cfg(test)]
+                {
+                    self.inspected += terminator.map_or(bytes.len(), |(end, len)| end + len);
+                }
+                if let Some((end, len)) = terminator {
+                    if self.buf.len().saturating_add(end + len) <= MAX_SEQUENCE {
+                        self.append(&bytes[..end + len]);
+                        emit_sequence(&self.buf, &mut emit);
+                    } else {
+                        emit(StreamEvent::Text(&self.buf));
+                        emit(StreamEvent::Text(&bytes[..end + len]));
+                    }
+                    self.reset();
+                    bytes = &bytes[end + len..];
+                } else {
+                    if self.buf.len().saturating_add(bytes.len()) > MAX_SEQUENCE {
+                        emit(StreamEvent::Text(&self.buf));
+                        emit(StreamEvent::Text(bytes));
+                        self.reset();
+                    } else {
+                        self.append(bytes);
+                    }
+                    return;
+                }
+                continue;
+            }
+
+            let Some(start) = find_intro(bytes) else {
+                emit(StreamEvent::Text(bytes));
+                return;
+            };
+            if start > 0 {
+                emit(StreamEvent::Text(&bytes[..start]));
+                bytes = &bytes[start..];
+            }
+            if bytes.len() == 1 {
+                self.buf.push(0x1b);
+                return;
+            }
+            if bytes[1] == b'[' {
+                if bytes.len() >= CURSOR_QUERY.len() {
+                    emit(StreamEvent::CursorReport);
+                    bytes = &bytes[CURSOR_QUERY.len()..];
+                } else {
+                    self.append(bytes);
+                    return;
+                }
+                continue;
+            }
+            if let Some((end, len)) = find_terminator(bytes, 2, bytes[1] == b']') {
+                if end + len <= MAX_SEQUENCE {
+                    emit_sequence(&bytes[..end + len], &mut emit);
+                } else {
+                    emit(StreamEvent::Text(&bytes[..end + len]));
+                }
+                bytes = &bytes[end + len..];
+            } else {
+                #[cfg(test)]
+                {
+                    self.inspected += bytes.len();
+                }
+                if bytes.len() > MAX_SEQUENCE {
+                    emit(StreamEvent::Text(bytes));
+                } else {
+                    self.append(bytes);
+                }
+                return;
+            }
+        }
+    }
+
+    fn append(&mut self, bytes: &[u8]) {
+        let needed = self.buf.len() + bytes.len();
+        if needed > self.buf.capacity() {
+            let capacity = needed
+                .max(self.buf.capacity().saturating_mul(2))
+                .min(MAX_SEQUENCE);
+            self.buf.reserve_exact(capacity - self.buf.len());
+        }
+        self.buf.extend_from_slice(bytes);
+    }
+
+    fn reset(&mut self) {
+        if self.buf.capacity() > RETAINED_BUFFER_BYTES {
+            self.buf = Vec::new();
+        } else {
+            self.buf.clear();
+        }
     }
 }
 
-/// Offset of the next `ESC P` / `ESC _` / `ESC ]` in `s`.
+fn emit_sequence(sequence: &[u8], emit: &mut impl FnMut(StreamEvent<'_>)) {
+    let terminator_len = if sequence.ends_with(b"\x1b\\") { 2 } else { 1 };
+    let payload = &sequence[2..sequence.len() - terminator_len];
+    if sequence[1] == b']' {
+        emit(StreamEvent::Osc(payload));
+    }
+    match classify(payload) {
+        Some(graphic) => emit(StreamEvent::Graphics(graphic)),
+        None => emit(StreamEvent::Text(sequence)),
+    }
+}
+
+/// Find a supported introducer, a partial DSR query, or a trailing ESC.
 fn find_intro(s: &[u8]) -> Option<usize> {
-    let mut k = 0;
-    while k + 1 < s.len() {
-        if s[k] == 0x1b {
-            match s[k + 1] {
-                b'P' | b'_' | b']' => return Some(k),
-                _ => {}
+    let mut from = 0;
+    while let Some(offset) = memchr::memchr(0x1b, &s[from..]) {
+        let k = from + offset;
+        match s.get(k + 1) {
+            None | Some(b'P' | b'_' | b']') => return Some(k),
+            Some(b'[') if s[k..].starts_with(CURSOR_QUERY) || CURSOR_QUERY.starts_with(&s[k..]) => {
+                return Some(k);
             }
+            _ => from = k + 1,
         }
-        k += 1;
     }
     None
 }
@@ -222,16 +345,26 @@ fn split_once(s: &[u8], sep: u8) -> Option<(&[u8], &[u8])> {
 
 /// Decode an iTerm2 base64 payload (raw PNG/JPEG/etc.).
 pub fn decode_iterm2(data: &[u8], max_pixels: usize) -> Option<Image> {
-    use base64::Engine;
-    let text: Vec<u8> = data
-        .iter()
-        .copied()
-        .filter(|b| !b.is_ascii_whitespace())
-        .collect();
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(text)
-        .ok()?;
+    let bytes = decode_base64(data)?;
     decode_png(&bytes, max_pixels)
+}
+
+/// Borrow ordinary base64; allocate a sanitized copy only when needed.
+pub(crate) fn decode_base64(data: &[u8]) -> Option<Vec<u8>> {
+    use base64::Engine;
+    let text = if data.iter().any(u8::is_ascii_whitespace) {
+        std::borrow::Cow::Owned(
+            data.iter()
+                .copied()
+                .filter(|b| !b.is_ascii_whitespace())
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        std::borrow::Cow::Borrowed(data)
+    };
+    base64::engine::general_purpose::STANDARD
+        .decode(text.as_ref())
+        .ok()
 }
 
 /// Decode a PNG (format 100) or raw RGB/RGBA (formats 24/32) with optional
@@ -245,13 +378,20 @@ pub fn decode_bitmap(
     let raw = if compressed {
         use std::io::Read;
         let mut out = Vec::new();
+        // PNG container overhead is independent of its pixel count (even a
+        // tiny PNG can exceed pixels*4+64). Bound the encoded container separately.
+        let limit = if format == 100 {
+            MAX_SEQUENCE
+        } else {
+            max_pixels.saturating_mul(4).saturating_add(64)
+        };
         flate2::read::ZlibDecoder::new(data)
-            .take((max_pixels * 4 + 64) as u64)
+            .take(limit as u64)
             .read_to_end(&mut out)
             .ok()?;
-        out
+        std::borrow::Cow::Owned(out)
     } else {
-        data.to_vec()
+        std::borrow::Cow::Borrowed(data)
     };
     match format {
         100 => decode_png(&raw, max_pixels),
@@ -273,11 +413,16 @@ pub fn rgba_from_raw(raw: &[u8], channels: usize, max_pixels: usize) -> Option<I
     if pixels == 0 || pixels > max_pixels {
         return None;
     }
-    let mut rgba = Vec::with_capacity(pixels * 4);
-    for px in raw.chunks_exact(channels) {
-        rgba.extend_from_slice(&px[..3]);
-        rgba.push(if channels == 4 { px[3] } else { 255 });
-    }
+    let rgba = if channels == 4 {
+        raw[..pixels * 4].to_vec()
+    } else {
+        let mut rgba = Vec::with_capacity(pixels * 4);
+        for px in raw.chunks_exact(channels) {
+            rgba.extend_from_slice(&px[..3]);
+            rgba.push(255);
+        }
+        rgba
+    };
     Some(Image {
         width: pixels as u32,
         height: 1,
@@ -286,12 +431,21 @@ pub fn rgba_from_raw(raw: &[u8], channels: usize, max_pixels: usize) -> Option<I
 }
 
 fn decode_png(bytes: &[u8], max_pixels: usize) -> Option<Image> {
-    let img = image::load_from_memory_with_format(bytes, image::ImageFormat::Png).ok()?;
-    let rgba = img.to_rgba8();
-    let (w, h) = rgba.dimensions();
-    if w as usize * h as usize > max_pixels {
+    use image::ImageDecoder;
+    let mut decoder = image::codecs::png::PngDecoder::new(std::io::Cursor::new(bytes)).ok()?;
+    let (w, h) = decoder.dimensions();
+    let pixels = (w as usize).checked_mul(h as usize)?;
+    // Check geometry before decoding/allocating pixels, not after the image has
+    // already expanded. PNG can have 16-bit channels and decoder work buffers.
+    if pixels == 0 || pixels > max_pixels {
         return None;
     }
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(max_pixels.saturating_mul(16) as u64);
+    decoder.set_limits(limits).ok()?;
+    let rgba = image::DynamicImage::from_decoder(decoder)
+        .ok()?
+        .into_rgba8();
     Some(Image {
         width: w,
         height: h,
@@ -302,6 +456,133 @@ fn decode_png(bytes: &[u8], max_pixels: usize) -> Option<Image> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn png_decoding_preserves_pixels_and_enforces_geometry_budget() {
+        use image::ImageEncoder;
+        let pixels = [255u8, 0, 0, 255].repeat(4);
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(&pixels, 2, 2, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        assert!(decode_png(&png, 3).is_none());
+        assert_eq!(decode_png(&png, 4).unwrap().rgba, pixels);
+        let mut wrapped = Vec::new();
+        use std::io::Write;
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(&mut wrapped, flate2::Compression::default());
+        encoder.write_all(&png).unwrap();
+        encoder.finish().unwrap();
+        assert_eq!(decode_bitmap(&wrapped, 100, true, 4).unwrap().rgba, pixels);
+    }
+
+    #[derive(Debug, PartialEq)]
+    enum OwnedEvent {
+        Text(Vec<u8>),
+        Graphics(Graphic),
+        Osc(Vec<u8>),
+        CursorReport,
+    }
+
+    fn events(bytes: &[u8], chunk_size: usize) -> Vec<OwnedEvent> {
+        let mut scanner = Scanner::new();
+        let mut out = Vec::new();
+        for chunk in bytes.chunks(chunk_size) {
+            scanner.feed_with(chunk, |event| match event {
+                StreamEvent::Text(text) => {
+                    if let Some(OwnedEvent::Text(previous)) = out.last_mut() {
+                        previous.extend_from_slice(text);
+                    } else {
+                        out.push(OwnedEvent::Text(text.to_vec()));
+                    }
+                }
+                StreamEvent::Graphics(g) => out.push(OwnedEvent::Graphics(g)),
+                StreamEvent::Osc(payload) => out.push(OwnedEvent::Osc(payload.to_vec())),
+                StreamEvent::CursorReport => out.push(OwnedEvent::CursorReport),
+            });
+        }
+        out
+    }
+
+    #[test]
+    fn stream_events_are_independent_of_every_chunk_boundary() {
+        let mixed = b"text\x1b[31mred\x1b[0m\x1b[6n\x1b]2;title\x1b\\\x1b]7;file://localhost/tmp\x07\x1bPq~\x1b\\\x1b_Ga=d,d=a\x1b\\\x1b]1337;File=:AAAA\x9c\x1bPunknown\x1b\\\x1b[6X\x1b[?6n\x1b\x1b[6nend";
+        let expected = events(mixed, mixed.len());
+        for size in 1..=mixed.len() {
+            assert_eq!(events(mixed, size), expected, "chunk size {size}");
+        }
+        assert_eq!(
+            expected
+                .iter()
+                .filter(|e| **e == OwnedEvent::CursorReport)
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn ordinary_text_is_borrowed_and_graphics_payload_is_not_rescanned() {
+        let text = b"normal \x1b[32mcolored\x1b[0m output";
+        let mut scanner = Scanner::new();
+        scanner.feed_with(text, |event| match event {
+            StreamEvent::Text(borrowed) => assert_eq!(borrowed.as_ptr(), text.as_ptr()),
+            _ => panic!("unexpected control event"),
+        });
+        assert_eq!(scanner.buf.capacity(), 0);
+        scanner.feed_with(b"\x1b]1337;File=:", |_| {});
+        let chunk = [b'A'; 512];
+        for _ in 0..2048 {
+            scanner.feed_with(&chunk, |_| panic!("sequence must remain buffered"));
+        }
+        scanner.feed_with(b"\x1b", |_| {});
+        scanner.feed_with(b"\\", |_| {});
+        assert!(
+            scanner.inspected <= (1 << 20) + 32,
+            "fragments must be scanned only once"
+        );
+        assert!(scanner.buf.capacity() <= RETAINED_BUFFER_BYTES);
+    }
+
+    #[test]
+    fn unterminated_sequence_limit_releases_high_water_buffer() {
+        let mut scanner = Scanner::new();
+        scanner.buf = b"\x1b]1337;File=:".to_vec();
+        scanner.buf.resize(MAX_SEQUENCE, b'A');
+        let mut returned = 0;
+        scanner.feed_with(b"A", |event| match event {
+            StreamEvent::Text(text) => returned += text.len(),
+            _ => panic!("oversized sequence must be returned as text"),
+        });
+        assert_eq!(returned, MAX_SEQUENCE + 1);
+        assert_eq!(scanner.buf.capacity(), 0);
+        assert_eq!(
+            events(b"after overflow", 1),
+            vec![OwnedEvent::Text(b"after overflow".to_vec())]
+        );
+    }
+
+    #[test]
+    #[ignore = "release fragmented scanner benchmark"]
+    fn fragmented_sequence_scaling() {
+        for size in [1 << 20, 2 << 20, 4 << 20] {
+            let mut scanner = Scanner::new();
+            let mut sequence = b"\x1b]1337;File=:".to_vec();
+            sequence.resize(size, b'A');
+            sequence.extend_from_slice(b"\x1b\\");
+            let start = std::time::Instant::now();
+            for chunk in sequence.chunks(512) {
+                std::hint::black_box(scanner.feed(chunk));
+            }
+            println!(
+                "fragmented sequence {} MiB, 512-byte chunks: {:.3} ms, retained capacity {} bytes",
+                size >> 20,
+                start.elapsed().as_secs_f64() * 1000.0,
+                scanner.buf.capacity()
+            );
+            assert!(scanner.inspected <= sequence.len() + 32);
+            assert!(scanner.buf.capacity() <= RETAINED_BUFFER_BYTES);
+        }
+    }
 
     #[test]
     fn passes_plain_text_through() {

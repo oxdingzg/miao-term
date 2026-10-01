@@ -15,3 +15,7 @@ minisign.key
 *.p12
 *.pfx
 .gstack/
+
+# Python verification scripts
+__pycache__/
+*.py[cod]

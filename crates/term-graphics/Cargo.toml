@@ -11,3 +11,4 @@ repository.workspace = true
 base64 = "0.22"
 flate2 = "1.1"
 image = { version = "0.25", default-features = false, features = ["png"] }
+memchr = "2"

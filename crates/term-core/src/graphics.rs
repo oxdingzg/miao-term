@@ -13,6 +13,10 @@ use miao_term_graphics as gfx;
 
 /// Decoded-pixel cap per image (also bounds total memory per image).
 pub const DEFAULT_MAX_PIXELS: usize = 16_000_000;
+/// Total retained decoded RGBA bytes, including animation frames, per terminal.
+pub const DEFAULT_MAX_IMAGE_BYTES: usize = 128 * 1024 * 1024;
+const MAX_PARTIAL_TRANSFERS: usize = 16;
+const MAX_ANIMATION_FRAMES: usize = 256;
 
 #[derive(Clone)]
 pub struct PlacedImage {
@@ -55,21 +59,33 @@ struct Partial {
 }
 
 /// The graphics state for one terminal.
-#[derive(Default)]
 pub struct GraphicsLayer {
     pub images: Vec<PlacedImage>,
     next_id: u64,
     partial: HashMap<u64, Partial>,
     pub max_pixels: usize,
+    pub max_image_bytes: usize,
+    pub max_partial_bytes: usize,
     last_total: usize,
+}
+
+impl Default for GraphicsLayer {
+    fn default() -> Self {
+        Self {
+            images: Vec::new(),
+            next_id: 0,
+            partial: HashMap::new(),
+            max_pixels: DEFAULT_MAX_PIXELS,
+            max_image_bytes: DEFAULT_MAX_IMAGE_BYTES,
+            max_partial_bytes: gfx::MAX_SEQUENCE,
+            last_total: 0,
+        }
+    }
 }
 
 impl GraphicsLayer {
     pub fn new() -> Self {
-        Self {
-            max_pixels: DEFAULT_MAX_PIXELS,
-            ..Default::default()
-        }
+        Self::default()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -103,12 +119,30 @@ impl GraphicsLayer {
             anim_start: std::time::Instant::now(),
             loops: None,
         });
-        // Keep the most recent images only, to bound memory.
-        if self.images.len() > 256 {
-            let drop = self.images.len() - 256;
-            self.images.drain(..drop);
-        }
+        self.trim_images();
         id
+    }
+
+    /// Retained pixel-buffer capacity (frame 0 and `image` share one Arc).
+    pub fn decoded_bytes(&self) -> usize {
+        self.images.iter().map(placed_bytes).sum()
+    }
+
+    /// Allocated capacity of incomplete Kitty transfers, across all ids.
+    pub fn pending_bytes(&self) -> usize {
+        self.partial.values().map(|p| p.data.capacity()).sum()
+    }
+
+    fn trim_images(&mut self) {
+        let mut bytes = self.decoded_bytes();
+        let mut drop = 0;
+        while self.images.len() - drop > 256 || bytes > self.max_image_bytes {
+            bytes -= placed_bytes(&self.images[drop]);
+            drop += 1;
+        }
+        // Evict whole oldest placements: dropping individual animation frames
+        // would silently renumber the protocol's frame sequence.
+        self.images.drain(..drop);
     }
 
     pub fn delete_id(&mut self, id: u64) {
@@ -184,10 +218,32 @@ impl GraphicsLayer {
             }
             return true;
         }
-        // Accumulate chunks (`m=1` means more follow). A new action restarts.
+        if cmd.action == 'f'
+            && self
+                .images
+                .iter()
+                .any(|image| image.kitty_id == cmd.id && image.frames.len() >= MAX_ANIMATION_FRAMES)
+        {
+            self.partial.remove(&key);
+            return false;
+        }
+        // Bound the aggregate capacity, not just one sender's payload. Many
+        // image ids and animation frames must not multiply a per-image cap.
+        if !self.partial.contains_key(&key) && self.partial.len() >= MAX_PARTIAL_TRANSFERS {
+            return false;
+        }
+        let other_bytes: usize = self
+            .partial
+            .iter()
+            .filter(|(id, _)| **id != key)
+            .map(|(_, p)| p.data.capacity())
+            .sum();
+        let limit = self.max_partial_bytes.saturating_sub(other_bytes);
         let p = self.partial.entry(key).or_default();
-        if cmd.more || p.data.is_empty() || p.action != cmd.action {
-            p.data.clear();
+        if p.data.is_empty() || p.action != cmd.action {
+            if p.action != cmd.action {
+                p.data = Vec::new();
+            }
             p.action = cmd.action;
             p.id = cmd.id;
             p.cols = cmd.cols.or(p.cols);
@@ -200,12 +256,17 @@ impl GraphicsLayer {
             p.x = cmd.x;
             p.y = cmd.y;
         }
+        let needed = p.data.len().saturating_add(cmd.data.len());
+        if needed > limit {
+            self.partial.remove(&key);
+            return false;
+        }
+        if needed > p.data.capacity() {
+            let capacity = needed.max(p.data.capacity().saturating_mul(2)).min(limit);
+            p.data.reserve_exact(capacity - p.data.len());
+        }
         p.data.extend_from_slice(&cmd.data);
         if cmd.more {
-            // Bound a partial in case the sender never finishes.
-            if p.data.len() > gfx::MAX_SEQUENCE {
-                self.partial.remove(&key);
-            }
             return false;
         }
         let Some(p) = self.partial.remove(&key) else {
@@ -229,6 +290,7 @@ impl GraphicsLayer {
                         pl.frames.push(Arc::new(img));
                         pl.anim_start = std::time::Instant::now();
                     }
+                    self.trim_images();
                 } else {
                     let our = self.place(img, anchor, col, p.cols, p.rows, p.x, p.y, p.z);
                     if let Some(pl) = self.images.iter_mut().find(|i| i.id == our) {
@@ -239,6 +301,14 @@ impl GraphicsLayer {
             }
             None => false,
         }
+    }
+}
+
+fn placed_bytes(image: &PlacedImage) -> usize {
+    if image.frames.is_empty() {
+        image.image.rgba.capacity()
+    } else {
+        image.frames.iter().map(|frame| frame.rgba.capacity()).sum()
     }
 }
 
@@ -262,6 +332,130 @@ mod tests {
             height: h,
             rgba: vec![255u8; (w * h * 4) as usize],
         }
+    }
+
+    #[test]
+    fn decoded_budget_evicts_oldest_placements_and_counts_frames_once() {
+        let mut layer = GraphicsLayer::new();
+        layer.max_image_bytes = 12;
+        let oldest = layer.place(img(1, 1), 0, 0, None, None, 0, 0, 0);
+        let released = Arc::downgrade(&layer.images[0].image);
+        layer.kitty(gfx::kitty::parse(b"a=T,f=24,s=1x1,i=9;AAAA"), 0, 0, 0);
+        layer.kitty(gfx::kitty::parse(b"a=f,f=24,s=1x1,i=9;AAAA"), 0, 0, 0);
+        assert_eq!(
+            layer.decoded_bytes(),
+            12,
+            "frame 0 shares the image allocation"
+        );
+        layer.place(img(1, 1), 0, 0, None, None, 0, 0, 0);
+        assert_eq!(layer.decoded_bytes(), 12);
+        assert!(layer.images.iter().all(|im| im.id != oldest));
+        assert!(
+            released.upgrade().is_none(),
+            "eviction must actually release pixels"
+        );
+        assert_eq!(
+            layer.images[0].frames.len(),
+            2,
+            "do not renumber retained frames"
+        );
+        layer.clear();
+        assert_eq!(layer.decoded_bytes(), 0);
+    }
+
+    #[test]
+    fn decoded_budget_counts_unused_capacity_and_frame_metadata_is_bounded() {
+        let mut layer = GraphicsLayer::new();
+        layer.max_image_bytes = 12;
+        let mut pixels = Vec::with_capacity(1024);
+        pixels.extend_from_slice(&[0, 0, 0, 255]);
+        layer.place(
+            gfx::Image {
+                width: 1,
+                height: 1,
+                rgba: pixels,
+            },
+            0,
+            0,
+            None,
+            None,
+            0,
+            0,
+            0,
+        );
+        assert!(
+            layer.images.is_empty(),
+            "unused pixel capacity must count toward the budget"
+        );
+        layer.max_image_bytes = DEFAULT_MAX_IMAGE_BYTES;
+        layer.kitty(gfx::kitty::parse(b"a=T,f=24,s=1x1,i=1;AAAA"), 0, 0, 0);
+        for _ in 0..MAX_ANIMATION_FRAMES + 10 {
+            layer.kitty(gfx::kitty::parse(b"a=f,f=24,s=1x1,i=1;AAAA"), 0, 0, 0);
+        }
+        assert_eq!(layer.images[0].frames.len(), MAX_ANIMATION_FRAMES);
+        assert_eq!(layer.pending_bytes(), 0);
+    }
+
+    #[test]
+    fn one_animation_cannot_bypass_the_total_decoded_budget() {
+        let mut layer = GraphicsLayer::new();
+        layer.max_image_bytes = 12;
+        layer.kitty(gfx::kitty::parse(b"a=T,f=24,s=1x1,i=1;AAAA"), 0, 0, 0);
+        for _ in 0..3 {
+            layer.kitty(gfx::kitty::parse(b"a=f,f=24,s=1x1,i=1;AAAA"), 0, 0, 0);
+            assert!(layer.decoded_bytes() <= 12);
+        }
+        assert!(
+            layer.images.is_empty(),
+            "an oversized animation is evicted whole"
+        );
+    }
+
+    #[test]
+    fn partial_budget_covers_all_ids_and_allocated_capacity() {
+        let mut layer = GraphicsLayer::new();
+        layer.max_partial_bytes = 24;
+        for command in [
+            b"a=T,i=1,m=1;AAAAAAAAAA".as_slice(),
+            b"a=T,i=2,m=1;AAAAAAAAAA",
+            b"a=T,i=1,m=1;AAAA",
+        ] {
+            assert!(!layer.kitty(gfx::kitty::parse(command), 0, 0, 0));
+            assert!(layer.pending_bytes() <= 24);
+        }
+        assert_eq!(
+            layer.partial[&1].data.len(),
+            14,
+            "m=1 continuation must append"
+        );
+        layer.kitty(gfx::kitty::parse(b"a=T,i=1,m=1;A"), 0, 0, 0);
+        assert!(
+            !layer.partial.contains_key(&1),
+            "over-budget transfer is discarded"
+        );
+        assert_eq!(layer.pending_bytes(), 10);
+        layer.clear();
+        assert_eq!(layer.pending_bytes(), 0);
+        for id in 0..32 {
+            layer.kitty(
+                gfx::kitty::parse(format!("a=T,i={id},m=1;A").as_bytes()),
+                0,
+                0,
+                0,
+            );
+        }
+        assert_eq!(layer.partial.len(), MAX_PARTIAL_TRANSFERS);
+    }
+
+    #[test]
+    fn three_or_more_kitty_chunks_preserve_every_payload_fragment() {
+        let mut layer = GraphicsLayer::new();
+        for command in [b"a=T,f=24,s=1x1,m=1;A".as_slice(), b"a=T,m=1;A"] {
+            assert!(!layer.kitty(gfx::kitty::parse(command), 0, 0, 0));
+        }
+        assert!(layer.kitty(gfx::kitty::parse(b"a=T,m=0;AA"), 0, 0, 0));
+        assert_eq!(layer.images[0].image.rgba, [0, 0, 0, 255]);
+        assert_eq!(layer.pending_bytes(), 0);
     }
 
     #[test]

@@ -55,6 +55,12 @@ const CARD_MARGIN: f32 = 6.0;
 const CARD_RADIUS: f32 = 9.0;
 const CARD_PAD: f32 = 8.0;
 const BLINK: Duration = Duration::from_millis(530);
+const IMAGE_FRAME_MS: u64 = 100;
+
+fn next_image_frame(start: Instant, now: Instant) -> Instant {
+    let phase = (now.duration_since(start).as_millis() % u128::from(IMAGE_FRAME_MS)) as u64;
+    now + Duration::from_millis(IMAGE_FRAME_MS - phase)
+}
 
 /// Whether the app menu belongs in the OS menu bar: macOS, and only from inside
 /// an app bundle — that is where the application icon lives that AppKit's about
@@ -460,6 +466,7 @@ struct State {
     focused: bool,
     cursor_on: bool,
     last_blink: Instant,
+    image_wake: Option<Instant>,
     start: Instant,
     shot_now: bool,
     egui_ctx: egui::Context,
@@ -1488,10 +1495,10 @@ impl State {
             .unwrap_or(0);
         let mut draws: Vec<PaneDraw> = Vec::new();
         let mut image_quads: Vec<(u64, i32, u32, ImageInstance)> = Vec::new();
-        let mut image_uploads: Vec<(u64, Arc<miao_term_core::graphics::PlacedImage>, usize)> =
-            Vec::new();
+        let mut image_uploads = Vec::new();
         let mut image_keep: std::collections::HashSet<u64> = std::collections::HashSet::new();
-        let mut animating = false;
+        let mut image_wake: Option<Instant> = None;
+        let image_now = Instant::now();
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
             for (pane_idx, (id, r)) in rects.iter().enumerate() {
                 let Some(pane) = tab.panes.iter_mut().find(|p| &p.id == id) else {
@@ -1621,15 +1628,15 @@ impl State {
                     let py1 = oy + inner.h * scale;
                     for im in pane.term.graphics().images.iter() {
                         let fi = if im.animating && im.frames.len() > 1 {
-                            animating = true;
-                            (im.anim_start.elapsed().as_millis() / 100) as usize % im.frames.len()
+                            (image_now.duration_since(im.anim_start).as_millis()
+                                / u128::from(IMAGE_FRAME_MS)) as usize
+                                % im.frames.len()
                         } else {
                             0
                         };
                         let frame = &im.frames[fi.min(im.frames.len().saturating_sub(1))];
                         let key = miao_term_core::graphics::image_key(id, im.id, fi);
                         image_keep.insert(key);
-                        image_uploads.push((key, Arc::new(im.clone()), fi));
                         let w = frame.width as f32;
                         let h = frame.height as f32;
                         let bx = ox + im.col as f32 * cw;
@@ -1647,6 +1654,13 @@ impl State {
                         };
                         if x1 < ox || y1 < oy || x0 > px1 || y0 > py1 {
                             continue;
+                        }
+                        if im.animating && im.frames.len() > 1 {
+                            let at = next_image_frame(im.anim_start, image_now);
+                            image_wake = Some(image_wake.map_or(at, |previous| previous.min(at)));
+                        }
+                        if !self.images.has(key) {
+                            image_uploads.push((key, Arc::clone(frame)));
                         }
                         image_quads.push((
                             key,
@@ -1697,23 +1711,19 @@ impl State {
         }
 
         // Upload any new inline images, drop textures for images that are gone.
-        for (key, p, fi) in &image_uploads {
-            if !self.images.has(*key) {
-                if let Some(frame) = p.frames.get(*fi) {
-                    self.images.upload(
-                        &self.device,
-                        &self.queue,
-                        *key,
-                        frame.width,
-                        frame.height,
-                        &frame.rgba,
-                    );
-                }
-            }
+        for (key, frame) in &image_uploads {
+            self.images.upload(
+                &self.device,
+                &self.queue,
+                *key,
+                frame.width,
+                frame.height,
+                &frame.rgba,
+            );
         }
-        if animating {
-            self.window.request_redraw();
-        }
+        // Only visible animations schedule a redraw, at the next actual frame
+        // change rather than continuously at the display's refresh rate.
+        self.image_wake = image_wake;
         self.images.retain(&image_keep);
 
         // GPU: quads (all panes) then per-pane glyphs.
@@ -4521,6 +4531,7 @@ impl ApplicationHandler<HostEvent> for Host {
             focused: false,
             cursor_on: true,
             last_blink: Instant::now(),
+            image_wake: None,
             start: Instant::now(),
             shot_now: false,
             egui_ctx,
@@ -4589,6 +4600,14 @@ impl ApplicationHandler<HostEvent> for Host {
                 state.window.request_redraw();
             }
             let mut wake_at = Instant::now() + Duration::from_millis(500);
+            if let Some(at) = state.image_wake {
+                if Instant::now() >= at {
+                    state.image_wake = None;
+                    state.window.request_redraw();
+                } else {
+                    wake_at = wake_at.min(at);
+                }
+            }
             // Launches forwarded by later processes (ADR 0019).
             for line in miao_term_ui::launch::drain_inbox() {
                 let intent = miao_term_ui::launch::Intent::decode(&line);
@@ -6006,6 +6025,17 @@ impl chrome::Chrome for State {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn image_redraw_deadlines_follow_frame_boundaries() {
+        let start = Instant::now();
+        for (elapsed, deadline) in [(0, 100), (99, 100), (100, 200), (235, 300)] {
+            assert_eq!(
+                next_image_frame(start, start + Duration::from_millis(elapsed)),
+                start + Duration::from_millis(deadline)
+            );
+        }
+    }
+
     #[test]
     fn terminal_clipboard_shortcut_preserves_application_control_v_on_macos() {
         use super::{input::KeyKind, terminal_paste_shortcut};
