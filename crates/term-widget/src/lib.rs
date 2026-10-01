@@ -34,6 +34,8 @@ enum HostEvent {
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
+#[cfg(target_os = "macos")]
+mod macos_url;
 mod session;
 
 #[derive(Debug)]
@@ -269,6 +271,13 @@ pub fn run(title: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
     let event_loop = EventLoop::<HostEvent>::with_user_event().build()?;
     event_loop.set_control_flow(ControlFlow::Wait);
     let proxy = event_loop.create_proxy();
+    #[cfg(target_os = "macos")]
+    {
+        let proxy = proxy.clone();
+        macos_url::install(move || {
+            let _ = proxy.send_event(HostEvent::Wake);
+        });
+    }
     // Let the control plane wake the loop, so `mtty-cli` commands apply
     // immediately even while the window is idle or unfocused.
     {
@@ -303,6 +312,16 @@ struct Pane {
     id: String,
     term: Terminal,
     scroll: usize,
+    /// A restored ssh session waiting for Enter to reconnect (the command).
+    reconnect: Option<String>,
+}
+
+/// Input for a pane that offers to reconnect: Enter becomes the ssh command;
+/// anything else means the user wants the local shell, so the offer ends and
+/// the input passes through unchanged.
+fn reconnect_input(pending: &mut Option<String>, bytes: &[u8]) -> Option<Vec<u8>> {
+    let command = pending.take()?;
+    (bytes == b"\r").then(|| format!("{command}\r").into_bytes())
 }
 
 struct Tab {
@@ -312,6 +331,8 @@ struct Tab {
     title: String,
     /// Opened as an ssh session (shows a server icon).
     ssh: bool,
+    /// The ssh target as the user typed it, to reconnect after a restore.
+    ssh_target: Option<String>,
     /// Optional short prefix shown before the tab title.
     prefix: Option<String>,
     /// A short user marker appended to the tab title (ADR 0011).
@@ -331,7 +352,7 @@ impl Tab {
             "title": self.title, "active": self.active,
             "layout": layout_to_json(&self.layout), "panes": panes,
             "prefix": self.prefix, "mark": self.mark, "group": self.group,
-            "ssh": self.ssh,
+            "ssh": self.ssh, "ssh_target": self.ssh_target,
         })
     }
 
@@ -831,6 +852,7 @@ impl State {
                     id,
                     term,
                     scroll: 0,
+                    reconnect: None,
                 }
             })
     }
@@ -886,6 +908,7 @@ impl State {
             active: id,
             title: format!("shell {n}"),
             ssh: false,
+            ssh_target: None,
             prefix: None,
             mark: None,
             group: None,
@@ -947,6 +970,7 @@ impl State {
             active: id,
             title: format!("shell {n}"),
             ssh: false,
+            ssh_target: None,
             prefix: None,
             mark: None,
             group: None,
@@ -1310,23 +1334,28 @@ impl State {
 
     fn duplicate_tab(&mut self) {
         let cwd = self.cwd();
-        let (title, ssh, prefix, mark, group) = self
+        let (title, ssh, target, prefix, mark, group) = self
             .tabs
             .get(self.active_tab)
             .map(|t| {
                 (
                     t.title.clone(),
                     t.ssh,
+                    t.ssh_target.clone(),
                     t.prefix.clone(),
                     t.mark.clone(),
                     t.group.clone(),
                 )
             })
             .unwrap_or_default();
-        self.new_tab_in(inherited_cwd(ssh, cwd));
+        // An ssh tab is duplicated by connecting again, not as a local shell
+        // that merely looks remote.
+        match target.filter(|_| ssh) {
+            Some(target) => self.open_ssh(&target),
+            None => self.new_tab_in(inherited_cwd(ssh, cwd)),
+        }
         if let Some(t) = self.tabs.last_mut() {
             t.title = title;
-            t.ssh = ssh;
             t.prefix = prefix;
             t.mark = mark;
             t.group = group;
@@ -1411,6 +1440,11 @@ impl State {
         }
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
             if let Some(pane) = tab.panes.iter_mut().find(|p| p.id == tab.active) {
+                if let Some(command) = reconnect_input(&mut pane.reconnect, bytes) {
+                    pane.scroll = 0;
+                    pane.term.write(&command);
+                    return;
+                }
                 pane.term.write(bytes);
                 pane.scroll = 0;
             }
@@ -2405,7 +2439,14 @@ impl State {
                 .and_then(|x| x.as_str())
                 .unwrap_or("shell")
                 .to_string();
-            let ssh = t.get("ssh").and_then(|x| x.as_bool()).unwrap_or(false);
+            let ssh_target = t
+                .get("ssh_target")
+                .and_then(|x| x.as_str())
+                .map(str::to_string);
+            // Sessions saved before ssh targets were recorded cannot reconnect:
+            // they come back as what they now are, local shells.
+            let ssh =
+                t.get("ssh").and_then(|x| x.as_bool()).unwrap_or(false) && ssh_target.is_some();
             let mut panes = Vec::new();
             let mut map = std::collections::HashMap::new();
             if let Some(arr) = t.get("panes").and_then(|p| p.as_array()) {
@@ -2441,11 +2482,15 @@ impl State {
                 active,
                 title,
                 ssh,
+                ssh_target: ssh_target.filter(|_| ssh),
                 prefix: None,
                 mark: None,
                 group: None,
             };
             tab.restore_decorations(t);
+            if let Some(target) = tab.ssh_target.clone() {
+                self.offer_reconnect(&mut tab, &target);
+            }
             self.tabs.push(tab);
         }
         if self.tabs.is_empty() {
@@ -3846,12 +3891,31 @@ impl State {
         self.update_rx = Some(rx);
     }
 
+    /// A restored ssh tab: say it is disconnected and let Enter reconnect.
+    fn offer_reconnect(&self, tab: &mut Tab, target: &str) {
+        let Some((_, cmd)) = miao_term_ui::ssh::session_command(target) else {
+            return;
+        };
+        let active = tab.active.clone();
+        let Some(pane) = tab.panes.iter_mut().find(|p| p.id == active) else {
+            return;
+        };
+        let note = format!(
+            "\x1b[2m[mtty] {} {target}. {}\x1b[0m\r\n",
+            miao_term_ui::i18n::t(self.lang, "Disconnected from", "已与以下主机断开:"),
+            miao_term_ui::i18n::t(self.lang, "Press Enter to reconnect.", "按回车重新连接。"),
+        );
+        pane.term.screen_mut().process(note.as_bytes());
+        pane.reconnect = Some(cmd);
+    }
+
     fn open_ssh(&mut self, input: &str) {
         let Some((title, cmd)) = miao_term_ui::ssh::session_command(input) else {
             return;
         };
         self.new_tab();
         if let Some(tab) = self.tabs.last_mut() {
+            tab.ssh_target = Some(input.trim().to_string());
             tab.title = title;
             tab.ssh = true;
             let active = tab.active.clone();
@@ -5156,6 +5220,13 @@ impl ApplicationHandler<HostEvent> for Host {
                 } else {
                     wake_at = wake_at.min(at);
                 }
+            }
+            // Links opened from a browser or Finder (macOS Apple Events).
+            #[cfg(target_os = "macos")]
+            for url in macos_url::take() {
+                let intent = miao_term_ui::launch::Intent::from_args(&[url]);
+                state.apply_launch(&intent);
+                state.window.request_redraw();
             }
             // Launches forwarded by later processes (ADR 0019).
             for line in miao_term_ui::launch::drain_inbox() {
@@ -6813,6 +6884,7 @@ mod tests {
             active: title.into(),
             title: title.into(),
             ssh: false,
+            ssh_target: None,
             prefix: None,
             mark: None,
             group: None,
@@ -6837,6 +6909,20 @@ mod tests {
             (restored.prefix, restored.mark, restored.group),
             (None, None, None)
         );
+    }
+
+    #[test]
+    fn restored_ssh_panes_reconnect_on_enter_only() {
+        let mut pending = Some("ssh -t 'work'".to_string());
+        assert_eq!(
+            reconnect_input(&mut pending, b"\r").as_deref(),
+            Some(&b"ssh -t 'work'\r"[..])
+        );
+        assert!(pending.is_none(), "reconnect is offered once");
+        let mut pending = Some("ssh -t 'work'".to_string());
+        assert!(reconnect_input(&mut pending, b"l").is_none());
+        assert!(pending.is_none(), "other input keeps the local shell");
+        assert!(reconnect_input(&mut None, b"\r").is_none());
     }
 
     #[test]

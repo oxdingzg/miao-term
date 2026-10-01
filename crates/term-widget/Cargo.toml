@@ -28,3 +28,7 @@ egui_commonmark = "0.19"
 # which is where the application icon lives that AppKit's about panel wants.
 # Patched locally — see vendor/muda/PATCHES.miao.md and ADR 0031.
 muda = { version = "0.15", default-features = false }
+# Apple Event handler for links opened from a browser or Finder (ADR 0019).
+# Both are already in the tree through winit/muda.
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString"] }
