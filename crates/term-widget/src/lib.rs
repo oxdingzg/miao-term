@@ -656,6 +656,19 @@ enum JobDone {
         entries: Vec<FileEntry>,
     },
     AgentStatus(miao_term_ui::hostkeys::Agent),
+    SftpListed {
+        dir: String,
+        result: Result<Vec<miao_term_ui::sftp::RemoteEntry>, String>,
+    },
+    SftpLocalListed {
+        dir: std::path::PathBuf,
+        entries: Vec<FileEntry>,
+    },
+    /// An SFTP operation finished; both sides are listed again.
+    SftpDone {
+        label: String,
+        result: Result<(), String>,
+    },
     HostKeyChecked {
         name: String,
         result: Result<miao_term_ui::hostkeys::HostKey, String>,
@@ -695,6 +708,29 @@ struct TasksView {
     loading: bool,
     /// Index into `tasks` and whether it is a merge (else a discard).
     confirm: Option<(usize, bool)>,
+}
+
+/// The SFTP window (B3.4): this machine on the left, the host on the right.
+struct SftpView {
+    title: String,
+    remote: miao_term_ui::sftp::Remote,
+    remote_dir: Option<String>,
+    remote_entries: Vec<miao_term_ui::sftp::RemoteEntry>,
+    remote_sel: Option<String>,
+    local_dir: std::path::PathBuf,
+    local_entries: Vec<FileEntry>,
+    local_sel: Option<String>,
+    /// A running operation, and for downloads the local file and its size
+    /// so progress can be read off the disk.
+    busy: Option<(String, Option<(std::path::PathBuf, u64)>)>,
+    error: Option<String>,
+    /// Inline editors: rename (new name), chmod (mode), new folder (name).
+    rename: Option<String>,
+    chmod: Option<String>,
+    new_folder: Option<String>,
+    confirm_delete: bool,
+    /// Where the window was drawn, so files dropped on it are uploaded.
+    rect: egui::Rect,
 }
 
 /// The Hosts window: search, a pending delete and the add-host form.
@@ -844,6 +880,7 @@ struct State {
     host_book: miao_term_config::hosts::HostBook,
     host_book_error: Option<String>,
     hosts_view: Option<HostsView>,
+    sftp_view: Option<SftpView>,
     /// Running port forwards by (host name, rule spec) (B3.3).
     tunnels: HashMap<(String, String), miao_term_ui::forward::Tunnel>,
     remote_dialog: Option<(String, String)>,
@@ -2693,6 +2730,7 @@ impl State {
         self.task_dialog_window(ctx);
         self.tasks_window(ctx);
         self.hosts_window(ctx);
+        self.sftp_window(ctx);
         self.remote_dialog_window(ctx);
         self.composer_window(ctx);
         self.quick_window(ctx);
@@ -3088,6 +3126,8 @@ enum Cmd {
     LaunchAgent(usize),
     /// The host library (B3.1).
     Hosts,
+    /// SFTP for the active ssh tab (B3.4).
+    SftpCurrent,
     /// Agent tasks in git worktrees (B2.4).
     NewTask,
     Tasks,
@@ -3153,6 +3193,14 @@ impl State {
             (Cmd::NewTab, t(l, "New Tab", "新建标签")),
             (Cmd::Composer, "Composer"),
             (Cmd::Hosts, t(l, "Hosts…", "主机…")),
+            (
+                Cmd::SftpCurrent,
+                t(
+                    l,
+                    "Files over SFTP (this ssh tab)…",
+                    "SFTP 文件(当前 SSH 标签)…",
+                ),
+            ),
             (Cmd::NewTask, t(l, "New Agent Task…", "新建 Agent 任务…")),
             (Cmd::Tasks, t(l, "Agent Tasks…", "Agent 任务…")),
             (
@@ -3281,6 +3329,50 @@ impl State {
     fn run_command(&mut self, cmd: Cmd) {
         match cmd {
             Cmd::LaunchAgent(i) => self.launch_agent(i),
+            Cmd::SftpCurrent => {
+                let tab = self.tabs.get(self.active_tab);
+                let saved = tab.filter(|t| t.ssh).and_then(|t| {
+                    self.host_book
+                        .hosts
+                        .iter()
+                        .find(|h| h.name == t.title)
+                        .cloned()
+                });
+                let typed = tab.filter(|t| t.ssh).and_then(|t| t.ssh_target.clone());
+                match (saved, typed) {
+                    (Some(host), _) => self.open_sftp(
+                        host.name.clone(),
+                        miao_term_ui::sftp::Remote {
+                            destination: host.destination(),
+                            options: host.ssh_options(),
+                        },
+                    ),
+                    (None, Some(target)) => {
+                        let parsed = miao_term_ui::ssh::Target::parse(&target);
+                        let options = parsed
+                            .as_ref()
+                            .and_then(|t| t.port)
+                            .map(|p| vec!["-p".to_string(), p.to_string()])
+                            .unwrap_or_default();
+                        let destination = parsed.map(|t| t.destination()).unwrap_or(target.clone());
+                        self.open_sftp(
+                            target,
+                            miao_term_ui::sftp::Remote {
+                                destination,
+                                options,
+                            },
+                        );
+                    }
+                    _ => self.show_notice(
+                        miao_term_ui::i18n::t(
+                            self.lang,
+                            "The active tab is not an ssh session; open Files from Hosts…",
+                            "当前标签不是 SSH 会话;请从“主机…”中打开文件",
+                        )
+                        .into(),
+                    ),
+                }
+            }
             Cmd::Hosts => {
                 self.reload_hosts();
                 self.hosts_view = Some(HostsView::default());
@@ -4026,6 +4118,37 @@ impl State {
                 self.window.set_visible(true);
                 self.window.focus_window();
             }
+            Intent::Sftp(name) => {
+                self.reload_hosts();
+                match self
+                    .host_book
+                    .hosts
+                    .iter()
+                    .find(|h| &h.name == name)
+                    .cloned()
+                {
+                    Some(host) => self.open_sftp(
+                        host.name.clone(),
+                        miao_term_ui::sftp::Remote {
+                            destination: host.destination(),
+                            options: host.ssh_options(),
+                        },
+                    ),
+                    None => {
+                        let msg = format!(
+                            "{} {name}",
+                            miao_term_ui::i18n::t(
+                                self.lang,
+                                "No saved host named",
+                                "没有名为此的已保存主机:"
+                            )
+                        );
+                        self.show_notice(msg);
+                    }
+                }
+                self.window.set_visible(true);
+                self.window.focus_window();
+            }
             Intent::Host(name) => {
                 self.reload_hosts();
                 match self
@@ -4634,6 +4757,436 @@ impl State {
         self.open_ssh_command(title, cmd, input.trim().to_string());
     }
 
+    fn open_sftp(&mut self, title: String, remote: miao_term_ui::sftp::Remote) {
+        let local_dir = self
+            .active_cwd_for_new()
+            .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from))
+            .unwrap_or_else(|| std::path::PathBuf::from("/"));
+        self.sftp_view = Some(SftpView {
+            title,
+            remote,
+            remote_dir: None,
+            remote_entries: Vec::new(),
+            remote_sel: None,
+            local_dir,
+            local_entries: Vec::new(),
+            local_sel: None,
+            busy: None,
+            error: None,
+            rename: None,
+            chmod: None,
+            new_folder: None,
+            confirm_delete: false,
+            rect: egui::Rect::NOTHING,
+        });
+        self.sftp_refresh(true, true);
+    }
+
+    /// List the remote (from home when no directory yet) and/or local side.
+    fn sftp_refresh(&mut self, remote: bool, local: bool) {
+        let Some(view) = self.sftp_view.as_mut() else {
+            return;
+        };
+        if remote {
+            let r = view.remote.clone();
+            let dir = view.remote_dir.clone();
+            view.busy.get_or_insert(("listing".into(), None));
+            self.spawn_job(move || {
+                let dir = match dir {
+                    Some(d) => Ok(d),
+                    None => r.home(),
+                };
+                match dir {
+                    Ok(dir) => {
+                        let result = r.list(&dir);
+                        JobDone::SftpListed { dir, result }
+                    }
+                    Err(e) => JobDone::SftpListed {
+                        dir: "/".into(),
+                        result: Err(e),
+                    },
+                }
+            });
+        }
+        if local {
+            let Some(view) = self.sftp_view.as_ref() else {
+                return;
+            };
+            let dir = view.local_dir.clone();
+            self.spawn_job(move || {
+                let entries = files_rows(&dir);
+                JobDone::SftpLocalListed { dir, entries }
+            });
+        }
+    }
+
+    /// Run one SFTP operation in the background; both sides refresh after.
+    fn sftp_job(
+        &mut self,
+        label: String,
+        progress: Option<(std::path::PathBuf, u64)>,
+        work: impl FnOnce(&miao_term_ui::sftp::Remote) -> Result<(), String> + Send + 'static,
+    ) {
+        let Some(view) = self.sftp_view.as_mut() else {
+            return;
+        };
+        view.busy = Some((label.clone(), progress));
+        let remote = view.remote.clone();
+        self.spawn_job(move || JobDone::SftpDone {
+            result: work(&remote),
+            label,
+        });
+    }
+
+    /// Upload dropped or selected local paths into the current remote folder.
+    fn sftp_upload(&mut self, paths: Vec<std::path::PathBuf>) {
+        let Some(dir) = self.sftp_view.as_ref().and_then(|v| v.remote_dir.clone()) else {
+            return;
+        };
+        let names: Vec<String> = paths
+            .iter()
+            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+            .collect();
+        self.sftp_job(format!("\u{2191} {}", names.join(", ")), None, move |r| {
+            paths.iter().try_for_each(|p| r.upload(p, &dir))
+        });
+    }
+
+    fn sftp_window(&mut self, ctx: &egui::Context) {
+        use miao_term_ui::i18n::t;
+        let lang = self.lang;
+        let Some(mut view) = self.sftp_view.take() else {
+            return;
+        };
+        let mut open = true;
+        let mut local_nav: Option<std::path::PathBuf> = None;
+        let mut remote_nav: Option<String> = None;
+        let mut upload = false;
+        let mut download = false;
+        let mut do_rename = false;
+        let mut do_chmod = false;
+        let mut do_mkdir = false;
+        let mut do_delete = false;
+        let mut refresh = false;
+        let busy_text = view.busy.as_ref().map(|(label, progress)| match progress {
+            Some((path, total)) if *total > 0 => {
+                let done = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+                format!(
+                    "{label} \u{2014} {} / {}",
+                    human_size(done),
+                    human_size(*total)
+                )
+            }
+            _ => format!("{label}\u{2026}"),
+        });
+        if view.busy.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(250));
+        }
+        let response = app_window(format!("SFTP \u{00b7} {}", view.title), ctx)
+            .open(&mut open)
+            .default_size([860.0, 520.0])
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if let Some(text) = &busy_text {
+                        ui.spinner();
+                        ui.label(text);
+                    } else if let Some(e) = &view.error {
+                        ui.label(
+                            egui::RichText::new(e).color(egui::Color32::from_rgb(0xbf, 0x61, 0x6a)),
+                        );
+                    } else {
+                        ui.label(
+                            egui::RichText::new(t(
+                                lang,
+                                "Drop files here to upload them to the right-hand folder.",
+                                "把文件拖到这里即上传到右侧目录。",
+                            ))
+                            .size(11.0)
+                            .color(egui::Color32::from_gray(140)),
+                        );
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(t(lang, "Refresh", "刷新")).clicked() {
+                            refresh = true;
+                        }
+                    });
+                });
+                ui.separator();
+                let idle = view.busy.is_none();
+                ui.columns(2, |cols| {
+                    // This machine.
+                    let ui = &mut cols[0];
+                    ui.horizontal(|ui| {
+                        if ui
+                            .small_button("\u{2191}")
+                            .on_hover_text(t(lang, "Up", "上一级"))
+                            .clicked()
+                        {
+                            if let Some(p) = view.local_dir.parent() {
+                                local_nav = Some(p.to_path_buf());
+                            }
+                        }
+                        ui.label(
+                            egui::RichText::new(view.local_dir.display().to_string()).size(11.0),
+                        );
+                    });
+                    egui::ScrollArea::vertical()
+                        .id_salt("sftp-local")
+                        .max_height(360.0)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            for e in &view.local_entries {
+                                let label = if e.is_dir {
+                                    format!("\u{1f4c1} {}", e.name)
+                                } else {
+                                    format!("    {}  \u{00b7} {}", e.name, human_size(e.size))
+                                };
+                                let sel = view.local_sel.as_deref() == Some(&e.name);
+                                let r = ui.selectable_label(sel, label);
+                                if r.clicked() {
+                                    view.local_sel = Some(e.name.clone());
+                                }
+                                if r.double_clicked() && e.is_dir {
+                                    local_nav = Some(view.local_dir.join(&e.name));
+                                }
+                            }
+                        });
+                    ui.add_enabled_ui(
+                        idle && view.local_sel.is_some() && view.remote_dir.is_some(),
+                        |ui| {
+                            if ui
+                                .button(t(lang, "Upload \u{2192}", "上传 \u{2192}"))
+                                .clicked()
+                            {
+                                upload = true;
+                            }
+                        },
+                    );
+                    // The host.
+                    let ui = &mut cols[1];
+                    ui.horizontal(|ui| {
+                        if ui
+                            .small_button("\u{2191}")
+                            .on_hover_text(t(lang, "Up", "上一级"))
+                            .clicked()
+                        {
+                            if let Some(d) = &view.remote_dir {
+                                remote_nav = Some(miao_term_ui::sftp::parent(d));
+                            }
+                        }
+                        ui.label(
+                            egui::RichText::new(
+                                view.remote_dir.clone().unwrap_or_else(|| "\u{2026}".into()),
+                            )
+                            .size(11.0),
+                        );
+                    });
+                    egui::ScrollArea::vertical()
+                        .id_salt("sftp-remote")
+                        .max_height(360.0)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            for e in &view.remote_entries {
+                                let label = if e.is_dir {
+                                    format!("\u{1f4c1} {}", e.name)
+                                } else {
+                                    format!(
+                                        "    {}  \u{00b7} {}  {}",
+                                        e.name,
+                                        human_size(e.size),
+                                        e.perms
+                                    )
+                                };
+                                let sel = view.remote_sel.as_deref() == Some(&e.name);
+                                let r = ui.selectable_label(sel, label).on_hover_text(&e.modified);
+                                if r.clicked() {
+                                    view.remote_sel = Some(e.name.clone());
+                                    view.rename = None;
+                                    view.chmod = None;
+                                    view.confirm_delete = false;
+                                }
+                                if r.double_clicked() && e.is_dir {
+                                    if let Some(d) = &view.remote_dir {
+                                        remote_nav = Some(miao_term_ui::sftp::join(d, &e.name));
+                                    }
+                                }
+                            }
+                        });
+                    let selected = view.remote_sel.is_some();
+                    ui.add_enabled_ui(idle, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            if ui
+                                .add_enabled(
+                                    selected,
+                                    egui::Button::new(t(
+                                        lang,
+                                        "\u{2190} Download",
+                                        "\u{2190} 下载",
+                                    )),
+                                )
+                                .clicked()
+                            {
+                                download = true;
+                            }
+                            if ui
+                                .add_enabled(
+                                    selected,
+                                    egui::Button::new(t(lang, "Rename", "重命名")),
+                                )
+                                .clicked()
+                            {
+                                view.rename = view.remote_sel.clone();
+                            }
+                            if ui
+                                .add_enabled(selected, egui::Button::new("chmod"))
+                                .clicked()
+                            {
+                                view.chmod = Some("644".into());
+                            }
+                            if ui.button(t(lang, "New folder", "新建文件夹")).clicked() {
+                                view.new_folder = Some(String::new());
+                            }
+                            if ui
+                                .add_enabled(
+                                    selected,
+                                    egui::Button::new(t(lang, "Delete…", "删除…")),
+                                )
+                                .clicked()
+                            {
+                                view.confirm_delete = true;
+                            }
+                        });
+                        if let Some(name) = view.rename.as_mut() {
+                            ui.horizontal(|ui| {
+                                ui.text_edit_singleline(name);
+                                if ui.button(t(lang, "Rename", "重命名")).clicked() {
+                                    do_rename = true;
+                                }
+                            });
+                        }
+                        if let Some(mode) = view.chmod.as_mut() {
+                            ui.horizontal(|ui| {
+                                ui.add(egui::TextEdit::singleline(mode).desired_width(60.0));
+                                if ui.button(t(lang, "Apply", "应用")).clicked() {
+                                    do_chmod = true;
+                                }
+                            });
+                        }
+                        if let Some(name) = view.new_folder.as_mut() {
+                            ui.horizontal(|ui| {
+                                ui.text_edit_singleline(name);
+                                if ui.button(t(lang, "Create", "创建")).clicked() {
+                                    do_mkdir = true;
+                                }
+                            });
+                        }
+                        if view.confirm_delete {
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .button(
+                                        egui::RichText::new(t(lang, "Confirm delete", "确认删除"))
+                                            .color(egui::Color32::from_rgb(0xbf, 0x61, 0x6a)),
+                                    )
+                                    .clicked()
+                                {
+                                    do_delete = true;
+                                }
+                                if ui.button(t(lang, "Cancel", "取消")).clicked() {
+                                    view.confirm_delete = false;
+                                }
+                            });
+                        }
+                    });
+                });
+            });
+        if let Some(r) = response {
+            view.rect = r.response.rect;
+        }
+        if !open {
+            return;
+        }
+        let remote_dir = view.remote_dir.clone();
+        let selected = view
+            .remote_sel
+            .as_ref()
+            .and_then(|n| view.remote_entries.iter().find(|e| &e.name == n))
+            .cloned();
+        let local_sel = view.local_sel.clone().map(|n| view.local_dir.join(n));
+        let local_dir = view.local_dir.clone();
+        // An inline editor closes only when its action runs.
+        let rename_to = if do_rename { view.rename.take() } else { None };
+        let chmod_to = if do_chmod { view.chmod.take() } else { None };
+        let mkdir_name = if do_mkdir {
+            view.new_folder.take()
+        } else {
+            None
+        };
+        if do_delete {
+            view.confirm_delete = false;
+        }
+        let local_changed = local_nav.is_some();
+        if let Some(p) = local_nav {
+            view.local_dir = p;
+            view.local_sel = None;
+        }
+        if let Some(d) = remote_nav.clone() {
+            view.remote_dir = Some(d);
+            view.remote_sel = None;
+        }
+        self.sftp_view = Some(view);
+        if refresh || remote_nav.is_some() {
+            self.sftp_refresh(true, false);
+        }
+        if refresh || local_changed {
+            self.sftp_refresh(false, true);
+        }
+        if upload {
+            if let Some(p) = local_sel {
+                self.sftp_upload(vec![p]);
+            }
+        }
+        let (Some(dir), Some(entry)) = (remote_dir, selected) else {
+            if let (Some(name), Some(dir)) = (
+                mkdir_name,
+                self.sftp_view.as_ref().and_then(|v| v.remote_dir.clone()),
+            ) {
+                let path = miao_term_ui::sftp::join(&dir, name.trim());
+                self.sftp_job(format!("mkdir {}", name.trim()), None, move |r| {
+                    r.mkdir(&path)
+                });
+            }
+            return;
+        };
+        let path = miao_term_ui::sftp::join(&dir, &entry.name);
+        if download {
+            let target = local_dir.join(&entry.name);
+            let progress = (!entry.is_dir).then_some((target, entry.size));
+            let dest = local_dir.clone();
+            self.sftp_job(format!("\u{2193} {}", entry.name), progress, move |r| {
+                r.download(&path, &dest)
+            });
+        } else if let Some(new) = rename_to {
+            let to = miao_term_ui::sftp::join(&dir, new.trim());
+            self.sftp_job(format!("rename {}", entry.name), None, move |r| {
+                r.rename(&path, &to)
+            });
+        } else if let Some(mode) = chmod_to {
+            self.sftp_job(format!("chmod {mode} {}", entry.name), None, move |r| {
+                r.chmod(mode.trim(), &path)
+            });
+        } else if do_delete {
+            let is_dir = entry.is_dir;
+            self.sftp_job(format!("delete {}", entry.name), None, move |r| {
+                r.remove(&path, is_dir)
+            });
+        } else if let Some(name) = mkdir_name {
+            let path = miao_term_ui::sftp::join(&dir, name.trim());
+            self.sftp_job(format!("mkdir {}", name.trim()), None, move |r| {
+                r.mkdir(&path)
+            });
+        }
+    }
+
     /// A new tab in the active directory that runs `cmd` (interactive tools
     /// like ssh-keygen ask for secrets there, never through mtty).
     fn run_in_new_tab(&mut self, title: &str, cmd: &str) {
@@ -4719,6 +5272,7 @@ impl State {
         let mut trust_key: Option<usize> = None;
         let mut copy_key: Option<usize> = None;
         let mut new_key = false;
+        let mut open_files: Option<usize> = None;
         // (host index, rule index, start?) / (host index, rule index) / host index
         let mut toggle_forward: Option<(usize, usize, bool)> = None;
         let mut remove_forward: Option<(usize, usize)> = None;
@@ -4837,6 +5391,9 @@ impl State {
                                         .clicked()
                                     {
                                         copy_key = Some(*i);
+                                    }
+                                    if ui.button(t(lang, "Files", "文件")).clicked() {
+                                        open_files = Some(*i);
                                     }
                                     if ui.button(t(lang, "Check key", "检查主机密钥")).clicked() {
                                         check_key = Some(*i);
@@ -5091,6 +5648,15 @@ impl State {
                     }
                 }
             }
+        }
+        if let Some(host) = open_files.and_then(|i| self.host_book.hosts.get(i).cloned()) {
+            self.open_sftp(
+                host.name.clone(),
+                miao_term_ui::sftp::Remote {
+                    destination: host.destination(),
+                    options: host.ssh_options(),
+                },
+            );
         }
         if let Some(host) = check_key.and_then(|i| self.host_book.hosts.get(i).cloned()) {
             view.keys.insert(host.name.clone(), None);
@@ -5905,6 +6471,37 @@ impl State {
         use miao_term_ui::i18n::t;
         match done {
             JobDone::DirListed { dir, entries } => self.tree_listed(dir, entries),
+            JobDone::SftpListed { dir, result } => {
+                if let Some(view) = self.sftp_view.as_mut() {
+                    view.busy = None;
+                    match result {
+                        Ok(entries) => {
+                            view.remote_dir = Some(dir);
+                            view.remote_entries = entries;
+                            view.error = None;
+                        }
+                        Err(e) => view.error = Some(e),
+                    }
+                }
+            }
+            JobDone::SftpLocalListed { dir, entries } => {
+                if let Some(view) = self.sftp_view.as_mut().filter(|v| v.local_dir == dir) {
+                    view.local_entries = entries;
+                }
+            }
+            JobDone::SftpDone { label, result } => {
+                if let Some(view) = self.sftp_view.as_mut() {
+                    view.busy = None;
+                    match result {
+                        Ok(()) => {
+                            view.error = None;
+                            self.show_notice(format!("SFTP: {label} \u{2713}"));
+                        }
+                        Err(e) => view.error = Some(format!("{label}: {e}")),
+                    }
+                }
+                self.sftp_refresh(true, true);
+            }
             JobDone::AgentStatus(agent) => {
                 if let Some(view) = self.hosts_view.as_mut() {
                     view.agent = Some(agent);
@@ -6642,6 +7239,7 @@ impl ApplicationHandler<HostEvent> for Host {
             host_book_error: None,
             hosts_view: None,
             tunnels: HashMap::new(),
+            sftp_view: None,
             remote_dialog: None,
             editor_vim: cfg.editor_vim,
             vim: cfg.editor_vim.then(miao_term_ui::vim::VimRuntime::default),
@@ -7064,6 +7662,18 @@ impl ApplicationHandler<HostEvent> for Host {
             }
             WindowEvent::DroppedFile(path) => {
                 state.dropping = false;
+                // Onto the SFTP window: upload to its remote folder.
+                let scale = state.window.scale_factor() as f32;
+                let at = egui::pos2(state.cursor.0 as f32 / scale, state.cursor.1 as f32 / scale);
+                if state
+                    .sftp_view
+                    .as_ref()
+                    .is_some_and(|v| v.rect.contains(at))
+                {
+                    state.sftp_upload(vec![path]);
+                    state.window.request_redraw();
+                    return;
+                }
                 let scale = state.window.scale_factor() as f32;
                 let (px, py) = (state.cursor.0 as f32, state.cursor.1 as f32);
                 let over_pane = state

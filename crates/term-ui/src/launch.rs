@@ -18,6 +18,8 @@ pub enum Intent {
     Run(String),
     /// Connect to a saved host by name (`mtty://host/<name>`, B3.1).
     Host(String),
+    /// Browse a saved host's files (`mtty://sftp/<name>`, B3.4).
+    Sftp(String),
 }
 
 impl Intent {
@@ -54,10 +56,19 @@ impl Intent {
                 let rest = rest.trim_start_matches('/');
                 if rest.starts_with("quick") {
                     Some(Intent::Quick)
-                } else if let Some(name) = rest.strip_prefix("host/") {
+                } else if let Some((kind, name)) = rest
+                    .strip_prefix("host/")
+                    .map(|n| ("host", n))
+                    .or_else(|| rest.strip_prefix("sftp/").map(|n| ("sftp", n)))
+                {
                     let name = name.split(['?', '#']).next().unwrap_or_default();
                     let name = percent_decode(name.trim_end_matches('/'));
-                    (!name.is_empty()).then_some(Intent::Host(name))
+                    let empty = name.is_empty();
+                    let intent = match kind {
+                        "sftp" => Intent::Sftp(name),
+                        _ => Intent::Host(name),
+                    };
+                    (!empty).then_some(intent)
                 } else {
                     rest.strip_prefix("focus")
                         .and_then(|r| r.split("pane=").nth(1))
@@ -76,6 +87,7 @@ impl Intent {
             Intent::Focus(id) => format!("focus\t{id}"),
             Intent::Run(cmd) => format!("run\t{cmd}"),
             Intent::Host(name) => format!("host\t{name}"),
+            Intent::Sftp(name) => format!("sftp\t{name}"),
         }
     }
 
@@ -85,6 +97,7 @@ impl Intent {
             Some(("focus", id)) => Intent::Focus(id.to_string()),
             Some(("run", cmd)) => Intent::Run(cmd.to_string()),
             Some(("host", name)) => Intent::Host(name.to_string()),
+            Some(("sftp", name)) => Intent::Sftp(name.to_string()),
             _ if line.trim() == "quick" => Intent::Quick,
             _ => Intent::Activate,
         }
@@ -234,6 +247,14 @@ mod tests {
         assert_eq!(
             Intent::from_args(&args(&["mtty://host/"])),
             Intent::Activate
+        );
+        assert_eq!(
+            Intent::from_args(&args(&["mtty://sftp/db"])),
+            Intent::Sftp("db".into())
+        );
+        assert_eq!(
+            Intent::decode(&Intent::Sftp("db".into()).encode()),
+            Intent::Sftp("db".into())
         );
         assert_eq!(
             Intent::from_args(&args(&["MTTY://focus?pane=p2"])),

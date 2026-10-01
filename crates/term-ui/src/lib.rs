@@ -22,6 +22,7 @@ pub mod menu;
 pub mod mermaid;
 pub mod palette;
 pub mod selection;
+pub mod sftp;
 pub mod ssh;
 pub mod syntax;
 pub mod tasks;
