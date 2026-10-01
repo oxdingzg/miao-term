@@ -257,7 +257,7 @@ verified on its own:
   tags, jump host), import from `~/.ssh/config`, sidebar host list, palette
   search, double-click to connect. Acceptance: parser/import unit tests; a smoke
   against a local sshd or container **[needs a test host]**.
-- [ ] **B3.2 Safe connections**: known_hosts confirmation on first connect and
+- [x] **B3.2 Safe connections** (an interactive ssh asks about host keys itself; the host library checks in the background: known / unknown (fingerprints, trust after comparing) / changed (refused); "known" checked against a real host; key generation and ssh-copy-id run in a terminal tab, so mtty never handles a passphrase): known_hosts confirmation on first connect and
   fingerprint change; ssh-agent status and key generation; no plaintext
   passwords.
 - [ ] **B3.3 Port forwarding**: L/R/D rules managed through the ControlMaster

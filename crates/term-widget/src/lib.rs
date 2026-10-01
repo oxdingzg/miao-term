@@ -655,6 +655,11 @@ enum JobDone {
         dir: std::path::PathBuf,
         entries: Vec<FileEntry>,
     },
+    AgentStatus(miao_term_ui::hostkeys::Agent),
+    HostKeyChecked {
+        name: String,
+        result: Result<miao_term_ui::hostkeys::HostKey, String>,
+    },
     TaskCreated {
         result: Result<miao_term_ui::tasks::Task, String>,
         agent: Option<usize>,
@@ -699,6 +704,10 @@ struct HostsView {
     confirm_delete: Option<usize>,
     form: miao_term_config::hosts::Host,
     form_port: String,
+    /// The ssh agent, checked when the window opens (B3.2).
+    agent: Option<miao_term_ui::hostkeys::Agent>,
+    /// Host key checks by host name: `None` while running.
+    keys: HashMap<String, Option<Result<miao_term_ui::hostkeys::HostKey, String>>>,
 }
 
 /// What a save request led to.
@@ -3268,6 +3277,7 @@ impl State {
             Cmd::Hosts => {
                 self.reload_hosts();
                 self.hosts_view = Some(HostsView::default());
+                self.spawn_job(|| JobDone::AgentStatus(miao_term_ui::hostkeys::agent_status()));
             }
             Cmd::NewTask => {
                 self.refresh_agents_detected();
@@ -4617,6 +4627,21 @@ impl State {
         self.open_ssh_command(title, cmd, input.trim().to_string());
     }
 
+    /// A new tab in the active directory that runs `cmd` (interactive tools
+    /// like ssh-keygen ask for secrets there, never through mtty).
+    fn run_in_new_tab(&mut self, title: &str, cmd: &str) {
+        self.new_tab_in(self.active_cwd_for_new());
+        if let Some(tab) = self.tabs.last_mut() {
+            tab.title = title.to_string();
+            tab.title_set = true;
+            let active = tab.active.clone();
+            if let Some(pane) = tab.panes.iter_mut().find(|p| p.id == active) {
+                pane.term.write(format!("{cmd}\r").as_bytes());
+            }
+        }
+        self.publish_panes();
+    }
+
     /// Connect to a saved host (B3.1).
     fn open_host(&mut self, host: &miao_term_config::hosts::Host) {
         let destination = host.destination();
@@ -4683,6 +4708,10 @@ impl State {
         let mut delete: Option<usize> = None;
         let mut import = false;
         let mut add = false;
+        let mut check_key: Option<usize> = None;
+        let mut trust_key: Option<usize> = None;
+        let mut copy_key: Option<usize> = None;
+        let mut new_key = false;
         let rows: Vec<(usize, miao_term_config::hosts::Host)> = self
             .host_book
             .sorted()
@@ -4705,6 +4734,38 @@ impl State {
                         .clicked()
                     {
                         import = true;
+                    }
+                });
+                ui.horizontal(|ui| {
+                    use miao_term_ui::hostkeys::Agent;
+                    let agent = match &view.agent {
+                        None => t(lang, "ssh-agent: checking…", "ssh-agent:检查中…").to_string(),
+                        Some(Agent::Keys(k)) => format!(
+                            "{} {}",
+                            t(lang, "ssh-agent: keys loaded:", "ssh-agent:已加载密钥"),
+                            k.len()
+                        ),
+                        Some(Agent::NoKeys) => t(
+                            lang,
+                            "ssh-agent: running, no keys (ssh-add)",
+                            "ssh-agent:运行中,无密钥(ssh-add)",
+                        )
+                        .to_string(),
+                        Some(Agent::NotRunning) => {
+                            t(lang, "ssh-agent: not running", "ssh-agent:未运行").to_string()
+                        }
+                    };
+                    ui.label(egui::RichText::new(agent).size(11.0));
+                    if ui
+                        .small_button(t(lang, "New SSH key…", "生成新密钥…"))
+                        .on_hover_text(t(
+                            lang,
+                            "Runs ssh-keygen in a new tab; you choose the passphrase there.",
+                            "在新标签中运行 ssh-keygen,口令由你在其中设置。",
+                        ))
+                        .clicked()
+                    {
+                        new_key = true;
                     }
                 });
                 let q = view.filter.to_lowercase();
@@ -4750,12 +4811,84 @@ impl State {
                                     if ui.button(t(lang, "Delete…", "删除…")).clicked() {
                                         view.confirm_delete = Some(*i);
                                     }
+                                    if ui
+                                        .button(t(lang, "Copy my key", "复制我的公钥"))
+                                        .on_hover_text(t(
+                                            lang,
+                                            "Runs ssh-copy-id in a new tab",
+                                            "在新标签中运行 ssh-copy-id",
+                                        ))
+                                        .clicked()
+                                    {
+                                        copy_key = Some(*i);
+                                    }
+                                    if ui.button(t(lang, "Check key", "检查主机密钥")).clicked() {
+                                        check_key = Some(*i);
+                                    }
                                     if ui.button(t(lang, "Connect", "连接")).clicked() {
                                         connect = Some(*i);
                                     }
                                 }
                             });
                         });
+                        if let Some(state) = view.keys.get(&host.name) {
+                            use miao_term_ui::hostkeys::HostKey;
+                            let red = egui::Color32::from_rgb(0xbf, 0x61, 0x6a);
+                            let green = egui::Color32::from_rgb(0xa3, 0xbe, 0x8c);
+                            match state {
+                                None => {
+                                    ui.label(t(lang, "Checking the host key…", "正在检查主机密钥…"));
+                                }
+                                Some(Ok(HostKey::Known)) => {
+                                    ui.label(
+                                        egui::RichText::new(t(
+                                            lang,
+                                            "\u{2713} Host key matches known_hosts",
+                                            "\u{2713} 主机密钥与 known_hosts 一致",
+                                        ))
+                                        .color(green),
+                                    );
+                                }
+                                Some(Ok(HostKey::Unknown { fingerprints })) => {
+                                    ui.label(t(
+                                        lang,
+                                        "Unknown host key. Compare these fingerprints with the server's before trusting it:",
+                                        "未知的主机密钥。信任前请与服务器上的指纹核对:",
+                                    ));
+                                    for f in fingerprints {
+                                        ui.label(egui::RichText::new(f).monospace().size(11.0));
+                                    }
+                                    if fingerprints.is_empty() {
+                                        ui.label(t(
+                                            lang,
+                                            "(behind a jump host: connect once in a tab to see and accept it)",
+                                            "(经跳板机连接:请先在标签中连接一次以查看并接受)",
+                                        ));
+                                    } else if ui
+                                        .button(t(lang, "Fingerprints match — trust", "指纹一致 —— 信任"))
+                                        .clicked()
+                                    {
+                                        trust_key = Some(*i);
+                                    }
+                                }
+                                Some(Ok(HostKey::Changed { fingerprints })) => {
+                                    ui.label(
+                                        egui::RichText::new(t(
+                                            lang,
+                                            "HOST KEY CHANGED. This can mean someone is intercepting the connection. Not trusted; verify with the server's administrator, then fix known_hosts (ssh-keygen -R).",
+                                            "主机密钥已变化。这可能意味着连接被拦截。不会信任;请与服务器管理员核实后再处理 known_hosts(ssh-keygen -R)。",
+                                        ))
+                                        .color(red),
+                                    );
+                                    for f in fingerprints {
+                                        ui.label(egui::RichText::new(f).monospace().size(11.0));
+                                    }
+                                }
+                                Some(Err(e)) => {
+                                    ui.label(egui::RichText::new(e).color(red));
+                                }
+                            }
+                        }
                     }
                 });
                 ui.separator();
@@ -4808,6 +4941,55 @@ impl State {
             if let Some(host) = self.host_book.hosts.get(i).cloned() {
                 self.open_host(&host);
             }
+        }
+        if let Some(host) = check_key.and_then(|i| self.host_book.hosts.get(i).cloned()) {
+            view.keys.insert(host.name.clone(), None);
+            self.spawn_job(move || {
+                let result =
+                    miao_term_ui::hostkeys::check(&host.destination(), &host.ssh_options());
+                JobDone::HostKeyChecked {
+                    name: host.name,
+                    result,
+                }
+            });
+        }
+        if let Some(host) = trust_key.and_then(|i| self.host_book.hosts.get(i).cloned()) {
+            view.keys.insert(host.name.clone(), None);
+            self.spawn_job(move || {
+                let (dest, opts) = (host.destination(), host.ssh_options());
+                let result = miao_term_ui::hostkeys::trust(&dest, &opts)
+                    .and_then(|()| miao_term_ui::hostkeys::check(&dest, &opts));
+                JobDone::HostKeyChecked {
+                    name: host.name,
+                    result,
+                }
+            });
+        }
+        if let Some(host) = copy_key.and_then(|i| self.host_book.hosts.get(i).cloned()) {
+            let mut cmd = String::from("ssh-copy-id");
+            for (flag, value) in host
+                .ssh_options()
+                .chunks(2)
+                .filter_map(|c| Some((c.first()?, c.get(1)?)))
+            {
+                match flag.as_str() {
+                    "-p" => cmd.push_str(&format!(" -p {}", miao_term_ui::ssh::shell_quote(value))),
+                    "-J" => cmd.push_str(&format!(
+                        " -o {}",
+                        miao_term_ui::ssh::shell_quote(&format!("ProxyJump={value}"))
+                    )),
+                    _ => {}
+                }
+            }
+            cmd.push(' ');
+            cmd.push_str(&miao_term_ui::ssh::shell_quote(&host.destination()));
+            self.run_in_new_tab(&format!("ssh-copy-id {}", host.name), &cmd);
+        }
+        if new_key {
+            self.run_in_new_tab(
+                t(lang, "New SSH key", "生成 SSH 密钥"),
+                "ssh-keygen -t ed25519 -C mtty",
+            );
         }
         if let Some(i) = delete {
             if i < self.host_book.hosts.len() {
@@ -5573,6 +5755,16 @@ impl State {
         use miao_term_ui::i18n::t;
         match done {
             JobDone::DirListed { dir, entries } => self.tree_listed(dir, entries),
+            JobDone::AgentStatus(agent) => {
+                if let Some(view) = self.hosts_view.as_mut() {
+                    view.agent = Some(agent);
+                }
+            }
+            JobDone::HostKeyChecked { name, result } => {
+                if let Some(view) = self.hosts_view.as_mut() {
+                    view.keys.insert(name, Some(result));
+                }
+            }
             JobDone::TaskCreated { result, agent } => match result {
                 Ok(task) => {
                     self.new_tab_in(Some(task.path.clone()));

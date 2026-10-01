@@ -151,7 +151,10 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
   Quickly; *Hosts…* searches, adds, deletes (confirmed) and imports the concrete
   `Host` entries of `~/.ssh/config`, which then connect by alias so every option
   ssh has for them applies. `mtty://host/<name>` connects from a script or
-  launcher. No passwords or keys are stored.
+  launcher. No passwords or keys are stored. *Hosts…* also shows the ssh agent's
+  keys, checks a host's key against `known_hosts` (unknown keys show their
+  fingerprints to compare before trusting; a changed key is refused), and runs
+  `ssh-keygen` / `ssh-copy-id` in a terminal tab.
 - **SSH sessions and remote view/edit**: *New SSH Session…* honours
   `~/.ssh/config`, reuses a ControlMaster connection and bootstraps terminfo with
   nothing installed remotely; *View/Edit Remote File…* reads and writes over that
