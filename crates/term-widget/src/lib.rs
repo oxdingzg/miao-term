@@ -508,6 +508,18 @@ fn app_window<'a>(title: impl Into<egui::WidgetText>, ctx: &egui::Context) -> eg
         .max_size((screen.size() - egui::vec2(24.0, 24.0)).max(egui::vec2(200.0, 120.0)))
 }
 
+/// A dialog's right-aligned button row, one row high. A bare
+/// `with_layout(right_to_left(..))` in an auto-sized window takes all the
+/// height left on screen and centres its buttons in it, stretching the window
+/// to the screen's height (Software Update did).
+fn button_row<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), add)
+            .inner
+    })
+    .inner
+}
+
 /// The scrolling content area of an [`app_window`].
 fn window_body<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     egui::ScrollArea::both()
@@ -2829,7 +2841,7 @@ impl State {
                         }
                     }
                     ui.add_space(16.0);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    button_row(ui, |ui| {
                         match &self.update_result {
                             Some(UpdateResult::Available {
                                 artifact: Some(a), ..
@@ -10828,6 +10840,44 @@ mod tests {
         }]);
         let after = frame(vec![]);
         (before.width(), after.width())
+    }
+
+    #[test]
+    fn dialog_button_row_keeps_an_auto_sized_window_short() {
+        // Software Update: anchored, not resizable, sized by its content.
+        let ctx = egui::Context::default();
+        let mut window = egui::Rect::NOTHING;
+        let mut close = egui::Rect::NOTHING;
+        for _ in 0..3 {
+            replay(&ctx, vec![], |ctx| {
+                window = egui::Window::new("Software Update")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                    .default_width(340.0)
+                    .show(ctx, |ui| {
+                        ui.heading("A new version is available");
+                        ui.label("mtty 0.0.8");
+                        ui.add_space(16.0);
+                        button_row(ui, |ui| {
+                            let _ = ui.button("Download Update");
+                            close = ui.button("Close").rect;
+                        });
+                    })
+                    .unwrap()
+                    .response
+                    .rect;
+            });
+        }
+        assert!(window.height() < 200.0, "window is {window:?}");
+        assert!(
+            window.top() > 200.0,
+            "the title stays on screen: {window:?}"
+        );
+        assert!(
+            close.bottom() <= window.bottom() && close.right() > window.center().x,
+            "buttons sit at the bottom right: {close:?} in {window:?}"
+        );
     }
 
     /// Drag a window's bottom-right corner by `d`; its rect before and after.
