@@ -35,6 +35,9 @@ pub struct TabBarEvents {
     pub move_down: Option<usize>,
     pub set_prefix: Option<usize>,
     pub new_tab: bool,
+    /// Where each tab chip was drawn, in tab order: stable targets for
+    /// replayed-input tests and accessibility tooling.
+    pub tab_rects: Vec<egui::Rect>,
 }
 
 /// A row action from the right-click menu shared by the tab bar and the session
@@ -244,6 +247,7 @@ pub fn tab_bar(
         rects.push(rect);
         ui.add_space(2.0);
     }
+    ev.tab_rects = rects.clone();
     // Resolve a finished drag against the collected chip rects.
     if ui.ctx().input(|i| i.pointer.any_released()) {
         let from = ui
@@ -1234,5 +1238,76 @@ mod tab_menu_tests {
         };
         assert_eq!(divider_count(frame(&groups)), 1);
         assert_eq!(divider_count(frame(&[None, None, None])), 0);
+    }
+
+    #[test]
+    fn dragging_a_tab_onto_another_reorders_them() {
+        let ctx = egui::Context::default();
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.font_data.insert(
+            "tabler".into(),
+            egui::FontData::from_static(include_bytes!(
+                "../../../assets/fonts/tabler-icons-subset.ttf"
+            ))
+            .into(),
+        );
+        fonts.families.insert(
+            egui::FontFamily::Name("tabler".into()),
+            vec!["tabler".into()],
+        );
+        ctx.set_fonts(fonts);
+        let titles: Vec<String> = vec!["alpha".into(), "beta".into(), "gamma".into()];
+        let icons = vec![crate::icons::TabIcon::from(crate::icons::Icon::Terminal); 3];
+        let groups = vec![None, None, None];
+        let frame = |events: Vec<egui::Event>| {
+            let mut ev = TabBarEvents::default();
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 200.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ev = tab_bar(
+                            ui,
+                            &ChromeColors::dark(),
+                            &titles,
+                            &icons,
+                            &groups,
+                            0,
+                            Lang::En,
+                        );
+                    });
+                });
+            });
+            ev
+        };
+        let rects = frame(vec![]).tab_rects;
+        assert_eq!(rects.len(), 3);
+        let from = rects[0].center();
+        let to = rects[2].center();
+        frame(vec![egui::Event::PointerMoved(from)]);
+        frame(vec![egui::Event::PointerButton {
+            pos: from,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        for step in 1..=6 {
+            let t = step as f32 / 6.0;
+            frame(vec![egui::Event::PointerMoved(from + (to - from) * t)]);
+        }
+        let ev = frame(vec![egui::Event::PointerButton {
+            pos: to,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        assert_eq!(ev.reorder, Some((0, 2)));
+        assert_eq!(ev.switch, None, "a drag is not a click");
     }
 }
