@@ -9808,6 +9808,11 @@ fn configure_egui(ctx: &egui::Context) {
     style.visuals.window_rounding = egui::Rounding::same(10.0);
     style.spacing.item_spacing = egui::vec2(6.0, 4.0);
     style.spacing.button_padding = egui::vec2(6.0, 2.0);
+    // A floating window's corner overlaps its two edges. egui 0.30 gives a tie
+    // to a target at most half as thick as the other, so with the default
+    // 10/20 pt grab areas the bottom or right edge always won and the corner
+    // never resized both ways; 16 pt corners over 10 pt edges win again.
+    style.interaction.resize_grab_radius_corner = 8.0;
     ctx.set_style(style);
 }
 
@@ -10756,6 +10761,89 @@ mod tests {
         }]);
         let after = frame(vec![]);
         (before.width(), after.width())
+    }
+
+    /// Drag a window's bottom-right corner by `d`; its rect before and after.
+    fn drag_window_corner(body: fn(&mut egui::Ui), d: egui::Vec2) -> (egui::Rect, egui::Rect) {
+        let ctx = egui::Context::default();
+        configure_egui(&ctx);
+        let mut rect = egui::Rect::NOTHING;
+        let mut frame = |events: Vec<egui::Event>| {
+            replay(&ctx, events, |ctx| {
+                rect = app_window("doc", ctx)
+                    .show(ctx, body)
+                    .unwrap()
+                    .response
+                    .rect;
+            });
+            rect
+        };
+        frame(vec![]);
+        let before = frame(vec![]);
+        // The very corner, where the edges' grab areas overlap the corner's.
+        let start = before.right_bottom();
+        frame(vec![egui::Event::PointerMoved(start)]);
+        frame(vec![egui::Event::PointerButton {
+            pos: start,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        for step in 1..=6 {
+            frame(vec![egui::Event::PointerMoved(
+                start + d * (step as f32 / 6.0),
+            )]);
+        }
+        frame(vec![egui::Event::PointerButton {
+            pos: start + d,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        (before, frame(vec![]))
+    }
+
+    #[test]
+    fn editor_window_corner_resizes_width_and_height_together() {
+        // The editor's layout: a toolbar, then a line-number column beside a
+        // full-width code field, both scrolling.
+        fn body(ui: &mut egui::Ui) {
+            ui.horizontal(|ui| {
+                let _ = ui.button("Save");
+            });
+            ui.separator();
+            egui::ScrollArea::both()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.horizontal_top(|ui| {
+                        ui.label("   1\n   2\n");
+                        let mut text = "fn main() {}\n".repeat(80);
+                        ui.add(
+                            egui::TextEdit::multiline(&mut text)
+                                .code_editor()
+                                .desired_width(f32::INFINITY),
+                        );
+                    });
+                });
+        }
+        let (before, after) = drag_window_corner(body, egui::vec2(-150.0, -120.0));
+        assert!(
+            after.width() < before.width() - 100.0,
+            "{before:?} -> {after:?}"
+        );
+        assert!(
+            after.height() < before.height() - 80.0,
+            "{before:?} -> {after:?}"
+        );
+        let (before, after) = drag_window_corner(body, egui::vec2(120.0, 100.0));
+        assert!(
+            after.width() > before.width() + 80.0,
+            "{before:?} -> {after:?}"
+        );
+        assert!(
+            after.height() > before.height() + 60.0,
+            "{before:?} -> {after:?}"
+        );
     }
 
     #[test]
