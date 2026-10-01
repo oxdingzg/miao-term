@@ -93,6 +93,11 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 - **Inline terminal graphics**: Sixel, Kitty and iTerm2 images are drawn in the
   grid by mtty — they scroll with the content and are clipped to the pane.
   Toggle with `graphics` (on by default).
+- **Agent tasks**: *New Agent Task…* creates a git worktree and branch
+  (`<repo>/.worktrees/<name>`, `mtty/<name>`) with its own tab and, optionally,
+  an agent started in it; *Agent Tasks…* lists them with Open, Diff (including
+  uncommitted work), Merge into the base branch and Discard (both confirmed).
+  Git runs in the background and nothing tracked in the repository changes.
 - **Recipes**: save and replay a whole workspace.
 - A settings window (`⌘,`): font size/family, opacity, line height, cursor
   style, theme, inline graphics, notifications, sleep guard and agent hook
