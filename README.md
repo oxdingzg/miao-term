@@ -47,9 +47,10 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
   and surface.
 - Scrollback with a scrollbar indicator, drag and double-click selection,
   copy/paste, and wide-character / CJK layout with a system CJK font fallback.
-- Find (`⌘F`) with match highlighting and a result count.
+- Find (`⌘F`) with match highlighting and a result count, CJK included.
 - The [kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/)
-  (CSI-u) and modifier-aware navigation keys when a program requests them.
+  (CSI-u, disambiguate level) when a program requests it, modifier-aware
+  navigation keys, and F1–F12 / Insert as xterm sequences.
 
 **Window and workspace**
 - Inline tab bar (icons, agent badges, `+`, `×`, drag to reorder) plus a Tabs
@@ -64,30 +65,34 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 - A recursive split tree: `⌘D` splits right and `⇧⌘D` splits down, with
   draggable dividers and a close button on every pane. `⌘⇧T` toggles a scratch
   Quick Terminal.
-- Sidebar **file tree** (double-click opens the reader) and **View rules**: map
-  a pane's cwd/command/agent/host/file to an alias, icon, tab title and badge —
-  see [`docs/VIEW-RULES.md`](docs/VIEW-RULES.md).
-- **Open Quickly** (`⌘K`): one palette over tabs, agents, files, recents,
-  content-search hits and commands.
+- A **file list** in the details panel's Files tab (a click opens the reader)
+  and **View rules** that map a pane's cwd/agent to an alias and tab title —
+  see [`docs/VIEW-RULES.md`](docs/VIEW-RULES.md). Rule icons and badges, and
+  matching on command/host/file, are not applied yet.
+- A **command palette** (`⌘K`) and **Open Quickly** (`⌘⇧O`) over tabs,
+  directories and recent files.
 - A right-hand details panel with tabs: **Info, Agent, Outline, Git, Files,
   Ports, Queue** (git status, directory listing, listening ports, prompt queue).
-- **Composer** (`⌘⇧E`) and a **prompt queue** that sends to an agent pane once it
-  is idle; **notifications** and a **sleep guard** driven by agent state.
-- **Reader/editor** (`⌘`-open): read-only preview with line numbers and a
-  jump-to-line highlight, edit mode with a gutter and an opt-in minimal vim mode
-  (`editor-vim`), *Open Externally* / *Edit in
-  Tab*, and a CommonMark renderer (`egui_commonmark`): headings, lists, quotes,
-  tables, code, links, local and remote images, plus a `graph`/`flowchart`
-  `graph`/`flowchart`, `sequenceDiagram`, `stateDiagram`, `classDiagram`,
+- **Composer** (`⌘⇧E`) and a **prompt queue** (sent from the Queue tab; automatic
+  delivery when an agent turns idle is on the roadmap); **notifications** and a
+  **sleep guard** driven by agent state.
+- **Reader/editor**: read-only preview with line numbers, edit mode with a
+  gutter and an opt-in minimal vim mode (`editor-vim`). A failed save is shown
+  and keeps the buffer modified; closing unsaved changes asks for a second
+  close. A CommonMark renderer (`egui_commonmark`): headings, lists, quotes,
+  tables, code, links, remote images, plus `graph`/`flowchart`,
+  `sequenceDiagram`, `stateDiagram`, `classDiagram`,
   `erDiagram` and `pie` Mermaid subsets (or full Mermaid via
   `mermaid-command`).
 - **Inline terminal graphics**: Sixel, Kitty and iTerm2 images are drawn in the
   grid by miaotty — they scroll with the content and are clipped to the pane.
   Toggle with `graphics` (on by default).
-- **Recipes**: save and replay a whole workspace; config export.
+- **Recipes**: save and replay a whole workspace.
 - A settings window (`⌘,`): font size/family, opacity, line height, cursor
-  style, theme, agent badges, notifications, sleep guard, agent integrations,
-  View rules — persisted to `config.toml` / `views.json`.
+  style, theme, inline graphics, notifications, sleep guard and agent hook
+  installation. Changed values are written back to `config.toml` when the window
+  closes, keeping comments and other keys; a `config.toml` that fails to parse is
+  reported in the status line and never overwritten.
 
 **Configuration and integration**
 - Configuration at `~/.config/miaotty/config.toml`: font size, font family,
@@ -102,7 +107,9 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 - **URL schemes**: `miaotty://`, `ssh://` and `x-man-page://` open a tab with the
   matching command; a second launch — of miaotty — is forwarded to the
   running instance (single instance, including "focus pane" and "quick"
-  intents) through a shared inbox beside the control socket.
+  intents) through a shared inbox beside the control socket, and a plain second
+  launch brings the window forward. URLs arrive as command-line arguments;
+  macOS URL events from a browser or Finder are not handled yet.
 - **Global Quick Terminal hotkey**: `global-hotkey` on macOS/Windows, the
   external compositor bindings on Linux (sway/hyprland/GNOME and friends).
 - **Native menu bar on macOS**: the installed `.app` shows File/Edit/View/Shell/
@@ -112,14 +119,17 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
   itself asks for the dark appearance, so its title bar matches the chrome
   instead of opening as a light strip.
 - **Agent integrations**: detect claude/codex/opencode/miao, install a state hook
-  script, copy the snippet that wires it into the agent's own config, and launch
-  the agent — the user's agent config is never edited for them. `miao` reports
+  script and show the snippet that wires it into the agent's own config — the
+  user's agent config is never edited for them. `miao` reports
   its state from a built-in integration, so it needs no hook wiring.
 - **Updates**: check the configured version manifest. Install published packages
   using the platform installer; automatic download/install UI from the former
   eframe application is not part of the unified native app.
-- **Remote view/edit**: read and write a remote file over the pane's ssh
-  ControlMaster connection, with a zero-install terminfo bootstrap.
+- **SSH sessions and remote view/edit**: *New SSH Session…* honours
+  `~/.ssh/config`, reuses a ControlMaster connection and bootstraps terminfo with
+  nothing installed remotely; *View/Edit Remote File…* reads and writes over that
+  connection (host typed in the dialog). Host library, SFTP and port forwarding
+  are on the roadmap ([`docs/PRODUCT.md`](docs/PRODUCT.md)).
 
 **Automation**
 - The **MTP control plane** over a per-user Unix socket (a named pipe on
@@ -305,7 +315,8 @@ Pass `--socket PATH` or set `MIAOTTY_SOCKET` to target a non-default socket.
 | `⌘D` / `⇧⌘D` | Split right / split down |
 | `⌥⌘→` / `⌥⌘←` (or `⌘⇧]` / `⌘⇧[`) | Cycle pane focus |
 | `⌥⌘D` | Toggle the details panel |
-| `⌘K` | Open Quickly (tabs, agents, files, commands) |
+| `⌘K` | Command palette |
+| `⌘⇧O` | Open Quickly (tabs, directories, recent files) |
 | `⌘F` | Find |
 | `⌘⇧E` | Composer (multi-line prompt to the focused pane) |
 | `⌘⇧T` | Quick Terminal (scratch tab) |
@@ -332,6 +343,7 @@ version kept in sync as `*.zh-CN.md`.
 | View rules (titles/icons/badges) | [`docs/VIEW-RULES.md`](docs/VIEW-RULES.md) | [`docs/VIEW-RULES.zh-CN.md`](docs/VIEW-RULES.zh-CN.md) |
 | Performance budgets & gate | [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) | [`docs/PERFORMANCE.zh-CN.md`](docs/PERFORMANCE.zh-CN.md) |
 | Windows dev/verification | [`docs/WINDOWS-DEV.md`](docs/WINDOWS-DEV.md) | [`docs/WINDOWS-DEV.zh-CN.md`](docs/WINDOWS-DEV.zh-CN.md) |
+| Product requirements & roadmap | [`docs/PRODUCT.md`](docs/PRODUCT.md) | [`docs/PRODUCT.zh-CN.md`](docs/PRODUCT.zh-CN.md) |
 | Releasing & updates | [`docs/RELEASE.md`](docs/RELEASE.md) | [`docs/RELEASE.zh-CN.md`](docs/RELEASE.zh-CN.md) |
 | Working agreement (privacy, checks) | [`AGENTS.md`](AGENTS.md) | — |
 | Example configuration | [`docs/config.example.toml`](docs/config.example.toml) | — |
@@ -339,6 +351,11 @@ version kept in sync as `*.zh-CN.md`.
 ---
 
 ## Roadmap
+
+The product direction for **mtty** (the official product name; the code,
+binaries and config still use `miaotty` until the rename milestone), the
+verified feature baseline and the milestone plan live in
+[`docs/PRODUCT.md`](docs/PRODUCT.md).
 
 Done recently: the Windows named-pipe transport and ConPTY path (verified on
 real hardware), session restore, View rules, Open Quickly, the details panels,
