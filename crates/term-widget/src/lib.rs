@@ -1072,6 +1072,7 @@ struct Pip {
     renderer: TermRenderer,
 }
 
+#[derive(Default)]
 struct Shortcut {
     new_tab: bool,
     close: bool,
@@ -1095,32 +1096,111 @@ struct Shortcut {
 }
 
 fn shortcut(event: &KeyEvent, mods: ModifiersState) -> Option<Shortcut> {
-    if event.state != ElementState::Pressed || !mods.super_key() {
+    if event.state != ElementState::Pressed {
         return None;
     }
-    let mut s = Shortcut {
-        new_tab: false,
-        close: false,
-        select: None,
-        font: 0.0,
-        split_right: false,
-        split_down: false,
-        cycle: 0,
-        tab: 0,
-        find: 0,
-        hint: false,
-        toggle_sidebar: false,
-        toggle_details: false,
-        palette: false,
-        settings: false,
-        composer: false,
-        quickly: false,
-        reopen: false,
-        search: false,
-        quick_terminal: false,
+    // Off macOS the chords hold Shift, so match the key as it is without
+    // modifiers (`t`, not `T`; `1`, not `!`), in the user's layout.
+    #[cfg(not(target_os = "macos"))]
+    let key = {
+        use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
+        event.key_without_modifiers()
     };
+    #[cfg(target_os = "macos")]
+    let key = event.logical_key.clone();
+    shortcut_for(&key, mods, cfg!(target_os = "macos"))
+}
+
+/// The app shortcut for a key. macOS uses ⌘ (and ⌘⇧). Linux and Windows
+/// follow their terminals: Ctrl+Shift for what is ⌘ on macOS, Ctrl+Shift+Alt
+/// for ⌘⇧, Alt+1…9 and Ctrl+PgUp/PgDn (or Ctrl+Tab) for tabs, Ctrl+, for
+/// settings and Ctrl+= / Ctrl+- for the font. Plain Ctrl chords stay the
+/// shell's and Super stays the desktop's.
+fn shortcut_for(key: &Key, mods: ModifiersState, mac: bool) -> Option<Shortcut> {
+    if mac {
+        mac_shortcut(key, mods)
+    } else {
+        pc_shortcut(key, mods)
+    }
+}
+
+fn pc_shortcut(key: &Key, mods: ModifiersState) -> Option<Shortcut> {
+    let (ctrl, shift, alt) = (mods.control_key(), mods.shift_key(), mods.alt_key());
+    if mods.super_key() {
+        return None;
+    }
+    let mut s = Shortcut::default();
+    let ch = match key {
+        Key::Character(c) => c.to_lowercase(),
+        _ => String::new(),
+    };
+    let digit = ch.parse::<usize>().ok().filter(|d| (1..=9).contains(d));
+    match key {
+        // Tabs: Ctrl+PgUp/PgDn and Ctrl+(Shift+)Tab, as in browsers and
+        // other terminals.
+        Key::Named(NamedKey::PageUp | NamedKey::PageDown) if ctrl && !shift && !alt => {
+            s.tab = if matches!(key, Key::Named(NamedKey::PageUp)) {
+                -1
+            } else {
+                1
+            };
+            return Some(s);
+        }
+        Key::Named(NamedKey::Tab) if ctrl && !alt => {
+            s.tab = if shift { -1 } else { 1 };
+            return Some(s);
+        }
+        _ => {}
+    }
+    if alt && !ctrl && !shift {
+        s.select = Some(digit? - 1);
+        return Some(s);
+    }
+    if ctrl && !alt && matches!(ch.as_str(), "=" | "+" | "-") {
+        s.font = if ch == "-" { -1.0 } else { 1.0 };
+        return Some(s);
+    }
+    if ctrl && !shift && !alt {
+        if ch == "," {
+            s.settings = true;
+            return Some(s);
+        }
+        return None;
+    }
+    if !(ctrl && shift) {
+        return None;
+    }
+    match (alt, ch.as_str()) {
+        (false, "t") => s.new_tab = true,
+        (false, "w") => s.close = true,
+        (false, "e") => s.composer = true,
+        (false, "f") => s.search = true,
+        (false, "k" | "p") => s.palette = true,
+        (false, "d") => s.split_right = true,
+        (false, "g") => s.find = 1,
+        // Pane focus, like ⌘[ / ⌘] on macOS.
+        (false, "[") => s.cycle = -1,
+        (false, "]") => s.cycle = 1,
+        (true, "d") => s.split_down = true,
+        (true, "g") => s.find = -1,
+        (true, "t") => s.quick_terminal = true,
+        (true, "z") => s.reopen = true,
+        (true, "h") => s.hint = true,
+        (true, "o") => s.quickly = true,
+        (true, "l") => s.toggle_sidebar = true,
+        (true, "r") => s.toggle_details = true,
+        _ => return None,
+    }
+    Some(s)
+}
+
+fn mac_shortcut(key: &Key, mods: ModifiersState) -> Option<Shortcut> {
+    if !mods.super_key() {
+        return None;
+    }
+    let mut s = Shortcut::default();
     let mut matched = true;
-    match &event.logical_key {
+    match key {
         Key::Character(c) => match c.as_str() {
             "t" if mods.shift_key() => s.quick_terminal = true,
             "t" => s.new_tab = true,
@@ -9081,6 +9161,16 @@ impl ApplicationHandler<HostEvent> for Host {
                         has_selection: state.selection.is_some(),
                     };
                     let kind = winit_key_kind(&event);
+                    // Ctrl+Shift+C copies (egui turns it into a Copy event);
+                    // it must not also reach the shell as ^C.
+                    if !cfg!(target_os = "macos")
+                        && mods.ctrl
+                        && mods.shift
+                        && !mods.alt
+                        && matches!(kind, input::KeyKind::Char('c' | 'C'))
+                    {
+                        return;
+                    }
                     // Special keys are encoded below; only plain text keys (letters,
                     // space, symbols) carry a `text` payload to send here — otherwise
                     // Enter/Tab/etc. would be sent twice.
@@ -9144,7 +9234,9 @@ fn terminal_paste_shortcut(
     if cfg!(target_os = "macos") {
         super_key && !control && !shift && matches!(key, input::KeyKind::Char('v' | 'V'))
     } else {
-        !super_key && control && !shift && matches!(key, input::KeyKind::Char('v' | 'V'))
+        // Ctrl+Shift+V as in other Linux/Windows terminals; Ctrl+V too.
+        let _ = shift;
+        !super_key && control && matches!(key, input::KeyKind::Char('v' | 'V'))
     }
 }
 
@@ -10172,6 +10264,75 @@ mod tests {
                 start + Duration::from_millis(deadline)
             );
         }
+    }
+
+    #[test]
+    fn keymaps_use_command_on_macos_and_ctrl_shift_elsewhere() {
+        use super::{shortcut_for, Key, ModifiersState, NamedKey};
+        let ch = |c: &str| Key::Character(c.into());
+        let m = |bits: &[ModifiersState]| bits.iter().fold(ModifiersState::empty(), |a, b| a | *b);
+        let (cmd, ctrl, shift, alt) = (
+            ModifiersState::SUPER,
+            ModifiersState::CONTROL,
+            ModifiersState::SHIFT,
+            ModifiersState::ALT,
+        );
+        // macOS: ⌘T, ⌘⇧D, ⌘1.
+        assert!(shortcut_for(&ch("t"), m(&[cmd]), true).unwrap().new_tab);
+        assert!(
+            shortcut_for(&ch("d"), m(&[cmd, shift]), true)
+                .unwrap()
+                .split_down
+        );
+        assert_eq!(
+            shortcut_for(&ch("1"), m(&[cmd]), true).unwrap().select,
+            Some(0)
+        );
+        assert!(shortcut_for(&ch("t"), m(&[ctrl, shift]), true).is_none());
+        // Linux/Windows.
+        let pc = |key: &Key, mods: &[ModifiersState]| shortcut_for(key, m(mods), false);
+        assert!(pc(&ch("t"), &[ctrl, shift]).unwrap().new_tab);
+        assert!(pc(&ch("k"), &[ctrl, shift]).unwrap().palette);
+        assert!(pc(&ch("p"), &[ctrl, shift]).unwrap().palette);
+        assert!(pc(&ch("d"), &[ctrl, shift]).unwrap().split_right);
+        assert!(pc(&ch("d"), &[ctrl, shift, alt]).unwrap().split_down);
+        assert!(pc(&ch("t"), &[ctrl, shift, alt]).unwrap().quick_terminal);
+        assert_eq!(pc(&ch("g"), &[ctrl, shift, alt]).unwrap().find, -1);
+        assert_eq!(pc(&ch("3"), &[alt]).unwrap().select, Some(2));
+        let named = |n: NamedKey, mods: &[ModifiersState]| pc(&Key::Named(n), mods).unwrap();
+        assert_eq!(named(NamedKey::PageDown, &[ctrl]).tab, 1);
+        assert_eq!(named(NamedKey::PageUp, &[ctrl]).tab, -1);
+        assert_eq!(named(NamedKey::Tab, &[ctrl, shift]).tab, -1);
+        assert!(pc(&Key::Named(NamedKey::PageUp), &[ctrl, shift]).is_none());
+        assert_eq!(pc(&ch("]"), &[ctrl, shift]).unwrap().cycle, 1);
+        // macOS: ⌘] moves pane focus, ⌘⇧] switches tab.
+        assert_eq!(shortcut_for(&ch("]"), m(&[cmd]), true).unwrap().cycle, 1);
+        assert_eq!(
+            shortcut_for(&ch("]"), m(&[cmd, shift]), true).unwrap().tab,
+            1
+        );
+        assert!(pc(&ch(","), &[ctrl]).unwrap().settings);
+        assert_eq!(pc(&ch("="), &[ctrl]).unwrap().font, 1.0);
+        assert_eq!(pc(&ch("-"), &[ctrl]).unwrap().font, -1.0);
+        // The shell keeps plain Ctrl chords, and the desktop keeps Super.
+        for c in ["t", "w", "d", "k", "e", "f", "c", "r"] {
+            assert!(
+                pc(&ch(c), &[ctrl]).is_none(),
+                "Ctrl+{c} belongs to the shell"
+            );
+        }
+        assert!(pc(&ch("t"), &[cmd]).is_none());
+        assert!(pc(&ch("1"), &[cmd]).is_none());
+        assert!(pc(&ch("x"), &[ctrl, shift]).is_none());
+    }
+
+    #[test]
+    fn ctrl_shift_v_pastes_off_macos() {
+        use super::{input::KeyKind, terminal_paste_shortcut};
+        assert_eq!(
+            terminal_paste_shortcut(KeyKind::Char('V'), false, true, true, false),
+            !cfg!(target_os = "macos")
+        );
     }
 
     #[test]

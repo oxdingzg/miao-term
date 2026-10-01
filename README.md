@@ -80,7 +80,7 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
   files and directories in the current folder, and recent files.
 - A right-hand details panel with tabs: **Info, Agent, Outline, Git, Files,
   Ports, Queue** (git status, directory listing, listening ports, prompt queue).
-- **Composer** (`⌘⇧E`) and a **prompt queue**: a queued prompt targets the pane
+- **Composer** (`⌘E`, `Ctrl+Shift+E` on Linux/Windows) and a **prompt queue**: a queued prompt targets the pane
   it was queued from and is typed in when that pane's agent turns idle, one per
   transition (it survives restarts; Send now takes it out of the queue);
   **notifications** and a **sleep guard** driven by agent state. Background tabs
@@ -378,25 +378,30 @@ Pass `--socket PATH` or set `MTTY_SOCKET` to target a non-default socket.
 
 ## Keyboard shortcuts
 
-| Shortcut | Action |
-|----------|--------|
-| `⌘T` | New tab |
-| `⌘W` | Close the focused pane (or tab) |
-| `⌘D` / `⇧⌘D` | Split right / split down |
-| `⌥⌘→` / `⌥⌘←` (or `⌘⇧]` / `⌘⇧[`) | Cycle pane focus |
-| `⌥⌘D` | Toggle the details panel |
-| `⌘K` | Command palette |
-| `⌘⇧O` | Open Quickly (tabs, agents, files, recent files) |
-| `⌘F` | Find |
-| `⌘⇧E` | Composer (multi-line prompt to the focused pane) |
-| `⌘⇧T` | Quick Terminal (scratch tab) |
-| `⌘⇧Z` | Reopen the last closed tab |
-| `⌘,` | Settings |
-| `⌘+` / `⌘-` / `⌘0` | Increase / decrease / reset font size |
+| macOS | Linux / Windows | Action |
+|---|---|---|
+| `⌘T` | `Ctrl+Shift+T` | New tab |
+| `⌘W` | `Ctrl+Shift+W` | Close the focused pane (or tab) |
+| `⌘D` / `⇧⌘D` | `Ctrl+Shift+D` / `Ctrl+Shift+Alt+D` | Split right / split down |
+| `⌘[` / `⌘]` | `Ctrl+Shift+[` / `Ctrl+Shift+]` | Previous / next pane |
+| `⇧⌘[` / `⇧⌘]` | `Ctrl+PgUp` / `Ctrl+PgDn` (or `Ctrl+Tab`) | Previous / next tab |
+| `⌘1`…`⌘9` | `Alt+1`…`Alt+9` | Go to tab |
+| `⌘K` (or `⇧⌘P`) | `Ctrl+Shift+K` (or `Ctrl+Shift+P`) | Command palette |
+| `⇧⌘O` | `Ctrl+Shift+Alt+O` | Open Quickly (tabs, agents, files, hosts) |
+| `⌘F` | `Ctrl+Shift+F` | Find |
+| `⌘G` / `⇧⌘G` | `Ctrl+Shift+G` / `Ctrl+Shift+Alt+G` | Next / previous match |
+| `⇧⌘H` | `Ctrl+Shift+Alt+H` | Hints (open a link or path by its label) |
+| `⌘E` | `Ctrl+Shift+E` | Composer (multi-line prompt to the focused pane) |
+| `⇧⌘T` | `Ctrl+Shift+Alt+T` | Quick Terminal (scratch tab) |
+| `⇧⌘Z` | `Ctrl+Shift+Alt+Z` | Reopen the last closed tab |
+| `⇧⌘L` / `⇧⌘R` | `Ctrl+Shift+Alt+L` / `Ctrl+Shift+Alt+R` | Toggle the sidebar / details panel |
+| `⌘,` | `Ctrl+,` | Settings |
+| `⌘+` / `⌘-` | `Ctrl+=` / `Ctrl+-` | Larger / smaller font |
+| `⌘C` / `⌘V` | `Ctrl+Shift+C` / `Ctrl+Shift+V` (also `Ctrl+V`, and `Ctrl+C` with a selection) | Copy / paste |
 | `Shift+PgUp` / `Shift+PgDn` | Scroll the viewport |
 
-On macOS, `⌘` is the command modifier; on other platforms, the equivalent
-primary modifier is used.
+Plain `Ctrl` chords (`Ctrl+C`, `Ctrl+W`, `Ctrl+D`, …) always reach the shell on
+Linux and Windows, and `Super`/`Win` combinations are left to the desktop.
 
 ---
 
