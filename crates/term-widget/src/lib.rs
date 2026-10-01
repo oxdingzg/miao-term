@@ -469,6 +469,27 @@ fn ssh_host(target: &str) -> String {
         .unwrap_or_else(|| target.to_string())
 }
 
+/// A floating window inside mtty: resizable both ways, kept on screen and no
+/// larger than it. Pair it with [`window_body`] so wide content (long lines,
+/// code blocks, full-width fields) scrolls instead of stretching the window
+/// to a size it can then no longer be dragged below.
+fn app_window<'a>(title: impl Into<egui::WidgetText>, ctx: &egui::Context) -> egui::Window<'a> {
+    let screen = ctx.screen_rect();
+    egui::Window::new(title)
+        .resizable(true)
+        .constrain(true)
+        .default_size([640.0, 480.0])
+        .max_size((screen.size() - egui::vec2(24.0, 24.0)).max(egui::vec2(200.0, 120.0)))
+}
+
+/// The scrolling content area of an [`app_window`].
+fn window_body<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    egui::ScrollArea::both()
+        .auto_shrink([false, false])
+        .show(ui, add)
+        .inner
+}
+
 /// The palette label for launching an agent.
 fn launch_label(lang: miao_term_ui::i18n::Lang, agent: &str) -> &'static str {
     use miao_term_ui::i18n::t;
@@ -3604,12 +3625,12 @@ impl State {
             .unwrap_or_default();
         let current_theme = self.theme_name.clone();
         let mut chosen_theme: Option<&'static str> = None;
-        egui::Window::new(miao_term_ui::i18n::t(self.lang, "Settings", "设置"))
+        app_window(miao_term_ui::i18n::t(self.lang, "Settings", "设置"), ctx)
             .collapsible(false)
+            .default_size([460.0, 560.0])
             .open(&mut open)
             .show(ctx, |ui| {
-                egui::ScrollArea::vertical()
-                    .max_height(560.0)
+                egui::ScrollArea::both()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         ui.label(miao_term_ui::i18n::t(self.lang, "Font size", "字号"));
@@ -3714,7 +3735,7 @@ impl State {
                                 egui::TextEdit::multiline(msg)
                                     .font(egui::TextStyle::Monospace)
                                     .desired_rows(6)
-                                    .desired_width(f32::INFINITY),
+                                    .desired_width(ui.available_width()),
                             );
                         }
                         ui.separator();
@@ -4221,93 +4242,97 @@ impl State {
         };
         let mut chosen: Option<Pick> = None;
         let mut open = true;
-        egui::Window::new(miao_term_ui::i18n::t(self.lang, "Open Quickly", "快速打开"))
-            .collapsible(false)
-            .open(&mut open)
-            .show(ctx, |ui| {
-                let r = ui.add(
-                    egui::TextEdit::singleline(query)
-                        .hint_text(miao_term_ui::i18n::t(
-                            self.lang,
-                            "tab / agent / file",
-                            "标签 / agent / 文件",
-                        ))
-                        .desired_width(420.0),
-                );
-                // Enter makes the field give up focus; check it before re-taking focus.
-                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if !enter {
-                    r.request_focus();
+        app_window(
+            miao_term_ui::i18n::t(self.lang, "Open Quickly", "快速打开"),
+            ctx,
+        )
+        .collapsible(false)
+        .default_size([460.0, 420.0])
+        .open(&mut open)
+        .show(ctx, |ui| {
+            let r = ui.add(
+                egui::TextEdit::singleline(query)
+                    .hint_text(miao_term_ui::i18n::t(
+                        self.lang,
+                        "tab / agent / file",
+                        "标签 / agent / 文件",
+                    ))
+                    .desired_width(420.0),
+            );
+            // Enter makes the field give up focus; check it before re-taking focus.
+            let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if !enter {
+                r.request_focus();
+            }
+            let q = query.to_lowercase();
+            let freq = |p: &str| std::cmp::Reverse(*counts.get(p).unwrap_or(&0));
+            let mut rows: Vec<(usize, std::cmp::Reverse<u32>, String, Pick)> = Vec::new();
+            for (i, title) in &tabs {
+                if let Some(s) = miao_term_ui::palette::score(title, "tab", &q) {
+                    rows.push((s, freq(title), format!("\u{21e5} {title}"), Pick::Tab(*i)));
                 }
-                let q = query.to_lowercase();
-                let freq = |p: &str| std::cmp::Reverse(*counts.get(p).unwrap_or(&0));
-                let mut rows: Vec<(usize, std::cmp::Reverse<u32>, String, Pick)> = Vec::new();
-                for (i, title) in &tabs {
-                    if let Some(s) = miao_term_ui::palette::score(title, "tab", &q) {
-                        rows.push((s, freq(title), format!("\u{21e5} {title}"), Pick::Tab(*i)));
-                    }
+            }
+            for (i, pane, label) in &agents {
+                if let Some(s) = miao_term_ui::palette::score(label, "agent", &q) {
+                    rows.push((
+                        s,
+                        freq(label),
+                        format!("\u{2726} {label}"),
+                        Pick::Pane(*i, pane.clone()),
+                    ));
                 }
-                for (i, pane, label) in &agents {
-                    if let Some(s) = miao_term_ui::palette::score(label, "agent", &q) {
-                        rows.push((
-                            s,
-                            freq(label),
-                            format!("\u{2726} {label}"),
-                            Pick::Pane(*i, pane.clone()),
-                        ));
-                    }
+            }
+            for (i, label) in &saved_hosts {
+                if let Some(s) = miao_term_ui::palette::score(label, "host ssh", &q) {
+                    rows.push((s, freq(label), format!("\u{21c4} {label}"), Pick::Host(*i)));
                 }
-                for (i, label) in &saved_hosts {
-                    if let Some(s) = miao_term_ui::palette::score(label, "host ssh", &q) {
-                        rows.push((s, freq(label), format!("\u{21c4} {label}"), Pick::Host(*i)));
-                    }
+            }
+            for (name, is_dir) in &files {
+                let kind = if *is_dir { "dir" } else { "file" };
+                if let Some(s) = miao_term_ui::palette::score(name, kind, &q) {
+                    let icon = if *is_dir { "\u{1f4c1}" } else { " " };
+                    let pick = if *is_dir {
+                        Pick::Dir(name.clone())
+                    } else {
+                        Pick::File(name.clone())
+                    };
+                    let f = cwd
+                        .as_ref()
+                        .map(|c| c.join(name).to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    rows.push((s, freq(&f), format!("{icon}  {name}"), pick));
                 }
-                for (name, is_dir) in &files {
-                    let kind = if *is_dir { "dir" } else { "file" };
-                    if let Some(s) = miao_term_ui::palette::score(name, kind, &q) {
-                        let icon = if *is_dir { "\u{1f4c1}" } else { " " };
-                        let pick = if *is_dir {
-                            Pick::Dir(name.clone())
-                        } else {
-                            Pick::File(name.clone())
-                        };
-                        let f = cwd
-                            .as_ref()
-                            .map(|c| c.join(name).to_string_lossy().to_string())
-                            .unwrap_or_default();
-                        rows.push((s, freq(&f), format!("{icon}  {name}"), pick));
-                    }
+            }
+            for path in &recents {
+                if let Some(s) = miao_term_ui::palette::score(path, "recent", &q) {
+                    rows.push((
+                        s,
+                        freq(path),
+                        format!("\u{21ba} {path}"),
+                        Pick::Path(std::path::PathBuf::from(path)),
+                    ));
                 }
-                for path in &recents {
-                    if let Some(s) = miao_term_ui::palette::score(path, "recent", &q) {
-                        rows.push((
-                            s,
-                            freq(path),
-                            format!("\u{21ba} {path}"),
-                            Pick::Path(std::path::PathBuf::from(path)),
-                        ));
-                    }
+            }
+            rows.sort_by_key(|r| (r.0, r.1));
+            let clone_pick = |p: &Pick| match p {
+                Pick::Tab(i) => Pick::Tab(*i),
+                Pick::Pane(i, id) => Pick::Pane(*i, id.clone()),
+                Pick::Host(i) => Pick::Host(*i),
+                Pick::File(n) => Pick::File(n.clone()),
+                Pick::Dir(n) => Pick::Dir(n.clone()),
+                Pick::Path(p) => Pick::Path(p.clone()),
+            };
+            for (_, _, label, pick) in rows.iter().take(50) {
+                if ui.selectable_label(false, label).clicked() {
+                    chosen = Some(clone_pick(pick));
                 }
-                rows.sort_by_key(|r| (r.0, r.1));
-                let clone_pick = |p: &Pick| match p {
-                    Pick::Tab(i) => Pick::Tab(*i),
-                    Pick::Pane(i, id) => Pick::Pane(*i, id.clone()),
-                    Pick::Host(i) => Pick::Host(*i),
-                    Pick::File(n) => Pick::File(n.clone()),
-                    Pick::Dir(n) => Pick::Dir(n.clone()),
-                    Pick::Path(p) => Pick::Path(p.clone()),
-                };
-                for (_, _, label, pick) in rows.iter().take(50) {
-                    if ui.selectable_label(false, label).clicked() {
-                        chosen = Some(clone_pick(pick));
-                    }
+            }
+            if enter {
+                if let Some((_, _, _, p)) = rows.first() {
+                    chosen = Some(clone_pick(p));
                 }
-                if enter {
-                    if let Some((_, _, _, p)) = rows.first() {
-                        chosen = Some(clone_pick(p));
-                    }
-                }
-            });
+            }
+        });
         if let Some(p) = chosen {
             self.quick = None;
             match p {
@@ -4470,7 +4495,7 @@ impl State {
         let mut open = true;
         let mut send = false;
         let mut queue = false;
-        egui::Window::new(t(lang, "Composer", "Composer"))
+        app_window(t(lang, "Composer", "Composer"), ctx)
             .open(&mut open)
             .default_size([520.0, 260.0])
             .show(ctx, |ui| {
@@ -4482,7 +4507,7 @@ impl State {
                 ui.add(
                     egui::TextEdit::multiline(text)
                         .hint_text(t(lang, "Prompt…", "提示词…"))
-                        .desired_width(f32::INFINITY)
+                        .desired_width(ui.available_width())
                         .desired_rows(8),
                 );
                 ui.horizontal(|ui| {
@@ -4664,10 +4689,10 @@ impl State {
             .into_iter()
             .map(|(i, h)| (i, h.clone()))
             .collect();
-        egui::Window::new(t(lang, "Hosts", "主机"))
+        app_window(t(lang, "Hosts", "主机"), ctx)
             .collapsible(false)
             .open(&mut open)
-            .default_width(520.0)
+            .default_size([560.0, 460.0])
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.add(
@@ -4934,75 +4959,77 @@ impl State {
         };
         let mut open = true;
         let mut action: Option<(usize, &'static str)> = None;
-        egui::Window::new(t(lang, "Agent Tasks", "Agent 任务"))
+        app_window(t(lang, "Agent Tasks", "Agent 任务"), ctx)
             .collapsible(false)
             .open(&mut open)
-            .default_width(520.0)
+            .default_size([560.0, 420.0])
             .show(ctx, |ui| {
-                ui.label(
-                    egui::RichText::new(view.repo.display().to_string())
-                        .size(11.0)
-                        .color(egui::Color32::from_gray(150)),
-                );
-                if view.loading {
-                    ui.label(t(lang, "Loading…", "加载中…"));
-                } else if view.tasks.is_empty() {
-                    ui.label(t(
-                        lang,
-                        "No tasks in this repository.",
-                        "这个仓库还没有任务。",
-                    ));
-                }
-                for (i, task) in view.tasks.iter().enumerate() {
-                    ui.separator();
-                    ui.label(egui::RichText::new(&task.name).strong());
+                window_body(ui, |ui| {
                     ui.label(
-                        egui::RichText::new(format!("{} \u{2190} {}", task.branch, task.base))
+                        egui::RichText::new(view.repo.display().to_string())
                             .size(11.0)
                             .color(egui::Color32::from_gray(150)),
                     );
-                    ui.horizontal(|ui| {
-                        if ui.button(t(lang, "Open", "打开")).clicked() {
-                            action = Some((i, "open"));
-                        }
-                        if ui.button(t(lang, "Diff", "查看改动")).clicked() {
-                            action = Some((i, "diff"));
-                        }
-                        match view.confirm {
-                            Some((c, merge)) if c == i => {
-                                let label = if merge {
-                                    t(lang, "Confirm merge", "确认合并")
-                                } else {
-                                    t(
-                                        lang,
-                                        "Confirm discard (deletes its work)",
-                                        "确认丢弃(删除其改动)",
-                                    )
-                                };
-                                if ui
-                                    .button(
-                                        egui::RichText::new(label)
-                                            .color(egui::Color32::from_rgb(0xeb, 0xcb, 0x8b)),
-                                    )
-                                    .clicked()
-                                {
-                                    action = Some((i, if merge { "merge" } else { "discard" }));
+                    if view.loading {
+                        ui.label(t(lang, "Loading…", "加载中…"));
+                    } else if view.tasks.is_empty() {
+                        ui.label(t(
+                            lang,
+                            "No tasks in this repository.",
+                            "这个仓库还没有任务。",
+                        ));
+                    }
+                    for (i, task) in view.tasks.iter().enumerate() {
+                        ui.separator();
+                        ui.label(egui::RichText::new(&task.name).strong());
+                        ui.label(
+                            egui::RichText::new(format!("{} \u{2190} {}", task.branch, task.base))
+                                .size(11.0)
+                                .color(egui::Color32::from_gray(150)),
+                        );
+                        ui.horizontal(|ui| {
+                            if ui.button(t(lang, "Open", "打开")).clicked() {
+                                action = Some((i, "open"));
+                            }
+                            if ui.button(t(lang, "Diff", "查看改动")).clicked() {
+                                action = Some((i, "diff"));
+                            }
+                            match view.confirm {
+                                Some((c, merge)) if c == i => {
+                                    let label = if merge {
+                                        t(lang, "Confirm merge", "确认合并")
+                                    } else {
+                                        t(
+                                            lang,
+                                            "Confirm discard (deletes its work)",
+                                            "确认丢弃(删除其改动)",
+                                        )
+                                    };
+                                    if ui
+                                        .button(
+                                            egui::RichText::new(label)
+                                                .color(egui::Color32::from_rgb(0xeb, 0xcb, 0x8b)),
+                                        )
+                                        .clicked()
+                                    {
+                                        action = Some((i, if merge { "merge" } else { "discard" }));
+                                    }
+                                    if ui.button(t(lang, "Cancel", "取消")).clicked() {
+                                        action = Some((i, "cancel"));
+                                    }
                                 }
-                                if ui.button(t(lang, "Cancel", "取消")).clicked() {
-                                    action = Some((i, "cancel"));
+                                _ => {
+                                    if ui.button(t(lang, "Merge…", "合并…")).clicked() {
+                                        action = Some((i, "ask-merge"));
+                                    }
+                                    if ui.button(t(lang, "Discard…", "丢弃…")).clicked() {
+                                        action = Some((i, "ask-discard"));
+                                    }
                                 }
                             }
-                            _ => {
-                                if ui.button(t(lang, "Merge…", "合并…")).clicked() {
-                                    action = Some((i, "ask-merge"));
-                                }
-                                if ui.button(t(lang, "Discard…", "丢弃…")).clicked() {
-                                    action = Some((i, "ask-discard"));
-                                }
-                            }
-                        }
-                    });
-                }
+                        });
+                    }
+                });
             });
         if !open {
             self.tasks_view = None;
@@ -5361,115 +5388,94 @@ impl State {
         let mut open = true;
         let mut save = false;
         let mut quit = false;
-        egui::Window::new(title)
-            .open(&mut open)
-            .default_size([640.0, 480.0])
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    if ed.readonly {
-                        ui.label(
-                            egui::RichText::new(miao_term_ui::i18n::t(
-                                self.lang,
-                                "read-only",
-                                "只读",
-                            ))
+        app_window(title, ctx).open(&mut open).show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                if ed.readonly {
+                    ui.label(
+                        egui::RichText::new(miao_term_ui::i18n::t(self.lang, "read-only", "只读"))
                             .color(egui::Color32::from_gray(140)),
-                        );
-                    } else if ui
-                        .button(miao_term_ui::i18n::t(self.lang, "Save", "保存"))
-                        .clicked()
-                    {
-                        save = true;
-                    }
-                    ui.checkbox(
-                        &mut ed.preview,
-                        miao_term_ui::i18n::t(self.lang, "Markdown preview", "Markdown 预览"),
                     );
-                    if ed.saving {
-                        ui.label(
-                            egui::RichText::new(miao_term_ui::i18n::t(
-                                self.lang,
-                                "saving…",
-                                "保存中…",
-                            ))
+                } else if ui
+                    .button(miao_term_ui::i18n::t(self.lang, "Save", "保存"))
+                    .clicked()
+                {
+                    save = true;
+                }
+                ui.checkbox(
+                    &mut ed.preview,
+                    miao_term_ui::i18n::t(self.lang, "Markdown preview", "Markdown 预览"),
+                );
+                if ed.saving {
+                    ui.label(
+                        egui::RichText::new(miao_term_ui::i18n::t(self.lang, "saving…", "保存中…"))
                             .color(egui::Color32::from_gray(150)),
-                        );
-                    } else if modified && !ed.readonly {
-                        ui.label(
-                            egui::RichText::new(miao_term_ui::i18n::t(
-                                self.lang,
-                                "modified",
-                                "已修改",
-                            ))
+                    );
+                } else if modified && !ed.readonly {
+                    ui.label(
+                        egui::RichText::new(miao_term_ui::i18n::t(self.lang, "modified", "已修改"))
                             .color(egui::Color32::from_rgb(0xeb, 0xcb, 0x8b)),
-                        );
-                    }
-                });
-                ui.separator();
-                if ed.preview {
-                    let ch = self.theme.chrome();
-                    let fg = miao_term_ui::chrome::bg_color(ch.text);
-                    let panel = miao_term_ui::chrome::bg_color(ch.card);
-                    egui::ScrollArea::vertical()
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            render_markdown(
-                                ui,
-                                &ed.text,
-                                &mut self.cmark,
-                                &mut self.mmd,
-                                fg,
-                                panel,
-                            );
-                        });
-                } else {
-                    let mut vim_effect = miao_term_ui::vim::VimEffect::Nothing;
-                    egui::ScrollArea::both()
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            ui.horizontal_top(|ui| {
-                                let lines = ed.text.lines().count().max(1);
-                                let mut nums = String::new();
-                                for i in 1..=lines {
-                                    nums.push_str(&format!("{i:>4}\n"));
-                                }
-                                ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(nums)
-                                            .monospace()
-                                            .size(13.0)
-                                            .color(egui::Color32::from_gray(110)),
-                                    )
-                                    .selectable(false),
-                                );
-                                let text_id = egui::Id::new("mtty-editor-text");
-                                let mut edit = egui::TextEdit::multiline(&mut ed.text)
-                                    .id(text_id)
-                                    .code_editor()
-                                    .desired_width(f32::INFINITY)
-                                    .layouter(&mut layouter);
-                                if ed.readonly {
-                                    edit = edit.interactive(false);
-                                }
-                                ui.add(edit);
-                                if let Some(v) = self.vim.as_mut().filter(|_| !ed.readonly) {
-                                    vim_effect = miao_term_ui::vim::vim_handle(
-                                        &mut ed.text,
-                                        v,
-                                        ui.ctx(),
-                                        text_id,
-                                    );
-                                }
-                            });
-                        });
-                    if vim_effect == miao_term_ui::vim::VimEffect::Save {
-                        save = true;
-                    }
-                    if vim_effect == miao_term_ui::vim::VimEffect::Quit {
-                        quit = true;
-                    }
+                    );
                 }
             });
+            ui.separator();
+            if ed.preview {
+                let ch = self.theme.chrome();
+                let fg = miao_term_ui::chrome::bg_color(ch.text);
+                let panel = miao_term_ui::chrome::bg_color(ch.card);
+                // Both ways: wide code blocks scroll instead of widening the window.
+                egui::ScrollArea::both()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        render_markdown(ui, &ed.text, &mut self.cmark, &mut self.mmd, fg, panel);
+                    });
+            } else {
+                let mut vim_effect = miao_term_ui::vim::VimEffect::Nothing;
+                egui::ScrollArea::both()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.horizontal_top(|ui| {
+                            let lines = ed.text.lines().count().max(1);
+                            let mut nums = String::new();
+                            for i in 1..=lines {
+                                nums.push_str(&format!("{i:>4}\n"));
+                            }
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(nums)
+                                        .monospace()
+                                        .size(13.0)
+                                        .color(egui::Color32::from_gray(110)),
+                                )
+                                .selectable(false),
+                            );
+                            let text_id = egui::Id::new("mtty-editor-text");
+                            let mut edit = egui::TextEdit::multiline(&mut ed.text)
+                                .id(text_id)
+                                .code_editor()
+                                .desired_width(f32::INFINITY)
+                                .layouter(&mut layouter);
+                            if ed.readonly {
+                                edit = edit.interactive(false);
+                            }
+                            ui.add(edit);
+                            if let Some(v) = self.vim.as_mut().filter(|_| !ed.readonly) {
+                                vim_effect = miao_term_ui::vim::vim_handle(
+                                    &mut ed.text,
+                                    v,
+                                    ui.ctx(),
+                                    text_id,
+                                );
+                            }
+                        });
+                    });
+                if vim_effect == miao_term_ui::vim::VimEffect::Save {
+                    save = true;
+                }
+                if vim_effect == miao_term_ui::vim::VimEffect::Quit {
+                    quit = true;
+                }
+            }
+        });
         let outcome = if save {
             self.save_editor()
         } else {
@@ -8282,6 +8288,67 @@ mod tests {
             repeat: false,
             modifiers: egui::Modifiers::NONE,
         }
+    }
+
+    /// Drag a window's right edge `dx` points and return its width after.
+    fn drag_window_edge(body: fn(&mut egui::Ui), dx: f32) -> (f32, f32) {
+        let ctx = egui::Context::default();
+        let mut rect = egui::Rect::NOTHING;
+        let mut frame = |events: Vec<egui::Event>| {
+            replay(&ctx, events, |ctx| {
+                rect = app_window("doc", ctx)
+                    .show(ctx, body)
+                    .unwrap()
+                    .response
+                    .rect;
+            });
+            rect
+        };
+        frame(vec![]);
+        let before = frame(vec![]);
+        let start = egui::pos2(before.right() - 1.0, before.center().y);
+        frame(vec![egui::Event::PointerMoved(start)]);
+        frame(vec![egui::Event::PointerButton {
+            pos: start,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        for step in 1..=6 {
+            frame(vec![egui::Event::PointerMoved(
+                start + egui::vec2(dx * step as f32 / 6.0, 0.0),
+            )]);
+        }
+        frame(vec![egui::Event::PointerButton {
+            pos: start + egui::vec2(dx, 0.0),
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        let after = frame(vec![]);
+        (before.width(), after.width())
+    }
+
+    #[test]
+    fn windows_with_wide_content_can_be_resized_both_ways() {
+        // A long unwrapped line (a Markdown code block) and a full-width text
+        // field used to pin the window at the widest size.
+        fn body(ui: &mut egui::Ui) {
+            let content = |ui: &mut egui::Ui| {
+                ui.add(egui::Label::new("x".repeat(400)).wrap_mode(egui::TextWrapMode::Extend));
+                let mut text = String::from("note");
+                ui.add(egui::TextEdit::multiline(&mut text).desired_width(f32::INFINITY));
+            };
+            window_body(ui, content);
+        }
+        let (before, narrower) = drag_window_edge(body, -200.0);
+        assert!(
+            before < 1000.0,
+            "the window does not fill the screen: {before}"
+        );
+        assert!(narrower < before - 150.0, "{before} -> {narrower}");
+        let (before, wider) = drag_window_edge(body, 150.0);
+        assert!(wider > before + 100.0, "{before} -> {wider}");
     }
 
     #[test]
