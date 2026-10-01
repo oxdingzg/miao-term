@@ -151,6 +151,59 @@ pub fn tab_group_boundary(groups: &[Option<String>], i: usize) -> bool {
         && groups.get(i - 1).and_then(|g| g.as_deref()) != groups.get(i).and_then(|g| g.as_deref())
 }
 
+/// The sidebar's saved hosts, grouped; a click asks to connect.
+pub fn host_list(
+    ui: &mut egui::Ui,
+    ch: &ChromeColors,
+    hosts: &[(String, Option<String>)],
+    lang: Lang,
+) -> Option<usize> {
+    let mut picked = None;
+    ui.add_space(10.0);
+    ui.label(section(&format!(
+        "{} ({})",
+        t(lang, "Hosts", "主机"),
+        hosts.len()
+    )));
+    ui.separator();
+    egui::ScrollArea::vertical()
+        .id_salt("host_list")
+        .max_height(240.0)
+        .show(ui, |ui| {
+            let mut last_group: Option<&Option<String>> = None;
+            for (i, (label, group)) in hosts.iter().enumerate() {
+                if last_group != Some(group) {
+                    if let Some(name) = group {
+                        ui.label(
+                            egui::RichText::new(name)
+                                .size(10.5)
+                                .color(bg_color(ch.text).gamma_multiply(0.6)),
+                        );
+                    }
+                    last_group = Some(group);
+                }
+                ui.horizontal(|ui| {
+                    let (irect, _) =
+                        ui.allocate_exact_size(egui::Vec2::splat(14.0), egui::Sense::hover());
+                    crate::icons::draw(
+                        ui.painter(),
+                        irect,
+                        crate::icons::Icon::Server,
+                        bg_color(ch.text),
+                    );
+                    if ui
+                        .selectable_label(false, egui::RichText::new(label).size(12.0))
+                        .on_hover_text(t(lang, "Connect", "连接"))
+                        .clicked()
+                    {
+                        picked = Some(i);
+                    }
+                });
+            }
+        });
+    picked
+}
+
 /// A horizontal tab bar: clickable, draggable labels, a close affordance, `+`.
 pub fn tab_bar(
     ui: &mut egui::Ui,
@@ -660,6 +713,21 @@ pub trait Chrome {
     fn on_close_pane(&mut self, id: &str) {
         let _ = id;
     }
+    /// Starting widths of the side panels (restored from the last session).
+    fn sidebar_width(&self) -> f32 {
+        CHROME_SIDEBAR_W
+    }
+    fn details_width(&self) -> f32 {
+        CHROME_DETAILS_W
+    }
+    /// The panels' actual widths after this frame (`None` when hidden).
+    fn on_panel_widths(&mut self, sidebar: Option<f32>, details: Option<f32>) {}
+    /// Saved SSH hosts for the sidebar, in display order: (label, group).
+    fn hosts(&self) -> Vec<(String, Option<String>)> {
+        Vec::new()
+    }
+    /// The user picked `hosts()[i]`.
+    fn on_host_connect(&mut self, i: usize) {}
 }
 
 pub const CHROME_MENU_H: f32 = 24.0;
@@ -667,6 +735,38 @@ pub const CHROME_TAB_H: f32 = 30.0;
 pub const CHROME_STATUS_H: f32 = 22.0;
 pub const CHROME_SIDEBAR_W: f32 = 200.0;
 pub const CHROME_DETAILS_W: f32 = 300.0;
+/// How far the side panels can be dragged (their default is the width above).
+pub const SIDEBAR_RANGE: std::ops::RangeInclusive<f32> = 140.0..=480.0;
+pub const DETAILS_RANGE: std::ops::RangeInclusive<f32> = 200.0..=640.0;
+
+/// Whether egui shows a resize cursor: the pointer is on a panel or window
+/// edge, so a press there belongs to the UI even outside the panel itself.
+pub fn resize_cursor(icon: egui::CursorIcon) -> bool {
+    use egui::CursorIcon::*;
+    matches!(
+        icon,
+        ResizeHorizontal
+            | ResizeColumn
+            | ResizeEast
+            | ResizeWest
+            | ResizeVertical
+            | ResizeRow
+            | ResizeNorth
+            | ResizeSouth
+            | ResizeNeSw
+            | ResizeNwSe
+            | ResizeNorthEast
+            | ResizeNorthWest
+            | ResizeSouthEast
+            | ResizeSouthWest
+    )
+}
+
+/// The width a side panel actually has this frame (after the user dragged its
+/// edge), so the host lays the terminal out beside it.
+fn panel_width(ctx: &egui::Context, id: &str) -> Option<f32> {
+    egui::containers::panel::PanelState::load(ctx, egui::Id::new(id)).map(|p| p.rect.width())
+}
 
 /// Draw the whole surrounding UI (menu, tabs, sidebar, details, status).
 pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
@@ -702,6 +802,8 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
     let status = host.status();
     let status_right = host.status_right();
     let queue_items = host.queue();
+    let saved_hosts = host.hosts();
+    let mut host_connect: Option<usize> = None;
     let mut queue_input = host.take_queue_input();
 
     let mut menu: Option<MenuId> = None;
@@ -826,7 +928,9 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
 
     if show_sidebar {
         egui::SidePanel::left("sessions")
-            .exact_width(CHROME_SIDEBAR_W)
+            .resizable(true)
+            .default_width(host.sidebar_width())
+            .width_range(SIDEBAR_RANGE)
             .frame(panel_frame_stroke(
                 egui::Margin::same(6.0),
                 ch.sidebar,
@@ -859,6 +963,9 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
                 group_tab = ev.group.or(group_tab);
                 ungroup_tab = ev.ungroup.or(ungroup_tab);
                 new_tab = new_tab || ev.new_tab;
+                if !saved_hosts.is_empty() {
+                    host_connect = host_list(ui, &ch, &saved_hosts, lang).or(host_connect);
+                }
             });
     }
 
@@ -874,7 +981,9 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
             (Icon::Queue, t(lang, "Queue", "队列")),
         ];
         egui::SidePanel::right("details")
-            .exact_width(CHROME_DETAILS_W)
+            .resizable(true)
+            .default_width(host.details_width())
+            .width_range(DETAILS_RANGE)
             .frame(panel_frame_stroke(
                 egui::Margin::same(8.0),
                 ch.details,
@@ -932,6 +1041,13 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
     host.set_queue_input(queue_input);
     if let Some(id) = menu {
         host.on_menu(id);
+    }
+    host.on_panel_widths(
+        show_sidebar.then(|| panel_width(ctx, "sessions")).flatten(),
+        show_details.then(|| panel_width(ctx, "details")).flatten(),
+    );
+    if let Some(i) = host_connect {
+        host.on_host_connect(i);
     }
     if let Some(i) = switch {
         host.on_switch_tab(i);
@@ -1309,5 +1425,107 @@ mod tab_menu_tests {
         }]);
         assert_eq!(ev.reorder, Some((0, 2)));
         assert_eq!(ev.switch, None, "a drag is not a click");
+    }
+
+    struct PanelHost {
+        widths: (Option<f32>, Option<f32>),
+    }
+
+    impl Chrome for PanelHost {
+        fn show_sidebar(&self) -> bool {
+            true
+        }
+        fn show_details(&self) -> bool {
+            true
+        }
+        fn on_panel_widths(&mut self, sidebar: Option<f32>, details: Option<f32>) {
+            self.widths = (sidebar, details);
+        }
+    }
+
+    #[test]
+    fn side_panels_can_be_dragged_wider_and_claim_the_pointer() {
+        let ctx = egui::Context::default();
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.font_data.insert(
+            "tabler".into(),
+            egui::FontData::from_static(include_bytes!(
+                "../../../assets/fonts/tabler-icons-subset.ttf"
+            ))
+            .into(),
+        );
+        fonts.families.insert(
+            egui::FontFamily::Name("tabler".into()),
+            vec!["tabler".into()],
+        );
+        ctx.set_fonts(fonts);
+        let mut host = PanelHost {
+            widths: (None, None),
+        };
+        let cursor = std::cell::Cell::new(egui::CursorIcon::Default);
+        let frame = |events: Vec<egui::Event>, host: &mut PanelHost| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 700.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            cursor.set(
+                ctx.run(input, |ctx| render(ctx, host))
+                    .platform_output
+                    .cursor_icon,
+            );
+            host.widths
+        };
+        frame(vec![], &mut host);
+        let (left, right) = frame(vec![], &mut host);
+        let left = left.expect("sidebar width reported");
+        assert!((left - CHROME_SIDEBAR_W).abs() < 1.0, "{left}");
+        assert!((right.unwrap() - CHROME_DETAILS_W).abs() < 1.0);
+        // Just outside the sidebar's edge, over what the host draws as terminal.
+        let start = egui::pos2(left + 2.0, 300.0);
+        frame(vec![egui::Event::PointerMoved(start)], &mut host);
+        frame(vec![egui::Event::PointerMoved(start)], &mut host);
+        // The host decides who owns a press before running the frame. Just
+        // outside a panel egui does not report wanting the pointer, but it
+        // shows the resize cursor, which the host treats as the UI's.
+        assert!(resize_cursor(cursor.get()), "{:?}", cursor.get());
+        frame(
+            vec![egui::Event::PointerButton {
+                pos: start,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            &mut host,
+        );
+        assert!(
+            ctx.wants_pointer_input(),
+            "the panel edge belongs to the UI, not the terminal"
+        );
+        for step in 1..=5 {
+            frame(
+                vec![egui::Event::PointerMoved(
+                    start + egui::vec2(20.0 * step as f32, 0.0),
+                )],
+                &mut host,
+            );
+        }
+        let (dragged, _) = frame(
+            vec![egui::Event::PointerButton {
+                pos: start + egui::vec2(100.0, 0.0),
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            &mut host,
+        );
+        let dragged = dragged.unwrap();
+        assert!(
+            (dragged - (left + 100.0)).abs() < 3.0,
+            "sidebar is now {dragged}"
+        );
     }
 }

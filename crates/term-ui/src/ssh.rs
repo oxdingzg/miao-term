@@ -91,6 +91,26 @@ pub fn session_command(input: &str) -> Option<(String, String)> {
     Some((target.destination(), cmd))
 }
 
+/// The command for a saved host (B3.1): connection reuse, the host's own
+/// options (`-p`, `-J`), the destination and the terminfo bootstrap.
+pub fn host_command(destination: &str, options: &[String]) -> String {
+    let mut cmd = String::from("ssh -t");
+    cmd.push_str(&format!(
+        " -o ControlMaster=auto -o ControlPath={}",
+        control_path()
+    ));
+    cmd.push_str(" -o ControlPersist=60s");
+    for option in options {
+        cmd.push(' ');
+        cmd.push_str(&shell_quote(option));
+    }
+    cmd.push(' ');
+    cmd.push_str(&shell_quote(destination));
+    cmd.push(' ');
+    cmd.push_str(&shell_quote(&bootstrap("xterm-256color")));
+    cmd
+}
+
 /// Resolve a target through the user's ssh config, falling back to the typed
 /// values when `ssh -G` is unavailable. Runs a process: keep it off the UI
 /// thread, and connect with the typed target (see [`session_command`]).
@@ -287,6 +307,19 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn host_commands_quote_options_and_destination() {
+        let cmd = host_command(
+            "deploy@203.0.113.7",
+            &["-p".into(), "2222".into(), "-J".into(), "bastion".into()],
+        );
+        assert!(
+            cmd.contains(" '-p' '2222' '-J' 'bastion' 'deploy@203.0.113.7' "),
+            "{cmd}"
+        );
+        assert!(cmd.contains("ControlMaster=auto"));
+    }
 
     #[test]
     fn sessions_connect_with_the_typed_alias() {

@@ -253,7 +253,7 @@ verified on its own:
 
 ### M3 Remote operations (from Termius)
 
-- [ ] **B3.1 Host library**: `hosts.toml` (name, address, user, port, group,
+- [x] **B3.1 Host library** (end to end against a real Linux host: an imported alias connected through its `~/.ssh/config` ProxyJump, opened via `mtty://host/<name>`, a remote command checked; sidebar HOSTS checked in a capture): `hosts.toml` (name, address, user, port, group,
   tags, jump host), import from `~/.ssh/config`, sidebar host list, palette
   search, double-click to connect. Acceptance: parser/import unit tests; a smoke
   against a local sshd or container **[needs a test host]**.

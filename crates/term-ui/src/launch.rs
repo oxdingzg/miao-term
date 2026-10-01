@@ -16,6 +16,8 @@ pub enum Intent {
     Focus(String),
     /// Run a command in a new tab.
     Run(String),
+    /// Connect to a saved host by name (`mtty://host/<name>`, B3.1).
+    Host(String),
 }
 
 impl Intent {
@@ -52,6 +54,10 @@ impl Intent {
                 let rest = rest.trim_start_matches('/');
                 if rest.starts_with("quick") {
                     Some(Intent::Quick)
+                } else if let Some(name) = rest.strip_prefix("host/") {
+                    let name = name.split(['?', '#']).next().unwrap_or_default();
+                    let name = percent_decode(name.trim_end_matches('/'));
+                    (!name.is_empty()).then_some(Intent::Host(name))
                 } else {
                     rest.strip_prefix("focus")
                         .and_then(|r| r.split("pane=").nth(1))
@@ -69,6 +75,7 @@ impl Intent {
             Intent::Quick => "quick".to_string(),
             Intent::Focus(id) => format!("focus\t{id}"),
             Intent::Run(cmd) => format!("run\t{cmd}"),
+            Intent::Host(name) => format!("host\t{name}"),
         }
     }
 
@@ -77,10 +84,35 @@ impl Intent {
         match line.split_once('\t') {
             Some(("focus", id)) => Intent::Focus(id.to_string()),
             Some(("run", cmd)) => Intent::Run(cmd.to_string()),
+            Some(("host", name)) => Intent::Host(name.to_string()),
             _ if line.trim() == "quick" => Intent::Quick,
             _ => Intent::Activate,
         }
     }
+}
+
+/// Decode `%XX` escapes (UTF-8); invalid escapes are kept as written.
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let escaped = (bytes[i] == b'%' && i + 3 <= bytes.len())
+            .then(|| std::str::from_utf8(&bytes[i + 1..i + 3]).ok())
+            .flatten()
+            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+        match escaped {
+            Some(b) => {
+                out.push(b);
+                i += 3;
+            }
+            None => {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// The command a launch URL maps to, or `None` when it should just activate.
@@ -187,6 +219,22 @@ mod tests {
             Intent::Quick
         );
         assert_eq!(Intent::from_args(&args(&["mtty://quick"])), Intent::Quick);
+        assert_eq!(
+            Intent::from_args(&args(&["mtty://host/web-1"])),
+            Intent::Host("web-1".into())
+        );
+        assert_eq!(
+            Intent::from_args(&args(&["mtty://host/%E4%B8%AD%20x/"])),
+            Intent::Host("中 x".into())
+        );
+        assert_eq!(
+            Intent::decode(&Intent::Host("db".into()).encode()),
+            Intent::Host("db".into())
+        );
+        assert_eq!(
+            Intent::from_args(&args(&["mtty://host/"])),
+            Intent::Activate
+        );
         assert_eq!(
             Intent::from_args(&args(&["MTTY://focus?pane=p2"])),
             Intent::Focus("p2".into())

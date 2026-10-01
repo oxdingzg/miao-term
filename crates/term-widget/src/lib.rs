@@ -323,7 +323,14 @@ struct Pane {
 /// the input passes through unchanged.
 fn reconnect_input(pending: &mut Option<String>, bytes: &[u8]) -> Option<Vec<u8>> {
     let command = pending.take()?;
-    (bytes == b"\r").then(|| format!("{command}\r").into_bytes())
+    (bytes == b"\r").then(|| typed_ssh(&command).into_bytes())
+}
+
+/// An ssh command as typed into a pane's shell: a leading space keeps it out
+/// of history (ignorespace), and `clear` wipes the echoed command line, so the
+/// pane starts with the remote session.
+fn typed_ssh(cmd: &str) -> String {
+    format!(" clear; {cmd}\r")
 }
 
 struct Tab {
@@ -338,6 +345,9 @@ struct Tab {
     ssh: bool,
     /// The ssh target as the user typed it, to reconnect after a restore.
     ssh_target: Option<String>,
+    /// The full ssh command the tab ran (saved hosts carry -p / -J), used to
+    /// reconnect or duplicate it.
+    ssh_cmd: Option<String>,
     /// Optional short prefix shown before the tab title.
     prefix: Option<String>,
     /// A short user marker appended to the tab title (ADR 0011).
@@ -390,7 +400,7 @@ impl Tab {
             "layout": layout_to_json(&self.layout), "panes": panes,
             "prefix": self.prefix, "mark": self.mark, "group": self.group,
             "title_set": self.title_set,
-            "ssh": self.ssh, "ssh_target": self.ssh_target,
+            "ssh": self.ssh, "ssh_target": self.ssh_target, "ssh_cmd": self.ssh_cmd,
         })
     }
 
@@ -661,6 +671,15 @@ struct TasksView {
     confirm: Option<(usize, bool)>,
 }
 
+/// The Hosts window: search, a pending delete and the add-host form.
+#[derive(Default)]
+struct HostsView {
+    filter: String,
+    confirm_delete: Option<usize>,
+    form: miao_term_config::hosts::Host,
+    form_port: String,
+}
+
 /// What a save request led to.
 #[derive(Debug, PartialEq, Eq)]
 enum SaveOutcome {
@@ -788,6 +807,11 @@ struct State {
     task_dialog: Option<(String, Option<usize>)>,
     /// The Agent Tasks window.
     tasks_view: Option<TasksView>,
+    /// Saved SSH hosts (B3.1). `host_book_error` blocks saving over a
+    /// hosts.toml that could not be read.
+    host_book: miao_term_config::hosts::HostBook,
+    host_book_error: Option<String>,
+    hosts_view: Option<HostsView>,
     remote_dialog: Option<(String, String)>,
     editor_vim: bool,
     vim: Option<miao_term_ui::vim::VimRuntime>,
@@ -842,6 +866,11 @@ struct State {
     /// it jumps there (macOS notifications from osascript cannot be clicked
     /// through to a pane).
     alert_target: Option<(String, Instant)>,
+    /// egui showed a resize cursor last frame (pointer on a panel edge).
+    ui_resize_hover: bool,
+    /// Side panel widths (logical points), as the user dragged them.
+    sidebar_w: f32,
+    details_w: f32,
     /// Agent CLIs found on PATH, and when that was checked.
     agents_detected: Option<(Instant, Vec<bool>)>,
     /// Settings as last loaded/saved, to write back only what changed.
@@ -1002,8 +1031,16 @@ impl State {
         let scale = self.window.scale_factor() as f32;
         let w = size.width as f32 / scale;
         let h = size.height as f32 / scale;
-        let x = if self.show_sidebar { SIDEBAR_W } else { 0.0 };
-        let right = if self.show_details { DETAILS_W } else { 0.0 };
+        let x = if self.show_sidebar {
+            self.sidebar_w
+        } else {
+            0.0
+        };
+        let right = if self.show_details {
+            self.details_w
+        } else {
+            0.0
+        };
         Rect {
             x,
             y: MENU_H + TAB_H,
@@ -1126,6 +1163,7 @@ impl State {
             title_set: false,
             ssh: false,
             ssh_target: None,
+            ssh_cmd: None,
             prefix: None,
             mark: None,
             group: None,
@@ -1191,6 +1229,7 @@ impl State {
             title_set: false,
             ssh: false,
             ssh_target: None,
+            ssh_cmd: None,
             prefix: None,
             mark: None,
             group: None,
@@ -1555,7 +1594,7 @@ impl State {
 
     fn duplicate_tab(&mut self) {
         let cwd = self.cwd();
-        let (title_set, title, ssh, target, prefix, mark, group) = self
+        let (title_set, title, ssh, (target, ssh_cmd), prefix, mark, group) = self
             .tabs
             .get(self.active_tab)
             .map(|t| {
@@ -1563,7 +1602,7 @@ impl State {
                     t.title_set,
                     t.title.clone(),
                     t.ssh,
-                    t.ssh_target.clone(),
+                    (t.ssh_target.clone(), t.ssh_cmd.clone()),
                     t.prefix.clone(),
                     t.mark.clone(),
                     t.group.clone(),
@@ -1572,9 +1611,12 @@ impl State {
             .unwrap_or_default();
         // An ssh tab is duplicated by connecting again, not as a local shell
         // that merely looks remote.
-        match target.filter(|_| ssh) {
-            Some(target) => self.open_ssh(&target),
-            None => self.new_tab_in(inherited_cwd(ssh, cwd)),
+        match (ssh, ssh_cmd, target) {
+            (true, Some(cmd), target) => {
+                self.open_ssh_command(title.clone(), cmd, target.unwrap_or_default())
+            }
+            (true, None, Some(target)) => self.open_ssh(&target),
+            _ => self.new_tab_in(inherited_cwd(ssh, cwd)),
         }
         if let Some(t) = self.tabs.last_mut() {
             if title_set {
@@ -2285,6 +2327,8 @@ impl State {
             .get(&egui::ViewportId::ROOT)
             .map(|v| v.repaint_delay.is_zero())
             .unwrap_or(false);
+        // A press on a panel edge belongs to the UI (see `resize_cursor`).
+        self.ui_resize_hover = chrome::resize_cursor(output.platform_output.cursor_icon);
         self.egui_state
             .handle_platform_output(&self.window, output.platform_output);
         let ppp = self.egui_ctx.pixels_per_point();
@@ -2614,6 +2658,7 @@ impl State {
         self.ssh_dialog_window(ctx);
         self.task_dialog_window(ctx);
         self.tasks_window(ctx);
+        self.hosts_window(ctx);
         self.remote_dialog_window(ctx);
         self.composer_window(ctx);
         self.quick_window(ctx);
@@ -2723,8 +2768,12 @@ impl State {
                 .map(str::to_string);
             // Sessions saved before ssh targets were recorded cannot reconnect:
             // they come back as what they now are, local shells.
-            let ssh =
-                t.get("ssh").and_then(|x| x.as_bool()).unwrap_or(false) && ssh_target.is_some();
+            let ssh_cmd = t
+                .get("ssh_cmd")
+                .and_then(|x| x.as_str())
+                .map(str::to_string);
+            let ssh = t.get("ssh").and_then(|x| x.as_bool()).unwrap_or(false)
+                && (ssh_target.is_some() || ssh_cmd.is_some());
             let mut panes = Vec::new();
             let mut map = std::collections::HashMap::new();
             if let Some(arr) = t.get("panes").and_then(|p| p.as_array()) {
@@ -2770,14 +2819,15 @@ impl State {
                 title_set,
                 ssh,
                 ssh_target: ssh_target.filter(|_| ssh),
+                ssh_cmd: ssh_cmd.filter(|_| ssh),
                 prefix: None,
                 mark: None,
                 group: None,
                 attention: None,
             };
             tab.restore_decorations(t);
-            if let Some(target) = tab.ssh_target.clone() {
-                self.offer_reconnect(&mut tab, &target);
+            if tab.ssh {
+                self.offer_reconnect(&mut tab);
             }
             self.tabs.push(tab);
         }
@@ -2999,6 +3049,8 @@ enum Cmd {
     NewTab,
     /// Launch `integration::AGENTS[i]` in a new tab (B2.1).
     LaunchAgent(usize),
+    /// The host library (B3.1).
+    Hosts,
     /// Agent tasks in git worktrees (B2.4).
     NewTask,
     Tasks,
@@ -3063,6 +3115,7 @@ impl State {
         vec![
             (Cmd::NewTab, t(l, "New Tab", "新建标签")),
             (Cmd::Composer, "Composer"),
+            (Cmd::Hosts, t(l, "Hosts…", "主机…")),
             (Cmd::NewTask, t(l, "New Agent Task…", "新建 Agent 任务…")),
             (Cmd::Tasks, t(l, "Agent Tasks…", "Agent 任务…")),
             (
@@ -3191,6 +3244,10 @@ impl State {
     fn run_command(&mut self, cmd: Cmd) {
         match cmd {
             Cmd::LaunchAgent(i) => self.launch_agent(i),
+            Cmd::Hosts => {
+                self.reload_hosts();
+                self.hosts_view = Some(HostsView::default());
+            }
             Cmd::NewTask => {
                 self.refresh_agents_detected();
                 let first = self
@@ -3428,6 +3485,7 @@ impl State {
                 save_window_size(
                     s.width as f32 / self.window.scale_factor() as f32,
                     s.height as f32 / self.window.scale_factor() as f32,
+                    (self.sidebar_w, self.details_w),
                 );
                 // process::exit skips destructors: persist the session and
                 // release the sleep inhibitor first, as a window close does.
@@ -3930,6 +3988,31 @@ impl State {
                 self.window.set_visible(true);
                 self.window.focus_window();
             }
+            Intent::Host(name) => {
+                self.reload_hosts();
+                match self
+                    .host_book
+                    .hosts
+                    .iter()
+                    .find(|h| &h.name == name)
+                    .cloned()
+                {
+                    Some(host) => self.open_host(&host),
+                    None => {
+                        let msg = format!(
+                            "{} {name}",
+                            miao_term_ui::i18n::t(
+                                self.lang,
+                                "No saved host named",
+                                "没有名为此的已保存主机:"
+                            )
+                        );
+                        self.show_notice(msg);
+                    }
+                }
+                self.window.set_visible(true);
+                self.window.focus_window();
+            }
             Intent::Run(cmd) => {
                 self.new_tab();
                 if let Some(tab) = self.tabs.get_mut(self.active_tab) {
@@ -4078,6 +4161,7 @@ impl State {
         enum Pick {
             Tab(usize),
             Pane(usize, String),
+            Host(usize),
             File(String),
             Dir(String),
             Path(std::path::PathBuf),
@@ -4117,6 +4201,13 @@ impl State {
                     format!("{agent} \u{00b7} {state} \u{00b7} {title}"),
                 ))
             })
+            .collect();
+        let saved_hosts: Vec<(usize, String)> = self
+            .host_book
+            .hosts
+            .iter()
+            .enumerate()
+            .map(|(i, h)| (i, format!("{} \u{00b7} {}", h.name, h.summary())))
             .collect();
         let files: Vec<(String, bool)> = cwd
             .as_ref()
@@ -4166,6 +4257,11 @@ impl State {
                         ));
                     }
                 }
+                for (i, label) in &saved_hosts {
+                    if let Some(s) = miao_term_ui::palette::score(label, "host ssh", &q) {
+                        rows.push((s, freq(label), format!("\u{21c4} {label}"), Pick::Host(*i)));
+                    }
+                }
                 for (name, is_dir) in &files {
                     let kind = if *is_dir { "dir" } else { "file" };
                     if let Some(s) = miao_term_ui::palette::score(name, kind, &q) {
@@ -4196,6 +4292,7 @@ impl State {
                 let clone_pick = |p: &Pick| match p {
                     Pick::Tab(i) => Pick::Tab(*i),
                     Pick::Pane(i, id) => Pick::Pane(*i, id.clone()),
+                    Pick::Host(i) => Pick::Host(*i),
                     Pick::File(n) => Pick::File(n.clone()),
                     Pick::Dir(n) => Pick::Dir(n.clone()),
                     Pick::Path(p) => Pick::Path(p.clone()),
@@ -4218,6 +4315,11 @@ impl State {
                     if i < self.tabs.len() {
                         self.active_tab = i;
                         self.selection = None;
+                    }
+                }
+                Pick::Host(i) => {
+                    if let Some(host) = self.host_book.hosts.get(i).cloned() {
+                        self.open_host(&host);
                     }
                 }
                 Pick::Pane(i, id) => {
@@ -4459,10 +4561,17 @@ impl State {
     }
 
     /// A restored ssh tab: say it is disconnected and let Enter reconnect.
-    fn offer_reconnect(&self, tab: &mut Tab, target: &str) {
-        let Some((_, cmd)) = miao_term_ui::ssh::session_command(target) else {
+    fn offer_reconnect(&self, tab: &mut Tab) {
+        let cmd = tab.ssh_cmd.clone().or_else(|| {
+            tab.ssh_target
+                .as_deref()
+                .and_then(miao_term_ui::ssh::session_command)
+                .map(|(_, cmd)| cmd)
+        });
+        let Some(cmd) = cmd else {
             return;
         };
+        let target = tab.ssh_target.clone().unwrap_or_else(|| tab.title.clone());
         let active = tab.active.clone();
         let Some(pane) = tab.panes.iter_mut().find(|p| p.id == active) else {
             return;
@@ -4480,18 +4589,251 @@ impl State {
         let Some((title, cmd)) = miao_term_ui::ssh::session_command(input) else {
             return;
         };
+        self.open_ssh_command(title, cmd, input.trim().to_string());
+    }
+
+    /// Connect to a saved host (B3.1).
+    fn open_host(&mut self, host: &miao_term_config::hosts::Host) {
+        let destination = host.destination();
+        let cmd = miao_term_ui::ssh::host_command(&destination, &host.ssh_options());
+        self.open_ssh_command(host.name.clone(), cmd, destination);
+    }
+
+    /// A new tab that runs an ssh command and remembers how to rerun it.
+    fn open_ssh_command(&mut self, title: String, cmd: String, target: String) {
         self.new_tab();
         if let Some(tab) = self.tabs.last_mut() {
-            tab.ssh_target = Some(input.trim().to_string());
+            tab.ssh_target = Some(target);
+            tab.ssh_cmd = Some(cmd.clone());
             tab.title = title;
             tab.title_set = true;
             tab.ssh = true;
             let active = tab.active.clone();
             if let Some(pane) = tab.panes.iter_mut().find(|p| p.id == active) {
-                pane.term.write(format!("{cmd}\r").as_bytes());
+                pane.term.write(typed_ssh(&cmd).as_bytes());
             }
         }
         self.publish_panes();
+    }
+
+    fn reload_hosts(&mut self) {
+        match miao_term_config::hosts::HostBook::load() {
+            Ok(book) => {
+                self.host_book = book;
+                self.host_book_error = None;
+            }
+            Err(e) => {
+                self.show_notice(e.clone());
+                self.host_book_error = Some(e);
+            }
+        }
+    }
+
+    /// Save the host library unless the file on disk could not be read.
+    fn save_hosts(&mut self) -> bool {
+        use miao_term_ui::i18n::t;
+        if let Some(e) = self.host_book_error.clone() {
+            let msg = format!("{}: {e}", t(self.lang, "Hosts not saved", "主机未保存"));
+            self.show_notice(msg);
+            return false;
+        }
+        match self.host_book.save() {
+            Ok(()) => true,
+            Err(e) => {
+                let msg = format!("{}: {e}", t(self.lang, "Hosts not saved", "主机未保存"));
+                self.show_notice(msg);
+                false
+            }
+        }
+    }
+
+    fn hosts_window(&mut self, ctx: &egui::Context) {
+        use miao_term_ui::i18n::t;
+        let lang = self.lang;
+        let Some(mut view) = self.hosts_view.take() else {
+            return;
+        };
+        let mut open = true;
+        let mut connect: Option<usize> = None;
+        let mut delete: Option<usize> = None;
+        let mut import = false;
+        let mut add = false;
+        let rows: Vec<(usize, miao_term_config::hosts::Host)> = self
+            .host_book
+            .sorted()
+            .into_iter()
+            .map(|(i, h)| (i, h.clone()))
+            .collect();
+        egui::Window::new(t(lang, "Hosts", "主机"))
+            .collapsible(false)
+            .open(&mut open)
+            .default_width(520.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut view.filter)
+                            .hint_text(t(lang, "Search hosts…", "搜索主机…"))
+                            .desired_width(260.0),
+                    );
+                    if ui
+                        .button(t(lang, "Import from ~/.ssh/config", "从 ~/.ssh/config 导入"))
+                        .clicked()
+                    {
+                        import = true;
+                    }
+                });
+                let q = view.filter.to_lowercase();
+                egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                    if rows.is_empty() {
+                        ui.label(t(
+                            lang,
+                            "No saved hosts yet. Import them or add one below.",
+                            "还没有保存的主机。可以导入,或在下方添加。",
+                        ));
+                    }
+                    for (i, host) in &rows {
+                        let haystack = format!(
+                            "{} {} {} {}",
+                            host.name,
+                            host.summary(),
+                            host.group.as_deref().unwrap_or(""),
+                            host.tags.join(" ")
+                        )
+                        .to_lowercase();
+                        if !q.is_empty() && !haystack.contains(&q) {
+                            continue;
+                        }
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(&host.name).strong());
+                            ui.label(
+                                egui::RichText::new(host.summary())
+                                    .size(11.0)
+                                    .color(egui::Color32::from_gray(150)),
+                            );
+                            if let Some(group) = &host.group {
+                                ui.label(egui::RichText::new(format!("[{group}]")).size(11.0));
+                            }
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if view.confirm_delete == Some(*i) {
+                                    if ui.button(t(lang, "Cancel", "取消")).clicked() {
+                                        view.confirm_delete = None;
+                                    }
+                                    if ui.button(t(lang, "Confirm delete", "确认删除")).clicked() {
+                                        delete = Some(*i);
+                                    }
+                                } else {
+                                    if ui.button(t(lang, "Delete…", "删除…")).clicked() {
+                                        view.confirm_delete = Some(*i);
+                                    }
+                                    if ui.button(t(lang, "Connect", "连接")).clicked() {
+                                        connect = Some(*i);
+                                    }
+                                }
+                            });
+                        });
+                    }
+                });
+                ui.separator();
+                ui.collapsing(t(lang, "Add host", "添加主机"), |ui| {
+                    let field = |ui: &mut egui::Ui, label: &str, value: &mut String, hint: &str| {
+                        ui.horizontal(|ui| {
+                            ui.label(label);
+                            ui.add(egui::TextEdit::singleline(value).hint_text(hint).desired_width(220.0));
+                        });
+                    };
+                    let opt = |o: &mut Option<String>| o.take().unwrap_or_default();
+                    let mut address = opt(&mut view.form.address);
+                    let mut user = opt(&mut view.form.user);
+                    let mut group = opt(&mut view.form.group);
+                    let mut jump = opt(&mut view.form.jump);
+                    field(ui, t(lang, "Name", "名称"), &mut view.form.name, "web-1");
+                    field(ui, t(lang, "Address", "地址"), &mut address, "203.0.113.5");
+                    field(ui, t(lang, "User", "用户"), &mut user, "deploy");
+                    field(ui, t(lang, "Port", "端口"), &mut view.form_port, "22");
+                    field(ui, t(lang, "Group", "分组"), &mut group, "prod");
+                    field(ui, t(lang, "Jump host", "跳板机"), &mut jump, "bastion");
+                    let some = |v: String| Some(v.trim().to_string()).filter(|v| !v.is_empty());
+                    view.form.address = some(address);
+                    view.form.user = some(user);
+                    view.form.group = some(group);
+                    view.form.jump = some(jump);
+                    let port_ok = view.form_port.trim().is_empty()
+                        || view.form_port.trim().parse::<u16>().is_ok();
+                    let valid = !view.form.name.trim().is_empty()
+                        && view.form.address.is_some()
+                        && port_ok;
+                    if ui
+                        .add_enabled(valid, egui::Button::new(t(lang, "Save host", "保存主机")))
+                        .clicked()
+                    {
+                        add = true;
+                    }
+                });
+                ui.label(
+                    egui::RichText::new(t(
+                        lang,
+                        "Passwords and keys are never stored; ssh-agent and ~/.ssh/config are used.",
+                        "不保存密码和密钥;使用 ssh-agent 与 ~/.ssh/config。",
+                    ))
+                    .size(11.0)
+                    .color(egui::Color32::from_gray(140)),
+                );
+            });
+        if let Some(i) = connect {
+            if let Some(host) = self.host_book.hosts.get(i).cloned() {
+                self.open_host(&host);
+            }
+        }
+        if let Some(i) = delete {
+            if i < self.host_book.hosts.len() {
+                let removed = self.host_book.hosts.remove(i);
+                if !self.save_hosts() {
+                    self.host_book.hosts.insert(i, removed);
+                }
+            }
+            view.confirm_delete = None;
+        }
+        if import {
+            let found = miao_term_config::hosts::read_ssh_config()
+                .map(|text| miao_term_config::hosts::parse_ssh_config(&text))
+                .unwrap_or_default();
+            let total = found.len();
+            let before = self.host_book.clone();
+            let added = self.host_book.merge(found);
+            if added > 0 && !self.save_hosts() {
+                self.host_book = before;
+            } else {
+                let msg = format!(
+                    "{} {added} / {total}",
+                    t(
+                        lang,
+                        "Imported hosts from ~/.ssh/config:",
+                        "已从 ~/.ssh/config 导入主机:"
+                    )
+                );
+                self.show_notice(msg);
+            }
+        }
+        if add {
+            let mut host = std::mem::take(&mut view.form);
+            host.name = host.name.trim().to_string();
+            host.port = view.form_port.trim().parse().ok();
+            view.form_port.clear();
+            if let Some(existing) = self
+                .host_book
+                .hosts
+                .iter_mut()
+                .find(|h| h.name == host.name)
+            {
+                *existing = host;
+            } else {
+                self.host_book.hosts.push(host);
+            }
+            self.save_hosts();
+        }
+        if open {
+            self.hosts_view = Some(view);
+        }
     }
 
     /// List the tasks of the repository the window shows, in the background.
@@ -5948,6 +6290,9 @@ impl ApplicationHandler<HostEvent> for Host {
             ssh_dialog: None,
             task_dialog: None,
             tasks_view: None,
+            host_book: Default::default(),
+            host_book_error: None,
+            hosts_view: None,
             remote_dialog: None,
             editor_vim: cfg.editor_vim,
             vim: cfg.editor_vim.then(miao_term_ui::vim::VimRuntime::default),
@@ -6006,6 +6351,9 @@ impl ApplicationHandler<HostEvent> for Host {
             jobs_tx,
             jobs_rx,
             agents_detected: None,
+            ui_resize_hover: false,
+            sidebar_w: load_panel_widths().0,
+            details_w: load_panel_widths().1,
             alert_target: None,
             saved_settings: Vec::new(),
             config_imported_from: cfg.imported_from,
@@ -6045,6 +6393,7 @@ impl ApplicationHandler<HostEvent> for Host {
         let intent = miao_term_ui::launch::Intent::from_args(&args);
         state.apply_launch(&intent);
         state.saved_settings = state.settings_values();
+        state.reload_hosts();
         // QA: run a palette command by its English label at startup, so
         // windows that only open from the palette can be captured.
         if let Some(label) = miao_term_config::env("QA_COMMAND") {
@@ -6287,7 +6636,9 @@ impl ApplicationHandler<HostEvent> for Host {
         }
         if !matches!(event, WindowEvent::RedrawRequested) {
             let resp = state.egui_state.on_window_event(&state.window, &event);
-            ui_consumed = resp.consumed;
+            // Just outside a side panel egui does not claim the pointer, but a
+            // press on its resize edge must drag the edge, not select text.
+            ui_consumed = resp.consumed || state.ui_resize_hover;
             if resp.repaint {
                 state.window.request_redraw();
             }
@@ -6318,6 +6669,7 @@ impl ApplicationHandler<HostEvent> for Host {
                 save_window_size(
                     s.width as f32 / state.window.scale_factor() as f32,
                     s.height as f32 / state.window.scale_factor() as f32,
+                    (state.sidebar_w, state.details_w),
                 );
                 if state.show_settings {
                     state.persist_settings();
@@ -7297,13 +7649,41 @@ fn load_window_size() -> Option<(f32, f32)> {
     Some((w, h))
 }
 
-fn save_window_size(w: f32, h: f32) {
+/// `width height [sidebar details]`; files from older versions have only
+/// the first two.
+fn save_window_size(w: f32, h: f32, panels: (f32, f32)) {
     if let Some(path) = window_file() {
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let _ = std::fs::write(path, format!("{w:.0} {h:.0}\n"));
+        let _ = std::fs::write(
+            path,
+            format!("{w:.0} {h:.0} {:.0} {:.0}\n", panels.0, panels.1),
+        );
     }
+}
+
+/// The side panels' saved widths, clamped to their drag ranges.
+fn load_panel_widths() -> (f32, f32) {
+    let text = window_file()
+        .and_then(|p| std::fs::read_to_string(legacy_state_path(&p, "native-window")).ok())
+        .unwrap_or_default();
+    parse_panel_widths(&text)
+}
+
+fn parse_panel_widths(text: &str) -> (f32, f32) {
+    let mut it = text
+        .split_whitespace()
+        .skip(2)
+        .map(|v| v.parse::<f32>().ok());
+    let clamp = |v: Option<f32>, range: std::ops::RangeInclusive<f32>, default: f32| {
+        v.filter(|v| v.is_finite())
+            .map(|v| v.clamp(*range.start(), *range.end()))
+            .unwrap_or(default)
+    };
+    let left = clamp(it.next().flatten(), chrome::SIDEBAR_RANGE, SIDEBAR_W);
+    let right = clamp(it.next().flatten(), chrome::DETAILS_RANGE, DETAILS_W);
+    (left, right)
 }
 
 impl chrome::Chrome for State {
@@ -7518,6 +7898,41 @@ impl chrome::Chrome for State {
     }
     fn on_new_tab(&mut self) {
         self.new_tab_in(self.active_cwd_for_new());
+    }
+    fn sidebar_width(&self) -> f32 {
+        self.sidebar_w
+    }
+    fn details_width(&self) -> f32 {
+        self.details_w
+    }
+    fn on_panel_widths(&mut self, sidebar: Option<f32>, details: Option<f32>) {
+        let mut changed = false;
+        if let Some(w) = sidebar.filter(|w| (w - self.sidebar_w).abs() > 0.5) {
+            self.sidebar_w = w;
+            changed = true;
+        }
+        if let Some(w) = details.filter(|w| (w - self.details_w).abs() > 0.5) {
+            self.details_w = w;
+            changed = true;
+        }
+        if changed {
+            // The terminal area changed: reflow the panes to it.
+            self.resize();
+            self.window.request_redraw();
+        }
+    }
+    fn hosts(&self) -> Vec<(String, Option<String>)> {
+        self.host_book
+            .sorted()
+            .into_iter()
+            .map(|(_, h)| (h.name.clone(), h.group.clone()))
+            .collect()
+    }
+    fn on_host_connect(&mut self, i: usize) {
+        let host = self.host_book.sorted().get(i).map(|(_, h)| (*h).clone());
+        if let Some(host) = host {
+            self.open_host(&host);
+        }
     }
     fn on_switch_tab(&mut self, i: usize) {
         if i < self.tabs.len() {
@@ -7977,6 +8392,7 @@ mod tests {
             title_set: false,
             ssh: false,
             ssh_target: None,
+            ssh_cmd: None,
             prefix: None,
             mark: None,
             group: None,
@@ -8035,6 +8451,18 @@ mod tests {
     }
 
     #[test]
+    fn panel_widths_load_from_old_and_new_window_files() {
+        assert_eq!(parse_panel_widths("1100 720"), (SIDEBAR_W, DETAILS_W));
+        assert_eq!(parse_panel_widths("1100 720 260 340\n"), (260.0, 340.0));
+        assert_eq!(
+            parse_panel_widths("1100 720 9999 1"),
+            (480.0, 200.0),
+            "clamped"
+        );
+        assert_eq!(parse_panel_widths("1100 720 x NaN"), (SIDEBAR_W, DETAILS_W));
+    }
+
+    #[test]
     fn view_rules_match_the_ssh_host() {
         assert_eq!(ssh_host("deploy@work:2200"), "work");
         assert_eq!(ssh_host("work"), "work");
@@ -8061,7 +8489,7 @@ mod tests {
         let mut pending = Some("ssh -t 'work'".to_string());
         assert_eq!(
             reconnect_input(&mut pending, b"\r").as_deref(),
-            Some(&b"ssh -t 'work'\r"[..])
+            Some(&b" clear; ssh -t 'work'\r"[..])
         );
         assert!(pending.is_none(), "reconnect is offered once");
         let mut pending = Some("ssh -t 'work'".to_string());

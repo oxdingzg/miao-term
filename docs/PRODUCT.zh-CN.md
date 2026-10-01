@@ -194,7 +194,7 @@
 
 ### M3 远程运维(吸收 Termius)
 
-- [ ] **B3.1 主机库**:`hosts.toml`(名称、地址、用户、端口、分组、标签、跳板机)、从 `~/.ssh/config`
+- [x] **B3.1 主机库**(一台真实 Linux 主机端到端:导入的别名经 `~/.ssh/config` 的 ProxyJump 连接,经 `mtty://host/<名称>` 打开并在远端执行命令核对;侧栏 HOSTS 截图核对):`hosts.toml`(名称、地址、用户、端口、分组、标签、跳板机)、从 `~/.ssh/config`
   导入、侧栏主机列表、命令面板搜索、双击连接。验收:解析/导入单测,冒烟连接本机 sshd 或容器 **[需测试主机]**。
 - [ ] **B3.2 安全连接**:known_hosts 首次连接/指纹变化确认界面;ssh-agent 状态与密钥生成;不保存明文密码。
 - [ ] **B3.3 端口转发**:经 ControlMaster `ssh -O forward/cancel` 管理 L/R/D 规则,随主机保存,状态可见。
