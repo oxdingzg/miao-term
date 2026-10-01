@@ -208,9 +208,10 @@
 - [ ] **B4.1** Windows/Linux 真实桌面验收(IME、热键、拖放、菜单)**[所有者 + 真机]**。
   Linux,2026-10-01(Ubuntu 24.04、GNOME 46、Wayland,经 uinput 注入输入):键盘输入、菜单及菜单动作正常;拼音输入法
   的预编辑、候选框位置与上屏正常;Quick Terminal 快捷键可通过 GNOME 自定义快捷键执行 `mtty --quick` 实现(GNOME 46
-  没有 GlobalShortcuts portal)。**发现问题:** 原生 Wayland 下拖放文件无反应(winit 0.30 只为 X11 实现了拖放;在
-  XWayland 下拖放会粘贴加引号的路径);Linux/Windows 上的应用快捷键用的是 Super 键,而桌面占用了大部分 Super 组合,
-  且提示显示为 ⌘。Windows:待进行。
+  没有 GlobalShortcuts portal)。**发现并已修复:** 原生 Wayland 下拖放文件无反应(winit 0.30 只为 X11 实现了拖放),
+  现由我们自己的 `wl_data_device` 处理;由于 GNOME 每个客户端只认一个 data device,剪贴板读取也改由它完成;应用快捷键
+  原用 Super(被桌面占用),现改为以 Ctrl+Shift 为主(见 README 表格);终端里按 Tab 会让 egui 焦点跳到 File 菜单并吞掉
+  后续输入。Windows:待进行。
 - [ ] **B4.2** Apple 公证、Windows MSI 签名 **[所有者 + 凭证]**。
 - [x] **B4.3** 自动更新:下载、`update-pubkey` 签名校验、替换安装。(内置发布公钥;Mac mini 上用打包 app + 测试密钥签名的发布包验证安装并重启,并验证篡改的包因校验和或签名被拒;已发布的 v0.0.5 包用仓库公钥验签通过。AppImage 与 Windows 辅助脚本尚未在真实桌面运行。)
 - [x] **B4.4** bash / fish / PowerShell 的 shell 集成。(真实 PTY 端到端测试:macOS 上的 zsh、bash 3.2/5.3,Linux 上的 bash 5.2、fish 3.7、PowerShell 7.5;Windows 上的 PowerShell 由 CI 运行。Windows PowerShell 5.1 不记录历史。)

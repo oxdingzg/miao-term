@@ -2090,6 +2090,8 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "pollster",
  "serde_json",
+ "wayland-backend",
+ "wayland-client",
  "wgpu",
  "winit",
 ]
