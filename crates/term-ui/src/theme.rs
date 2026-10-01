@@ -2,7 +2,7 @@
 
 use miao_term_core::aterm::{Color as TermColor, NamedColor};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Rgb(pub u8, pub u8, pub u8);
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]

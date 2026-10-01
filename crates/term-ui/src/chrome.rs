@@ -153,7 +153,7 @@ pub fn tab_bar(
     ui: &mut egui::Ui,
     ch: &ChromeColors,
     titles: &[String],
-    icons: &[crate::icons::Icon],
+    icons: &[crate::icons::TabIcon],
     groups: &[Option<String>],
     active: usize,
     lang: Lang,
@@ -176,7 +176,10 @@ pub fn tab_bar(
                 egui::Stroke::new(1.0_f32, bg_color(ch.text).gamma_multiply(0.5)),
             );
         }
-        let icon = icons[i];
+        let icon = icons
+            .get(i)
+            .cloned()
+            .unwrap_or_else(|| crate::icons::Icon::Terminal.into());
         let galley = ui
             .painter()
             .layout_no_wrap(title.clone(), font.clone(), text_color);
@@ -196,7 +199,7 @@ pub fn tab_bar(
             egui::pos2(rect.left() + 12.0, rect.center().y),
             egui::Vec2::splat(14.0),
         );
-        crate::icons::draw(ui.painter(), ir, icon, text_color);
+        crate::icons::draw_tab_icon(ui.painter(), ir, &icon, text_color);
         let pos = rect.min + egui::vec2(22.0, (rect.height() - galley.size().y) * 0.5);
         ui.painter().galley(pos, galley, text_color);
         // Close affordance, inside the chip.
@@ -276,7 +279,7 @@ pub fn sidebar(
     ui: &mut egui::Ui,
     ch: &ChromeColors,
     titles: &[String],
-    icons: &[crate::icons::Icon],
+    icons: &[crate::icons::TabIcon],
     badges: &[Option<Rgb>],
     metas: &[String],
     groups: &[Option<String>],
@@ -292,13 +295,13 @@ pub fn sidebar(
     for (i, title) in titles.iter().enumerate() {
         ui.horizontal(|ui| {
             let (irect, _) = ui.allocate_exact_size(egui::Vec2::splat(14.0), egui::Sense::hover());
-            crate::icons::draw(
+            crate::icons::draw_tab_icon(
                 ui.painter(),
                 irect,
-                icons
+                &icons
                     .get(i)
-                    .copied()
-                    .unwrap_or(crate::icons::Icon::Terminal),
+                    .cloned()
+                    .unwrap_or_else(|| crate::icons::Icon::Terminal.into()),
                 bg_color(ch.text),
             );
             match badges.get(i).copied().flatten() {
@@ -545,7 +548,7 @@ pub enum MenuId {
 pub struct ChromeTab {
     pub title: String,
     pub badge: Option<Rgb>,
-    pub icon: crate::icons::Icon,
+    pub icon: crate::icons::TabIcon,
 }
 
 /// The host implements this; [`render`] draws the surrounding UI from it and
@@ -673,7 +676,7 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
     let titles: Vec<String> = tabs.iter().map(|t| t.title.clone()).collect();
     let tab_groups = host.tab_groups();
     let badges: Vec<Option<Rgb>> = tabs.iter().map(|t| t.badge).collect();
-    let icons: Vec<crate::icons::Icon> = tabs.iter().map(|t| t.icon).collect();
+    let icons: Vec<crate::icons::TabIcon> = tabs.iter().map(|t| t.icon.clone()).collect();
     let metas: Vec<String> = (0..titles.len())
         .map(|i| {
             if i < 9 {
@@ -1198,7 +1201,7 @@ mod tab_menu_tests {
         );
         ctx.set_fonts(fonts);
         let titles = vec!["one".into(), "two".into(), "three".into()];
-        let icons = vec![crate::icons::Icon::Terminal; 3];
+        let icons = vec![crate::icons::TabIcon::from(crate::icons::Icon::Terminal); 3];
         let groups = vec![Some("a".into()), Some("a".into()), Some("b".into())];
         let frame = |groups: &[Option<String>]| {
             ctx.run(egui::RawInput::default(), |ctx| {
