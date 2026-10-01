@@ -729,6 +729,8 @@ struct SftpView {
     chmod: Option<String>,
     new_folder: Option<String>,
     confirm_delete: bool,
+    /// Show dot files on both sides (hidden by default, as in the Files tree).
+    show_hidden: bool,
     /// Where the window was drawn, so files dropped on it are uploaded.
     rect: egui::Rect,
 }
@@ -3584,7 +3586,16 @@ impl State {
             Cmd::OpenQuickly => self.quick = Some(String::new()),
             Cmd::CheckUpdates => self.check_updates(),
             Cmd::NewSsh => self.ssh_dialog = Some(String::new()),
-            Cmd::OpenRemote => self.remote_dialog = Some((String::new(), String::new())),
+            Cmd::OpenRemote => {
+                // From an ssh tab the host is already known.
+                let dest = self
+                    .tabs
+                    .get(self.active_tab)
+                    .filter(|t| t.ssh)
+                    .and_then(|t| t.ssh_target.clone())
+                    .unwrap_or_default();
+                self.remote_dialog = Some((dest, String::new()));
+            }
             Cmd::SaveRecipe => {
                 self.recipe_name.clear();
                 self.recipe_dialog = Some(true);
@@ -4430,7 +4441,7 @@ impl State {
             for (name, is_dir) in &files {
                 let kind = if *is_dir { "dir" } else { "file" };
                 if let Some(s) = miao_term_ui::palette::score(name, kind, &q) {
-                    let icon = if *is_dir { "\u{1f4c1}" } else { " " };
+                    let icon = if *is_dir { "\u{ea83}" } else { " " };
                     let pick = if *is_dir {
                         Pick::Dir(name.clone())
                     } else {
@@ -4777,6 +4788,7 @@ impl State {
             chmod: None,
             new_folder: None,
             confirm_delete: false,
+            show_hidden: false,
             rect: egui::Rect::NOTHING,
         });
         self.sftp_refresh(true, true);
@@ -4814,7 +4826,7 @@ impl State {
             };
             let dir = view.local_dir.clone();
             self.spawn_job(move || {
-                let entries = files_rows(&dir);
+                let entries = list_dir(&dir, true);
                 JobDone::SftpLocalListed { dir, entries }
             });
         }
@@ -4909,6 +4921,15 @@ impl State {
                         if ui.button(t(lang, "Refresh", "刷新")).clicked() {
                             refresh = true;
                         }
+                        if ui
+                            .checkbox(
+                                &mut view.show_hidden,
+                                t(lang, "Show hidden", "显示隐藏文件"),
+                            )
+                            .changed()
+                        {
+                            refresh = true;
+                        }
                     });
                 });
                 ui.separator();
@@ -4935,9 +4956,13 @@ impl State {
                         .max_height(360.0)
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            for e in &view.local_entries {
+                            for e in view
+                                .local_entries
+                                .iter()
+                                .filter(|e| view.show_hidden || !e.name.starts_with('.'))
+                            {
                                 let label = if e.is_dir {
-                                    format!("\u{1f4c1} {}", e.name)
+                                    format!("\u{ea83} {}", e.name)
                                 } else {
                                     format!("    {}  \u{00b7} {}", e.name, human_size(e.size))
                                 };
@@ -4986,9 +5011,13 @@ impl State {
                         .max_height(360.0)
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            for e in &view.remote_entries {
+                            for e in view
+                                .remote_entries
+                                .iter()
+                                .filter(|e| view.show_hidden || !e.name.starts_with('.'))
+                            {
                                 let label = if e.is_dir {
-                                    format!("\u{1f4c1} {}", e.name)
+                                    format!("\u{ea83} {}", e.name)
                                 } else {
                                     format!(
                                         "    {}  \u{00b7} {}  {}",
@@ -8426,12 +8455,17 @@ fn ports_rows(pid: u32) -> Vec<(String, String)> {
 }
 
 fn files_rows(cwd: &std::path::Path) -> Vec<FileEntry> {
+    list_dir(cwd, false)
+}
+
+/// Directory entries, directories first; dot files only with `hidden`.
+fn list_dir(cwd: &std::path::Path, hidden: bool) -> Vec<FileEntry> {
     let Ok(read) = std::fs::read_dir(cwd) else {
         return Vec::new();
     };
     let mut rows: Vec<FileEntry> = read
         .flatten()
-        .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+        .filter(|e| hidden || !e.file_name().to_string_lossy().starts_with('.'))
         .take(500)
         .map(|e| {
             let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
