@@ -9,6 +9,8 @@
 //! group = "prod"
 //! tags = ["web"]
 //! jump = "bastion"
+//! tmux = "mtty"        # keep the shell in a tmux session (optional)
+//! mosh = true          # connect with mosh (optional)
 //!
 //! [[host]]
 //! name = "work"        # imported from ~/.ssh/config
@@ -42,6 +44,13 @@ pub struct Host {
     /// A jump host (`ssh -J`), for hosts not described in `~/.ssh/config`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub jump: Option<String>,
+    /// Keep the remote shell in this tmux session, so reconnecting returns to
+    /// it (B3.6). Ignored where the host has no tmux.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tmux: Option<String>,
+    /// Connect with mosh (survives roaming and sleep; needs mosh on both ends).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mosh: bool,
     /// Saved port forwards (B3.3).
     #[serde(default, skip_serializing_if = "Vec::is_empty", rename = "forward")]
     pub forwards: Vec<Forward>,

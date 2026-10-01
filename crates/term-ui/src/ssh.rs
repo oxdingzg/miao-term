@@ -111,6 +111,80 @@ pub fn host_command(destination: &str, options: &[String]) -> String {
     cmd
 }
 
+/// A tmux session name mtty will put on a command line.
+pub fn valid_session_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// The bootstrap, ending in `tmux new-session -A` (attach or create) instead
+/// of a plain login shell when the host has tmux.
+pub fn with_tmux(bootstrap: &str, session: &str) -> String {
+    const SHELL: &str = "exec ${SHELL:-sh} -l";
+    if !valid_session_name(session) {
+        return bootstrap.to_string();
+    }
+    bootstrap.replacen(
+        SHELL,
+        &format!(
+            "T=$(PATH=$PATH:/usr/local/bin:/opt/homebrew/bin command -v tmux); \
+             if [ -n \"$T\" ]; then exec \"$T\" new-session -A -s {session}; else {SHELL}; fi"
+        ),
+        1,
+    )
+}
+
+/// Whether a program is on PATH.
+pub fn on_path(program: &str) -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|dir| {
+        let file = dir.join(program);
+        file.is_file() || (cfg!(windows) && dir.join(format!("{program}.exe")).is_file())
+    })
+}
+
+/// A saved host's command with its persistent-session choices (B3.6): the
+/// shell inside a tmux session, and/or mosh instead of ssh. mosh takes the
+/// ssh options through `--ssh` and runs the bootstrap as its remote command.
+pub fn persistent_host_command(
+    destination: &str,
+    options: &[String],
+    tmux: Option<&str>,
+    mosh: bool,
+) -> String {
+    let mut boot = bootstrap("xterm-256color");
+    if let Some(session) = tmux {
+        boot = with_tmux(&boot, session);
+    }
+    if !mosh {
+        let plain = host_command(destination, options);
+        return plain.replacen(
+            &shell_quote(&bootstrap("xterm-256color")),
+            &shell_quote(&boot),
+            1,
+        );
+    }
+    let mut cmd = String::from("mosh");
+    if !options.is_empty() {
+        let ssh: Vec<String> = std::iter::once("ssh".to_string())
+            .chain(options.iter().map(|o| shell_quote(o)))
+            .collect();
+        cmd.push_str(&format!(" --ssh={}", shell_quote(&ssh.join(" "))));
+    }
+    cmd.push(' ');
+    cmd.push_str(&shell_quote(destination));
+    // The bootstrap is `sh -c '…'`: after `--` the local shell splits it into
+    // the argv mosh-server runs.
+    cmd.push_str(" -- ");
+    cmd.push_str(&boot);
+    cmd
+}
+
 /// Resolve a target through the user's ssh config, falling back to the typed
 /// values when `ssh -G` is unavailable. Runs a process: keep it off the UI
 /// thread, and connect with the typed target (see [`session_command`]).
@@ -319,6 +393,73 @@ mod tests {
             "{cmd}"
         );
         assert!(cmd.contains("ControlMaster=auto"));
+    }
+
+    #[test]
+    fn persistent_sessions_use_tmux_and_mosh() {
+        let plain = host_command("h", &[]);
+        assert_eq!(persistent_host_command("h", &[], None, false), plain);
+        let tmux = persistent_host_command("h", &["-p".into(), "2222".into()], Some("mtty"), false);
+        assert!(
+            tmux.starts_with("ssh -t") && tmux.contains("new-session -A -s mtty"),
+            "{tmux}"
+        );
+        assert!(
+            tmux.contains("else exec ${SHELL:-sh} -l; fi"),
+            "falls back without tmux"
+        );
+        // A name that is not safe on a command line is ignored.
+        let bad = persistent_host_command("h", &[], Some("x; rm -rf ~"), false);
+        assert_eq!(bad, plain);
+        let mosh = persistent_host_command(
+            "deploy@h",
+            &["-p".into(), "2222".into()],
+            Some("mtty"),
+            true,
+        );
+        assert!(mosh.starts_with("mosh --ssh="), "{mosh}");
+        assert!(mosh.contains(" 'deploy@h' -- sh -c '"), "{mosh}");
+        assert!(mosh.len() < 1000, "fits a PTY input line");
+    }
+
+    /// The tmux bootstrap really runs: with a fake `tmux` on PATH it is
+    /// called as `new-session -A -s mtty`; without one, the login shell runs.
+    #[test]
+    #[cfg(unix)]
+    fn tmux_bootstrap_runs_in_sh() {
+        let dir = std::env::temp_dir().join(format!("mtty-tmux-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("tmux");
+        std::fs::write(&fake, "#!/bin/sh\necho \"tmux $*\"\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let boot = with_tmux(&bootstrap_with(None, "xterm-256color"), "mtty");
+        let script = boot
+            .strip_prefix("sh -c '")
+            .unwrap()
+            .strip_suffix('\'')
+            .unwrap();
+        let run = |path: &str| {
+            let out = Command::new("/bin/sh")
+                .args(["-c", script])
+                .env("PATH", path)
+                .env("SHELL", "/bin/echo")
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        assert_eq!(
+            run(&format!("{}:/usr/bin:/bin", dir.display())),
+            "tmux new-session -A -s mtty"
+        );
+        // The fallback (the bootstrap also looks in Homebrew's directories).
+        let installed = ["/usr/local/bin/tmux", "/opt/homebrew/bin/tmux"]
+            .iter()
+            .any(|p| std::path::Path::new(p).exists());
+        if !installed {
+            assert_eq!(run("/usr/bin:/bin"), "-l");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

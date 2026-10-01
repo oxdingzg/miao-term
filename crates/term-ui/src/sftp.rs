@@ -173,6 +173,53 @@ impl Remote {
     }
 }
 
+/// Where the file browser points: a host over SFTP, or an FTP/FTPS server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Endpoint {
+    Sftp(Remote),
+    Ftp(crate::ftp::Remote),
+}
+
+macro_rules! each {
+    ($self:ident, $r:ident => $e:expr) => {
+        match $self {
+            Endpoint::Sftp($r) => $e,
+            Endpoint::Ftp($r) => $e,
+        }
+    };
+}
+
+impl Endpoint {
+    /// Plain FTP: shown with a warning in the browser.
+    pub fn is_plaintext(&self) -> bool {
+        matches!(self, Endpoint::Ftp(r) if r.is_plaintext())
+    }
+    pub fn home(&self) -> Result<String, String> {
+        each!(self, r => r.home())
+    }
+    pub fn list(&self, dir: &str) -> Result<Vec<RemoteEntry>, String> {
+        each!(self, r => r.list(dir))
+    }
+    pub fn download(&self, remote: &str, local_dir: &std::path::Path) -> Result<(), String> {
+        each!(self, r => r.download(remote, local_dir))
+    }
+    pub fn upload(&self, local: &std::path::Path, remote_dir: &str) -> Result<(), String> {
+        each!(self, r => r.upload(local, remote_dir))
+    }
+    pub fn rename(&self, from: &str, to: &str) -> Result<(), String> {
+        each!(self, r => r.rename(from, to))
+    }
+    pub fn chmod(&self, mode: &str, path: &str) -> Result<(), String> {
+        each!(self, r => r.chmod(mode, path))
+    }
+    pub fn mkdir(&self, path: &str) -> Result<(), String> {
+        each!(self, r => r.mkdir(path))
+    }
+    pub fn remove(&self, path: &str, is_dir: bool) -> Result<(), String> {
+        each!(self, r => r.remove(path, is_dir))
+    }
+}
+
 /// Parse `ls -la <dir>` output. Columns: perms, links, user, group, size,
 /// month, day, time-or-year, then the path (which may contain spaces).
 pub fn parse_ls(dir: &str, text: &str) -> Vec<RemoteEntry> {
