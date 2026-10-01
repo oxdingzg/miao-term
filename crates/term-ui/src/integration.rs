@@ -325,12 +325,9 @@ mod tests {
                 cmd.env("MTTY_PANE_ID", pane);
             }
             let mut child = cmd.spawn().unwrap();
-            child
-                .stdin
-                .take()
-                .unwrap()
-                .write_all(stdin.as_bytes())
-                .unwrap();
+            // The hook never waits, so it may exit before reading its input:
+            // a broken pipe here is allowed, a failed hook is not.
+            let _ = child.stdin.take().unwrap().write_all(stdin.as_bytes());
             assert!(child.wait().unwrap().success());
         };
         run(
