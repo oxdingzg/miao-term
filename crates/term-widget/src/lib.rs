@@ -8260,7 +8260,10 @@ impl ApplicationHandler<HostEvent> for Host {
         };
         window.set_ime_allowed(true);
 
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu_backends(),
+            ..Default::default()
+        });
         let surface = match instance.create_surface(window.clone()) {
             Ok(s) => s,
             Err(e) => return startup_failure(event_loop, "could not create a drawing surface", e),
@@ -9318,6 +9321,20 @@ fn find_in_cells(cells: &[(u16, char, u16)], query: &str) -> Vec<(u16, u16)> {
 
 /// Whether a key event is a Tab meant for the terminal, which egui must not
 /// see (it would move its focus away from the terminal).
+/// The wgpu backends mtty draws with. On Windows the OpenGL (WGL) backend is
+/// left out: probing it leaves a thread owning a hidden window ("wgpu Device
+/// Class") that never processes messages, and Windows tells every thread's
+/// windows about an input-language change synchronously, so switching to an
+/// input method hung mtty for good. DX12 and Vulkan cover Windows 10 and 11.
+/// `WGPU_BACKEND` (for example `gl`) still overrides.
+fn wgpu_backends() -> wgpu::Backends {
+    wgpu::util::backend_bits_from_env().unwrap_or(if cfg!(windows) {
+        wgpu::Backends::DX12 | wgpu::Backends::VULKAN
+    } else {
+        wgpu::Backends::all()
+    })
+}
+
 fn keeps_tab_from_egui(event: &WindowEvent, egui_has_focus: bool) -> bool {
     !egui_has_focus
         && matches!(
@@ -10495,6 +10512,20 @@ mod tests {
         assert!(pc(&ch("t"), &[cmd]).is_none());
         assert!(pc(&ch("1"), &[cmd]).is_none());
         assert!(pc(&ch("x"), &[ctrl, shift]).is_none());
+    }
+
+    #[test]
+    fn windows_does_not_probe_the_opengl_backend() {
+        if std::env::var_os("WGPU_BACKEND").is_some() {
+            return;
+        }
+        let backends = super::wgpu_backends();
+        assert_eq!(backends.contains(wgpu::Backends::GL), !cfg!(windows));
+        assert!(backends.contains(if cfg!(windows) {
+            wgpu::Backends::DX12
+        } else {
+            wgpu::Backends::all()
+        }));
     }
 
     #[test]
