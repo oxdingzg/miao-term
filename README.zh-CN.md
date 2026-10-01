@@ -87,8 +87,8 @@
   `language`(英文或简体中文)、`editor`、agent 开关、`quick-terminal-hotkey`、
   `update-check-url` / `update-pubkey` —— 见 [`docs/config.example.toml`](docs/config.example.toml)。
 - 当不存在 mtty 配置时,自动导入 ghostty 的 `config` 与 alacritty 的 `alacritty.toml`。
-- zsh shell 集成(经 OSC 7 上报 cwd、命令历史、OSC 133 命令边界),通过 `ZDOTDIR` shim 安装 ——
-  不修改用户点文件。有了它,*复制上一条命令的输出* 与 *把上一条命令的输出发到 Composer* 只取上一条
+- zsh、bash、fish 与 PowerShell 的 shell 集成(经 OSC 7 上报 cwd、命令历史、OSC 133 命令边界),
+  每种 shell 各用一个 shim 安装 —— 不修改用户点文件。有了它,*复制上一条命令的输出* 与 *把上一条命令的输出发到 Composer* 只取上一条
   命令的输出(含退出码)。
 - **URL scheme**:`mtty://`、`ssh://`、`x-man-page://` 会用对应命令新开标签;二次启动会转发给
   正在运行的实例(单实例,含"聚焦 pane""quick"意图),无参数的二次启动会把窗口带到前台。
@@ -238,9 +238,18 @@ palette    = ["#3b4252", "#bf616a", "#a3be8c", "#ebcb8b",
 
 ### Shell 集成
 
-启动时,mtty 会安装一个 zsh `ZDOTDIR` shim,用于上报工作目录(OSC 7)与命令历史。
-shim 写入一个仅当前用户可访问的私有目录,并会恢复用户真实的 `ZDOTDIR`,因此现有
-点文件不受影响,无需手动配置。
+新 pane 中的 shell 会上报工作目录(OSC 7)、每条命令输出的起止与退出码(OSC 133)以及命令历史,无需手动配置。
+shim 写入仅当前用户可访问的私有目录,并先加载用户自己的启动文件:
+
+| Shell | shim 的加载方式 |
+|---|---|
+| zsh | 一个 `ZDOTDIR`,其 `.zshenv` 会恢复真实的 `ZDOTDIR` |
+| bash | `--rcfile`,先 source `~/.bashrc`;bash 4.4+ 用 `PS0`,更老的 bash(macOS 3.2)用 DEBUG trap |
+| fish | 经 `XDG_DATA_DIRS` 找到的 `vendor_conf.d` 脚本,并恢复原值 |
+| PowerShell | 在 profile 之后用 `-NoExit -Command` 加载;包装 `prompt` 与 PSReadLine(历史需 PowerShell 7) |
+
+每种都在真实 PTY 中做端到端测试(Linux 上的 zsh、bash 3.2/5.x、fish 3.7、PowerShell 7.5;Windows 上的
+PowerShell 由 CI 运行)。
 
 ---
 

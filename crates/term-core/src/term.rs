@@ -156,7 +156,18 @@ impl Terminal {
         for (k, v) in extra_env {
             cmd.env(k, v);
         }
-        for (k, v) in crate::shell::env_for(&shell_path) {
+        // The environment the shell will see, for values the shim restores.
+        let seen = |name: &str| {
+            extra_env
+                .iter()
+                .rev()
+                .find(|(k, _)| k == name)
+                .map(|(_, v)| v.clone())
+                .or_else(|| std::env::var(name).ok())
+        };
+        let integration = crate::shell::integration(&shell_path, &seen);
+        cmd.args(&integration.args);
+        for (k, v) in integration.env {
             cmd.env(k, v);
         }
         let cwd = cwd.or_else(|| std::env::current_dir().ok());
@@ -900,20 +911,26 @@ mod tests {
         assert_eq!(wait_for(&mut term, Some("sleep")).as_deref(), Some("sleep"));
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn zsh_integration_marks_commands_end_to_end() {
-        let zsh = std::path::Path::new("/bin/zsh");
-        if !zsh.exists() {
-            return;
-        }
-        // An empty HOME keeps the user's own zsh startup files out of the test.
-        let home = std::env::temp_dir().join(format!("mtty-zsh-home-{}", std::process::id()));
-        std::fs::create_dir_all(&home).unwrap();
-        let env = [("HOME".to_string(), home.to_string_lossy().to_string())];
+    /// Run `shell` through its integration in an empty HOME (the user's own
+    /// startup files stay out) and check command output capture, exit codes
+    /// and the cwd it reports after `cd`.
+    fn integration_end_to_end(shell: &str, ok_then_fail: &str, fail_code: i32) {
+        let home = std::env::temp_dir().join(format!(
+            "mtty-shell-home-{}-{}",
+            shell.rsplit(['/', '\\']).next().unwrap(),
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join("a dir")).unwrap();
+        let home_s = home.to_string_lossy().to_string();
+        let env = [
+            ("HOME".to_string(), home_s.clone()),
+            ("USERPROFILE".to_string(), home_s.clone()),
+            ("XDG_CONFIG_HOME".to_string(), format!("{home_s}/.config")),
+        ];
         let mut term = Terminal::new(
-            Some("/bin/zsh".into()),
-            80,
+            Some(shell.into()),
+            100,
             24,
             100,
             Some(home.clone()),
@@ -922,28 +939,117 @@ mod tests {
         )
         .unwrap();
         let wait = |term: &mut Terminal, done: &dyn Fn(&Terminal) -> bool| {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
             while !done(term) && std::time::Instant::now() < deadline {
                 term.process_pending();
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
         };
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        term.write(b"printf 'first\\nsecond\\n'; false\r");
+        // The first prompt reports the start directory. Line editors such as
+        // PSReadLine start after the prompt is drawn and drop a typed-ahead
+        // Enter, so give them a moment, as a person would.
+        wait(&mut term, &|t| t.cwd().is_some());
+        let settle = std::time::Instant::now() + std::time::Duration::from_millis(1500);
+        while std::time::Instant::now() < settle {
+            term.process_pending();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        term.write(ok_then_fail.as_bytes());
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        term.process_pending();
+        term.write(b"\r");
         wait(&mut term, &|t| t.last_command_output().is_some());
-        let out = term
-            .last_command_output()
-            .cloned()
-            .expect("OSC 133 C/D from the zsh shim");
-        assert_eq!(out.text, "first\nsecond");
-        assert_eq!(out.exit, Some(1));
+        let out = term.last_command_output().cloned().unwrap_or_else(|| {
+            let screen: Vec<String> = (0..24).map(|r| term.screen().line_text(r)).collect();
+            panic!(
+                "{shell}: no OSC 133 C/D; screen:\n{}",
+                screen.join("\n").trim_end()
+            )
+        });
+        assert_eq!(out.text, "first\nsecond", "{shell}");
+        assert_eq!(out.exit, Some(fail_code), "{shell}");
         term.write("echo 中文\r".as_bytes());
         wait(&mut term, &|t| {
             t.last_command_output().is_some_and(|o| o.exit == Some(0))
         });
-        assert_eq!(term.last_command_output().unwrap().text, "中文");
+        assert_eq!(term.last_command_output().unwrap().text, "中文", "{shell}");
+        term.write(b"cd 'a dir'\r");
+        wait(&mut term, &|t| {
+            t.cwd().is_some_and(|c| c.ends_with("a dir"))
+        });
+        let cwd = term.cwd().map(str::to_string);
+        assert!(
+            cwd.as_deref().is_some_and(|c| c.ends_with("a dir")),
+            "{shell}: cwd {cwd:?}"
+        );
         drop(term);
         let _ = std::fs::remove_dir_all(&home);
+        eprintln!("shell integration checked: {shell}");
+    }
+
+    /// The shells installed here (CI images differ); missing ones are skipped.
+    fn installed(candidates: &[&str]) -> Vec<String> {
+        let mut found: Vec<String> = candidates
+            .iter()
+            .filter(|p| std::path::Path::new(p).exists())
+            .map(|p| p.to_string())
+            .collect();
+        found.dedup();
+        found
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn zsh_integration_marks_commands_end_to_end() {
+        for zsh in installed(&["/bin/zsh", "/usr/bin/zsh"]).into_iter().take(1) {
+            integration_end_to_end(&zsh, "printf 'first\\nsecond\\n'; false", 1);
+        }
+    }
+
+    /// bash 3.2 (macOS, DEBUG trap) and 4.4+ (PS0) both.
+    #[cfg(unix)]
+    #[test]
+    fn bash_integration_marks_commands_end_to_end() {
+        for bash in installed(&["/bin/bash", "/opt/homebrew/bin/bash", "/usr/local/bin/bash"]) {
+            integration_end_to_end(&bash, "printf 'first\\nsecond\\n'; (exit 3)", 3);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fish_integration_marks_commands_end_to_end() {
+        let fish = installed(&[
+            "/usr/bin/fish",
+            "/opt/homebrew/bin/fish",
+            "/usr/local/bin/fish",
+        ]);
+        for fish in fish.into_iter().take(1) {
+            integration_end_to_end(&fish, "printf 'first\\nsecond\\n'; false", 1);
+        }
+    }
+
+    #[test]
+    fn powershell_integration_marks_commands_end_to_end() {
+        let pwsh = installed(&[
+            "/usr/bin/pwsh",
+            "/usr/local/bin/pwsh",
+            "/opt/homebrew/bin/pwsh",
+            "/snap/bin/pwsh",
+            r"C:\Program Files\PowerShell\7\pwsh.exe",
+        ]);
+        let pwsh = pwsh.into_iter().next().or_else(|| {
+            std::env::var("MTTY_TEST_PWSH")
+                .ok()
+                .filter(|p| std::path::Path::new(p).exists())
+        });
+        if let Some(pwsh) = pwsh {
+            let fail = if cfg!(windows) {
+                "'first'; 'second'; cmd /c exit 4"
+            } else {
+                "'first'; 'second'; sh -c 'exit 4'"
+            };
+            integration_end_to_end(&pwsh, fail, 4);
+        }
     }
 
     #[test]
