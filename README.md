@@ -7,6 +7,8 @@
 [![Rust](https://img.shields.io/badge/rust-1.80%2B-orange.svg)](Cargo.toml)
 [![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#requirements)
 
+**Website:** [mtty.dev/mtty](https://mtty.dev/mtty) · **Docs:** [mtty.dev/docs/mtty](https://mtty.dev/docs/mtty) · [Releases](https://github.com/oxdingzg/miao-term/releases) · [Related projects](#related-projects)
+
 **English** · [简体中文](README.zh-CN.md)
 
 ---
@@ -40,9 +42,31 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 > **Project status — pre-release.** The version is `0.0.5` and the API is not yet
 > stable. macOS is the primary platform. Windows is built, tested and driven over
 > MTP on real hardware (see [`docs/WINDOWS-DEV.md`](docs/WINDOWS-DEV.md)); Linux
-> builds and passes tests in CI.
+> builds and passes tests in CI and has been checked on a real GNOME/Wayland
+> desktop (input method, menus, file drops, clipboard, shortcuts).
 
 ---
+
+## Related projects
+
+| Project | What it is | Links |
+|---|---|---|
+| **mtty** (this repository) | The terminal application and the embeddable engine behind it | [mtty.dev/mtty](https://mtty.dev/mtty) · [oxdingzg/miao-term](https://github.com/oxdingzg/miao-term) |
+| **miao** | Open-source AI coding agent for the terminal | [mtty.dev/miao](https://mtty.dev/miao) · [oxdingzg/miao](https://github.com/oxdingzg/miao) |
+| **mtty.dev** | The website and documentation for both | [mtty.dev](https://mtty.dev) |
+
+mtty and miao are separate projects, and each works without the other. Inside
+an mtty pane, miao reports its state (working, waiting for you, done, error)
+over the control plane; mtty badges the pane, notifies you when an agent needs
+you, keeps the machine awake while one works and sends your queued prompt when
+it goes idle. mtty also ships state hooks for other agent CLIs (Claude Code,
+Codex, OpenCode).
+
+Two things named *miaotty*: the application in this repository was called
+`miaotty` up to v0.0.5 (see the rename note above), and
+[oxdingzg/miaotty](https://github.com/oxdingzg/miaotty) is a separate, earlier
+personal macOS prototype (a Ghostty fork) that is no longer developed — use
+mtty instead.
 
 ## Features
 
