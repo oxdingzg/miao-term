@@ -15,6 +15,7 @@ pub mod hotkey;
 pub mod i18n;
 pub mod icons;
 pub mod input;
+pub mod install;
 pub mod integration;
 pub mod launch;
 pub mod layout;
