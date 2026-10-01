@@ -40,10 +40,10 @@
 - 基于 PTY 的 shell,经 `alacritty_terminal` 做 VT 解析。
 - GPU 字形网格渲染(`wgpu` + `glyphon`),复用 egui 的 device、queue 与 surface。
 - 回滚缓冲与滚动条指示、拖拽/双击选区、复制粘贴,以及宽字符 / 中日韩排版与系统 CJK 字体回退。
-- 查找(`⌘F`),带匹配高亮与结果计数。
+- 查找(`⌘F`),带匹配高亮与结果计数,支持中文。
 - 当程序请求时,支持
   [kitty keyboard 协议](https://sw.kovidgoyal.net/kitty/keyboard-protocol/)(CSI-u)
-  与带修饰键的光标移动。
+  (disambiguate 级别)与带修饰键的光标移动;F1–F12 / Insert 按 xterm 序列发送。
 
 **窗口与工作区**
 - 内联标签栏(图标、Agent 徽章、`+`、`×`、拖拽重排)与 Tabs 侧边栏。右键标签或会话行弹出
@@ -54,21 +54,24 @@
   `⌘W` / `Ctrl+W` 在分屏标签中仍只关闭当前窗格。
 - 递归分屏树:`⌘D` 向右分屏,`⇧⌘D` 向下分屏,分隔条可拖拽调整比例,每个 pane 都有
   关闭按钮。`⌘⇧T` 切换临时快速终端。
-- 侧边栏**文件树**(双击用查看器打开)与 **View 规则**:把 pane 的 cwd/命令/agent/host/文件
-  映射为别名、图标、标签标题与徽章 —— 见 [`docs/VIEW-RULES.zh-CN.md`](docs/VIEW-RULES.zh-CN.md)。
-- **Open Quickly**(`⌘K`):一个面板覆盖标签、agent、文件、最近项、内容搜索命中与命令。
+- details 面板 Files 分页中的**文件列表**(单击用查看器打开)与 **View 规则**:把 pane 的
+  cwd/agent 映射为别名与标签标题 —— 见 [`docs/VIEW-RULES.zh-CN.md`](docs/VIEW-RULES.zh-CN.md)。
+  规则中的图标、徽章,以及按命令/host/文件匹配,尚未生效。
+- **命令面板**(`⌘K`)与 **Open Quickly**(`⌘⇧O`):覆盖标签、目录与最近文件。
 - 右侧 details 面板含分页:**Info / Agent / Outline / Git / Files / Ports / Queue**
   (git 状态、目录列表、监听端口、提示队列)。
-- **Composer**(`⌘⇧E`)与**提示队列**:agent 空闲时自动投递;由 agent 状态驱动的**通知**与**防休眠**。
-- **查看器/编辑器**:只读预览带行号与跳转行高亮,编辑态带行号栏与**可选的极简 vim 模式**(`editor-vim`),*Open Externally* /
-  *Edit in Tab*,以及 CommonMark 渲染(`egui_commonmark`):标题、列表、引用、表格、代码、链接、本地与
-  远程图片,外加 `graph`/`flowchart`、`sequenceDiagram`、`stateDiagram`、`classDiagram`、
+- **Composer**(`⌘⇧E`)与**提示队列**(在 Queue 分页手动发送;agent 空闲时自动投递在路线图中);
+  由 agent 状态驱动的**通知**与**防休眠**。
+- **查看器/编辑器**:只读预览带行号,编辑态带行号栏与**可选的极简 vim 模式**(`editor-vim`)。
+  保存失败会提示且保持"已修改";有未保存修改时需再次关闭才会丢弃。CommonMark 渲染
+  (`egui_commonmark`):标题、列表、引用、表格、代码、链接、远程图片,外加 `graph`/`flowchart`、`sequenceDiagram`、`stateDiagram`、`classDiagram`、
   `erDiagram` 与 `pie` 的 Mermaid 子集(或经 `mermaid-command` 全量渲染)。
 - **终端内联图片**:Sixel / Kitty / iTerm2 图片由 miaotty 直接画在字符网格上——随内容滚动、
   裁剪在 pane 内;用 `graphics` 开关(默认开)。
-- **Recipes**:保存并回放整个工作区;配置导出。
-- 设置窗口(`⌘,`):字号/字体族、透明度、行高、光标样式、主题、agent 徽章、通知、防休眠、
-  agent 集成、View 规则 —— 写入 `config.toml` / `views.json`。
+- **Recipes**:保存并回放整个工作区。
+- 设置窗口(`⌘,`):字号/字体族、透明度、行高、光标样式、主题、内联图片、通知、防休眠与
+  agent 钩子安装。关闭窗口时把改动过的值写回 `config.toml`,保留注释与其他键;无法解析的
+  `config.toml` 会在状态栏提示,且不会被覆盖。
 
 **配置与集成**
 - 配置位于 `~/.config/miaotty/config.toml`:字号、字体族、透明度、行高、光标样式、主题、配色、
@@ -77,18 +80,21 @@
 - 当不存在 miaotty 配置时,自动导入 ghostty 的 `config` 与 alacritty 的 `alacritty.toml`。
 - zsh shell 集成(经 OSC 7 上报 cwd、命令历史),通过 `ZDOTDIR` shim 安装 —— 不修改用户点文件。
 - **URL scheme**:`miaotty://`、`ssh://`、`x-man-page://` 会用对应命令新开标签;二次启动会转发给
-  正在运行的实例(单实例,含"聚焦 pane""quick"意图)。
+  正在运行的实例(单实例,含"聚焦 pane""quick"意图),无参数的二次启动会把窗口带到前台。
+  URL 目前经命令行参数传入;macOS 从浏览器/Finder 发来的 URL 事件尚未处理。
 - **macOS 原生菜单栏**:安装的 `.app` 会把 文件/编辑/视图/终端/Agent/帮助 放进系统菜单栏
   (含 About/Services/Hide/Quit),窗口内不再有菜单条,与其它 macOS 终端一致(ADR 0031);
   裸跑 `miaotty` 仍用窗口内菜单。窗口本身请求深色外观,标题栏与界面一致,不再是一条
   浅色条。
 - **全局快速终端热键**:macOS/Windows 用 `global-hotkey`,Linux 使用 sway/hyprland/GNOME 等 compositor 绑定。
-- **Agent 集成**:检测 claude/codex/opencode/miao,安装状态上报 hook 脚本,复制接入该 agent 自身
-  配置的片段,并可启动 agent —— 不替用户修改 agent 配置。`miao` 通过内置集成自动上报状态,
+- **Agent 集成**:检测 claude/codex/opencode/miao,安装状态上报 hook 脚本,并显示接入该 agent
+  自身配置的片段 —— 不替用户修改 agent 配置。`miao` 通过内置集成自动上报状态,
   无需接线 hook。
 - **更新**:检查配置的版本清单；通过平台安装包安装新版本。旧 eframe 应用的自动下载/安装
   界面不属于统一后的 native 应用。
-- **远端 view/edit**:经 pane 的 ssh ControlMaster 连接读/写远端文件,带零安装 terminfo 引导。
+- **SSH 会话与远端 view/edit**:*新建 SSH 会话…* 遵循 `~/.ssh/config`,复用 ControlMaster 连接,
+  远端零安装引导 terminfo;*查看/编辑远端文件…* 经该连接读写(主机在对话框中填写)。主机库、
+  SFTP 与端口转发在路线图中([`docs/PRODUCT.zh-CN.md`](docs/PRODUCT.zh-CN.md))。
 
 **自动化**
 - **MTP 控制面**,经 per-user Unix socket(Windows 为命名管道):
@@ -261,7 +267,8 @@ miaotty-cli file write --path /tmp/x --data-b64 "AAECAw=="   # 二进制
 | `⌘D` / `⇧⌘D` | 向右 / 向下分屏 |
 | `⌥⌘→` / `⌥⌘←`(或 `⌘⇧]` / `⌘⇧[`) | 轮换 pane 焦点 |
 | `⌥⌘D` | 开关 details 面板 |
-| `⌘K` | Open Quickly(标签、agent、文件、命令) |
+| `⌘K` | 命令面板 |
+| `⌘⇧O` | Open Quickly(标签、目录、最近文件) |
 | `⌘F` | 查找 |
 | `⌘⇧E` | Composer(向焦点 pane 发送多行提示) |
 | `⌘⇧T` | 快速终端(临时标签) |
@@ -286,6 +293,7 @@ miaotty-cli file write --path /tmp/x --data-b64 "AAECAw=="   # 二进制
 | View 规则(标题/图标/徽章) | [`docs/VIEW-RULES.md`](docs/VIEW-RULES.md) | [`docs/VIEW-RULES.zh-CN.md`](docs/VIEW-RULES.zh-CN.md) |
 | 性能预算与门 | [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) | [`docs/PERFORMANCE.zh-CN.md`](docs/PERFORMANCE.zh-CN.md) |
 | Windows 开发/验证 | [`docs/WINDOWS-DEV.md`](docs/WINDOWS-DEV.md) | [`docs/WINDOWS-DEV.zh-CN.md`](docs/WINDOWS-DEV.zh-CN.md) |
+| 产品需求与路线图 | [`docs/PRODUCT.md`](docs/PRODUCT.md) | [`docs/PRODUCT.zh-CN.md`](docs/PRODUCT.zh-CN.md) |
 | 发布与更新 | [`docs/RELEASE.md`](docs/RELEASE.md) | [`docs/RELEASE.zh-CN.md`](docs/RELEASE.zh-CN.md) |
 | 工作约定(隐私、检查) | [`AGENTS.md`](AGENTS.md) | —— |
 | 示例配置 | [`docs/config.example.toml`](docs/config.example.toml) | —— |
@@ -293,6 +301,9 @@ miaotty-cli file write --path /tmp/x --data-b64 "AAECAw=="   # 二进制
 ---
 
 ## 路线图
+
+**mtty**(正式产品名;在改名里程碑完成前,代码、可执行文件与配置仍使用 `miaotty`)的产品方向、
+已验证的功能基线与里程碑计划见 [`docs/PRODUCT.zh-CN.md`](docs/PRODUCT.zh-CN.md)。
 
 近期已完成:Windows 命名管道传输与 ConPTY 路径(真实硬件验证)、会话恢复、View 规则、
 Open Quickly、details 面板、agent 闭环(通知、防休眠、提示队列)、Recipes、经 ssh 的远端
