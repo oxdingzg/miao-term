@@ -98,12 +98,35 @@ impl ATerm {
     }
 
     /// Text of buffer line `b` counted from the oldest (0), right-trimmed.
+    /// Wide-character spacer cells are skipped, so CJK reads as typed.
     pub fn line_text_abs(&self, b: usize) -> String {
-        let line = b as i32 - self.history_size() as i32;
-        let text: String = (0..self.cols)
-            .map(|c| self.term.grid()[Line(line)][Column(c)].c)
+        let text: String = self
+            .line_chars_abs(b)
+            .into_iter()
+            .map(|(_, c, _)| c)
             .collect();
         text.trim_end().to_string()
+    }
+
+    /// Characters of buffer line `b` with their starting column and cell
+    /// width (2 for wide characters); spacer cells are skipped.
+    pub fn line_chars_abs(&self, b: usize) -> Vec<(u16, char, u16)> {
+        let line = b as i32 - self.history_size() as i32;
+        let row = &self.term.grid()[Line(line)];
+        (0..self.cols)
+            .filter_map(|c| {
+                let cell = &row[Column(c)];
+                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                    return None;
+                }
+                let width = if cell.flags.contains(Flags::WIDE_CHAR) {
+                    2
+                } else {
+                    1
+                };
+                Some((c as u16, cell.c, width))
+            })
+            .collect()
     }
 
     pub fn cursor(&self) -> (u16, u16) {
@@ -348,6 +371,24 @@ mod tests {
         t.set_scrollback(2);
         assert_eq!(t.line_text(0), "a");
         assert_eq!(t.line_text(2), "c");
+    }
+
+    #[test]
+    fn absolute_line_text_skips_wide_spacers() {
+        let mut t = ATerm::new(20, 3, 100);
+        t.process("ab目录c".as_bytes());
+        assert_eq!(t.line_text_abs(0), "ab目录c");
+        let cells = t.line_chars_abs(0);
+        assert_eq!(
+            &cells[..5],
+            &[
+                (0, 'a', 1),
+                (1, 'b', 1),
+                (2, '目', 2),
+                (4, '录', 2),
+                (6, 'c', 1)
+            ]
+        );
     }
 
     #[test]

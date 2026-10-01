@@ -85,9 +85,15 @@ impl Drop for SleepGuard {
     }
 }
 
+// Both inhibitors also watch our pid, so they end with miaotty even when it
+// exits without dropping the guard (process::exit, a crash, a kill).
 #[cfg(target_os = "macos")]
 fn spawn_inhibitor() -> Option<Child> {
-    Command::new("caffeinate").args(["-dims"]).spawn().ok()
+    let pid = std::process::id().to_string();
+    Command::new("caffeinate")
+        .args(["-dims", "-w", &pid])
+        .spawn()
+        .ok()
 }
 
 #[cfg(target_os = "linux")]
@@ -97,8 +103,10 @@ fn spawn_inhibitor() -> Option<Child> {
             "--what=idle:sleep",
             "--why=miaotty: agent processing",
             "--mode=block",
-            "sleep",
-            "infinity",
+            "tail",
+            &format!("--pid={}", std::process::id()),
+            "-f",
+            "/dev/null",
         ])
         .spawn()
         .ok()

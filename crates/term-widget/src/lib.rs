@@ -341,6 +341,39 @@ struct Editor {
     readonly: bool,
     /// `(destination, remote path)` when editing a file over ssh.
     remote: Option<(String, String)>,
+    /// Closing with unsaved changes was requested once; the next close discards.
+    close_armed: bool,
+}
+
+impl Editor {
+    /// Write the buffer (locally or over ssh); it is marked clean only on success.
+    fn write(&mut self) -> std::io::Result<()> {
+        if self.readonly {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "read-only",
+            ));
+        }
+        match &self.remote {
+            Some((dest, path)) => {
+                miao_term_ui::ssh::write_remote(dest, path, self.text.as_bytes())?
+            }
+            None => std::fs::write(&self.path, &self.text)?,
+        }
+        self.original = self.text.clone();
+        self.close_armed = false;
+        Ok(())
+    }
+
+    /// Whether a close may proceed. Unsaved changes arm the first request and
+    /// let the second one discard them.
+    fn may_close(&mut self) -> bool {
+        if self.readonly || self.text == self.original || self.close_armed {
+            return true;
+        }
+        self.close_armed = true;
+        false
+    }
 }
 
 /// The inline-image layer for the debug capture (quads + the pane scissor).
@@ -448,12 +481,19 @@ struct State {
     hover_pointer: bool,
     search: Option<String>,
     search_idx: usize,
-    search_hits: Vec<(usize, u16)>,
+    /// Find matches as (buffer line, start column, width in cells).
+    search_hits: Vec<(usize, u16, u16)>,
     search_key: String,
     update_url: Option<String>,
     update_rx: Option<std::sync::mpsc::Receiver<UpdateResult>>,
     update_result: Option<UpdateResult>,
     update_notice_until: Option<Instant>,
+    /// A transient status-line message (failed saves, opens) and its expiry.
+    notice: Option<(String, Instant)>,
+    /// Settings as last loaded/saved, to write back only what changed.
+    saved_settings: Vec<(&'static str, String)>,
+    /// Where settings came from when there was no config.toml.
+    config_imported_from: Option<&'static str>,
     update_dialog: bool,
     details_tab: usize,
     details_cwd: Option<std::path::PathBuf>,
@@ -1303,6 +1343,19 @@ impl State {
         self.window.request_redraw();
     }
 
+    /// Menu-bar Copy/Paste/Select All arrive as commands, not key events: the
+    /// macOS menu claims ⌘C/⌘V/⌘A before the view sees them. When a text field
+    /// (editor, Composer, dialogs) has focus, hand the edit to egui instead of
+    /// acting on the terminal. Returns true when egui takes it.
+    fn edit_in_text_field(&mut self, event: egui::Event) -> bool {
+        if !self.egui_ctx.wants_keyboard_input() {
+            return false;
+        }
+        self.egui_state.egui_input_mut().events.push(event);
+        self.window.request_redraw();
+        true
+    }
+
     fn paste_clipboard(&mut self) {
         // Image-only clipboards have no text. Still send an empty bracketed
         // paste: TUIs such as miao use it to read native clipboard attachments.
@@ -1488,11 +1541,6 @@ impl State {
         let search_on = self.search.as_ref().map(|s| !s.is_empty()).unwrap_or(false);
         let search_hits = self.search_hits.clone();
         let search_idx = self.search_idx;
-        let search_len = self
-            .search
-            .as_ref()
-            .map(|s| s.chars().count() as u16)
-            .unwrap_or(0);
         let mut draws: Vec<PaneDraw> = Vec::new();
         let mut image_quads: Vec<(u64, i32, u32, ImageInstance)> = Vec::new();
         let mut image_uploads = Vec::new();
@@ -1551,7 +1599,7 @@ impl State {
                 if search_on && id == &active_id {
                     let hist = pane.term.screen().history_size() as i32;
                     let off = pane.term.screen().scroll_offset() as i32;
-                    for (k, (b, col)) in search_hits.iter().enumerate() {
+                    for (k, (b, col, width)) in search_hits.iter().enumerate() {
                         let row = *b as i32 - hist + off;
                         if row < 0 || row >= sr as i32 {
                             continue;
@@ -1561,7 +1609,7 @@ impl State {
                         } else {
                             (0x33, 0x3d, 0x4d)
                         };
-                        for dc in 0..search_len {
+                        for dc in 0..*width {
                             quads.push(quad(ox, oy, row as u16, col + dc, cw, ch, color));
                         }
                     }
@@ -2388,6 +2436,12 @@ impl State {
             .cwd()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "miaotty".to_string());
+        // Notices lead the line so a long cwd cannot truncate them away.
+        if let Some((msg, until)) = &self.notice {
+            if Instant::now() < *until {
+                s = format!("{msg}   \u{00b7}   {s}");
+            }
+        }
         // Git branch (when the details worker has it).
         if let Some(branch) = self.details_data.as_ref().and_then(|d| {
             d.git
@@ -2659,6 +2713,16 @@ impl State {
             Cmd::DuplicateTab => self.duplicate_tab(),
             Cmd::ReopenClosed => self.reopen_tab(),
             Cmd::SelectAll => {
+                let select_all = egui::Event::Key {
+                    key: egui::Key::A,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::COMMAND,
+                };
+                if self.edit_in_text_field(select_all) {
+                    return;
+                }
                 if let Some(id) = self.active_pane_id() {
                     if let Some(tab) = self.tabs.get(self.active_tab) {
                         if let Some(p) = tab.panes.iter().find(|p| p.id == id) {
@@ -2708,24 +2772,19 @@ impl State {
             }
             Cmd::OpenFile => self.show_open = true,
             Cmd::Save => {
-                if let Some(ed) = self.editor.as_mut() {
-                    match &ed.remote {
-                        Some((dest, path)) => {
-                            let _ = miao_term_ui::ssh::write_remote(dest, path, ed.text.as_bytes());
-                        }
-                        None => {
-                            let _ = std::fs::write(&ed.path, &ed.text);
-                        }
-                    }
-                    ed.original = ed.text.clone();
-                }
+                self.save_editor();
             }
             Cmd::Copy => {
-                let ctx = self.egui_ctx.clone();
-                self.copy_selection(&ctx);
+                if !self.edit_in_text_field(egui::Event::Copy) {
+                    let ctx = self.egui_ctx.clone();
+                    self.copy_selection(&ctx);
+                }
             }
             Cmd::Paste => {
-                self.paste_clipboard();
+                let text = self.egui_state.clipboard_text().unwrap_or_default();
+                if !self.edit_in_text_field(egui::Event::Paste(text)) {
+                    self.paste_clipboard();
+                }
             }
             Cmd::Settings => self.show_settings = true,
             Cmd::Quit => {
@@ -2734,6 +2793,13 @@ impl State {
                     s.width as f32 / self.window.scale_factor() as f32,
                     s.height as f32 / self.window.scale_factor() as f32,
                 );
+                // process::exit skips destructors: persist the session and
+                // release the sleep inhibitor first, as a window close does.
+                if self.show_settings {
+                    self.persist_settings();
+                }
+                self.save_session();
+                self.sleep.set_awake(false);
                 std::process::exit(0);
             }
         }
@@ -2992,7 +3058,72 @@ impl State {
         }
         if !open {
             self.show_settings = false;
+            self.persist_settings();
         }
+    }
+
+    /// The settings the window edits, as config.toml literals.
+    fn settings_values(&self) -> Vec<(&'static str, String)> {
+        use miao_term_config::toml_string;
+        let cursor = match self.theme.cursor {
+            miao_term_ui::CursorStyle::Block => "block",
+            miao_term_ui::CursorStyle::Bar => "bar",
+            miao_term_ui::CursorStyle::Underline => "underline",
+        };
+        let mut v = vec![
+            ("font-size", format!("{:.1}", self.font_size)),
+            (
+                "font-family",
+                toml_string(self.font_family.as_deref().unwrap_or("")),
+            ),
+            ("line-height", format!("{:.2}", self.line_ratio)),
+            ("background-opacity", format!("{:.2}", self.opacity)),
+            ("cursor-style", toml_string(cursor)),
+            ("graphics", self.graphics_enabled.to_string()),
+            ("notifications", self.notifications.to_string()),
+            ("prevent-sleep", self.prevent_sleep.to_string()),
+        ];
+        if !self.theme_name.is_empty() {
+            v.push(("theme", toml_string(&self.theme_name.to_ascii_lowercase())));
+        }
+        v
+    }
+
+    /// Write changed settings to config.toml; failures stay visible.
+    fn persist_settings(&mut self) {
+        use miao_term_ui::i18n::t;
+        let current = self.settings_values();
+        let changed: Vec<(&str, String)> = current
+            .iter()
+            .filter(|kv| !self.saved_settings.contains(kv))
+            .cloned()
+            .collect();
+        if changed.is_empty() {
+            return;
+        }
+        let msg = match miao_term_config::Config::save_settings(&changed) {
+            Ok(path) => {
+                self.saved_settings = current;
+                let mut msg = format!(
+                    "{} {}",
+                    t(self.lang, "Settings saved to", "设置已保存到"),
+                    path.display()
+                );
+                if let Some(source) = self.config_imported_from.take() {
+                    msg.push_str(&format!(
+                        " ({source} {})",
+                        t(
+                            self.lang,
+                            "settings are no longer imported",
+                            "配置将不再导入"
+                        )
+                    ));
+                }
+                msg
+            }
+            Err(e) => format!("{}: {e}", t(self.lang, "Settings not saved", "设置未保存")),
+        };
+        self.show_notice(msg);
     }
 
     /// Debug: render the terminal grid offscreen and dump a PPM, then exit.
@@ -3106,7 +3237,11 @@ impl State {
     fn apply_launch(&mut self, intent: &miao_term_ui::launch::Intent) {
         use miao_term_ui::launch::Intent;
         match intent {
-            Intent::Activate => {}
+            // A second plain launch was forwarded here: bring the window forward.
+            Intent::Activate => {
+                self.window.set_visible(true);
+                self.window.focus_window();
+            }
             Intent::Quick => self.toggle_quick_terminal(),
             Intent::Focus(id) => {
                 for (i, tab) in self.tabs.iter().enumerate() {
@@ -3309,7 +3444,7 @@ impl State {
         }
     }
 
-    fn compute_search_hits(&self) -> Vec<(usize, u16)> {
+    fn compute_search_hits(&self) -> Vec<(usize, u16, u16)> {
         let Some(q) = self.search.as_deref() else {
             return Vec::new();
         };
@@ -3320,21 +3455,12 @@ impl State {
             return Vec::new();
         };
         let screen = pane.term.screen();
-        let qb = q.as_bytes();
         let mut out = Vec::new();
         for b in 0..screen.total_lines() {
-            let text = screen.line_text_abs(b);
-            let tb = text.as_bytes();
-            let mut i = 0usize;
-            while i + qb.len() <= tb.len() {
-                if tb[i..i + qb.len()].eq_ignore_ascii_case(qb) {
-                    out.push((b, i as u16));
-                    i += qb.len().max(1);
-                    if out.len() >= 2000 {
-                        return out;
-                    }
-                } else {
-                    i += 1;
+            for (col, width) in find_in_cells(&screen.line_chars_abs(b), q) {
+                out.push((b, col, width));
+                if out.len() >= 2000 {
+                    return out;
                 }
             }
         }
@@ -3362,7 +3488,7 @@ impl State {
     }
 
     fn scroll_to_search_hit(&mut self) {
-        let Some((b, _)) = self.search_hits.get(self.search_idx).copied() else {
+        let Some((b, _, _)) = self.search_hits.get(self.search_idx).copied() else {
             return;
         };
         let Some(tab) = self.tabs.get_mut(self.active_tab) else {
@@ -3631,9 +3757,16 @@ impl State {
                         preview: path.ends_with(".md"),
                         readonly: false,
                         remote: Some((dest, path)),
+                        close_armed: false,
                     });
                 }
-                Err(e) => eprintln!("remote read failed: {e}"),
+                Err(e) => {
+                    let msg = format!(
+                        "{} {dest}:{path}: {e}",
+                        miao_term_ui::i18n::t(self.lang, "Remote read failed", "读取远端文件失败")
+                    );
+                    self.show_notice(msg);
+                }
             }
         } else if !open {
             self.remote_dialog = None;
@@ -3729,6 +3862,7 @@ impl State {
                     preview,
                     readonly,
                     remote: None,
+                    close_armed: false,
                 });
                 self.vim_for.clear();
                 self.recent_files.retain(|p| p != &key);
@@ -3738,7 +3872,12 @@ impl State {
                 true
             }
             Err(e) => {
-                eprintln!("miaotty: open failed: {e}");
+                let msg = format!(
+                    "{} {}: {e}",
+                    miao_term_ui::i18n::t(self.lang, "Open failed", "打开失败"),
+                    path.display()
+                );
+                self.show_notice(msg);
                 false
             }
         }
@@ -3909,25 +4048,57 @@ impl State {
                     }
                 }
             });
-        if save {
-            match &ed.remote {
-                Some((dest, path)) => {
-                    let _ = miao_term_ui::ssh::write_remote(dest, path, ed.text.as_bytes());
-                }
-                None => {
-                    let _ = std::fs::write(&ed.path, &ed.text);
-                }
-            }
-            ed.original = ed.text.clone();
-        }
-        if quit {
+        let saved = !save || self.save_editor();
+        if quit && saved {
             self.editor = None;
             self.vim = None;
             return;
         }
         if !open {
-            self.editor = None;
+            self.close_editor();
         }
+    }
+
+    /// Write the editor buffer (locally or over ssh). The buffer is marked
+    /// clean only when the write succeeds; a failure stays visible.
+    fn save_editor(&mut self) -> bool {
+        let Some(ed) = self.editor.as_mut() else {
+            return false;
+        };
+        match ed.write() {
+            Ok(()) => true,
+            Err(e) => {
+                let msg = format!(
+                    "{}: {e}",
+                    miao_term_ui::i18n::t(self.lang, "Save failed", "保存失败")
+                );
+                self.show_notice(msg);
+                false
+            }
+        }
+    }
+
+    /// Close the editor; unsaved changes need a second close to discard.
+    fn close_editor(&mut self) {
+        let Some(ed) = self.editor.as_mut() else {
+            return;
+        };
+        if ed.may_close() {
+            self.editor = None;
+            return;
+        }
+        let msg = miao_term_ui::i18n::t(
+            self.lang,
+            "Unsaved changes. Close again to discard them.",
+            "有未保存的修改。再次关闭将丢弃修改。",
+        )
+        .to_string();
+        self.show_notice(msg);
+    }
+
+    fn show_notice(&mut self, msg: String) {
+        self.notice = Some((msg, Instant::now() + Duration::from_secs(8)));
+        self.window.request_redraw();
     }
 
     fn prefix_window(&mut self, ctx: &egui::Context, i: usize) {
@@ -4408,13 +4579,22 @@ impl ApplicationHandler<HostEvent> for Host {
         let egui_renderer = egui_wgpu::Renderer::new(&device, format, None, 1, false);
 
         // Config (ADR: read `~/.config/miaotty/config.toml`).
-        let cfg = miao_term_config::Config::load();
+        let (cfg, config_problem) = miao_term_config::Config::load_checked();
         let font_size = cfg.font_size;
         let line_ratio = cfg.line_height;
         let font_family = cfg.font_family.clone();
         let lang = miao_term_ui::i18n::Lang::parse(cfg.language.as_deref());
         let theme = Theme::from_config(&cfg.theme, cfg.cursor_style);
-        let theme_name = "Nord".to_string();
+        let theme_name = match cfg.theme_name.as_deref() {
+            Some(n) => Theme::NAMES
+                .iter()
+                .find(|known| known.eq_ignore_ascii_case(n))
+                .map(|known| known.to_string())
+                .unwrap_or_default(),
+            // No `theme` key: the default palette is Nord unless imported.
+            None if cfg.imported_from.is_none() => "Nord".to_string(),
+            None => String::new(),
+        };
         let (cw, ch) = State::cell_size(font_size, line_ratio, font_family.as_deref());
 
         let mut state = State {
@@ -4516,6 +4696,9 @@ impl ApplicationHandler<HostEvent> for Host {
             update_rx: None,
             update_result: None,
             update_notice_until: None,
+            notice: None,
+            saved_settings: Vec::new(),
+            config_imported_from: cfg.imported_from,
             update_dialog: false,
             details_tab: std::env::var("MIAOTTY_DETAILS_TAB")
                 .ok()
@@ -4552,6 +4735,18 @@ impl ApplicationHandler<HostEvent> for Host {
         let args: Vec<String> = std::env::args().skip(1).collect();
         let intent = miao_term_ui::launch::Intent::from_args(&args);
         state.apply_launch(&intent);
+        state.saved_settings = state.settings_values();
+        if let Some(problem) = config_problem {
+            let msg = format!(
+                "{} {problem}",
+                miao_term_ui::i18n::t(
+                    state.lang,
+                    "config.toml was ignored:",
+                    "config.toml 未生效:"
+                )
+            );
+            state.show_notice(msg);
+        }
         if let Some(spec) = cfg.quick_terminal_hotkey.clone() {
             let proxy = self.proxy.clone();
             state.hotkeys = miao_term_ui::hotkey::Hotkeys::register(&spec, move || {
@@ -4572,9 +4767,12 @@ impl ApplicationHandler<HostEvent> for Host {
         match event {
             // PTY output / MTP work: just repaint.
             HostEvent::Wake => state.window.request_redraw(),
-            // Global Quick Terminal hotkey.
+            // Global Quick Terminal hotkey (ADR 0019): one press toggles the
+            // Quick tab and brings the window forward. This event is the only
+            // trigger; the hotkey's pending flag is not polled as well.
             HostEvent::Hotkey => {
                 state.toggle_quick_terminal();
+                state.window.set_visible(true);
                 state.window.focus_window();
             }
             // OS menu bar command.
@@ -4642,6 +4840,14 @@ impl ApplicationHandler<HostEvent> for Host {
                     }
                 }
             }
+            if let Some(until) = state.notice.as_ref().map(|(_, until)| *until) {
+                if Instant::now() >= until {
+                    state.notice = None;
+                    state.window.request_redraw();
+                } else {
+                    wake_at = wake_at.min(until);
+                }
+            }
             if let Some(until) = state.update_notice_until {
                 if Instant::now() >= until {
                     state.update_notice_until = None;
@@ -4652,18 +4858,6 @@ impl ApplicationHandler<HostEvent> for Host {
             }
             state.poll_details();
             state.ensure_details();
-            if state
-                .hotkeys
-                .as_ref()
-                .is_some_and(miao_term_ui::hotkey::Hotkeys::take_pending)
-            {
-                let visible = state.window.is_visible().unwrap_or(true);
-                state.window.set_visible(!visible);
-                if !visible {
-                    state.window.focus_window();
-                }
-                state.window.request_redraw();
-            }
             if !state.shot_now {
                 if let Ok(v) = std::env::var("MIAOTTY_SHOT_AFTER")
                     .or_else(|_| std::env::var("MIAOTTY_NATIVE_SHOT_AFTER"))
@@ -4768,6 +4962,9 @@ impl ApplicationHandler<HostEvent> for Host {
                     s.width as f32 / state.window.scale_factor() as f32,
                     s.height as f32 / state.window.scale_factor() as f32,
                 );
+                if state.show_settings {
+                    state.persist_settings();
+                }
                 state.save_session();
                 event_loop.exit();
             }
@@ -5187,6 +5384,34 @@ impl ApplicationHandler<HostEvent> for Host {
     }
 }
 
+/// Case-insensitive matches of `query` in a line's cells (see
+/// `ATerm::line_chars_abs`), as (start column, width in cells). Columns come
+/// from the cells, so wide characters before or inside a match line up.
+fn find_in_cells(cells: &[(u16, char, u16)], query: &str) -> Vec<(u16, u16)> {
+    let fold = |c: char| c.to_lowercase().next().unwrap_or(c);
+    let q: Vec<char> = query.chars().map(fold).collect();
+    let mut out = Vec::new();
+    if q.is_empty() {
+        return out;
+    }
+    let mut i = 0;
+    while i + q.len() <= cells.len() {
+        if cells[i..i + q.len()]
+            .iter()
+            .zip(&q)
+            .all(|((_, c, _), qc)| fold(*c) == *qc)
+        {
+            let (start, _, _) = cells[i];
+            let (last, _, w) = cells[i + q.len() - 1];
+            out.push((start, last + w - start));
+            i += q.len();
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
 fn terminal_paste_shortcut(
     key: input::KeyKind,
     super_key: bool,
@@ -5226,6 +5451,19 @@ fn winit_key_kind(event: &KeyEvent) -> input::KeyKind {
             NamedKey::Delete => KeyKind::Delete,
             NamedKey::PageUp => KeyKind::PageUp,
             NamedKey::PageDown => KeyKind::PageDown,
+            NamedKey::Insert => KeyKind::Insert,
+            NamedKey::F1 => KeyKind::F(1),
+            NamedKey::F2 => KeyKind::F(2),
+            NamedKey::F3 => KeyKind::F(3),
+            NamedKey::F4 => KeyKind::F(4),
+            NamedKey::F5 => KeyKind::F(5),
+            NamedKey::F6 => KeyKind::F(6),
+            NamedKey::F7 => KeyKind::F(7),
+            NamedKey::F8 => KeyKind::F(8),
+            NamedKey::F9 => KeyKind::F(9),
+            NamedKey::F10 => KeyKind::F(10),
+            NamedKey::F11 => KeyKind::F(11),
+            NamedKey::F12 => KeyKind::F(12),
             _ => KeyKind::Other,
         },
         _ => KeyKind::Other,
@@ -6190,6 +6428,69 @@ mod tests {
         assert_eq!(active, 0);
         assert!(!remove_whole_tab(&mut tabs, &mut active, 0));
         assert_eq!(tabs[0].title, "c");
+    }
+
+    fn editor_at(path: std::path::PathBuf) -> Editor {
+        Editor {
+            path,
+            text: "edited".into(),
+            original: "original".into(),
+            preview: false,
+            readonly: false,
+            remote: None,
+            close_armed: false,
+        }
+    }
+
+    #[test]
+    fn failed_save_keeps_the_buffer_dirty() {
+        let dir = std::env::temp_dir().join(format!("miaotty-save-{}", std::process::id()));
+        let mut ed = editor_at(dir.join("missing-dir").join("file.txt"));
+        assert!(ed.write().is_err());
+        assert_eq!(
+            ed.original, "original",
+            "a failed write must not look saved"
+        );
+
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut ed = editor_at(dir.join("file.txt"));
+        ed.write().unwrap();
+        assert_eq!(ed.original, "edited");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("file.txt")).unwrap(),
+            "edited"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn closing_unsaved_changes_needs_confirmation() {
+        let mut ed = editor_at(std::path::PathBuf::from("unused"));
+        assert!(!ed.may_close(), "first close keeps unsaved changes");
+        assert!(ed.may_close(), "second close discards");
+
+        let mut clean = editor_at(std::path::PathBuf::from("unused"));
+        clean.original = clean.text.clone();
+        assert!(clean.may_close());
+    }
+
+    #[test]
+    fn find_columns_follow_wide_characters() {
+        // "目录 abc 目录": 目(0,2) 录(2,2) ' '(4) a(5) b(6) c(7) ' '(8) 目(9,2) 录(11,2)
+        let cells = vec![
+            (0, '目', 2),
+            (2, '录', 2),
+            (4, ' ', 1),
+            (5, 'a', 1),
+            (6, 'B', 1),
+            (7, 'c', 1),
+            (8, ' ', 1),
+            (9, '目', 2),
+            (11, '录', 2),
+        ];
+        assert_eq!(find_in_cells(&cells, "abc"), vec![(5, 3)]);
+        assert_eq!(find_in_cells(&cells, "目录"), vec![(0, 4), (9, 4)]);
+        assert!(find_in_cells(&cells, "").is_empty());
     }
 
     #[test]

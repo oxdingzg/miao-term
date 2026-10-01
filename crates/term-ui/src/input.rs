@@ -37,7 +37,36 @@ pub enum KeyKind {
     Delete,
     PageUp,
     PageDown,
+    Insert,
+    /// Function key F1–F12.
+    F(u8),
     Other,
+}
+
+/// xterm encoding of a function key: SS3 for unmodified F1–F4, otherwise
+/// `CSI 1;n P..S` / `CSI code[;n] ~`. `n` is the modifier parameter (1 = none).
+fn function_key(f: u8, n: u8) -> Option<String> {
+    let tilde = |code: u8| {
+        if n > 1 {
+            format!("\x1b[{code};{n}~")
+        } else {
+            format!("\x1b[{code}~")
+        }
+    };
+    Some(match f {
+        1..=4 => {
+            let c = (b'P' + f - 1) as char;
+            if n > 1 {
+                format!("\x1b[1;{n}{c}")
+            } else {
+                format!("\x1bO{c}")
+            }
+        }
+        5 => tilde(15),
+        6..=10 => tilde(f + 11),
+        11 | 12 => tilde(f + 12),
+        _ => return None,
+    })
 }
 
 /// Escape sequence options for a key press.
@@ -132,6 +161,8 @@ pub fn encode_key(kind: KeyKind, mods: Modifiers, opts: EncodeOpts) -> Vec<u8> {
             KeyKind::Home => Some(format!("\x1b[1;{n}H")),
             KeyKind::End => Some(format!("\x1b[1;{n}F")),
             KeyKind::Delete => Some(format!("\x1b[3;{n}~")),
+            KeyKind::Insert => Some(format!("\x1b[2;{n}~")),
+            KeyKind::F(f) => function_key(f, n),
             KeyKind::PageUp => Some(format!("\x1b[5;{n}~")),
             KeyKind::PageDown => Some(format!("\x1b[6;{n}~")),
             _ => None,
@@ -161,6 +192,12 @@ pub fn encode_key(kind: KeyKind, mods: Modifiers, opts: EncodeOpts) -> Vec<u8> {
         KeyKind::Delete => out.extend_from_slice(b"\x1b[3~"),
         KeyKind::PageUp => out.extend_from_slice(b"\x1b[5~"),
         KeyKind::PageDown => out.extend_from_slice(b"\x1b[6~"),
+        KeyKind::Insert => out.extend_from_slice(b"\x1b[2~"),
+        KeyKind::F(f) => {
+            if let Some(seq) = function_key(f, 1) {
+                out.extend_from_slice(seq.as_bytes());
+            }
+        }
         KeyKind::Char(_) | KeyKind::Other => {}
     }
     out
@@ -221,6 +258,27 @@ mod tests {
             encode_key(KeyKind::Right, ctrl, EncodeOpts::default()),
             b"\x1b[1;5C"
         );
+    }
+
+    #[test]
+    fn function_keys_and_insert_use_xterm_sequences() {
+        let none = Modifiers::default();
+        let opts = EncodeOpts::default();
+        assert_eq!(encode_key(KeyKind::F(1), none, opts), b"\x1bOP");
+        assert_eq!(encode_key(KeyKind::F(4), none, opts), b"\x1bOS");
+        assert_eq!(encode_key(KeyKind::F(5), none, opts), b"\x1b[15~");
+        assert_eq!(encode_key(KeyKind::F(6), none, opts), b"\x1b[17~");
+        assert_eq!(encode_key(KeyKind::F(10), none, opts), b"\x1b[21~");
+        assert_eq!(encode_key(KeyKind::F(11), none, opts), b"\x1b[23~");
+        assert_eq!(encode_key(KeyKind::F(12), none, opts), b"\x1b[24~");
+        assert_eq!(encode_key(KeyKind::Insert, none, opts), b"\x1b[2~");
+        let shift = Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        assert_eq!(encode_key(KeyKind::F(1), shift, opts), b"\x1b[1;2P");
+        assert_eq!(encode_key(KeyKind::F(5), shift, opts), b"\x1b[15;2~");
+        assert_eq!(encode_key(KeyKind::Insert, shift, opts), b"\x1b[2;2~");
     }
 
     #[test]

@@ -224,6 +224,11 @@ pub struct Config {
     /// minisign public key used to verify downloaded updates (see ADR 0023).
     pub update_pubkey: Option<String>,
     pub theme: Theme,
+    /// The named theme the colours started from (`theme = "…"`), if any.
+    pub theme_name: Option<String>,
+    /// Set when no `config.toml` was used and settings were imported
+    /// (`"ghostty"` / `"alacritty"`).
+    pub imported_from: Option<&'static str>,
 }
 
 /// Per-state tab badge switches (`settings.agents.badge_*`).
@@ -280,6 +285,8 @@ impl Default for Config {
             remote_listen: None,
             quick_terminal_hotkey: None,
             update_pubkey: None,
+            theme_name: None,
+            imported_from: None,
             theme: Theme::default(),
         }
     }
@@ -341,7 +348,75 @@ fn ghostty_config_path() -> Option<PathBuf> {
     Some(base.join("ghostty").join("config"))
 }
 
+/// Replace or add top-level `key = value` assignments in config TOML text.
+/// Comments, other keys and tables are kept; new keys go before the first
+/// table header. Values are TOML literals (see [`toml_string`]).
+pub fn upsert_top_level(text: &str, updates: &[(&str, String)]) -> String {
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    let first_table = lines
+        .iter()
+        .position(|l| l.trim_start().starts_with('['))
+        .unwrap_or(lines.len());
+    let mut insert_at = first_table;
+    while insert_at > 0 && lines[insert_at - 1].trim().is_empty() {
+        insert_at -= 1;
+    }
+    for (key, value) in updates {
+        let assignment = format!("{key} = {value}");
+        let existing = lines[..first_table.min(lines.len())].iter().position(|l| {
+            l.trim_start()
+                .strip_prefix(key)
+                .is_some_and(|rest| rest.trim_start().starts_with('='))
+        });
+        match existing {
+            Some(i) => lines[i] = assignment,
+            None => {
+                lines.insert(insert_at, assignment);
+                insert_at += 1;
+            }
+        }
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
+}
+
+/// A TOML string literal.
+pub fn toml_string(s: &str) -> String {
+    toml::Value::String(s.to_string()).to_string()
+}
+
 impl Config {
+    /// Apply settings to `config.toml` (see [`upsert_top_level`]). Refuses to
+    /// touch a file that does not parse, so a typo is never made worse.
+    pub fn save_settings(updates: &[(&str, String)]) -> std::io::Result<std::path::PathBuf> {
+        use std::io::{Error, ErrorKind};
+        let path =
+            Self::path().ok_or_else(|| Error::new(ErrorKind::NotFound, "no config directory"))?;
+        let current = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(e),
+        };
+        let invalid = |what: &str| Error::new(ErrorKind::InvalidData, what.to_string());
+        if toml::from_str::<RawConfig>(&current).is_err() {
+            return Err(invalid(
+                "config.toml has errors; fix it before saving settings",
+            ));
+        }
+        let next = upsert_top_level(&current, updates);
+        if toml::from_str::<RawConfig>(&next).is_err() {
+            return Err(invalid("settings would produce invalid TOML"));
+        }
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let tmp = path.with_extension("toml.tmp");
+        std::fs::write(&tmp, next)?;
+        std::fs::rename(&tmp, &path)?;
+        Ok(path)
+    }
+
     /// Config file path: `$XDG_CONFIG_HOME/miaotty/config.toml` or `~/.config/miaotty/config.toml`.
     pub fn path() -> Option<PathBuf> {
         let base = std::env::var_os("XDG_CONFIG_HOME")
@@ -353,21 +428,46 @@ impl Config {
     /// Load from the default path. If there is no miaotty config, fall back to
     /// importing a ghostty config, then to defaults.
     pub fn load() -> Self {
+        Self::load_checked().0
+    }
+
+    /// Like [`Config::load`], plus a message when `config.toml` exists but
+    /// cannot be parsed. Its values are then ignored, which the user should
+    /// hear about instead of silently getting imported or default settings.
+    pub fn load_checked() -> (Self, Option<String>) {
+        let mut problem = None;
         if let Some(path) = Self::path() {
             if let Ok(text) = std::fs::read_to_string(&path) {
-                if let Some(cfg) = Self::from_toml(&text) {
-                    return cfg;
+                match toml::from_str::<RawConfig>(&text) {
+                    Ok(_) => {
+                        if let Some(cfg) = Self::from_toml(&text) {
+                            return (cfg, None);
+                        }
+                    }
+                    Err(e) => {
+                        let first = e.to_string();
+                        let first = first.lines().next().unwrap_or_default().to_string();
+                        // The file name is in the UI text; keep the reason visible.
+                        problem = Some(first);
+                    }
                 }
             }
         }
+        (Self::load_fallback(), problem)
+    }
+
+    fn load_fallback() -> Self {
         if let Some(ghostty) = ghostty_config_path() {
             if let Ok(text) = std::fs::read_to_string(ghostty) {
-                return Self::from_ghostty_text(&text);
+                let mut cfg = Self::from_ghostty_text(&text);
+                cfg.imported_from = Some("ghostty");
+                return cfg;
             }
         }
         if let Some(alacritty) = alacritty_config_path() {
             if let Ok(text) = std::fs::read_to_string(alacritty) {
-                if let Some(cfg) = Self::from_alacritty_text(&text) {
+                if let Some(mut cfg) = Self::from_alacritty_text(&text) {
+                    cfg.imported_from = Some("alacritty");
                     return cfg;
                 }
             }
@@ -598,6 +698,7 @@ impl Config {
         if let Some(name) = raw.theme {
             if let Some(theme) = theme_by_name(&name) {
                 cfg.theme = theme;
+                cfg.theme_name = Some(name);
             }
         }
         if let Some(colors) = raw.colors {
@@ -624,6 +725,48 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn upsert_keeps_comments_and_tables() {
+        let text = "# mine\nfont-size = 13 # big\n\n[colors]\nbackground = \"#000000\"\n";
+        let out = upsert_top_level(
+            text,
+            &[
+                ("font-size", "15".into()),
+                ("theme", toml_string("dracula")),
+            ],
+        );
+        assert_eq!(
+            out,
+            "# mine\nfont-size = 15\ntheme = \"dracula\"\n\n[colors]\nbackground = \"#000000\"\n"
+        );
+        let cfg = Config::from_toml(&out).unwrap();
+        assert_eq!(cfg.font_size, 15.0);
+        assert_eq!(cfg.theme_name.as_deref(), Some("dracula"));
+        assert_eq!(
+            cfg.theme.background,
+            Rgb(0, 0, 0),
+            "explicit colours still win"
+        );
+    }
+
+    #[test]
+    fn upsert_into_an_empty_file_and_does_not_confuse_prefixes() {
+        let out = upsert_top_level("", &[("font-family", toml_string("Menlo"))]);
+        assert_eq!(out, "font-family = \"Menlo\"\n");
+        // `font-size` must not match a `font-size-extra` key.
+        let out = upsert_top_level("font-size-extra = 1\n", &[("font-size", "12".into())]);
+        assert_eq!(out, "font-size-extra = 1\nfont-size = 12\n");
+    }
+
+    #[test]
+    fn string_values_are_escaped() {
+        for family in ["a\"b", "it's", "x\\y", "等宽 Mono"] {
+            let out = upsert_top_level("", &[("font-family", toml_string(family))]);
+            let cfg = Config::from_toml(&out).unwrap();
+            assert_eq!(cfg.font_family.as_deref(), Some(family), "{out}");
+        }
+    }
     use super::*;
 
     #[test]
