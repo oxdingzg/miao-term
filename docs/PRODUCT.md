@@ -281,7 +281,7 @@ verified on its own:
 
 ### M4 Cross-platform delivery
 
-- [ ] **B4.1** Real Windows/Linux desktop acceptance (IME, hotkey, drag and
+- [x] **B4.1** Real Windows/Linux desktop acceptance (IME, hotkey, drag and
   drop, menus) **[owner + hardware]**.
   Linux, 2026-10-01 (Ubuntu 24.04, GNOME 46, Wayland, input injected through
   uinput): typing, menus and menu actions work; pinyin IME preedit, candidate
@@ -292,8 +292,19 @@ verified on its own:
   `wl_data_device`, which also reads the clipboard because GNOME serves one
   data device per client; app shortcuts used Super, which the desktop owns,
   now Ctrl+Shift based (see the README table); Tab in the terminal moved
-  egui's focus to the File menu and swallowed further typing. Windows:
-  pending.
+  egui's focus to the File menu and swallowed further typing.
+  Windows, 2026-10-01 (Windows 11 22H2, input through SendInput in the
+  logged-on session): typing, Tab completion, menus, Microsoft Pinyin
+  (preedit, candidate placement, commit), file drops, clipboard
+  (Ctrl+Shift+C/V) and the Quick Terminal hotkey work. **Found and fixed:**
+  mtty exited at start (no CJK font for egui); switching the input language
+  hung the window for good (wgpu's OpenGL probe left a thread whose hidden
+  window never processes messages — found with a symbolized minidump);
+  every ssh command typed into cmd.exe failed (POSIX quoting, `clear;`,
+  ControlMaster); config.toml, hosts, snippets and sessions were ignored (no
+  `HOME` on Windows; now `%APPDATA%\mtty`); a console window opened with mtty;
+  keys held while focusing (the hotkey's Y) were typed into the pane; dropped
+  paths used single quotes.
 - [ ] **B4.2** Apple notarization and Windows MSI signing **[owner +
   credentials]**.
 - [x] **B4.3** Auto-update: download, `update-pubkey` signature check, replace.

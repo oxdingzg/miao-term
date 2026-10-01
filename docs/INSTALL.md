@@ -47,7 +47,9 @@ artifact signatures use the optional secrets described in [RELEASE.md](RELEASE.m
 ## Configuration and links
 
 Configuration is `~/.config/mtty/config.toml`, or
-`$XDG_CONFIG_HOME/mtty/config.toml`. Ghostty/Alacritty config import and the
+`$XDG_CONFIG_HOME/mtty/config.toml`; on Windows `%APPDATA%\mtty\config.toml`
+(saved state goes to `%LOCALAPPDATA%\mtty`; a `~/.config/mtty` that already
+exists under a `HOME` set by Git Bash keeps being used). Ghostty/Alacritty config import and the
 zsh ZDOTDIR integration retain their existing behavior. Existing native and
 eframe session formats are read through the compatibility migration.
 

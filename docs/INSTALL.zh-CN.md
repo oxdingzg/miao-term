@@ -43,7 +43,7 @@ Apple Developer ID 签名/公证、Windows MSI 签名和 minisign 产物签名�
 
 ## 配置与深链接
 
-配置位于 `~/.config/mtty/config.toml` 或 `$XDG_CONFIG_HOME/mtty/config.toml`。
+配置位于 `~/.config/mtty/config.toml` 或 `$XDG_CONFIG_HOME/mtty/config.toml`;Windows 上为 `%APPDATA%\mtty\config.toml`(保存的状态在 `%LOCALAPPDATA%\mtty`;若在 Git Bash 设置的 `HOME` 下已有 `~/.config/mtty`,则继续使用它)。
 Ghostty/Alacritty 配置导入及 zsh ZDOTDIR 集成保持原有行为，旧 native/eframe 会话格式
 通过兼容迁移读取。
 
