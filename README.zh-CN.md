@@ -111,7 +111,10 @@
   一致(未知密钥显示指纹供核对后信任;已变化的密钥会被拒绝),并在终端标签中运行 `ssh-keygen` / `ssh-copy-id`。每台主机可保存端口转发(`-L`、`-R`、`-D` SOCKS),
   在窗口中启停,显示运行状态或 ssh 放弃的原因;状态栏显示数量。
 - **SSH 会话与远端 view/edit**:*新建 SSH 会话…* 遵循 `~/.ssh/config`,复用 ControlMaster 连接,
-  远端零安装引导 terminfo;*查看/编辑远端文件…* 经该连接读写(主机在对话框中填写)。SFTP 与端口转发在路线图中([`docs/PRODUCT.zh-CN.md`](docs/PRODUCT.zh-CN.md))。
+  远端零安装引导 terminfo;*查看/编辑远端文件…* 经该连接读写(自动带入当前 SSH 标签的主机)。
+- **SFTP**:双栏文件浏览(本机 | 主机),可从"主机…"、命令面板(当前 SSH 标签)或 `mtty://sftp/<名称>` 打开:
+  浏览、上传(也可把文件拖到窗口上)、带进度的下载、重命名、chmod、新建文件夹与删除(需确认)。底层调用系统
+  `sftp`,ssh 配置、跳板机、agent 与共享连接均照常生效。
 
 **自动化**
 - **MTP 控制面**,经 per-user Unix socket(Windows 为命名管道):

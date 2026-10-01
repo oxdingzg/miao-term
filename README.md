@@ -160,8 +160,12 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 - **SSH sessions and remote view/edit**: *New SSH Session…* honours
   `~/.ssh/config`, reuses a ControlMaster connection and bootstraps terminfo with
   nothing installed remotely; *View/Edit Remote File…* reads and writes over that
-  connection (host typed in the dialog). SFTP and port forwarding are on the
-  roadmap ([`docs/PRODUCT.md`](docs/PRODUCT.md)).
+  connection (the host of the active ssh tab is filled in).
+- **SFTP**: a two-pane file browser (this machine | the host) from Hosts, the
+  palette for the active ssh tab, or `mtty://sftp/<name>`: browse, upload
+  (also by dropping files on the window), download with progress, rename,
+  chmod, new folder and delete (confirmed). It drives the system `sftp`, so ssh
+  config, jump hosts, the agent and the shared connection apply.
 
 **Automation**
 - The **MTP control plane** over a per-user Unix socket (a named pipe on

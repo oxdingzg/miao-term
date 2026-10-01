@@ -265,7 +265,7 @@ verified on its own:
   with mtty (not the shared ControlMaster, whose 60 s ControlPersist would drop
   forwards). End to end against a real host: the remote sshd banner read
   through the local port, the port closed after Stop.
-- [ ] **B3.4 SFTP**: two-pane browser, upload/download, drag and drop, progress,
+- [x] **B3.4 SFTP** (OpenSSH sftp in batch mode, keeping ssh config, jump hosts, the agent and ControlMaster; real round-trip test; checked on a real Linux Wayland desktop; download progress is read off the local file, uploads show a busy state without a percentage): two-pane browser, upload/download, drag and drop, progress,
   rename/permissions; remote editing reuses the pane's connection.
 - [ ] **B3.5 Snippets and broadcast**: a command library run in the current pane
   or on several hosts; broadcast input to several panes.
