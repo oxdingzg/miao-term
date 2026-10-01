@@ -7,6 +7,8 @@
 [![Rust](https://img.shields.io/badge/rust-1.80%2B-orange.svg)](Cargo.toml)
 [![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#环境要求)
 
+**官网:** [mtty.dev/mtty](https://mtty.dev/zh/mtty) · **文档:** [mtty.dev/docs/mtty](https://mtty.dev/zh/docs/mtty) · [版本发布](https://github.com/oxdingzg/miao-term/releases) · [相关项目](#相关项目)
+
 [English](README.md) · **简体中文**
 
 ---
@@ -33,9 +35,26 @@
 
 > **项目状态 —— 预发布。** 当前版本为 `0.0.5`,API 尚未稳定。macOS 是主要平台;
 > Windows 已在真实硬件上构建、测试并经 MTP 驱动(见 [`docs/WINDOWS-DEV.zh-CN.md`](docs/WINDOWS-DEV.zh-CN.md));
-> Linux 在 CI 中构建并通过测试。
+> Linux 在 CI 中构建并通过测试,并已在真实的 GNOME/Wayland 桌面上验收(输入法、菜单、文件拖放、剪贴板、快捷键)。
 
 ---
+
+
+## 相关项目
+
+| 项目 | 是什么 | 链接 |
+|---|---|---|
+| **mtty**(本仓库) | 终端应用,以及其背后可嵌入的终端引擎 | [mtty.dev/mtty](https://mtty.dev/zh/mtty) · [oxdingzg/miao-term](https://github.com/oxdingzg/miao-term) |
+| **miao** | 在终端里运行的开源 AI 编程代理 | [mtty.dev/miao](https://mtty.dev/zh/miao) · [oxdingzg/miao](https://github.com/oxdingzg/miao) |
+| **mtty.dev** | 两者的官网与文档站 | [mtty.dev](https://mtty.dev/zh/) |
+
+mtty 与 miao 是两个独立项目,任意一个都可以单独使用。在 mtty 的窗格里,miao 通过控制面上报自己的状态(工作中、
+等待你、已完成、出错);mtty 据此给窗格加徽章、在代理需要你时通知你、在代理工作时阻止电脑休眠,并在它空闲时发出你
+排队的提示。mtty 也为其他代理 CLI(Claude Code、Codex、OpenCode)提供状态钩子。
+
+有两个都叫 *miaotty* 的东西:本仓库的应用在 v0.0.5 及之前名为 `miaotty`(见上文的更名说明);而
+[oxdingzg/miaotty](https://github.com/oxdingzg/miaotty) 是另一个更早的个人 macOS 原型(基于 Ghostty 分叉),
+已不再开发,请改用 mtty。
 
 ## 功能
 
