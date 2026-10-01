@@ -387,6 +387,37 @@ fn views_mtime() -> Option<std::time::SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
+/// Chinese for the fixed words of the details panel (titles, keys and the
+/// status values the workers produce); anything else is shown as is.
+fn localize_detail(lang: miao_term_ui::i18n::Lang, text: &str) -> &str {
+    if lang == miao_term_ui::i18n::Lang::En {
+        return text;
+    }
+    match text {
+        "Info" => "信息",
+        "Agent" => "Agent",
+        "Outline" => "大纲",
+        "Git" => "Git",
+        "Files" => "文件",
+        "Ports" => "端口",
+        "Title" => "标题",
+        "Directory" => "目录",
+        "Size" => "尺寸",
+        "Pane" => "Pane",
+        "branch" => "分支",
+        "status" => "状态",
+        "clean" => "无改动",
+        "not a git repository" => "不是 git 仓库",
+        "unavailable" => "不可用",
+        "ports" => "端口",
+        "no listeners" => "无监听端口",
+        "lsof unavailable" => "lsof 不可用",
+        "state" => "状态",
+        "session_id" => "会话 ID",
+        _ => text,
+    }
+}
+
 /// The host part of an ssh target as typed (`deploy@work:2200` → `work`).
 fn ssh_host(target: &str) -> String {
     miao_term_ui::ssh::Target::parse(target)
@@ -3576,13 +3607,18 @@ impl State {
             }
             Intent::Quick => self.toggle_quick_terminal(),
             Intent::Focus(id) => {
-                for (i, tab) in self.tabs.iter().enumerate() {
-                    if tab.panes.iter().any(|p| &p.id == id) {
-                        self.active_tab = i;
-                        self.selection = None;
-                        break;
-                    }
+                // Like MTP `pane.focus`: the tab and the pane inside it.
+                if let Some(i) = self
+                    .tabs
+                    .iter()
+                    .position(|t| t.panes.iter().any(|p| &p.id == id))
+                {
+                    self.tabs[i].active = id.clone();
+                    self.active_tab = i;
+                    self.selection = None;
                 }
+                self.window.set_visible(true);
+                self.window.focus_window();
             }
             Intent::Run(cmd) => {
                 self.new_tab();
@@ -3653,27 +3689,51 @@ impl State {
     fn quick_window(&mut self, ctx: &egui::Context) {
         enum Pick {
             Tab(usize),
+            Pane(usize, String),
             File(String),
             Dir(String),
             Path(std::path::PathBuf),
         }
         let cwd = self.cwd();
+        // Files come from the background directory listing (shared with the
+        // Files tree), so they are there whether or not that panel is open.
+        if self.quick.is_none() {
+            return;
+        }
+        if let Some(dir) = cwd.clone() {
+            self.load_tree(&dir);
+        }
         let tabs: Vec<(usize, String)> = self
             .tabs
             .iter()
             .enumerate()
             .map(|(i, t)| (i, self.title_of(t)))
             .collect();
-        let files: Vec<(String, bool)> = self
-            .details_data
-            .as_ref()
-            .map(|d| {
-                d.files
+        let agents: Vec<(usize, String, String)> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .flat_map(|(i, t)| {
+                let title = self.title_of(t);
+                t.panes
                     .iter()
-                    .filter(|f| f.is_dir)
-                    .map(|f| (f.name.clone(), true))
-                    .collect()
+                    .map(move |p| (i, p.id.clone(), title.clone()))
             })
+            .filter_map(|(i, pane, title)| {
+                let a = self.mtp.agent_for(&pane)?;
+                let agent = a.get("agent").and_then(|v| v.as_str()).unwrap_or("agent");
+                let state = a.get("state").and_then(|v| v.as_str()).unwrap_or("");
+                Some((
+                    i,
+                    pane,
+                    format!("{agent} \u{00b7} {state} \u{00b7} {title}"),
+                ))
+            })
+            .collect();
+        let files: Vec<(String, bool)> = cwd
+            .as_ref()
+            .and_then(|dir| self.tree_children.get(dir))
+            .map(|entries| entries.iter().map(|f| (f.name.clone(), f.is_dir)).collect())
             .unwrap_or_default();
         let recents = self.recent_files.clone();
         let counts = self.open_counts.clone();
@@ -3690,8 +3750,8 @@ impl State {
                     egui::TextEdit::singleline(query)
                         .hint_text(miao_term_ui::i18n::t(
                             self.lang,
-                            "tab / file",
-                            "标签 / 文件",
+                            "tab / agent / file",
+                            "标签 / agent / 文件",
                         ))
                         .desired_width(420.0),
                 );
@@ -3702,6 +3762,16 @@ impl State {
                 for (i, title) in &tabs {
                     if let Some(s) = miao_term_ui::palette::score(title, "tab", &q) {
                         rows.push((s, freq(title), format!("\u{21e5} {title}"), Pick::Tab(*i)));
+                    }
+                }
+                for (i, pane, label) in &agents {
+                    if let Some(s) = miao_term_ui::palette::score(label, "agent", &q) {
+                        rows.push((
+                            s,
+                            freq(label),
+                            format!("\u{2726} {label}"),
+                            Pick::Pane(*i, pane.clone()),
+                        ));
                     }
                 }
                 for (name, is_dir) in &files {
@@ -3733,6 +3803,7 @@ impl State {
                 rows.sort_by_key(|r| (r.0, r.1));
                 let clone_pick = |p: &Pick| match p {
                     Pick::Tab(i) => Pick::Tab(*i),
+                    Pick::Pane(i, id) => Pick::Pane(*i, id.clone()),
                     Pick::File(n) => Pick::File(n.clone()),
                     Pick::Dir(n) => Pick::Dir(n.clone()),
                     Pick::Path(p) => Pick::Path(p.clone()),
@@ -3753,6 +3824,15 @@ impl State {
             match p {
                 Pick::Tab(i) => {
                     if i < self.tabs.len() {
+                        self.active_tab = i;
+                        self.selection = None;
+                    }
+                }
+                Pick::Pane(i, id) => {
+                    if let Some(tab) = self.tabs.get_mut(i) {
+                        if tab.panes.iter().any(|p| p.id == id) {
+                            tab.active = id;
+                        }
                         self.active_tab = i;
                         self.selection = None;
                     }
@@ -6574,10 +6654,20 @@ impl chrome::Chrome for State {
         self.details_tab.min(6)
     }
     fn details_title(&self) -> String {
-        self.details_content(self.details_tab.min(6)).0.to_string()
+        let title = self.details_content(self.details_tab.min(6)).0;
+        localize_detail(self.lang, title).to_string()
     }
     fn details_rows(&self) -> Vec<(String, String)> {
-        self.details_content(self.details_tab.min(6)).1
+        self.details_content(self.details_tab.min(6))
+            .1
+            .into_iter()
+            .map(|(k, v)| {
+                (
+                    localize_detail(self.lang, &k).to_string(),
+                    localize_detail(self.lang, &v).to_string(),
+                )
+            })
+            .collect()
     }
     fn read_only(&self) -> bool {
         self.read_only
@@ -7038,6 +7128,17 @@ mod tests {
             (restored.prefix, restored.mark, restored.group),
             (None, None, None)
         );
+    }
+
+    #[test]
+    fn details_words_are_translated_and_data_is_kept() {
+        use miao_term_ui::i18n::Lang;
+        assert_eq!(
+            localize_detail(Lang::Zh, "not a git repository"),
+            "不是 git 仓库"
+        );
+        assert_eq!(localize_detail(Lang::Zh, "src/main.rs"), "src/main.rs");
+        assert_eq!(localize_detail(Lang::En, "Directory"), "Directory");
     }
 
     #[test]

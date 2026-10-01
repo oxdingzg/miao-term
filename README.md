@@ -71,11 +71,11 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
   draggable dividers and a close button on every pane. `⌘⇧T` toggles a scratch
   Quick Terminal.
 - A **file list** in the details panel's Files tab (a click opens the reader)
-  and **View rules** that map a pane's cwd/agent to an alias and tab title —
-  see [`docs/VIEW-RULES.md`](docs/VIEW-RULES.md). Rule icons and badges, and
-  matching on command/host/file, are not applied yet.
-- A **command palette** (`⌘K`) and **Open Quickly** (`⌘⇧O`) over tabs,
-  directories and recent files.
+  and **View rules** that map a pane's directory, foreground command, agent or
+  ssh host to an alias, icon, tab title and badge, reloaded when `views.json`
+  changes — see [`docs/VIEW-RULES.md`](docs/VIEW-RULES.md).
+- A **command palette** (`⌘K`) and **Open Quickly** (`⌘⇧O`) over tabs, agents,
+  files and directories in the current folder, and recent files.
 - A right-hand details panel with tabs: **Info, Agent, Outline, Git, Files,
   Ports, Queue** (git status, directory listing, listening ports, prompt queue).
 - **Composer** (`⌘⇧E`) and a **prompt queue** (sent from the Queue tab; automatic
@@ -321,7 +321,7 @@ Pass `--socket PATH` or set `MTTY_SOCKET` to target a non-default socket.
 | `⌥⌘→` / `⌥⌘←` (or `⌘⇧]` / `⌘⇧[`) | Cycle pane focus |
 | `⌥⌘D` | Toggle the details panel |
 | `⌘K` | Command palette |
-| `⌘⇧O` | Open Quickly (tabs, directories, recent files) |
+| `⌘⇧O` | Open Quickly (tabs, agents, files, recent files) |
 | `⌘F` | Find |
 | `⌘⇧E` | Composer (multi-line prompt to the focused pane) |
 | `⌘⇧T` | Quick Terminal (scratch tab) |

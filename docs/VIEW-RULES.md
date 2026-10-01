@@ -2,8 +2,9 @@
 
 A pane's tab title, icon and badge are derived from its context by the *view
 rule engine* (design: [ADR 0007](./decisions/0007-view-rule-engine.md)). Rules
-live in `~/.config/mtty/views.json` (JSON) and are also editable from
-**Settings → View rules**, with a live preview.
+live in `~/.config/mtty/views.json` (JSON). mtty reloads the file when it
+changes, so an edit shows within a couple of seconds of the next activity; an
+in-app rule editor is not available yet.
 
 ```jsonc
 {
@@ -26,9 +27,12 @@ live in `~/.config/mtty/views.json` (JSON) and are also editable from
 
 ## Matching
 - Rules are an **ordered list**; the **first** rule whose every present clause
-  matches wins. Reorder with the ↑/↓ buttons.
-- Clauses: `path` (glob over the working directory, `~` expanded), `command`
-  (foreground command), `agent` (exact name), `host`, `file`.
+  matches wins. Reorder them in the file.
+- Clauses: `path` (glob over the working directory, `~` expanded; a pattern
+  through a symlinked folder also matches the resolved directory), `command`
+  (the name of the program in the foreground, e.g. `vim`, `cargo`; empty while
+  the shell waits for input), `agent` (exact name), `host` (an ssh tab's host),
+  `file`.
 - Glob: `*` matches within a path segment, `**` crosses `/`, `?` matches one
   character. Matching is case-sensitive.
 - An empty `match` (`{}`) matches anything — use it as the catch-all.

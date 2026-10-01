@@ -57,10 +57,10 @@
   `⌘W` / `Ctrl+W` 在分屏标签中仍只关闭当前窗格。
 - 递归分屏树:`⌘D` 向右分屏,`⇧⌘D` 向下分屏,分隔条可拖拽调整比例,每个 pane 都有
   关闭按钮。`⌘⇧T` 切换临时快速终端。
-- details 面板 Files 分页中的**文件列表**(单击用查看器打开)与 **View 规则**:把 pane 的
-  cwd/agent 映射为别名与标签标题 —— 见 [`docs/VIEW-RULES.zh-CN.md`](docs/VIEW-RULES.zh-CN.md)。
-  规则中的图标、徽章,以及按命令/host/文件匹配,尚未生效。
-- **命令面板**(`⌘K`)与 **Open Quickly**(`⌘⇧O`):覆盖标签、目录与最近文件。
+- details 面板 Files 分页中的**文件列表**(单击用查看器打开)与 **View 规则**:把 pane 的目录、
+  前台命令、agent 或 SSH 主机映射为别名、图标、标签标题与徽章,`views.json` 修改后自动生效 ——
+  见 [`docs/VIEW-RULES.zh-CN.md`](docs/VIEW-RULES.zh-CN.md)。
+- **命令面板**(`⌘K`)与 **Open Quickly**(`⌘⇧O`):覆盖标签、agent、当前目录的文件与子目录,以及最近文件。
 - 右侧 details 面板含分页:**Info / Agent / Outline / Git / Files / Ports / Queue**
   (git 状态、目录列表、监听端口、提示队列)。
 - **Composer**(`⌘⇧E`)与**提示队列**(在 Queue 分页手动发送;agent 空闲时自动投递在路线图中);
@@ -271,7 +271,7 @@ mtty-cli file write --path /tmp/x --data-b64 "AAECAw=="   # 二进制
 | `⌥⌘→` / `⌥⌘←`(或 `⌘⇧]` / `⌘⇧[`) | 轮换 pane 焦点 |
 | `⌥⌘D` | 开关 details 面板 |
 | `⌘K` | 命令面板 |
-| `⌘⇧O` | Open Quickly(标签、目录、最近文件) |
+| `⌘⇧O` | Open Quickly(标签、agent、文件、最近文件) |
 | `⌘F` | 查找 |
 | `⌘⇧E` | Composer(向焦点 pane 发送多行提示) |
 | `⌘⇧T` | 快速终端(临时标签) |
