@@ -1,8 +1,8 @@
 //! URL-scheme launching (ADR 0013).
 //!
 //! The OS invokes us with a URL argument when a registered scheme is opened
-//! (`miaotty://…`, `ssh://…`, `x-man-page://…`). We translate that into a shell
-//! command to run in a fresh tab; `miaotty://` only activates the app.
+//! (`mtty://…` or the former `miaotty://…`, `ssh://…`, `x-man-page://…`). We translate that into a shell
+//! command to run in a fresh tab; `mtty://` only activates the app.
 
 /// What a launch asks the (running) app to do.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -42,12 +42,13 @@ impl Intent {
         Intent::Activate
     }
 
-    /// The URL forms we understand (`miaotty://quick`, `miaotty://focus?pane=…`,
-    /// plus `ssh://` / `x-man-page://` which become commands).
+    /// The URL forms we understand (`mtty://quick`, `mtty://focus?pane=…`, the
+    /// same under the former `miaotty://` scheme, plus `ssh://` /
+    /// `x-man-page://` which become commands).
     pub fn from_url(arg: &str) -> Option<Self> {
         let (scheme, rest) = arg.split_once("://")?;
         match scheme.to_ascii_lowercase().as_str() {
-            "miaotty" => {
+            "mtty" | "miaotty" => {
                 let rest = rest.trim_start_matches('/');
                 if rest.starts_with("quick") {
                     Some(Intent::Quick)
@@ -86,7 +87,7 @@ impl Intent {
 pub fn command_for(arg: &str) -> Option<String> {
     let (scheme, rest) = arg.split_once("://")?;
     match scheme.to_ascii_lowercase().as_str() {
-        "miaotty" => None,
+        "mtty" | "miaotty" => None,
         "ssh" => ssh_command(rest),
         "x-man-page" => {
             let cmd = rest.split(['/', '?']).next().filter(|s| !s.is_empty())?;
@@ -98,12 +99,7 @@ pub fn command_for(arg: &str) -> Option<String> {
 
 /// The inbox directory for cross-instance launches.
 pub fn inbox_dir() -> Option<std::path::PathBuf> {
-    let base = std::env::var_os("XDG_DATA_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/share"))
-        })?;
-    Some(base.join("miaotty").join("inbox"))
+    Some(miao_term_config::data_dir()?.join("inbox"))
 }
 
 /// Hand a launch to an already-running instance (single-instance deep link) and
@@ -190,6 +186,11 @@ mod tests {
             Intent::from_args(&args(&["miaotty://quick"])),
             Intent::Quick
         );
+        assert_eq!(Intent::from_args(&args(&["mtty://quick"])), Intent::Quick);
+        assert_eq!(
+            Intent::from_args(&args(&["MTTY://focus?pane=p2"])),
+            Intent::Focus("p2".into())
+        );
         assert!(matches!(
             Intent::from_args(&args(&["ssh://h"])),
             Intent::Run(_)
@@ -219,6 +220,7 @@ mod tests {
             Some("man 'git'")
         );
         assert!(command_for("miaotty://open").is_none());
+        assert!(command_for("mtty://open").is_none());
         assert!(command_for("unknown://x").is_none());
         assert!(command_for("not-a-url").is_none());
     }

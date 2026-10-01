@@ -1,21 +1,21 @@
-//! `miaotty-cli` — control CLI (cross-platform MTP client).
+//! `mtty-cli` — control CLI (cross-platform MTP client).
 //!
-//! Talks to the running miaotty host over the MTP socket. Examples:
-//!   miaotty-cli ping
-//!   miaotty-cli pane list
-//!   miaotty-cli state miao --state processing [--pane ID]
-//!   miaotty-cli state list
-//!   miaotty-cli history add --command "ls" [--cwd DIR] [--pane ID]
-//!   miaotty-cli history list [--pane ID]
-//!   miaotty-cli pane run --pane ID --data "echo hi"
-//!   miaotty-cli pane focus|close --pane ID
+//! Talks to the running mtty host over the MTP socket. Examples:
+//!   mtty-cli ping
+//!   mtty-cli pane list
+//!   mtty-cli state miao --state processing [--pane ID]
+//!   mtty-cli state list
+//!   mtty-cli history add --command "ls" [--cwd DIR] [--pane ID]
+//!   mtty-cli history list [--pane ID]
+//!   mtty-cli pane run --pane ID --data "echo hi"
+//!   mtty-cli pane focus|close --pane ID
 
 use std::path::PathBuf;
 
 use serde_json::{json, Value};
 
 fn usage_text() -> &'static str {
-    "usage: miaotty-cli [--socket PATH|tcp://host:port] <command>\n\
+    "usage: mtty-cli [--socket PATH|tcp://host:port] <command>\n\
      commands: ping | health | wait [--since N] | events [--topic T[,T]] | \
      pane list|run|send|focus|close | \
      state <agent> --state S | state list | history add|list |\n     view|edit <path> |\n     file read --path P [--offset N] [--length N] [--base64] |\n     file write --path P [--data D | --data-b64 B]"
@@ -37,10 +37,11 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
 
-    let mut socket = std::env::var("MIAOTTY_SOCKET")
-        .ok()
+    // `MTTY_SOCKET` (or the former `MIAOTTY_SOCKET`), else the default path —
+    // or an older host's socket when only that one exists (ADR 0032).
+    let mut socket = miao_term_mtp::env("SOCKET")
         .map(PathBuf::from)
-        .unwrap_or_else(miao_term_mtp::default_socket);
+        .unwrap_or_else(miao_term_mtp::client_socket);
     if let Some(i) = args.iter().position(|a| a == "--socket") {
         if i + 1 < args.len() {
             socket = PathBuf::from(args.remove(i + 1));
@@ -48,7 +49,7 @@ fn main() {
         }
     }
 
-    let pane_default = || std::env::var("MIAOTTY_PANE_ID").ok();
+    let pane_default = || miao_term_mtp::env("PANE_ID");
     let cmd = args.first().map(String::as_str).unwrap_or("");
     if cmd == "--help" || cmd == "-h" {
         println!("{}", usage_text());
@@ -58,7 +59,7 @@ fn main() {
     let mut client = match miao_term_mtp::client::connect_any(&socket.to_string_lossy()) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("miaotty-cli: cannot connect to {}: {e}", socket.display());
+            eprintln!("mtty-cli: cannot connect to {}: {e}", socket.display());
             std::process::exit(1);
         }
     };
@@ -69,7 +70,7 @@ fn main() {
             .map(|t| t.split(',').collect())
             .unwrap_or_default();
         if let Err(e) = client.subscribe(&topics) {
-            eprintln!("miaotty-cli: subscribe failed: {e}");
+            eprintln!("mtty-cli: subscribe failed: {e}");
             std::process::exit(1);
         }
         loop {
@@ -77,7 +78,7 @@ fn main() {
                 Ok(Some(event)) => println!("{event}"),
                 Ok(None) => break,
                 Err(e) => {
-                    eprintln!("miaotty-cli: stream ended: {e}");
+                    eprintln!("mtty-cli: stream ended: {e}");
                     std::process::exit(1);
                 }
             }

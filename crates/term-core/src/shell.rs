@@ -1,5 +1,5 @@
 //! Shell integration: a `ZDOTDIR` shim so the spawned shell reports its cwd
-//! (OSC 7) and command history (via `miaotty-cli`) without the user editing any
+//! (OSC 7) and command history (via `mtty-cli`) without the user editing any
 //! dotfiles.
 //!
 //! The shim restores the user's real `ZDOTDIR` first, then sources their
@@ -8,27 +8,30 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-const ZSHENV: &str = r#"# miaotty shell integration (zsh) — auto-generated, do not edit.
-if [[ -n "${MIAOTTY_ZDOTDIR_ORIG+x}" ]]; then
-  export ZDOTDIR="$MIAOTTY_ZDOTDIR_ORIG"
-  unset MIAOTTY_ZDOTDIR_ORIG
+// The host exports `MTTY_CLI` as an absolute path: inside an app bundle the
+// CLI is not on `PATH`.
+const ZSHENV: &str = r#"# mtty shell integration (zsh) — auto-generated, do not edit.
+if [[ -n "${MTTY_ZDOTDIR_ORIG+x}" ]]; then
+  export ZDOTDIR="$MTTY_ZDOTDIR_ORIG"
+  unset MTTY_ZDOTDIR_ORIG
 else
   unset ZDOTDIR
 fi
 [[ -r "${ZDOTDIR:-$HOME}/.zshenv" ]] && source "${ZDOTDIR:-$HOME}/.zshenv"
 
-_miaotty_osc7() { printf '\033]7;file://%s%s\033\\' "${HOST:-localhost}" "$PWD"; }
-_miaotty_preexec() {
-  command -v miaotty-cli >/dev/null 2>&1 || return 0
-  ( miaotty-cli history add --command "$1" --cwd "$PWD" >/dev/null 2>&1 & )
+_mtty_osc7() { printf '\033]7;file://%s%s\033\\' "${HOST:-localhost}" "$PWD"; }
+_mtty_preexec() {
+  local cli="${MTTY_CLI:-mtty-cli}"
+  command -v "$cli" >/dev/null 2>&1 || return 0
+  ( "$cli" history add --command "$1" --cwd "$PWD" >/dev/null 2>&1 & )
 }
 autoload -Uz add-zsh-hook 2>/dev/null
 if (( $+functions[add-zsh-hook] )); then
-  add-zsh-hook chpwd _miaotty_osc7
-  add-zsh-hook precmd _miaotty_osc7
-  add-zsh-hook preexec _miaotty_preexec
+  add-zsh-hook chpwd _mtty_osc7
+  add-zsh-hook precmd _mtty_osc7
+  add-zsh-hook preexec _mtty_preexec
 fi
-_miaotty_osc7
+_mtty_osc7
 "#;
 
 /// Per-user directory the shim is written to. Prefers `$XDG_RUNTIME_DIR` and
@@ -76,7 +79,7 @@ fn ensure_private_dir(dir: &Path) -> io::Result<()> {
 }
 
 fn shim_dir() -> Option<PathBuf> {
-    let dir = runtime_dir().join("miaotty-zdotdir");
+    let dir = runtime_dir().join("mtty-zdotdir");
     ensure_private_dir(&dir).ok()?;
     Some(dir)
 }
@@ -105,7 +108,7 @@ pub fn env_for(shell: &str) -> Vec<(String, String)> {
 
     vec![
         ("ZDOTDIR".to_string(), dir.to_string_lossy().into_owned()),
-        ("MIAOTTY_ZDOTDIR_ORIG".to_string(), orig),
+        ("MTTY_ZDOTDIR_ORIG".to_string(), orig),
     ]
 }
 
@@ -118,7 +121,7 @@ mod tests {
     fn temp_path() -> PathBuf {
         static N: AtomicU32 = AtomicU32::new(0);
         std::env::temp_dir().join(format!(
-            "miaotty-shim-test-{}-{}",
+            "mtty-shim-test-{}-{}",
             std::process::id(),
             N.fetch_add(1, Ordering::SeqCst)
         ))

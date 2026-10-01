@@ -1,4 +1,5 @@
-//! Compatibility readers for the single miaotty application's saved state.
+//! Compatibility readers for the application's saved state (including what
+//! the former miaotty builds wrote).
 
 use serde_json::{json, Value};
 use std::path::Path;
@@ -90,7 +91,7 @@ mod tests {
 
     #[test]
     fn canonical_wins_and_legacy_state_is_never_deleted() {
-        let root = std::env::temp_dir().join(format!("miaotty-migration-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("mtty-migration-{}", std::process::id()));
         let config = root.join("config");
         let data = root.join("data");
         std::fs::create_dir_all(&config).unwrap();

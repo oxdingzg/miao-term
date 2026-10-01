@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Profile miaotty's real PTY input on macOS with isolated state.
+"""Profile mtty's real PTY input on macOS with isolated state.
 
 Build release binaries first. The test app hides its own window before sending
 input, so desktop typing cannot corrupt the shell command. Artifacts (including
@@ -62,10 +62,10 @@ open('done','w').write('ok')
 
 
 def profile(binary, cli, mode):
-    case = Path(tempfile.mkdtemp(prefix="miaotty-input-profile-"))
+    case = Path(tempfile.mkdtemp(prefix="mtty-input-profile-"))
     print(f"Local artifacts: {case}", flush=True)
     env = {key: value for key, value in os.environ.items()
-           if not key.startswith("MIAOTTY_")}
+           if not key.startswith(("MTTY_", "MIAOTTY_"))}
     env.update(HOME=str(case), XDG_CONFIG_HOME=str(case / "config"),
                XDG_DATA_HOME=str(case / "data"), XDG_RUNTIME_DIR=str(case),
                SHELL="/bin/sh")
@@ -73,7 +73,7 @@ def profile(binary, cli, mode):
 
     def call(*args):
         result = subprocess.run(
-            [str(cli), "--socket", str(case / "miaotty.sock"), *args],
+            [str(cli), "--socket", str(case / "mtty.sock"), *args],
             env=env, capture_output=True, text=True, timeout=5)
         return json.loads(result.stdout) if result.returncode == 0 else None
 
@@ -145,8 +145,8 @@ def profile(binary, cli, mode):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--binary", type=Path, default=ROOT / "target/release/miaotty")
-    parser.add_argument("--cli", type=Path, default=ROOT / "target/release/miaotty-cli")
+    parser.add_argument("--binary", type=Path, default=ROOT / "target/release/mtty")
+    parser.add_argument("--cli", type=Path, default=ROOT / "target/release/mtty-cli")
     parser.add_argument("--mode", choices=["fragments", "images"], default="fragments")
     args = parser.parse_args()
     if sys.platform != "darwin":

@@ -115,7 +115,7 @@ impl Terminal {
 
         let shell_path = shell.unwrap_or_else(default_shell);
         let mut cmd = CommandBuilder::new(&shell_path);
-        // Inherit the current environment (PATH, MIAOTTY_SOCKET, …), then override.
+        // Inherit the current environment (PATH, MTTY_SOCKET, …), then override.
         for (k, v) in std::env::vars() {
             cmd.env(k, v);
         }
@@ -583,7 +583,8 @@ mod tests {
         }
         let mbps = data.len() as f64 / 1e6 / start.elapsed().as_secs_f64();
         println!("full input path (8 KiB chunks): {mbps:.2} MB/s");
-        let scale = std::env::var("MIAOTTY_PERF_SCALE")
+        let scale = std::env::var("MTTY_PERF_SCALE")
+            .or_else(|_| std::env::var("MIAOTTY_PERF_SCALE"))
             .ok()
             .and_then(|value| value.parse::<f64>().ok())
             .unwrap_or(1.0);
@@ -675,7 +676,7 @@ mod tests {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn shell_directory_tracks_cd_without_osc_hooks() {
-        let root = std::env::temp_dir().join(format!("miaotty-cwd-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("mtty-cwd-{}", std::process::id()));
         let next = root.join("space 目录");
         std::fs::create_dir_all(&next).unwrap();
         let mut term = Terminal::new(

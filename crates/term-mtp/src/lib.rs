@@ -1,8 +1,9 @@
 //! `miao-term-mtp` — the MTP control plane.
 //!
 //! A newline-delimited JSON server over a Unix socket (Windows named pipe is a
-//! later transport). The envelope matches the existing `miaotty` MTP contract so
-//! `miaotty-cli`, plugins and agent hooks keep working unchanged.
+//! later transport). The envelope matches the existing MTP contract so
+//! `mtty-cli` (formerly `miaotty-cli`), plugins and agent hooks keep working
+//! unchanged.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -120,10 +121,51 @@ fn runtime_dir() -> PathBuf {
     std::env::temp_dir()
 }
 
-/// Default socket path (`$XDG_RUNTIME_DIR/miaotty.sock` or `$TMPDIR/miaotty.sock`),
-/// shared with `miaotty-cli`.
+/// Default socket path (`$XDG_RUNTIME_DIR/mtty.sock` or `$TMPDIR/mtty.sock`),
+/// shared with `mtty-cli`.
 pub fn default_socket() -> PathBuf {
+    runtime_dir().join("mtty.sock")
+}
+
+/// The pre-rename socket path (ADR 0032), still served through a link.
+pub fn legacy_socket() -> PathBuf {
     runtime_dir().join("miaotty.sock")
+}
+
+/// The socket a client should use by default: the new path, or the legacy one
+/// when only an older host is running.
+pub fn client_socket() -> PathBuf {
+    let socket = default_socket();
+    let legacy = legacy_socket();
+    if !socket.exists() && legacy.exists() {
+        legacy
+    } else {
+        socket
+    }
+}
+
+/// Point the legacy socket path at `socket`, so older clients reach this host.
+/// Only a missing path or an existing symlink is replaced; a real socket left
+/// by a running older host is never touched.
+#[cfg(unix)]
+pub fn link_legacy_socket(socket: &Path, legacy: &Path) -> std::io::Result<bool> {
+    match std::fs::symlink_metadata(legacy) {
+        Ok(meta) if !meta.file_type().is_symlink() => return Ok(false),
+        Ok(_) => std::fs::remove_file(legacy)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    std::os::unix::fs::symlink(socket, legacy)?;
+    Ok(true)
+}
+
+/// An environment setting by its unprefixed name: `MTTY_<name>`, then the
+/// pre-rename `MIAOTTY_<name>` (ADR 0032). Empty values count as unset.
+pub fn env(name: &str) -> Option<String> {
+    ["MTTY_", "MIAOTTY_"]
+        .iter()
+        .filter_map(|prefix| std::env::var(format!("{prefix}{name}")).ok())
+        .find(|v| !v.is_empty())
 }
 
 fn now_ms() -> f64 {
@@ -136,9 +178,9 @@ fn now_ms() -> f64 {
 /// Shared, in-memory server state: agent states + command history.
 #[derive(Default)]
 pub struct ServerState {
-    /// When set (from `MIAOTTY_MTP_TOKEN`), every request must carry it.
+    /// When set (from `MTTY_MTP_TOKEN`), every request must carry it.
     token: Option<String>,
-    /// When set (from `MIAOTTY_MTP_ALLOW`), only these capabilities are allowed.
+    /// When set (from `MTTY_MTP_ALLOW`), only these capabilities are allowed.
     allow: Option<Vec<String>>,
     revision: Mutex<i64>,
     revision_cv: Condvar,
@@ -191,7 +233,7 @@ impl ServerState {
         })
     }
 
-    /// Parse a comma-separated `MIAOTTY_MTP_ALLOW` value into a policy.
+    /// Parse a comma-separated `MTTY_MTP_ALLOW` value into a policy.
     /// Empty/blank input means "no policy" (allow everything).
     pub fn parse_allow(value: Option<String>) -> Option<Vec<String>> {
         let list: Vec<String> = value?
@@ -434,7 +476,7 @@ fn dispatch(state: &ServerState, req: Request) -> Response {
             rev,
             json!({
                 "proto": PROTO_VERSION,
-                "app_version": concat!("miaotty/", env!("CARGO_PKG_VERSION")),
+                "app_version": concat!("mtty/", env!("CARGO_PKG_VERSION")),
                 "pid": std::process::id(),
                 "caps": HOST_CAPS,
                 "allowed": state.allowed_caps(),
@@ -740,15 +782,24 @@ pub mod client {
     }
 
     /// Connect to the host at `path` (Unix socket path; ignored on Windows,
-    /// which uses the fixed `miaotty` named pipe).
+    /// which uses the fixed `mtty` named pipe, falling back to the pre-rename
+    /// `miaotty` pipe of an older host).
     pub fn connect(path: &Path) -> std::io::Result<Client> {
         #[cfg(unix)]
         let name = path.to_fs_name::<GenericFilePath>()?;
         #[cfg(windows)]
-        let name = {
+        let stream = {
             let _ = path;
-            "miaotty".to_ns_name::<GenericNamespaced>()?
+            let name = "mtty".to_ns_name::<GenericNamespaced>()?;
+            match ConnectOptions::new().name(name).connect_sync() {
+                Ok(stream) => stream,
+                Err(_) => {
+                    let legacy = "miaotty".to_ns_name::<GenericNamespaced>()?;
+                    ConnectOptions::new().name(legacy).connect_sync()?
+                }
+            }
         };
+        #[cfg(unix)]
         let stream = ConnectOptions::new().name(name).connect_sync()?;
         let writer = stream.try_clone()?;
         Ok(Client {
@@ -810,9 +861,9 @@ pub mod client {
         }
 
         pub fn call(&mut self, ns: &str, method: &str, params: Value) -> std::io::Result<Value> {
-            // A host started with MIAOTTY_MTP_TOKEN requires it on every request.
-            let params = match std::env::var("MIAOTTY_MTP_TOKEN") {
-                Ok(token) if !token.is_empty() => match params {
+            // A host started with MTTY_MTP_TOKEN requires it on every request.
+            let params = match crate::env("MTP_TOKEN") {
+                Some(token) => match params {
                     Value::Object(mut map) => {
                         map.insert("token".to_string(), Value::String(token));
                         Value::Object(map)
@@ -909,7 +960,7 @@ pub fn serve(path: &Path, state: Arc<ServerState>) -> std::io::Result<()> {
     #[cfg(windows)]
     let name = {
         let _ = path;
-        "miaotty".to_ns_name::<GenericNamespaced>()?
+        "mtty".to_ns_name::<GenericNamespaced>()?
     };
 
     let listener = ListenerOptions::new().name(name).create_sync()?;
@@ -948,7 +999,7 @@ pub fn serve_tcp(addr: &str, state: Arc<ServerState>) -> std::io::Result<()> {
     if state.token().is_none() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "remote access requires MIAOTTY_MTP_TOKEN",
+            "remote access requires MTTY_MTP_TOKEN",
         ));
     }
     let listener = TcpListener::bind(addr)?;
@@ -1016,7 +1067,7 @@ mod tests {
     #[test]
     fn file_read_and_write_round_trip() {
         let state = ServerState::new();
-        let path = std::env::temp_dir().join(format!("miaotty-mtp-file-{}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("mtty-mtp-file-{}", std::process::id()));
         let path_str = path.to_string_lossy().to_string();
 
         let write = dispatch(
@@ -1087,7 +1138,7 @@ mod tests {
         // No policy: everything is allowed (backwards compatible). Use the OS
         // temp dir so this works on Windows too (there is no `/tmp`).
         let open = ServerState::new();
-        let tmp = std::env::temp_dir().join(format!("miaotty-mtp-allow-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("mtty-mtp-allow-{}", std::process::id()));
         let tmp = tmp.to_string_lossy().to_string();
         assert!(
             dispatch(
@@ -1097,6 +1148,30 @@ mod tests {
             .ok
         );
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_socket_link_never_replaces_a_real_socket() {
+        let dir = std::env::temp_dir().join(format!("mtty-mtp-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let socket = dir.join("mtty.sock");
+        let legacy = dir.join("miaotty.sock");
+        assert!(link_legacy_socket(&socket, &legacy).unwrap());
+        assert_eq!(std::fs::read_link(&legacy).unwrap(), socket);
+        // A stale link from an earlier run is refreshed.
+        assert!(link_legacy_socket(&dir.join("other.sock"), &legacy).unwrap());
+        assert_eq!(std::fs::read_link(&legacy).unwrap(), dir.join("other.sock"));
+        // A real file (an older host's socket) is left alone.
+        std::fs::remove_file(&legacy).unwrap();
+        std::fs::write(&legacy, "").unwrap();
+        assert!(!link_legacy_socket(&socket, &legacy).unwrap());
+        assert!(!std::fs::symlink_metadata(&legacy)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -1112,7 +1187,7 @@ mod tests {
     #[test]
     fn file_read_supports_offsets_and_base64() {
         let state = ServerState::new();
-        let path = std::env::temp_dir().join(format!("miaotty-mtp-bin-{}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("mtty-mtp-bin-{}", std::process::id()));
         let path_str = path.to_string_lossy().to_string();
         // 0x00..0x03 via base64 ("AAECAw==")
         assert!(

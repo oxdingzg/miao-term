@@ -1,4 +1,4 @@
-//! `miao-term-ui` — host-agnostic pieces used by miaotty and embedders.
+//! `miao-term-ui` — host-agnostic pieces used by mtty and embedders.
 //!
 //! Nothing here owns an event loop or a GPU: it is theme, input encoding,
 //! selection, row building for the renderer, the split layout model, and the

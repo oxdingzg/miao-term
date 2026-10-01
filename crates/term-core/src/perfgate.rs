@@ -12,7 +12,7 @@
 /// Compare `measured` against the committed baseline for `key` and print the
 /// outcome; fail only when `PERF_ENFORCE` is set.
 ///
-/// `measured` is expected to be normalised by `MIAOTTY_PERF_SCALE` already, so
+/// `measured` is expected to be normalised by `MTTY_PERF_SCALE` (or the former `MIAOTTY_PERF_SCALE`) already, so
 /// a deliberately slowed machine is not compared against an unscaled baseline.
 pub fn baseline_gate(key: &str, measured: f64, higher_is_better: bool) {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../benches/budgets.json");

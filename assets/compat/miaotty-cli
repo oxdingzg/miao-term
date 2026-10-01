@@ -1,0 +1,3 @@
+#!/bin/sh
+# Compatibility alias for the former name (ADR 0032).
+exec /usr/bin/mtty-cli "$@"

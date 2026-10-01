@@ -1,4 +1,4 @@
-# windows-verify.ps1 — build, test and smoke-test miaotty on Windows.
+# windows-verify.ps1 — build, test and smoke-test mtty on Windows.
 #
 # Run it on a Windows dev/verification machine (see docs/WINDOWS-DEV.md):
 #
@@ -43,15 +43,15 @@ if ((Test-Path $toolchainFile) -and (Select-String -Quiet -Path $toolchainFile -
 
 Push-Location $Source
 try {
-    Step "build miaotty" { & $cargo build -p miaotty-app --color never }
-    Step "build miaotty-cli" { & $cargo build -p miaotty-cli --color never }
+    Step "build mtty" { & $cargo build -p mtty-app --color never }
+    Step "build mtty-cli" { & $cargo build -p mtty-cli --color never }
     if (-not $SkipTests) {
         Step "engine + mtp tests" { & $cargo test -p miao-term-core -p miao-term-mtp --color never }
     }
 
-    $exe = Join-Path $Source "target\debug\miaotty.exe"
-    $cli = Join-Path $Source "target\debug\miaotty-cli.exe"
-    $tmpFile = Join-Path $env:TEMP "miaotty-smoke.txt"
+    $exe = Join-Path $Source "target\debug\mtty.exe"
+    $cli = Join-Path $Source "target\debug\mtty-cli.exe"
+    $tmpFile = Join-Path $env:TEMP "mtty-smoke.txt"
     $app = $null
     try {
         Step "start app" { $script:app = Start-Process $exe -PassThru -WindowStyle Minimized }

@@ -1,4 +1,4 @@
-//! Release performance gates for the shared paths used by miaotty.
+//! Release performance gates for the shared paths used by mtty.
 use miao_term_core::ATerm;
 use miao_term_ui::{build_rows, UiTheme as Theme};
 use std::time::Instant;
@@ -32,7 +32,8 @@ fn record_metric(key: &str, value: f64) {
 }
 
 fn scale() -> f64 {
-    std::env::var("MIAOTTY_PERF_SCALE")
+    std::env::var("MTTY_PERF_SCALE")
+        .or_else(|_| std::env::var("MIAOTTY_PERF_SCALE"))
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(1.0)

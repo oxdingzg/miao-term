@@ -1,6 +1,6 @@
 [package]
-name = "miaotty-app"
-description = "The miaotty native terminal application, built on the miao-term engine"
+name = "mtty-app"
+description = "The mtty native terminal application, built on the miao-term engine"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,21 +9,27 @@ repository.workspace = true
 authors.workspace = true
 
 [[bin]]
-name = "miaotty"
+name = "mtty"
 path = "src/main.rs"
 
 [package.metadata.deb]
-name = "miaotty"
-maintainer = "miaotty"
+name = "mtty"
+maintainer = "mtty contributors"
 copyright = "Apache-2.0"
 license-file = ["../LICENSE", "0"]
 section = "utils"
 priority = "optional"
 depends = "$auto"
+# The package was called miaotty before ADR 0032.
+replaces = "miaotty"
+conflicts = "miaotty"
+provides = "miaotty"
 assets = [
-    ["target/release/miaotty", "usr/bin/miaotty", "755"],
-    ["target/release/miaotty-cli", "usr/bin/miaotty-cli", "755"],
-    ["../assets/miaotty.desktop", "usr/share/applications/miaotty.desktop", "644"],
+    ["target/release/mtty", "usr/bin/mtty", "755"],
+    ["target/release/mtty-cli", "usr/bin/mtty-cli", "755"],
+    ["../assets/compat/miaotty", "usr/bin/miaotty", "755"],
+    ["../assets/compat/miaotty-cli", "usr/bin/miaotty-cli", "755"],
+    ["../assets/mtty.desktop", "usr/share/applications/mtty.desktop", "644"],
 ]
 
 [dependencies]

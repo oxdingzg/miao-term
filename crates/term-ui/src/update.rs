@@ -361,18 +361,18 @@ mod tests {
         ] {
             assert!(parse_checked(response).is_err(), "{response}");
         }
-        let manifest = parse_checked(r#"{"version":"0.0.3","artifacts":{"macos-aarch64":{"url":"https://example.com/miaotty.zip","sha256":"ab"}}}"#).unwrap();
+        let manifest = parse_checked(r#"{"version":"0.0.3","artifacts":{"macos-aarch64":{"url":"https://example.com/mtty.zip","sha256":"ab"}}}"#).unwrap();
         assert!(is_newer(&manifest.version, "0.0.2"));
         assert_eq!(
             manifest.artifacts["macos-aarch64"].url,
-            "https://example.com/miaotty.zip"
+            "https://example.com/mtty.zip"
         );
     }
 
     #[test]
     fn sha256_matches_the_system_tool() {
         // Cross-check our implementation against shasum/sha256sum when present.
-        let path = std::env::temp_dir().join(format!("miaotty-xcheck-{}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("mtty-xcheck-{}", std::process::id()));
         let data: Vec<u8> = (0..70_000u32).map(|i| (i % 253) as u8).collect();
         std::fs::write(&path, &data).unwrap();
         let tool = ["shasum", "sha256sum"].into_iter().find(|t| {
@@ -412,7 +412,7 @@ mod tests {
 
     #[test]
     fn verifies_a_file() {
-        let path = std::env::temp_dir().join(format!("miaotty-digest-{}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("mtty-digest-{}", std::process::id()));
         std::fs::write(&path, b"abc").unwrap();
         assert!(verify_file(
             &path,

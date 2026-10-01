@@ -1,6 +1,6 @@
 [package]
-name = "miaotty-cli"
-description = "Control CLI for miaotty (cross-platform MTP client)"
+name = "mtty-cli"
+description = "Control CLI for mtty (cross-platform MTP client)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,7 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [[bin]]
-name = "miaotty-cli"
+name = "mtty-cli"
 path = "src/main.rs"
 
 [dependencies]

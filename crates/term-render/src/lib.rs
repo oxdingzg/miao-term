@@ -218,14 +218,14 @@ impl TermRenderer {
             areas,
             &mut self.swash_cache,
         ) {
-            eprintln!("miaotty: text prepare error: {e}");
+            eprintln!("mtty: text prepare error: {e}");
         }
     }
 
     /// Draw prepared glyphs into the pass.
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
         if let Err(e) = self.renderer.render(&self.atlas, &self.viewport, pass) {
-            eprintln!("miaotty: text render error: {e}");
+            eprintln!("mtty: text render error: {e}");
         }
     }
 }
