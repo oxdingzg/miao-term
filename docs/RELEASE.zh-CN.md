@@ -174,8 +174,15 @@ shasum -a 256 miaotty-macos-arm64.zip   # 与清单里的 "sha256" 比对
 单应用迁移本地验收（2026-10-01）：154 项 workspace 测试、9 项发布/清单测试、严格
 clippy、格式检查及 4 项强制 release 性能预算通过。单一 native `miaotty.app` 通过身份和
 codesign 检查；打包 app 和实际安装 app 均跑通桌面冒烟，包含 native 分屏会话迁移及
-pane 聚焦/关闭。这是本地 macOS 证据；新的四 runner 发布流水线仍须独立演练后才能发布
-新的 GitHub Release。
+pane 聚焦/关闭。这是本地 macOS 证据。后续单应用流水线已在 `03848e4` 成功发布
+v0.0.4：[运行 36794301755](https://github.com/oxdingzg/miao-term/actions/runs/36794301755)
+的四个构建、AppImage/MSI 打包、包检查、汇总与分离签名验证全部通过。
+每个新候选版本仍须对其自身 commit 重跑完整 CI 和四 runner 打包演练。
+
+v0.0.5 的改动与资源约束见[发布说明](releases/v0.0.5.zh-CN.md)和
+[性能报告](PERFORMANCE.zh-CN.md)。本地验证包含 workspace 测试、严格 clippy、release
+性能与分配门禁、强制 GPU 字形缓存测试及 macOS 桌面冒烟。已发布 commit 和安装包哈希
+以远端 CI/演练与正式 Release 记录为准，本地结果不替代远端记录。
 
 发布工作流检查 Linux 包内容与 CLI 运行,以及 Windows MSI 安装 → 两个二进制 + URL handler
 → CLI 运行 → 卸载。这些检查不代表交互桌面体验已验收。上文的真机记录针对旧的双二进制包,

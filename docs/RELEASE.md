@@ -197,8 +197,19 @@ nine release/manifest tests, strict clippy, formatting and four enforced release
 performance budgets passed. The single native `miaotty.app` passed identity and
 codesign checks. Both the packaged app and installed app completed the desktop
 smoke, including native split-session migration and pane close/focus. This is
-local macOS evidence; the changed four-runner release pipeline still requires
-its own rehearsal before a new GitHub Release is published.
+local macOS evidence. The single-application pipeline subsequently published
+v0.0.4 successfully at `03848e4`:
+[run 36794301755](https://github.com/oxdingzg/miao-term/actions/runs/36794301755)
+passed all four builds, AppImage/MSI packaging, package checks, assembly and
+detached-signature verification. Each new candidate must repeat full CI and the
+four-runner packaging rehearsal for its own commit.
+
+The v0.0.5 changes and resource limits are described in
+[the release notes](releases/v0.0.5.md) and [the performance report](PERFORMANCE.md).
+Local verification includes workspace tests, strict clippy, release performance
+and allocation gates, the required-GPU shaping-cache test, and the macOS desktop
+smoke. Remote CI/rehearsal and the final Release remain the authoritative records
+for the published commit and package hashes; local results do not replace them.
 
 The release workflow checks Linux package contents and CLI execution, and Windows
 MSI install → two binaries + URL handler → CLI execution → uninstall. These
