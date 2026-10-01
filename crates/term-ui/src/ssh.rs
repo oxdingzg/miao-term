@@ -452,12 +452,15 @@ mod tests {
             run(&format!("{}:/usr/bin:/bin", dir.display())),
             "tmux new-session -A -s mtty"
         );
-        // The fallback (the bootstrap also looks in Homebrew's directories).
+        // The fallback: PATH is an empty directory (the script needs only
+        // builtins); the bootstrap also looks in Homebrew's directories.
+        let empty = dir.join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
         let installed = ["/usr/local/bin/tmux", "/opt/homebrew/bin/tmux"]
             .iter()
             .any(|p| std::path::Path::new(p).exists());
         if !installed {
-            assert_eq!(run("/usr/bin:/bin"), "-l");
+            assert_eq!(run(&empty.to_string_lossy()), "-l");
         }
         std::fs::remove_dir_all(&dir).unwrap();
     }
