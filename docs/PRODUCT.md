@@ -149,106 +149,136 @@ feature-by-feature review of the native host code for this baseline.
 | Version check | Works | Check only, no install; `update-pubkey` unused |
 | English / Chinese UI | Partial | Some details-panel rows are still English |
 
-## 4. Roadmap
+## 4. Roadmap and execution batches
 
-Order is priority. **A milestone's acceptance must pass before the next starts.**
+Order: **M1 → M0 → M2 → M3 → M4**. M1 (the rename) moved first by the
+2026-10-01 decision: the later it happens, the more user state and external
+integrations need migrating. Each batch is a unit that is committed and
+verified on its own:
 
-### M0 Stabilize (v0.0.6): turn "Partial" into "Works"
+- Every batch must pass `cargo fmt --check`, `cargo clippy -D warnings`,
+  `cargo test --workspace`, `scripts/smoke-hosts.py` (when UI or packaging is
+  touched), and the acceptance listed for it.
+- One (or a few) commits per batch, pushed right away; tick the box here and
+  cite the evidence.
+- Steps that need credentials, real hardware or the owner's confirmation
+  (signing, notarization, publishing, production hosts) are marked **[owner]**
+  and are not run automatically inside a batch.
 
-Goal: every "Partial" row in §3 is fixed or its limit is stated in the README.
+### M1 One brand: mtty (design: [ADR 0032](decisions/0032-rename-mtty.md))
 
-- [ ] Nothing blocks the UI thread: `ssh -G`, remote read/write,
-      `mermaid-command` and Files-panel directory reads move to the background
-      with a loading state.
-- [ ] The details panel polls only while visible; Ports includes child
-      processes; Git says "not a git repository" outside one.
-- [ ] macOS URL events (`miaotty://`, `ssh://` opened from a browser/Finder).
-- [ ] Restored SSH tabs reconnect, or clearly show "disconnected — press Enter
-      to reconnect".
-- [ ] New splits/tabs inherit the pane's directory; Duplicate keeps mark and
-      group; Close Others/Below are reopenable.
-- [ ] Read-only mode also blocks input from MTP and URLs.
-- [ ] The IME candidate window follows the cursor.
-- [ ] Recipe names validated, read/write failures shown; GPU init failure at
-      startup shows an error instead of panicking.
-- [ ] View rules apply icons and badges, match command/host, and hot-reload.
-- [ ] Automatable UI acceptance (the P0 from UI-AUDIT): semantic control
-      targets plus event replay for rename/cancel, tab reorder, divider drag,
-      editor save, clipboard focus and IME.
-- [ ] Real-desktop acceptance for menu shortcuts vs text-field focus (fixed at
-      code level now; no OS-level key replay yet).
+- [ ] **B1.1 Runtime rename and compatibility layer**
+  - `miao-term-config`: `config_dir()`, `migrate_legacy_config()` (copy once,
+    never overwrite, never delete the old directory), `env()` (`MTTY_*` first,
+    then `MIAOTTY_*`).
+  - Every path goes through `config_dir()`: config, views, hooks, launch inbox,
+    session/queue/window/recipes.
+  - MTP: default socket `mtty.sock` plus a `miaotty.sock` compatibility link;
+    Windows pipe `mtty`; token/capability variables read under both names.
+  - Pane environment exports `MTTY_*` and `MIAOTTY_*`; `MTTY_CLI`/`MIAOTTY_CLI`
+    hold the absolute path of the sibling CLI.
+  - Both `mtty://` and `miaotty://` are accepted; hook scripts, the shell shim,
+    hotkey snippets, ControlPath and UI text say mtty.
+  - Acceptance: unit tests for migration, environment and schemes; an old hook
+    script reports state from a new pane (smoke).
+- [ ] **B1.2 Build and packaging**
+  - Dirs and packages: `miaotty-app` → `mtty-app` (binary `mtty`),
+    `miaotty-cli` → `mtty-cli`.
+  - macOS: `mtty.app`, `dev.mtty.terminal`, URL scheme registration; the
+    installer archives and removes the old `miaotty.app`.
+  - Linux: deb package `mtty` (Replaces/Conflicts/Provides `miaotty`),
+    compatibility symlinks, `.desktop`, AppImage.
+  - Windows: MSI product and folder `mtty`, same UpgradeCode, `mtty://` and
+    `miaotty://` registered.
+  - `release.yml`, `ci.yml`, the update-manifest script and its tests,
+    smoke/profiling scripts, `windows-verify.ps1`.
+  - Acceptance: `scripts/package-macos.sh` + `check-macos-bundle.py` +
+    `smoke-hosts.py --bundle` pass; `test-release-manifest.py` passes; a manual
+    release-workflow rehearsal **[owner]**.
+- [ ] **B1.3 Docs and website**
+  - READMEs, `docs/*`, AGENTS.md and the example config say mtty; APP-IDENTITY
+    becomes the migration guide; historical ADRs stay as written.
+  - The mtty.dev site's install, config and CLI examples say mtty (separate
+    repository, separate commit).
+  - Acceptance: `check-privacy.sh` passes; `miaotty` remains only in
+    compatibility notes and historical records.
 
-**Acceptance**: fmt / clippy / tests / perf gate / desktop smoke all pass; no
-"Partial" left in §3 (or its limit is in the README); one Windows and one Linux
-desktop pass following WINDOWS-DEV and RELEASE.
+### M0 Stabilize: turn "Partial" into "Works"
 
-### M1 One brand: mtty
-
-- [ ] Binaries `mtty` / `mtty-cli`, keeping `miaotty` / `miaotty-cli` aliases
-      for at least two releases.
-- [ ] Config directory `~/.config/mtty`, migrated from `~/.config/miaotty` on
-      first start (copy, never delete).
-- [ ] `MTTY_*` environment variables, still reading `MIAOTTY_*`; socket name and
-      a new `mtty://` scheme, keeping `miaotty://`.
-- [ ] Packages, bundle name, icon and docs updated together; a bundle ID change
-      needs its own ADR (it affects OS permissions and updates).
-
-**Acceptance**: existing config, sessions, recipes and hook scripts keep
-working; the old CLI drives the new app; migration has automated tests.
+- [ ] **B0.1 Nothing blocks the UI thread**: `ssh -G`, remote read/write,
+  `mermaid-command` and Files directory reads become background tasks with a
+  loading state; the details panel polls only while visible; Ports includes
+  child processes; non-git directories are reported as such. Acceptance:
+  background-task unit tests; no frame stalls in the smoke while opening a
+  remote file or a large directory (timed in the log).
+- [ ] **B0.2 Workspace correctness**: new splits/tabs inherit the directory;
+  Duplicate keeps mark and group; Close Others/Below are reopenable; read-only
+  blocks MTP/URL input; recipe names validated and read/write failures shown;
+  GPU init failure shows an error instead of panicking. Acceptance: unit tests
+  for the pure parts plus a smoke check of a new split's cwd.
+- [ ] **B0.3 System integration**: macOS URL Apple Events (links opened from a
+  browser/Finder); restored SSH tabs show "disconnected — press Enter to
+  reconnect" and reconnect; the IME candidate window follows the cursor.
+  Acceptance: `open mtty://quick` works on the installed app; reconnect has unit
+  tests; IME needs a manual desktop check **[owner]**.
+- [ ] **B0.4 View rules and entry points**: rule icons/badges applied,
+  command/host matching, `views.json` hot reload; Open Quickly lists files and
+  agents; the remaining English strings in the details panel are translated.
+  Acceptance: rule-engine unit tests and a screenshot check.
+- [ ] **B0.5 Automatable UI acceptance**: semantic control targets plus
+  windowless event replay for rename/cancel, tab reorder, divider drag, editor
+  save and clipboard focus. Acceptance: the new replay tests run in CI.
 
 ### M2 Agent workbench (from Superset / Otty)
 
-- [ ] Launch an agent (codex / claude / opencode / miao) from the UI, with an
-      optional working directory.
-- [ ] Queue items target a pane and are delivered when its agent turns idle;
-      the queue persists.
-- [ ] OSC 133 command boundaries: select the last command's output and send it
-      to the Composer / an agent in one step.
-- [ ] Task = git worktree + branch + agent pane: create, list, review the diff,
-      merge or discard.
-- [ ] Clicking a notification jumps to its pane; unread/finished marks on
-      background tabs.
-- [ ] Deeper miao integration: event subscription over MTP, session resume,
-      opening files miao produces in mtty.
-- [ ] codex wiring: a ready-to-use hook snippet and a verification script, with
-      an end-to-end state-reporting test.
-
-**Acceptance**: three agents in three worktrees run in parallel; state,
-notifications, queue and diff review are covered by a real-window smoke.
+- [ ] **B2.1 Launch and wiring**: "Launch agent" in settings and the palette
+  (codex/claude/opencode/miao, optional directory); a Copy button for wiring
+  snippets; a codex hook snippet and verification script. Acceptance: launch
+  command unit tests; a fake agent reports state in the smoke.
+- [ ] **B2.2 Queue**: items target a pane and are delivered when its agent turns
+  idle; persisted in `queue.json` (old format still read). Acceptance: unit
+  tests for transitions and delivery, including no double delivery on repeated
+  events.
+- [ ] **B2.3 Command boundaries**: OSC 133 (A/B/C/D) parsing, emitted by the zsh
+  shim; "copy/send the last command's output". Acceptance: parser unit tests;
+  the smoke runs a command and retrieves its output.
+- [ ] **B2.4 Worktree tasks**: a task = `git worktree add` + branch + agent pane;
+  task list, diff view, merge or discard (destructive steps confirm).
+  Acceptance: integration tests against a temporary repository.
+- [ ] **B2.5 Attention and miao**: clicking a notification jumps to its pane;
+  unread/finished marks on background tabs; the miao plugin reads `MTTY_*`
+  (miao repository, separate commit). Acceptance: transition unit tests; miao
+  plugin tests.
 
 ### M3 Remote operations (from Termius)
 
-- [ ] **Host library**: `hosts.toml` (name, address, user, port, group, tags,
-      jump host), one-step import from `~/.ssh/config`; a sidebar host list,
-      double-click to connect, hosts searchable from `⌘K`.
-- [ ] **Identities and keys**: ssh-agent and the system keychain; optional key
-      generation; no plaintext passwords.
-- [ ] **known_hosts**: clear confirmation on first connect and on fingerprint
-      change.
-- [ ] **SFTP**: two-pane browser (local/remote), upload/download, drag and
-      drop, progress, resume, permissions and rename.
-- [ ] **FTP / FTPS** in the same browser (plain FTP is flagged as unencrypted).
-- [ ] **Port forwarding**: local / remote / dynamic (SOCKS) rules stored with
-      the host, started and stopped individually, with visible state.
-- [ ] **Snippets**: a command library to run in the current pane or on several
-      selected hosts.
-- [ ] **Broadcast input** to several panes.
-- [ ] **Persistent sessions**: optional tmux / mosh to keep remote work alive
-      and reconnect.
-- [ ] Remote view/edit uses the pane's own connection; no typing the host.
-
-**Acceptance**: an automated smoke against a test host (a container is fine)
-covers host import, login, SFTP transfer, port forwarding and running a snippet;
-credentials never appear in logs, session files or MTP responses.
+- [ ] **B3.1 Host library**: `hosts.toml` (name, address, user, port, group,
+  tags, jump host), import from `~/.ssh/config`, sidebar host list, palette
+  search, double-click to connect. Acceptance: parser/import unit tests; a smoke
+  against a local sshd or container **[needs a test host]**.
+- [ ] **B3.2 Safe connections**: known_hosts confirmation on first connect and
+  fingerprint change; ssh-agent status and key generation; no plaintext
+  passwords.
+- [ ] **B3.3 Port forwarding**: L/R/D rules managed through the ControlMaster
+  (`ssh -O forward/cancel`), stored with the host, with visible state.
+- [ ] **B3.4 SFTP**: two-pane browser, upload/download, drag and drop, progress,
+  rename/permissions; remote editing reuses the pane's connection.
+- [ ] **B3.5 Snippets and broadcast**: a command library run in the current pane
+  or on several hosts; broadcast input to several panes.
+- [ ] **B3.6 FTP/FTPS and persistent sessions**: FTP/FTPS in the same browser
+  (plaintext flagged); optional tmux/mosh reconnect.
+  Acceptance (M3 overall): an automated smoke against a test host; credentials
+  never reach logs, session files or MTP responses.
 
 ### M4 Cross-platform delivery
 
-- [ ] Real Windows / Linux desktop acceptance (IME, hotkey, drag and drop, menus).
-- [ ] Apple notarization and Windows MSI signing (credentials; run by the owner).
-- [ ] Auto-update: download, signature check (`update-pubkey`), replace.
-- [ ] Shell integration for bash / fish / PowerShell.
-- [ ] Optional end-to-end-encrypted sync (hosts, snippets, settings), off by
-      default.
+- [ ] **B4.1** Real Windows/Linux desktop acceptance (IME, hotkey, drag and
+  drop, menus) **[owner + hardware]**.
+- [ ] **B4.2** Apple notarization and Windows MSI signing **[owner +
+  credentials]**.
+- [ ] **B4.3** Auto-update: download, `update-pubkey` signature check, replace.
+- [ ] **B4.4** Shell integration for bash / fish / PowerShell.
+- [ ] **B4.5** Optional end-to-end-encrypted sync, off by default.
 
 ## 5. Non-goals
 

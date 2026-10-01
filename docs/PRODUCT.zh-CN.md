@@ -130,75 +130,85 @@
 | 版本检查 | 可用 | 只检查,不自动安装;`update-pubkey` 未使用 |
 | 中英界面 | 部分 | details 面板部分行仍是英文 |
 
-## 4. 路线图
+## 4. 路线图与执行批次
 
-顺序即优先级。**下一个里程碑开始前,上一个的验收必须通过。**
+执行顺序:**M1 → M0 → M2 → M3 → M4**。M1(改名)按 2026-10-01 的决定提前,因为越晚改,
+需要迁移的用户状态和外部集成越多。每个批次是一个可独立提交、独立验证的单元:
 
-### M0 稳定化(v0.0.6):把"部分"变成"可用"
+- 每批结束必须通过:`cargo fmt --check`、`cargo clippy -D warnings`、`cargo test --workspace`、
+  `scripts/smoke-hosts.py`(涉及界面或打包时),以及该批列出的专项验收。
+- 每批一个(或少数几个)提交,完成后立即推送,并在本节打勾、注明证据。
+- 需要凭证、真机或所有者确认的步骤(签名、公证、发布、生产主机)标记为 **[所有者]**,不在批次内自动执行。
 
-目标:§3 中所有"部分"的行要么修好,要么在 README 中如实说明限制。
+### M1 品牌统一:mtty(设计见 [ADR 0032](decisions/0032-rename-mtty.zh-CN.md))
 
-- [ ] UI 线程不阻塞:`ssh -G`、远端读写、`mermaid-command`、Files 面板目录读取移到后台,带加载状态。
-- [ ] details 面板只在可见时轮询;Ports 覆盖子进程;Git 在非仓库目录显示"不是 git 仓库"。
-- [ ] macOS URL 事件(浏览器/Finder 打开 `miaotty://`、`ssh://`)。
-- [ ] 恢复的 SSH 标签:重新连接,或明确显示"已断开 — 回车重连"。
-- [ ] 新分屏/新标签继承当前 pane 的目录;复制标签保留标记与分组;关闭其他/下方可重开。
-- [ ] 只读模式同样拦截 MTP 与 URL 发来的输入。
-- [ ] IME 候选窗定位到光标。
-- [ ] Recipes 名称校验、读写失败提示;启动时 GPU 初始化失败给出错误窗口而不是 panic。
-- [ ] View 规则生效图标与徽章,支持按命令/host 匹配,修改后热加载。
-- [ ] 可自动验收的 UI(沿用 UI-AUDIT 的 P0):语义化控件目标 + 事件回放,覆盖重命名/取消、
-      标签重排、分隔条拖动、编辑器保存、剪贴板焦点与 IME。
-- [ ] 菜单快捷键与文本框焦点的真实桌面验收(本次为代码级修复,尚无 OS 级按键回放)。
+- [ ] **B1.1 运行时改名与兼容层**
+  - `miao-term-config`:`config_dir()`、`migrate_legacy_config()`(复制一次、不覆盖、不删旧目录)、`env()`(`MTTY_*` 优先、回退 `MIAOTTY_*`)。
+  - 所有路径改走 `config_dir()`:config、views、hooks、launch inbox、session/queue/window/recipes。
+  - MTP:默认 socket `mtty.sock` + `miaotty.sock` 兼容链接;Windows 管道 `mtty`;令牌/能力环境变量双读。
+  - pane 环境:同时导出 `MTTY_*` 与 `MIAOTTY_*`,`MTTY_CLI`/`MIAOTTY_CLI` 指向同目录 CLI 的绝对路径。
+  - URL scheme `mtty://` 与 `miaotty://` 都接受;hook 脚本、shell shim、热键片段、ControlPath、界面文字改为 mtty。
+  - 验收:迁移/环境变量/scheme 单元测试;旧 hook 脚本在新 pane 中上报状态成功(冒烟)。
+- [ ] **B1.2 构建与打包**
+  - 目录与包:`miaotty-app` → `mtty-app`(二进制 `mtty`),`miaotty-cli` → `mtty-cli`。
+  - macOS:`mtty.app`、`dev.mtty.terminal`、URL scheme 注册;安装脚本归档并移除旧 `miaotty.app`。
+  - Linux:deb 包 `mtty`(Replaces/Conflicts/Provides `miaotty`)、兼容符号链接、`.desktop`、AppImage。
+  - Windows:MSI 产品名与目录 `mtty`,UpgradeCode 不变,注册 `mtty://` 与 `miaotty://`。
+  - `release.yml`、`ci.yml`、更新清单脚本与其测试、冒烟/性能脚本、`windows-verify.ps1`。
+  - 验收:`scripts/package-macos.sh` + `check-macos-bundle.py` + `smoke-hosts.py --bundle` 通过;
+    `test-release-manifest.py` 通过;release 工作流手动演练 **[所有者]**。
+- [ ] **B1.3 文档与官网**
+  - README(中英)、`docs/*`、AGENTS.md、配置示例改为 mtty;APP-IDENTITY 改写为迁移说明;历史 ADR 不改。
+  - mtty.dev 站点的安装、配置、CLI 示例改为 mtty(独立仓库,单独提交)。
+  - 验收:`check-privacy.sh` 通过;仓库内除兼容说明与历史记录外不再出现 `miaotty`。
 
-**验收**:fmt / clippy / test / 性能门 / 桌面冒烟全部通过;§3 表中不再有"部分"
-(或限制已写进 README);Windows 与 Linux 桌面按 WINDOWS-DEV 与 RELEASE 文档各跑一次。
+### M0 稳定化:把"部分"变成"可用"
 
-### M1 品牌统一:mtty
-
-- [ ] 可执行文件 `mtty` / `mtty-cli`,保留 `miaotty` / `miaotty-cli` 兼容别名至少两个版本。
-- [ ] 配置目录 `~/.config/mtty`,首次启动从 `~/.config/miaotty` 迁移(复制,不删除旧文件)。
-- [ ] 环境变量 `MTTY_*`,同时读取 `MIAOTTY_*`;socket 名称与 URL scheme 新增 `mtty://`,保留 `miaotty://`。
-- [ ] 安装包、bundle 名称、图标与文档同步更新;bundle ID 变更需单独 ADR(影响系统权限与更新)。
-
-**验收**:旧配置、会话、Recipes、hook 脚本在新版本中继续工作;旧 CLI 能驱动新应用;迁移有自动化测试。
+- [ ] **B0.1 UI 线程不阻塞**:`ssh -G`、远端读写、`mermaid-command`、Files 目录读取改为后台任务 +
+  加载状态;details 面板只在可见时轮询;Ports 覆盖子进程;非 git 目录如实显示。
+  验收:后台任务单元测试;冒烟中打开远端/大目录时界面帧不停顿(日志计时)。
+- [ ] **B0.2 工作区正确性**:新分屏/标签继承目录;复制标签保留标记与分组;关闭其他/下方可重开;
+  只读模式拦截 MTP/URL 输入;Recipes 名称校验与读写失败提示;GPU 初始化失败给出错误而非 panic。
+  验收:对应纯函数单测 + 冒烟检查新分屏 cwd。
+- [ ] **B0.3 系统集成**:macOS URL Apple Event(浏览器/Finder 打开链接);恢复的 SSH 标签显示
+  "已断开 — 回车重连"并可重连;IME 候选窗定位到光标。
+  验收:`open mtty://quick` 在已安装应用上生效;重连有单测;IME 需桌面人工核对 **[所有者]**。
+- [ ] **B0.4 View 规则与入口**:规则图标/徽章生效,支持按命令/host 匹配,`views.json` 热加载;
+  Open Quickly 加入文件与 agent;details 面板剩余英文串国际化。验收:规则引擎单测、截图核对。
+- [ ] **B0.5 可自动验收的 UI**:语义化控件目标 + 无窗口事件回放,覆盖重命名/取消、标签重排、
+  分隔条拖动、编辑器保存、剪贴板焦点。验收:新增回放测试在 CI 中运行。
 
 ### M2 Agent 工作台(吸收 Superset / Otty)
 
-- [ ] 从界面启动 agent(codex / claude / opencode / miao),可选工作目录。
-- [ ] 提示队列绑定目标 pane,agent 转为空闲时自动投递;队列持久化。
-- [ ] OSC 133 命令边界:选中"上一条命令的输出",一键发给 Composer / agent。
-- [ ] 任务 = git worktree + 分支 + agent pane:新建、列表、diff 审阅、合并或丢弃。
-- [ ] 通知点击直接跳到对应 pane;后台标签的未读/完成提示。
-- [ ] miao 深度集成:经 MTP 订阅事件、会话恢复、在 mtty 中打开 miao 产出的文件。
-- [ ] codex 接入:提供可直接使用的 hook 配置片段与验证脚本,端到端测试状态上报。
-
-**验收**:三个 agent 并行跑在三个 worktree 中,状态、通知、队列、diff 审阅全流程有真实窗口冒烟。
+- [ ] **B2.1 启动与接入**:设置与命令面板中"启动 agent"(codex/claude/opencode/miao,可选目录);
+  接入片段带"复制"按钮;codex hook 片段与验证脚本。验收:启动命令单测;冒烟用假 agent 上报状态。
+- [ ] **B2.2 队列**:队列项绑定目标 pane,agent 转为 idle 时自动投递,持久化到 `queue.json`(兼容旧格式)。
+  验收:状态转换与投递单测(含重复事件不重复投递)。
+- [ ] **B2.3 命令边界**:OSC 133(A/B/C/D)解析,zsh shim 发送;"复制/发送上一条命令输出"。
+  验收:解析单测;冒烟中运行命令后取回其输出。
+- [ ] **B2.4 Worktree 任务**:新建任务 = `git worktree add` + 分支 + agent pane;任务列表、diff 查看、
+  合并或丢弃(破坏性操作需确认)。验收:在临时仓库上的集成测试。
+- [ ] **B2.5 注意力与 miao**:通知点击跳转 pane、后台标签未读/完成标记;miao 插件读取 `MTTY_*`
+  (miao 仓库,单独提交)。验收:状态转换单测;miao 插件测试。
 
 ### M3 远程运维(吸收 Termius)
 
-- [ ] **主机库**:`hosts.toml`(名称、地址、用户、端口、分组、标签、跳板机),可一键导入 `~/.ssh/config`;
-      侧栏主机列表,双击连接,`⌘K` 可搜索主机。
-- [ ] **身份与密钥**:使用 ssh-agent 与系统钥匙串;可选生成密钥;不保存明文密码。
-- [ ] **known_hosts**:首次连接与指纹变化都给出清晰确认界面。
-- [ ] **SFTP**:双栏文件浏览(本地/远端),上传下载、拖放、进度、断点续传、权限与重命名。
-- [ ] **FTP / FTPS**:与 SFTP 共用文件浏览界面(FTP 明文传输需显著提示)。
-- [ ] **端口转发**:本地 / 远程 / 动态(SOCKS)规则,保存在主机条目下,可单独启停,状态可见。
-- [ ] **Snippets**:命令片段库,可在当前 pane 或选中的多台主机上执行。
-- [ ] **广播输入**:同时向多个 pane 输入。
-- [ ] **持久会话**:可选通过 tmux / mosh 保持远端任务,断线重连。
-- [ ] 远端 pane 的文件查看/编辑自动使用该 pane 的连接,不再手填主机。
-
-**验收**:用一台测试主机(容器即可)跑完主机导入、登录、SFTP 传文件、端口转发、Snippet 执行的
-自动化冒烟;凭证不出现在任何日志、会话文件或 MTP 响应中。
+- [ ] **B3.1 主机库**:`hosts.toml`(名称、地址、用户、端口、分组、标签、跳板机)、从 `~/.ssh/config`
+  导入、侧栏主机列表、命令面板搜索、双击连接。验收:解析/导入单测,冒烟连接本机 sshd 或容器 **[需测试主机]**。
+- [ ] **B3.2 安全连接**:known_hosts 首次连接/指纹变化确认界面;ssh-agent 状态与密钥生成;不保存明文密码。
+- [ ] **B3.3 端口转发**:经 ControlMaster `ssh -O forward/cancel` 管理 L/R/D 规则,随主机保存,状态可见。
+- [ ] **B3.4 SFTP**:双栏文件浏览、上传下载、拖放、进度、重命名/权限;远端编辑复用 pane 连接。
+- [ ] **B3.5 Snippets 与广播**:命令片段库,在当前 pane 或多台主机执行;多 pane 广播输入。
+- [ ] **B3.6 FTP/FTPS 与持久会话**:FTP/FTPS 共用文件浏览(明文提示);可选 tmux/mosh 重连。
+  验收(M3 整体):对测试主机的自动化冒烟;凭证不进日志、会话文件或 MTP 响应。
 
 ### M4 跨平台交付
 
-- [ ] Windows / Linux 真实桌面验收(IME、热键、拖放、菜单)。
-- [ ] Apple 公证与 Windows MSI 签名(需要凭证,由所有者执行)。
-- [ ] 自动更新:下载、签名校验(`update-pubkey`)、替换安装。
-- [ ] bash / fish / PowerShell 的 shell 集成。
-- [ ] 可选的端到端加密同步(主机库、Snippets、设置),默认关闭。
+- [ ] **B4.1** Windows/Linux 真实桌面验收(IME、热键、拖放、菜单)**[所有者 + 真机]**。
+- [ ] **B4.2** Apple 公证、Windows MSI 签名 **[所有者 + 凭证]**。
+- [ ] **B4.3** 自动更新:下载、`update-pubkey` 签名校验、替换安装。
+- [ ] **B4.4** bash / fish / PowerShell 的 shell 集成。
+- [ ] **B4.5** 可选的端到端加密同步,默认关闭。
 
 ## 5. 不做的事
 
