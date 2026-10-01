@@ -3,6 +3,16 @@
 
 use crate::theme::{Chrome as ChromeColors, Rgb};
 
+/// How a shortcut is written on this platform: macOS's ⌘ chord, or the
+/// Linux/Windows one (see the keymap in term-widget).
+pub fn shortcut_hint(mac: &'static str, pc: &'static str) -> &'static str {
+    if cfg!(target_os = "macos") {
+        mac
+    } else {
+        pc
+    }
+}
+
 pub fn fg_color(t: &crate::theme::Theme) -> egui::Color32 {
     egui::Color32::from_rgb(t.fg.0, t.fg.1, t.fg.2)
 }
@@ -784,7 +794,7 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
     let metas: Vec<String> = (0..titles.len())
         .map(|i| {
             if i < 9 {
-                format!("\u{2318}{}", i + 1)
+                format!("{}{}", shortcut_hint("\u{2318}", "Alt+"), i + 1)
             } else {
                 String::new()
             }
@@ -1017,9 +1027,13 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
             ui.visuals_mut().override_text_color = Some(bg_color(ch.text));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
-                    egui::RichText::new(format!("\u{2318}K  {}", t(lang, "commands", "命令")))
-                        .size(11.0)
-                        .color(egui::Color32::from_gray(130)),
+                    egui::RichText::new(format!(
+                        "{}  {}",
+                        shortcut_hint("\u{2318}K", "Ctrl+Shift+K"),
+                        t(lang, "commands", "命令")
+                    ))
+                    .size(11.0)
+                    .color(egui::Color32::from_gray(130)),
                 );
                 if !status_right.is_empty() {
                     ui.label(

@@ -64,7 +64,7 @@
 - **命令面板**(`⌘K`)与 **Open Quickly**(`⌘⇧O`):覆盖标签、agent、当前目录的文件与子目录,以及最近文件。
 - 右侧 details 面板含分页:**Info / Agent / Outline / Git / Files / Ports / Queue**
   (git 状态、目录列表、监听端口、提示队列)。
-- **Composer**(`⌘⇧E`)与**提示队列**:队列项绑定入队时的 pane,该 pane 的 agent 每次转为空闲时
+- **Composer**(`⌘E`;Linux/Windows 上 `Ctrl+Shift+E`)与**提示队列**:队列项绑定入队时的 pane,该 pane 的 agent 每次转为空闲时
   投递一条(重启后保留;"立即发送"会将其移出队列);由 agent 状态驱动的**通知**与**防休眠**。后台标签会
   标出 agent 需要输入或出错(`!`)、已完成(✓)或有新输出(•);收到通知后不久切回 mtty,会直接显示该
   通知对应的 pane。
@@ -303,24 +303,29 @@ mtty-cli file write --path /tmp/x --data-b64 "AAECAw=="   # 二进制
 
 ## 快捷键
 
-| 快捷键 | 操作 |
-|--------|------|
-| `⌘T` | 新建标签 |
-| `⌘W` | 关闭当前 pane(或标签) |
-| `⌘D` / `⇧⌘D` | 向右 / 向下分屏 |
-| `⌥⌘→` / `⌥⌘←`(或 `⌘⇧]` / `⌘⇧[`) | 轮换 pane 焦点 |
-| `⌥⌘D` | 开关 details 面板 |
-| `⌘K` | 命令面板 |
-| `⌘⇧O` | Open Quickly(标签、agent、文件、最近文件) |
-| `⌘F` | 查找 |
-| `⌘⇧E` | Composer(向焦点 pane 发送多行提示) |
-| `⌘⇧T` | 快速终端(临时标签) |
-| `⌘⇧Z` | 重新打开最近关闭的标签 |
-| `⌘,` | 设置 |
-| `⌘+` / `⌘-` / `⌘0` | 增大 / 减小 / 重置字号 |
+| macOS | Linux / Windows | 操作 |
+|---|---|---|
+| `⌘T` | `Ctrl+Shift+T` | 新建标签 |
+| `⌘W` | `Ctrl+Shift+W` | 关闭当前 pane(或标签) |
+| `⌘D` / `⇧⌘D` | `Ctrl+Shift+D` / `Ctrl+Shift+Alt+D` | 向右 / 向下分屏 |
+| `⌘[` / `⌘]` | `Ctrl+Shift+[` / `Ctrl+Shift+]` | 上一个 / 下一个 pane |
+| `⇧⌘[` / `⇧⌘]` | `Ctrl+PgUp` / `Ctrl+PgDn`(或 `Ctrl+Tab`) | 上一个 / 下一个标签 |
+| `⌘1`…`⌘9` | `Alt+1`…`Alt+9` | 跳到标签 |
+| `⌘K`(或 `⇧⌘P`) | `Ctrl+Shift+K`(或 `Ctrl+Shift+P`) | 命令面板 |
+| `⇧⌘O` | `Ctrl+Shift+Alt+O` | Open Quickly(标签、agent、文件、主机) |
+| `⌘F` | `Ctrl+Shift+F` | 查找 |
+| `⌘G` / `⇧⌘G` | `Ctrl+Shift+G` / `Ctrl+Shift+Alt+G` | 下一个 / 上一个匹配 |
+| `⇧⌘H` | `Ctrl+Shift+Alt+H` | Hints(按标签打开链接或路径) |
+| `⌘E` | `Ctrl+Shift+E` | Composer(向焦点 pane 发送多行提示) |
+| `⇧⌘T` | `Ctrl+Shift+Alt+T` | 快速终端(临时标签) |
+| `⇧⌘Z` | `Ctrl+Shift+Alt+Z` | 重新打开最近关闭的标签 |
+| `⇧⌘L` / `⇧⌘R` | `Ctrl+Shift+Alt+L` / `Ctrl+Shift+Alt+R` | 开关侧栏 / details 面板 |
+| `⌘,` | `Ctrl+,` | 设置 |
+| `⌘+` / `⌘-` | `Ctrl+=` / `Ctrl+-` | 增大 / 减小字号 |
+| `⌘C` / `⌘V` | `Ctrl+Shift+C` / `Ctrl+Shift+V`(`Ctrl+V` 也可;有选区时 `Ctrl+C` 也可复制) | 复制 / 粘贴 |
 | `Shift+PgUp` / `Shift+PgDn` | 滚动视口 |
 
-在 macOS 上 `⌘` 为命令修饰键;其他平台上使用对应的主修饰键。
+在 Linux 与 Windows 上,单独的 `Ctrl` 组合键(`Ctrl+C`、`Ctrl+W`、`Ctrl+D`……)始终交给 shell,`Super`/`Win` 组合留给桌面。
 
 ---
 
