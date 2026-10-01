@@ -354,55 +354,121 @@ pub fn sidebar(
     heading: &str,
     lang: Lang,
 ) -> TabBarEvents {
+    const DRAG_ID: &str = "miao_session_drag";
     let mut ev = TabBarEvents::default();
     ui.visuals_mut().selection.bg_fill = bg_color(ch.active);
     ui.visuals_mut().override_text_color = Some(bg_color(ch.text));
     ui.label(section(&format!("{heading} ({})", titles.len())));
     ui.separator();
+    let text_color = bg_color(ch.text);
+    let font = egui::FontId::proportional(13.0);
+    let meta_font = egui::FontId::proportional(10.5);
+    let mut rects: Vec<egui::Rect> = Vec::with_capacity(titles.len());
     for (i, title) in titles.iter().enumerate() {
-        ui.horizontal(|ui| {
-            let (irect, _) = ui.allocate_exact_size(egui::Vec2::splat(14.0), egui::Sense::hover());
-            crate::icons::draw_tab_icon(
-                ui.painter(),
-                irect,
-                &icons
-                    .get(i)
-                    .cloned()
-                    .unwrap_or_else(|| crate::icons::Icon::Terminal.into()),
-                bg_color(ch.text),
+        // The tab bar's group divider, laid horizontally (ADR 0011).
+        if tab_group_boundary(groups, i) {
+            let (r, _) =
+                ui.allocate_exact_size(egui::vec2(ui.available_width(), 7.0), egui::Sense::hover());
+            ui.painter().hline(
+                r.x_range().shrink(4.0),
+                r.center().y,
+                egui::Stroke::new(1.0_f32, text_color.gamma_multiply(0.5)),
             );
-            match badges.get(i).copied().flatten() {
-                Some(c) => {
-                    ui.colored_label(bg_color(c), "\u{25cf}");
-                }
-                None => {
-                    ui.label("  ");
-                }
-            }
-            let resp = ui.selectable_label(i == active, egui::RichText::new(title).size(13.0));
-            if resp.clicked() {
-                ev.switch = Some(i);
-            }
-            if titles.len() > 1 && resp.clicked_by(egui::PointerButton::Middle) {
-                ev.close = Some(i);
-            }
-            tab_row_menu(
-                &resp,
-                lang,
-                i,
-                groups.get(i).is_some_and(|g| g.is_some()),
-                &mut ev,
+        }
+        // One painted row (icon, badge, title, shortcut) so the whole row can
+        // be clicked and dragged, like the tab bar's chips.
+        let (rect, resp) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), 24.0),
+            egui::Sense::click_and_drag(),
+        );
+        let bg = if i == active {
+            bg_color(ch.active)
+        } else if resp.hovered() {
+            bg_color(ch.hover)
+        } else {
+            egui::Color32::TRANSPARENT
+        };
+        ui.painter().rect_filled(rect, 5.0, bg);
+        let icon = icons
+            .get(i)
+            .cloned()
+            .unwrap_or_else(|| crate::icons::Icon::Terminal.into());
+        let ir = egui::Rect::from_center_size(
+            egui::pos2(rect.left() + 12.0, rect.center().y),
+            egui::Vec2::splat(14.0),
+        );
+        crate::icons::draw_tab_icon(ui.painter(), ir, &icon, text_color);
+        if let Some(c) = badges.get(i).copied().flatten() {
+            ui.painter().circle_filled(
+                egui::pos2(rect.left() + 26.0, rect.center().y),
+                3.0,
+                bg_color(c),
             );
-            if let Some(m) = metas.get(i).filter(|m| !m.is_empty()) {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(
-                        egui::RichText::new(m)
-                            .size(10.5)
-                            .color(egui::Color32::from_gray(120)),
-                    );
-                });
-            }
+        }
+        let meta = metas.get(i).filter(|m| !m.is_empty()).map(|m| {
+            ui.painter()
+                .layout_no_wrap(m.clone(), meta_font.clone(), egui::Color32::from_gray(120))
         });
+        let meta_w = meta.as_ref().map_or(0.0, |g| g.size().x + 8.0);
+        let text_left = rect.left() + 34.0;
+        let mut job =
+            egui::text::LayoutJob::simple_singleline(title.clone(), font.clone(), text_color);
+        job.wrap = egui::text::TextWrapping::truncate_at_width(
+            (rect.right() - 6.0 - meta_w - text_left).max(8.0),
+        );
+        let galley = ui.painter().layout_job(job);
+        ui.painter().galley(
+            egui::pos2(text_left, rect.center().y - galley.size().y * 0.5),
+            galley,
+            text_color,
+        );
+        if let Some(g) = meta {
+            ui.painter().galley(
+                egui::pos2(
+                    rect.right() - 6.0 - g.size().x,
+                    rect.center().y - g.size().y * 0.5,
+                ),
+                g,
+                text_color,
+            );
+        }
+        if resp.clicked() {
+            ev.switch = Some(i);
+        }
+        if resp.double_clicked() {
+            ev.rename = Some(i);
+        }
+        if titles.len() > 1 && resp.clicked_by(egui::PointerButton::Middle) {
+            ev.close = Some(i);
+        }
+        tab_row_menu(
+            &resp,
+            lang,
+            i,
+            groups.get(i).is_some_and(|g| g.is_some()),
+            &mut ev,
+        );
+        if resp.drag_started() {
+            ui.ctx()
+                .memory_mut(|m| m.data.insert_temp(egui::Id::new(DRAG_ID), i));
+        }
+        rects.push(rect);
+    }
+    ev.tab_rects = rects.clone();
+    // Resolve a finished drag against the rows, by height.
+    if ui.ctx().input(|i| i.pointer.any_released()) {
+        let from = ui
+            .ctx()
+            .memory_mut(|m| m.data.remove_temp::<usize>(egui::Id::new(DRAG_ID)));
+        if let (Some(from), Some(p)) = (from, ui.ctx().pointer_interact_pos()) {
+            let target = rects
+                .iter()
+                .position(|r| p.y >= r.top() && p.y <= r.bottom())
+                .unwrap_or(from);
+            if target != from {
+                ev.reorder = Some((from, target));
+            }
+        }
     }
     ev
 }
@@ -738,16 +804,48 @@ pub trait Chrome {
     }
     /// The user picked `hosts()[i]`.
     fn on_host_connect(&mut self, i: usize) {}
+    /// Room the title row leaves at its leading edge for window controls the
+    /// OS draws over it (macOS traffic lights on a transparent title bar).
+    /// 0 when the OS draws its own title bar.
+    fn titlebar_inset(&self) -> f32 {
+        0.0
+    }
+    /// Whether the pointer rests on empty title-row space this frame, where a
+    /// press moves the window (only meaningful with a [`Self::titlebar_inset`]).
+    fn on_title_drag_hover(&mut self, hovered: bool) {}
 }
 
 pub const CHROME_MENU_H: f32 = 24.0;
-pub const CHROME_TAB_H: f32 = 30.0;
+/// The title row above the terminal, and the sidebar header beside it. On
+/// macOS it shares the transparent title bar with the traffic lights.
+pub const CHROME_TITLE_H: f32 = 30.0;
 pub const CHROME_STATUS_H: f32 = 22.0;
 pub const CHROME_SIDEBAR_W: f32 = 200.0;
 pub const CHROME_DETAILS_W: f32 = 300.0;
 /// How far the side panels can be dragged (their default is the width above).
 pub const SIDEBAR_RANGE: std::ops::RangeInclusive<f32> = 140.0..=480.0;
 pub const DETAILS_RANGE: std::ops::RangeInclusive<f32> = 200.0..=640.0;
+
+/// Width reserved for the title row's right-hand controls (panel toggles and
+/// font size), mirrored on the left so the title stays centred.
+const TITLE_CONTROLS_W: f32 = 120.0;
+
+/// Empty space that moves the window: a click-sensing backdrop over `rect`.
+/// Widgets added after it sit on top, so it only reports hover where none is.
+fn drag_region(ui: &mut egui::Ui, rect: egui::Rect, id: &str) -> bool {
+    ui.interact(rect, ui.id().with(id), egui::Sense::click())
+        .hovered()
+}
+
+/// Where the terminal grid starts: below the in-window menu (if drawn) and the
+/// title row. [`render`] lays the panels out to match.
+pub fn content_top(draws_menu_bar: bool) -> f32 {
+    if draws_menu_bar {
+        CHROME_MENU_H + CHROME_TITLE_H
+    } else {
+        CHROME_TITLE_H
+    }
+}
 
 /// Whether egui shows a resize cursor: the pointer is on a panel or window
 /// edge, so a press there belongs to the UI even outside the panel itself.
@@ -893,26 +991,127 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
             });
     }
 
-    egui::TopBottomPanel::top("tabs")
-        .exact_height(CHROME_TAB_H)
+    // Otty's frame: the session list runs the full height of the window, its
+    // header beside the title row. With a transparent macOS title bar the
+    // traffic lights sit over that header, so its controls keep to the right.
+    let inset = host.titlebar_inset();
+    let mut title_drag_hover = false;
+    if show_sidebar {
+        egui::SidePanel::left("sessions")
+            .resizable(true)
+            .default_width(host.sidebar_width())
+            .width_range(SIDEBAR_RANGE)
+            .frame(panel_frame_stroke(
+                egui::Margin::same(6.0),
+                ch.sidebar,
+                ch.border,
+            ))
+            .show(ctx, |ui| {
+                // The header lines up with the title row (the frame's top
+                // margin is part of that height).
+                let (header, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), CHROME_TITLE_H - 6.0),
+                    egui::Sense::hover(),
+                );
+                title_drag_hover |= drag_region(ui, header.expand(6.0), "sidebar_header");
+                ui.allocate_new_ui(
+                    egui::UiBuilder::new()
+                        .max_rect(header)
+                        .layout(egui::Layout::right_to_left(egui::Align::Center)),
+                    |ui| {
+                        if icon_button(ui, Icon::Sidebar, bg_color(ch.text))
+                            .on_hover_text(t(lang, "Toggle sidebar", "开关侧栏"))
+                            .clicked()
+                        {
+                            toggle_sidebar = true;
+                        }
+                        if ui
+                            .button("+")
+                            .on_hover_text(t(lang, "New Tab", "新建标签"))
+                            .clicked()
+                        {
+                            new_tab = true;
+                        }
+                    },
+                );
+                let heading = t(lang, "Sessions", "会话");
+                let ev = sidebar(
+                    ui,
+                    &ch,
+                    &titles,
+                    &icons,
+                    &badges,
+                    &metas,
+                    &tab_groups,
+                    active,
+                    heading,
+                    lang,
+                );
+                switch = ev.switch.or(switch);
+                close = ev.close.or(close);
+                rename = ev.rename.or(rename);
+                reorder = ev.reorder.or(reorder);
+                duplicate = ev.duplicate.or(duplicate);
+                close_others = ev.close_others.or(close_others);
+                close_below = ev.close_below.or(close_below);
+                move_up = ev.move_up.or(move_up);
+                move_down = ev.move_down.or(move_down);
+                set_prefix = ev.set_prefix.or(set_prefix);
+                mark_tab = ev.mark.or(mark_tab);
+                group_tab = ev.group.or(group_tab);
+                ungroup_tab = ev.ungroup.or(ungroup_tab);
+                new_tab = new_tab || ev.new_tab;
+                if !saved_hosts.is_empty() {
+                    host_connect = host_list(ui, &ch, &saved_hosts, lang).or(host_connect);
+                }
+            });
+    }
+
+    // The title row: the active tab's title, or the tab strip while the
+    // sidebar is hidden; panel and font controls at the top right.
+    egui::TopBottomPanel::top("title")
+        .exact_height(CHROME_TITLE_H)
         .frame(panel_frame(&ch, egui::Margin::symmetric(6.0, 3.0)))
         .show(ctx, |ui| {
+            title_drag_hover |=
+                drag_region(ui, ui.max_rect().expand2(egui::vec2(6.0, 3.0)), "title_row");
             ui.horizontal(|ui| {
-                let ev = tab_bar(ui, &ch, &titles, &icons, &tab_groups, active, lang);
-                switch = ev.switch;
-                close = ev.close;
-                rename = ev.rename;
-                reorder = ev.reorder;
-                duplicate = ev.duplicate;
-                close_others = ev.close_others;
-                close_below = ev.close_below;
-                move_up = ev.move_up;
-                move_down = ev.move_down;
-                set_prefix = ev.set_prefix;
-                mark_tab = ev.mark;
-                group_tab = ev.group;
-                ungroup_tab = ev.ungroup;
-                new_tab = ev.new_tab;
+                if show_sidebar {
+                    let row = ui.max_rect();
+                    let mut job = egui::text::LayoutJob::simple_singleline(
+                        titles.get(active).cloned().unwrap_or_default(),
+                        egui::FontId::proportional(13.0),
+                        bg_color(ch.text),
+                    );
+                    // Leave the right-hand controls their room on both sides
+                    // so the title stays centred.
+                    job.wrap = egui::text::TextWrapping::truncate_at_width(
+                        (row.width() - 2.0 * TITLE_CONTROLS_W).max(40.0),
+                    );
+                    let galley = ui.painter().layout_job(job);
+                    ui.painter().galley(
+                        row.center() - galley.size() * 0.5,
+                        galley,
+                        bg_color(ch.text),
+                    );
+                } else {
+                    ui.add_space(inset);
+                    let ev = tab_bar(ui, &ch, &titles, &icons, &tab_groups, active, lang);
+                    switch = ev.switch;
+                    close = ev.close;
+                    rename = ev.rename;
+                    reorder = ev.reorder;
+                    duplicate = ev.duplicate;
+                    close_others = ev.close_others;
+                    close_below = ev.close_below;
+                    move_up = ev.move_up;
+                    move_down = ev.move_down;
+                    set_prefix = ev.set_prefix;
+                    mark_tab = ev.mark;
+                    group_tab = ev.group;
+                    ungroup_tab = ev.ungroup;
+                    new_tab = ev.new_tab;
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("A+").clicked() {
                         font_delta = 1.0;
@@ -935,49 +1134,7 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
                 });
             });
         });
-
-    if show_sidebar {
-        egui::SidePanel::left("sessions")
-            .resizable(true)
-            .default_width(host.sidebar_width())
-            .width_range(SIDEBAR_RANGE)
-            .frame(panel_frame_stroke(
-                egui::Margin::same(6.0),
-                ch.sidebar,
-                ch.border,
-            ))
-            .show(ctx, |ui| {
-                let heading = t(lang, "Sessions", "会话");
-                let ev = sidebar(
-                    ui,
-                    &ch,
-                    &titles,
-                    &icons,
-                    &badges,
-                    &metas,
-                    &tab_groups,
-                    active,
-                    heading,
-                    lang,
-                );
-                switch = ev.switch.or(switch);
-                close = ev.close.or(close);
-                rename = ev.rename.or(rename);
-                duplicate = ev.duplicate.or(duplicate);
-                close_others = ev.close_others.or(close_others);
-                close_below = ev.close_below.or(close_below);
-                move_up = ev.move_up.or(move_up);
-                move_down = ev.move_down.or(move_down);
-                set_prefix = ev.set_prefix.or(set_prefix);
-                mark_tab = ev.mark.or(mark_tab);
-                group_tab = ev.group.or(group_tab);
-                ungroup_tab = ev.ungroup.or(ungroup_tab);
-                new_tab = new_tab || ev.new_tab;
-                if !saved_hosts.is_empty() {
-                    host_connect = host_list(ui, &ch, &saved_hosts, lang).or(host_connect);
-                }
-            });
-    }
+    host.on_title_drag_hover(title_drag_hover);
 
     if show_details {
         let host = &mut *host;
@@ -1541,5 +1698,241 @@ mod tab_menu_tests {
             (dragged - (left + 100.0)).abs() < 3.0,
             "sidebar is now {dragged}"
         );
+    }
+
+    fn test_ctx() -> egui::Context {
+        let ctx = egui::Context::default();
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.font_data.insert(
+            "tabler".into(),
+            egui::FontData::from_static(include_bytes!(
+                "../../../assets/fonts/tabler-icons-subset.ttf"
+            ))
+            .into(),
+        );
+        fonts.families.insert(
+            egui::FontFamily::Name("tabler".into()),
+            vec!["tabler".into()],
+        );
+        ctx.set_fonts(fonts);
+        ctx
+    }
+
+    fn press(pos: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    /// One sidebar frame over a 300x400 screen with three sessions.
+    fn sidebar_frame(
+        ctx: &egui::Context,
+        groups: &[Option<String>],
+        events: Vec<egui::Event>,
+    ) -> (TabBarEvents, egui::FullOutput) {
+        let titles: Vec<String> = vec!["alpha".into(), "beta".into(), "gamma".into()];
+        let icons = vec![crate::icons::TabIcon::from(crate::icons::Icon::Terminal); 3];
+        let badges = vec![None, Some(Rgb(0xa3, 0xbe, 0x8c)), None];
+        let metas = vec!["\u{2318}1".into(), "\u{2318}2".into(), "\u{2318}3".into()];
+        let mut ev = TabBarEvents::default();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(300.0, 400.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let output = ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ev = sidebar(
+                    ui,
+                    &ChromeColors::dark(),
+                    &titles,
+                    &icons,
+                    &badges,
+                    &metas,
+                    groups,
+                    0,
+                    "Sessions",
+                    Lang::En,
+                );
+            });
+        });
+        (ev, output)
+    }
+
+    #[test]
+    fn dragging_a_session_row_reorders_the_tabs() {
+        let ctx = test_ctx();
+        let groups = vec![None, None, None];
+        let rects = sidebar_frame(&ctx, &groups, vec![]).0.tab_rects;
+        assert_eq!(rects.len(), 3);
+        let (from, to) = (rects[0].center(), rects[2].center());
+        sidebar_frame(&ctx, &groups, vec![egui::Event::PointerMoved(from)]);
+        sidebar_frame(&ctx, &groups, vec![press(from, true)]);
+        for step in 1..=6 {
+            let t = step as f32 / 6.0;
+            let p = from + (to - from) * t;
+            sidebar_frame(&ctx, &groups, vec![egui::Event::PointerMoved(p)]);
+        }
+        let ev = sidebar_frame(&ctx, &groups, vec![press(to, false)]).0;
+        assert_eq!(ev.reorder, Some((0, 2)));
+        assert_eq!(ev.switch, None, "a drag is not a click");
+        // A plain click still switches.
+        let p = rects[1].center();
+        sidebar_frame(&ctx, &groups, vec![egui::Event::PointerMoved(p)]);
+        sidebar_frame(&ctx, &groups, vec![press(p, true)]);
+        let ev = sidebar_frame(&ctx, &groups, vec![press(p, false)]).0;
+        assert_eq!((ev.switch, ev.reorder), (Some(1), None));
+    }
+
+    #[test]
+    fn grouped_session_list_paints_horizontal_dividers() {
+        let ctx = test_ctx();
+        let dividers = |groups: &[Option<String>]| {
+            sidebar_frame(&ctx, groups, vec![]);
+            let (ev, output) = sidebar_frame(&ctx, groups, vec![]);
+            let lines: Vec<f32> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::LineSegment { points, .. }
+                        if (points[0].y - points[1].y).abs() < 0.01
+                            && (points[1].x - points[0].x) > 100.0 =>
+                    {
+                        Some(points[0].y)
+                    }
+                    _ => None,
+                })
+                .collect();
+            (ev.tab_rects, lines)
+        };
+        // The heading's separator is one horizontal line already.
+        let (_, plain) = dividers(&[None, None, None]);
+        let (rects, grouped) = dividers(&[Some("a".into()), Some("a".into()), Some("b".into())]);
+        assert_eq!(grouped.len(), plain.len() + 1, "{grouped:?} vs {plain:?}");
+        let divider = grouped
+            .iter()
+            .find(|y| !plain.contains(y))
+            .copied()
+            .unwrap();
+        assert!(rects[1].bottom() <= divider && divider <= rects[2].top());
+    }
+
+    struct FrameHost {
+        sidebar: bool,
+        menu: bool,
+        inset: f32,
+        drag_hover: bool,
+        toggled_sidebar: bool,
+    }
+
+    impl Chrome for FrameHost {
+        fn tabs(&self) -> Vec<ChromeTab> {
+            ["one", "two"]
+                .into_iter()
+                .map(|t| ChromeTab {
+                    title: t.into(),
+                    badge: None,
+                    icon: crate::icons::Icon::Terminal.into(),
+                })
+                .collect()
+        }
+        fn show_sidebar(&self) -> bool {
+            self.sidebar
+        }
+        fn draws_menu_bar(&self) -> bool {
+            self.menu
+        }
+        fn titlebar_inset(&self) -> f32 {
+            self.inset
+        }
+        fn on_title_drag_hover(&mut self, hovered: bool) {
+            self.drag_hover = hovered;
+        }
+        fn on_toggle_sidebar(&mut self) {
+            self.toggled_sidebar = true;
+        }
+    }
+
+    fn frame_run(
+        ctx: &egui::Context,
+        host: &mut FrameHost,
+        events: Vec<egui::Event>,
+    ) -> egui::Rect {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1200.0, 700.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let mut central = egui::Rect::NOTHING;
+        let _ = ctx.run(input, |ctx| {
+            render(ctx, host);
+            central = ctx.available_rect();
+        });
+        central
+    }
+
+    #[test]
+    fn terminal_area_starts_where_the_host_lays_out_its_grid() {
+        for (sidebar, menu) in [(true, false), (true, true), (false, false), (false, true)] {
+            let ctx = test_ctx();
+            let mut host = FrameHost {
+                sidebar,
+                menu,
+                inset: 76.0,
+                drag_hover: false,
+                toggled_sidebar: false,
+            };
+            frame_run(&ctx, &mut host, vec![]);
+            let central = frame_run(&ctx, &mut host, vec![]);
+            assert!(
+                (central.top() - content_top(menu)).abs() < 0.5,
+                "sidebar {sidebar}, menu {menu}: {central:?}"
+            );
+            let left = if sidebar { CHROME_SIDEBAR_W } else { 0.0 };
+            assert!((central.left() - left).abs() < 1.0, "{central:?}");
+            assert!(
+                (central.bottom() - (700.0 - CHROME_STATUS_H)).abs() < 0.5,
+                "{central:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_title_row_space_moves_the_window_but_controls_do_not() {
+        let ctx = test_ctx();
+        let mut host = FrameHost {
+            sidebar: true,
+            menu: false,
+            inset: 76.0,
+            drag_hover: false,
+            toggled_sidebar: false,
+        };
+        let hover = |p: egui::Pos2, host: &mut FrameHost| {
+            frame_run(&ctx, host, vec![egui::Event::PointerMoved(p)]);
+            frame_run(&ctx, host, vec![egui::Event::PointerMoved(p)]);
+            host.drag_hover
+        };
+        // Over the centred title and over the sidebar header's empty start
+        // (where the traffic lights sit).
+        assert!(hover(egui::pos2(600.0, 15.0), &mut host));
+        assert!(hover(egui::pos2(40.0, 15.0), &mut host));
+        // Over the terminal, and over the top-right controls.
+        assert!(!hover(egui::pos2(600.0, 300.0), &mut host));
+        assert!(!hover(egui::pos2(1190.0, 15.0), &mut host));
+        // The sidebar header's own toggle sits at its right end.
+        let p = egui::pos2(CHROME_SIDEBAR_W - 14.0, 15.0);
+        assert!(!hover(p, &mut host));
+        frame_run(&ctx, &mut host, vec![press(p, true)]);
+        frame_run(&ctx, &mut host, vec![press(p, false)]);
+        assert!(host.toggled_sidebar);
     }
 }

@@ -61,8 +61,6 @@ enum UpdateInstall {
     Failed(String),
 }
 
-const MENU_H: f32 = 24.0;
-const TAB_H: f32 = 30.0;
 const STATUS_H: f32 = 22.0;
 const SIDEBAR_W: f32 = 200.0;
 const DETAILS_W: f32 = 300.0;
@@ -83,15 +81,30 @@ fn next_image_frame(start: Instant, now: Instant) -> Instant {
 fn menu_in_os() -> bool {
     #[cfg(target_os = "macos")]
     {
-        std::env::current_exe()
-            .map(|p| p.to_string_lossy().contains(".app/Contents/MacOS/"))
-            .unwrap_or(false)
+        // Asked on every layout pass; the answer cannot change while running.
+        static IN_BUNDLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *IN_BUNDLE.get_or_init(|| {
+            std::env::current_exe()
+                .map(|p| p.to_string_lossy().contains(".app/Contents/MacOS/"))
+                .unwrap_or(false)
+        })
     }
     #[cfg(not(target_os = "macos"))]
     {
         false
     }
 }
+
+/// Whether the window extends under a transparent title bar, Otty-style: the
+/// traffic lights float over the sidebar header and the title row takes the
+/// title bar's place. Only where the menu lives in the OS menu bar; otherwise
+/// the in-window menu would sit under the traffic lights.
+fn unified_titlebar() -> bool {
+    cfg!(target_os = "macos") && menu_in_os()
+}
+
+/// Room the traffic lights take at the leading edge of a unified title bar.
+const TRAFFIC_LIGHTS_W: f32 = 76.0;
 
 /// The OS menu bar, built from the shared menu table (ADR 0031).
 #[cfg(target_os = "macos")]
@@ -1053,6 +1066,11 @@ struct State {
     alert_target: Option<(String, Instant)>,
     /// egui showed a resize cursor last frame (pointer on a panel edge).
     ui_resize_hover: bool,
+    /// The pointer was on empty title-row space last frame: a press there
+    /// moves the window (unified title bar only).
+    title_drag_hover: bool,
+    /// When the title row was last pressed, to turn a second press into zoom.
+    title_pressed_at: Option<Instant>,
     /// Side panel widths (logical points), as the user dragged them.
     sidebar_w: f32,
     details_w: f32,
@@ -1306,11 +1324,12 @@ impl State {
         } else {
             0.0
         };
+        let top = chrome::content_top(!menu_in_os());
         Rect {
             x,
-            y: MENU_H + TAB_H,
+            y: top,
             w: (w - x - right).max(1.0),
-            h: (h - MENU_H - TAB_H - STATUS_H).max(1.0),
+            h: (h - top - STATUS_H).max(1.0),
         }
     }
 
@@ -8294,6 +8313,16 @@ impl ApplicationHandler<HostEvent> for Host {
             // themes its whole frame the same way).
             .with_theme(Some(winit::window::Theme::Dark))
             .with_transparent(opacity < 1.0);
+        #[cfg(target_os = "macos")]
+        let attrs = if unified_titlebar() {
+            use winit::platform::macos::WindowAttributesExtMacOS;
+            attrs
+                .with_titlebar_transparent(true)
+                .with_title_hidden(true)
+                .with_fullsize_content_view(true)
+        } else {
+            attrs
+        };
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => return startup_failure(event_loop, "could not create a window", e),
@@ -8549,6 +8578,8 @@ impl ApplicationHandler<HostEvent> for Host {
             jobs_rx,
             agents_detected: None,
             ui_resize_hover: false,
+            title_drag_hover: false,
+            title_pressed_at: None,
             sidebar_w: load_panel_widths().0,
             details_w: load_panel_widths().1,
             alert_target: None,
@@ -8903,6 +8934,30 @@ impl ApplicationHandler<HostEvent> for Host {
                     .push(egui::Event::Paste(text));
             }
             state.window.request_redraw();
+        }
+        // Empty title-row space stands in for the title bar it covers: a press
+        // moves the window, a second one soon after zooms it. The OS drag loop
+        // swallows the release, so egui must not see the press either.
+        if state.title_drag_hover && unified_titlebar() {
+            if let WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } = &event
+            {
+                let now = Instant::now();
+                if state
+                    .title_pressed_at
+                    .is_some_and(|t| now.duration_since(t) < Duration::from_millis(400))
+                {
+                    state.title_pressed_at = None;
+                    state.window.set_maximized(!state.window.is_maximized());
+                } else {
+                    state.title_pressed_at = Some(now);
+                    let _ = state.window.drag_window();
+                }
+                return;
+            }
         }
         if !matches!(event, WindowEvent::RedrawRequested) && !terminal_tab && !field_paste {
             let resp = state.egui_state.on_window_event(&state.window, &event);
@@ -10025,6 +10080,18 @@ impl chrome::Chrome for State {
     fn draws_menu_bar(&self) -> bool {
         // macOS inside an app bundle uses the system menu bar instead (ADR 0031).
         !menu_in_os()
+    }
+
+    fn titlebar_inset(&self) -> f32 {
+        if unified_titlebar() {
+            TRAFFIC_LIGHTS_W
+        } else {
+            0.0
+        }
+    }
+
+    fn on_title_drag_hover(&mut self, hovered: bool) {
+        self.title_drag_hover = hovered;
     }
 
     fn pane_close_rects(&self) -> Vec<(String, egui::Rect)> {
