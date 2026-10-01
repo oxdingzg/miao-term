@@ -222,7 +222,7 @@ verified on its own:
   reconnect" and reconnect; the IME candidate window follows the cursor.
   Acceptance: `open mtty://quick` works on the installed app; reconnect has unit
   tests; IME needs a manual desktop check **[owner]**.
-- [ ] **B0.4 View rules and entry points**: rule icons/badges applied,
+- [x] **B0.4 View rules and entry points** (`d52d898` and after; icons, badges, command matching and hot reload checked in real-window captures; also fixed: Rename Tab had no effect, deep-link Focus did not select the pane, symlinked folders did not match): rule icons/badges applied,
   command/host matching, `views.json` hot reload; Open Quickly lists files and
   agents; the remaining English strings in the details panel are translated.
   Acceptance: rule-engine unit tests and a screenshot check.
