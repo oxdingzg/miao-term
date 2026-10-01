@@ -344,6 +344,38 @@ struct Tab {
     mark: Option<String>,
     /// The session-list group this tab belongs to (ADR 0011).
     group: Option<String>,
+    /// Something happened here while it was in the background (B2.5).
+    attention: Option<Attention>,
+}
+
+/// Why a background tab wants a look, most urgent last (so `max` wins).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Attention {
+    /// New output.
+    Unread,
+    /// Its agent finished (processing -> idle).
+    Done,
+    /// Its agent waits for input or failed.
+    Needs,
+}
+
+impl Attention {
+    fn marker(self) -> &'static str {
+        match self {
+            Attention::Unread => " \u{2022}",
+            Attention::Done => " \u{eab2}", // cod-check (Symbols Nerd Font)
+            Attention::Needs => " !",
+        }
+    }
+
+    /// The attention an agent state change asks for, if any.
+    fn for_transition(previous: Option<&str>, now: &str) -> Option<Self> {
+        match now {
+            "awaiting" | "error" => Some(Attention::Needs),
+            "idle" if previous == Some("processing") => Some(Attention::Done),
+            _ => None,
+        }
+    }
 }
 
 impl Tab {
@@ -806,6 +838,10 @@ struct State {
     /// Background work results (see [`JobDone`]).
     jobs_tx: std::sync::mpsc::Sender<JobDone>,
     jobs_rx: std::sync::mpsc::Receiver<JobDone>,
+    /// The pane behind the last notification, so activating mtty soon after
+    /// it jumps there (macOS notifications from osascript cannot be clicked
+    /// through to a pane).
+    alert_target: Option<(String, Instant)>,
     /// Agent CLIs found on PATH, and when that was checked.
     agents_detected: Option<(Instant, Vec<bool>)>,
     /// Settings as last loaded/saved, to write back only what changed.
@@ -1093,6 +1129,7 @@ impl State {
             prefix: None,
             mark: None,
             group: None,
+            attention: None,
         });
         self.active_tab = self.tabs.len() - 1;
         self.selection = None;
@@ -1157,6 +1194,7 @@ impl State {
             prefix: None,
             mark: None,
             group: None,
+            attention: None,
         });
         self.active_tab = self.tabs.len() - 1;
         self.selection = None;
@@ -1889,6 +1927,11 @@ impl State {
     }
 
     fn render(&mut self) {
+        if self.focused {
+            if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                tab.attention = None;
+            }
+        }
         self.refresh_search();
         self.poll_details();
         self.ensure_details();
@@ -2730,6 +2773,7 @@ impl State {
                 prefix: None,
                 mark: None,
                 group: None,
+                attention: None,
             };
             tab.restore_decorations(t);
             if let Some(target) = tab.ssh_target.clone() {
@@ -3900,6 +3944,47 @@ impl State {
     }
 
     /// Notifications + sleep guard (ADR 0010).
+    /// After a notification, bringing mtty forward shows the pane it was
+    /// about (within two minutes, and only if that tab still wants a look).
+    fn follow_recent_alert(&mut self) {
+        let Some((pane, at)) = self.alert_target.take() else {
+            return;
+        };
+        if at.elapsed() > Duration::from_secs(120) {
+            return;
+        }
+        if let Some(i) = self
+            .tabs
+            .iter()
+            .position(|t| t.attention.is_some() && t.panes.iter().any(|p| p.id == pane))
+        {
+            self.tabs[i].active = pane;
+            self.active_tab = i;
+            self.selection = None;
+            self.window.request_redraw();
+        }
+    }
+
+    /// Mark the tab holding `pane` unless it is what the user is looking at.
+    fn raise_attention(&mut self, pane: &str, level: Attention) {
+        let visible = self.focused
+            && self
+                .tabs
+                .get(self.active_tab)
+                .is_some_and(|t| t.panes.iter().any(|p| p.id == pane));
+        if visible {
+            return;
+        }
+        if let Some(tab) = self
+            .tabs
+            .iter_mut()
+            .find(|t| t.panes.iter().any(|p| p.id == pane))
+        {
+            tab.attention = tab.attention.max(Some(level));
+            self.window.request_redraw();
+        }
+    }
+
     /// Type a queued prompt into its pane (or the active pane when it has no
     /// target). Read-only mode holds it back.
     fn deliver_prompt(&mut self, item: miao_term_ui::agentloop::QueuedPrompt) {
@@ -3943,6 +4028,9 @@ impl State {
             {
                 deliveries.push(item);
             }
+            if let Some(level) = Attention::for_transition(prev.as_deref(), &change.state) {
+                self.raise_attention(&change.pane, level);
+            }
             let changed = prev.as_deref() != Some(change.state.as_str());
             let wants = matches!(change.state.as_str(), "awaiting" | "error");
             let focused = Some(&change.pane) == focused_id.as_ref();
@@ -3959,6 +4047,7 @@ impl State {
                     change.agent.as_str()
                 };
                 alert = Some((format!("{agent} \u{00b7} {}", change.state), body));
+                self.alert_target = Some((change.pane.clone(), Instant::now()));
             }
         }
         if !deliveries.is_empty() {
@@ -5917,6 +6006,7 @@ impl ApplicationHandler<HostEvent> for Host {
             jobs_tx,
             jobs_rx,
             agents_detected: None,
+            alert_target: None,
             saved_settings: Vec::new(),
             config_imported_from: cfg.imported_from,
             update_dialog: false,
@@ -6023,9 +6113,15 @@ impl ApplicationHandler<HostEvent> for Host {
             // The cwd fallback must advance even when an idle/background shell
             // produces no output. This also keeps pending output draining.
             let mut changed = false;
-            for tab in &mut state.tabs {
+            let active_tab = state.active_tab;
+            let focused = state.focused;
+            for (ti, tab) in state.tabs.iter_mut().enumerate() {
                 for pane in &mut tab.panes {
-                    changed |= pane.term.process_pending();
+                    let output = pane.term.process_pending();
+                    changed |= output;
+                    if output && (ti != active_tab || !focused) && tab.attention.is_none() {
+                        tab.attention = Some(Attention::Unread);
+                    }
                     // Publish a newly finished command's output (OSC 133).
                     let latest = pane.term.last_command_output();
                     if latest != pane.published_output.as_ref() {
@@ -6229,7 +6325,12 @@ impl ApplicationHandler<HostEvent> for Host {
                 state.save_session();
                 event_loop.exit();
             }
-            WindowEvent::Focused(f) => state.focused = f,
+            WindowEvent::Focused(f) => {
+                state.focused = f;
+                if f {
+                    state.follow_recent_alert();
+                }
+            }
             WindowEvent::Resized(_) => {
                 state.resize();
                 state.window.request_redraw();
@@ -7265,6 +7366,9 @@ impl chrome::Chrome for State {
                 if let Some(b) = rule_badge.filter(|b| !b.trim().is_empty()) {
                     title = format!("{title} \u{00b7} {b}");
                 }
+                if let Some(a) = t.attention {
+                    title.push_str(a.marker());
+                }
                 chrome::ChromeTab { title, badge, icon }
             })
             .collect()
@@ -7876,6 +7980,7 @@ mod tests {
             prefix: None,
             mark: None,
             group: None,
+            attention: None,
         }
     }
 
@@ -7908,6 +8013,25 @@ mod tests {
         );
         assert_eq!(localize_detail(Lang::Zh, "src/main.rs"), "src/main.rs");
         assert_eq!(localize_detail(Lang::En, "Directory"), "Directory");
+    }
+
+    #[test]
+    fn attention_follows_agent_transitions_and_keeps_the_most_urgent() {
+        assert_eq!(
+            Attention::for_transition(Some("processing"), "idle"),
+            Some(Attention::Done)
+        );
+        assert_eq!(Attention::for_transition(None, "idle"), None);
+        assert_eq!(
+            Attention::for_transition(Some("idle"), "awaiting"),
+            Some(Attention::Needs)
+        );
+        assert_eq!(Attention::for_transition(Some("idle"), "processing"), None);
+        assert!(Attention::Needs > Attention::Done && Attention::Done > Attention::Unread);
+        assert_eq!(
+            Some(Attention::Done).max(Some(Attention::Unread)),
+            Some(Attention::Done)
+        );
     }
 
     #[test]
