@@ -232,7 +232,7 @@ verified on its own:
 
 ### M2 Agent workbench (from mtty / Otty)
 
-- [ ] **B2.1 Launch and wiring**: "Launch agent" in settings and the palette
+- [x] **B2.1 Launch and wiring** (the codex snippet follows its `hooks.json` format and needs `[features] hooks = true`; an end-to-end hook-script test covers `--stdin` session parsing, the pane filter and never blocking; the user's real agent configs were not touched): "Launch agent" in settings and the palette
   (codex/claude/opencode/miao, optional directory); a Copy button for wiring
   snippets; a codex hook snippet and verification script. Acceptance: launch
   command unit tests; a fake agent reports state in the smoke.

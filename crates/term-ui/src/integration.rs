@@ -77,13 +77,20 @@ pub fn hook_script(agent: &str) -> String {
     format!(
         "#!/bin/sh\n\
          # mtty agent hook for {agent} (generated).\n\
-         # Usage: hook.sh <processing|idle|awaiting|error> [session-id]\n\
+         # Usage: hook.sh <processing|idle|awaiting|error> [session-id | --stdin]\n\
+         # --stdin reads the session id from the JSON event on stdin.\n\
          set -eu\n\
          state=\"${{1:-}}\"\n\
          [ -n \"$state\" ] || {{ echo \"usage: $0 <state> [session-id]\" >&2; exit 2; }}\n\
          session=\"${{2:-}}\"\n\
-         exe=\"${{MTTY_CLI:-${{MIAOTTY_CLI:-mtty-cli}}}}\"\n\
          pane=\"${{MTTY_PANE_ID:-${{MIAOTTY_PANE_ID:-}}}}\"\n\
+         # Hooks are global; only report for agents running inside an mtty pane.\n\
+         [ -n \"$pane\" ] || exit 0\n\
+         # Claude Code and codex pass the event as JSON on stdin.\n\
+         if [ \"$session\" = --stdin ]; then\n\
+         \x20 session=$(sed -n 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n 1)\n\
+         fi\n\
+         exe=\"${{MTTY_CLI:-${{MIAOTTY_CLI:-mtty-cli}}}}\"\n\
          command -v \"$exe\" >/dev/null 2>&1 || exit 0\n\
          set -- state {agent} --state \"$state\"\n\
          [ -n \"$session\" ] && set -- \"$@\" --session \"$session\"\n\
@@ -115,7 +122,8 @@ pub fn install(agent: &str) -> std::io::Result<PathBuf> {
     Ok(path)
 }
 
-/// The text to paste into the agent's hook configuration.
+/// The text to paste into the agent's hook configuration: where it goes and
+/// a ready-to-merge configuration that calls the installed script.
 pub fn snippet(agent: &Agent, path: &Path) -> String {
     if agent.auto {
         return format!(
@@ -123,12 +131,71 @@ pub fn snippet(agent: &Agent, path: &Path) -> String {
             agent.name
         );
     }
-    format!(
-        "{}: register `{} <processing|idle|awaiting|error> [session]` via {}.",
-        agent.name,
-        path.display(),
-        agent.hook_via
-    )
+    let script = crate::ssh::shell_quote(&path.display().to_string());
+    match agent.name {
+        "claude" => format!(
+            "Merge into \"hooks\" in ~/.claude/settings.json:\n\n{}",
+            hooks_json(
+                &script,
+                &[
+                    ("SessionStart", "idle"),
+                    ("UserPromptSubmit", "processing"),
+                    ("Notification", "awaiting"),
+                    ("Stop", "idle"),
+                ]
+            )
+        ),
+        "codex" => format!(
+            "Merge into \"hooks\" in ~/.codex/hooks.json, and enable them in \
+             ~/.codex/config.toml with `[features]` `hooks = true`. codex asks you \
+             to trust the new hooks once.\n\n{}",
+            hooks_json(
+                &script,
+                &[
+                    ("SessionStart", "idle"),
+                    ("UserPromptSubmit", "processing"),
+                    ("PermissionRequest", "awaiting"),
+                    ("Stop", "idle"),
+                ]
+            )
+        ),
+        "opencode" => format!(
+            "Save as ~/.config/opencode/plugin/mtty.js:\n\n\
+             export const MttyPlugin = async ({{ $ }}) => {{\n\
+             \x20 const report = (state) => $`{} ${{state}}`.quiet().nothrow()\n\
+             \x20 return {{\n\
+             \x20   event: async ({{ event }}) => {{\n\
+             \x20     const t = event.type\n\
+             \x20     if (t === \"session.idle\") await report(\"idle\")\n\
+             \x20     else if (t === \"session.error\") await report(\"error\")\n\
+             \x20     else if (t.startsWith(\"permission.\")) await report(\"awaiting\")\n\
+             \x20     else if (t === \"session.status\") await report(\"processing\")\n\
+             \x20   }},\n\
+             \x20 }}\n\
+             }}\n",
+            path.display()
+        ),
+        _ => format!(
+            "{}: register `{script} <processing|idle|awaiting|error> [session]` via {}.",
+            agent.name, agent.hook_via
+        ),
+    }
+}
+
+/// A Claude Code / codex style `{"hooks": {Event: [...]}}` block that runs
+/// `script <state> --stdin` for each event.
+fn hooks_json(script: &str, events: &[(&str, &str)]) -> String {
+    let mut hooks = serde_json::Map::new();
+    for (event, state) in events {
+        hooks.insert(
+            (*event).to_string(),
+            serde_json::json!([{ "hooks": [{
+                "type": "command",
+                "command": format!("{script} {state} --stdin"),
+            }]}]),
+        );
+    }
+    serde_json::to_string_pretty(&serde_json::json!({ "hooks": hooks })).unwrap_or_default()
 }
 
 /// Tools that can bind a system-wide hotkey to `mtty --quick`, for
@@ -203,11 +270,95 @@ mod tests {
     }
 
     #[test]
-    fn snippet_names_the_script_and_where_to_wire_it() {
-        let agent = &AGENTS[0];
-        let text = snippet(agent, Path::new("/tmp/claude.sh"));
-        assert!(text.contains("/tmp/claude.sh"));
-        assert!(text.contains("Claude Code"));
+    fn claude_and_codex_snippets_are_mergeable_hook_configs() {
+        for (name, file, awaiting) in [
+            ("claude", "~/.claude/settings.json", "Notification"),
+            ("codex", "~/.codex/hooks.json", "PermissionRequest"),
+        ] {
+            let agent = AGENTS.iter().find(|a| a.name == name).unwrap();
+            let text = snippet(agent, Path::new("/tmp/hook dir/x.sh"));
+            assert!(text.contains(file), "{text}");
+            let json: serde_json::Value =
+                serde_json::from_str(&text[text.find('{').unwrap()..]).unwrap();
+            let command = |event: &str| {
+                json["hooks"][event][0]["hooks"][0]["command"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            assert_eq!(
+                command("UserPromptSubmit"),
+                "'/tmp/hook dir/x.sh' processing --stdin"
+            );
+            assert_eq!(command(awaiting), "'/tmp/hook dir/x.sh' awaiting --stdin");
+            assert_eq!(command("Stop"), "'/tmp/hook dir/x.sh' idle --stdin");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hook_script_reports_session_and_pane_and_never_waits() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("mtty-hook-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let hook = dir.join("codex.sh");
+        std::fs::write(&hook, hook_script("codex")).unwrap();
+        let cli = dir.join("fake-cli");
+        let log = dir.join("calls");
+        std::fs::write(
+            &cli,
+            format!("#!/bin/sh\necho \"$@\" >> '{}'\n", log.display()),
+        )
+        .unwrap();
+        for p in [&hook, &cli] {
+            std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let run = |args: &[&str], pane: Option<&str>, stdin: &str| {
+            let mut cmd = Command::new(&hook);
+            cmd.args(args)
+                .env("MTTY_CLI", &cli)
+                .env_remove("MTTY_PANE_ID")
+                .env_remove("MIAOTTY_PANE_ID")
+                .stdin(std::process::Stdio::piped());
+            if let Some(pane) = pane {
+                cmd.env("MTTY_PANE_ID", pane);
+            }
+            let mut child = cmd.spawn().unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(stdin.as_bytes())
+                .unwrap();
+            assert!(child.wait().unwrap().success());
+        };
+        run(
+            &["awaiting", "--stdin"],
+            Some("pane3"),
+            r#"{"session_id": "abc-123", "x": 1}"#,
+        );
+        // Outside an mtty pane nothing is reported.
+        run(&["idle", "--stdin"], None, r#"{"session_id": "zzz"}"#);
+        // An explicit session never reads stdin (which stays open here).
+        let mut child = Command::new(&hook)
+            .args(["processing", "s9"])
+            .env("MTTY_CLI", &cli)
+            .env("MTTY_PANE_ID", "pane3")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let _keep_stdin_open = child.stdin.take();
+        assert!(child.wait().unwrap().success());
+        let calls = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(
+            calls.lines().collect::<Vec<_>>(),
+            [
+                "state codex --state awaiting --session abc-123 --pane pane3",
+                "state codex --state processing --session s9 --pane pane3",
+            ]
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

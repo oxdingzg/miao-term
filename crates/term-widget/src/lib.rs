@@ -425,6 +425,18 @@ fn ssh_host(target: &str) -> String {
         .unwrap_or_else(|| target.to_string())
 }
 
+/// The palette label for launching an agent.
+fn launch_label(lang: miao_term_ui::i18n::Lang, agent: &str) -> &'static str {
+    use miao_term_ui::i18n::t;
+    match agent {
+        "claude" => t(lang, "Launch claude", "启动 claude"),
+        "codex" => t(lang, "Launch codex", "启动 codex"),
+        "opencode" => t(lang, "Launch opencode", "启动 opencode"),
+        "miao" => t(lang, "Launch miao", "启动 miao"),
+        _ => t(lang, "Launch agent", "启动 agent"),
+    }
+}
+
 /// The split divider under a pointer given in physical pixels, if any.
 fn divider_at(
     handles: Vec<miao_term_ui::layout::Handle>,
@@ -2902,6 +2914,8 @@ impl State {
 #[derive(Clone, Copy)]
 enum Cmd {
     NewTab,
+    /// Launch `integration::AGENTS[i]` in a new tab (B2.1).
+    LaunchAgent(usize),
     Composer,
     OpenQuickly,
     CheckUpdates,
@@ -3022,10 +3036,58 @@ impl State {
             (Cmd::Settings, t(l, "Settings", "设置")),
             (Cmd::Quit, t(l, "Quit", "退出")),
         ]
+        .into_iter()
+        .chain(
+            // Agents found on PATH (the Settings check, refreshed every 5 s).
+            miao_term_ui::integration::AGENTS
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| {
+                    self.agents_detected
+                        .as_ref()
+                        .is_some_and(|(_, found)| found.get(*i).copied().unwrap_or(false))
+                })
+                .map(|(i, a)| (Cmd::LaunchAgent(i), launch_label(l, a.name))),
+        )
+        .collect()
+    }
+
+    /// Scanning PATH is file-system work: refresh it at most every 5 s, not on
+    /// every frame Settings or the palette is open.
+    fn refresh_agents_detected(&mut self) {
+        if self
+            .agents_detected
+            .as_ref()
+            .map_or(true, |(at, _)| at.elapsed() > Duration::from_secs(5))
+        {
+            let found = miao_term_ui::integration::AGENTS
+                .iter()
+                .map(|a| miao_term_ui::integration::detected(a.bin))
+                .collect();
+            self.agents_detected = Some((Instant::now(), found));
+        }
+    }
+
+    /// Start an agent CLI in a new tab in the active pane's directory. The
+    /// pane carries MTTY_PANE_ID, so the agent's hook reports to that tab.
+    fn launch_agent(&mut self, index: usize) {
+        let Some(agent) = miao_term_ui::integration::AGENTS.get(index) else {
+            return;
+        };
+        let cmd = miao_term_ui::integration::launch_command(agent);
+        self.new_tab_in(self.active_cwd_for_new());
+        if let Some(tab) = self.tabs.last_mut() {
+            let active = tab.active.clone();
+            if let Some(pane) = tab.panes.iter_mut().find(|p| p.id == active) {
+                pane.term.write(format!("{cmd}\r").as_bytes());
+            }
+        }
+        self.publish_panes();
     }
 
     fn run_command(&mut self, cmd: Cmd) {
         match cmd {
+            Cmd::LaunchAgent(i) => self.launch_agent(i),
             Cmd::NewTab => self.new_tab_in(self.active_cwd_for_new()),
             Cmd::QuickTerminal => self.toggle_quick_terminal(),
             Cmd::SplitRight => self.split(SplitDir::Right),
@@ -3231,6 +3293,7 @@ impl State {
         if !self.show_palette {
             return;
         }
+        self.refresh_agents_detected();
         let cmds = self.commands();
         let mut query = std::mem::take(&mut self.palette_query);
         let mut chosen: Option<Cmd> = None;
@@ -3321,19 +3384,8 @@ impl State {
         let mut notifications = self.notifications;
         let mut prevent_sleep = self.prevent_sleep;
         let mut install_agent: Option<&'static str> = None;
-        // Scanning PATH is file-system work: refresh it at most every 5 s,
-        // not on every frame the window is open.
-        if self
-            .agents_detected
-            .as_ref()
-            .map_or(true, |(at, _)| at.elapsed() > Duration::from_secs(5))
-        {
-            let found = miao_term_ui::integration::AGENTS
-                .iter()
-                .map(|a| miao_term_ui::integration::detected(a.bin))
-                .collect();
-            self.agents_detected = Some((Instant::now(), found));
-        }
+        let mut launch: Option<usize> = None;
+        self.refresh_agents_detected();
         let detected = self
             .agents_detected
             .as_ref()
@@ -3408,10 +3460,25 @@ impl State {
                             "Agent integrations",
                             "Agent 集成",
                         ));
-                        for (a, found) in miao_term_ui::integration::AGENTS.iter().zip(&detected) {
+                        for (i, (a, found)) in miao_term_ui::integration::AGENTS
+                            .iter()
+                            .zip(&detected)
+                            .enumerate()
+                        {
                             ui.horizontal(|ui| {
                                 ui.label(if *found { "\u{25cf}" } else { "\u{25cb}" });
                                 ui.label(a.name);
+                                if ui
+                                    .add_enabled(
+                                        *found,
+                                        egui::Button::new(miao_term_ui::i18n::t(
+                                            self.lang, "Launch", "启动",
+                                        )),
+                                    )
+                                    .clicked()
+                                {
+                                    launch = Some(i);
+                                }
                                 if ui
                                     .button(miao_term_ui::i18n::t(
                                         self.lang,
@@ -3424,11 +3491,19 @@ impl State {
                                 }
                             });
                         }
-                        if let Some(msg) = &self.integration_msg {
-                            ui.label(
-                                egui::RichText::new(msg)
-                                    .size(11.0)
-                                    .color(egui::Color32::from_gray(150)),
+                        if let Some(msg) = self.integration_msg.as_mut() {
+                            if ui
+                                .button(miao_term_ui::i18n::t(self.lang, "Copy", "复制"))
+                                .clicked()
+                            {
+                                ui.ctx().copy_text(msg.clone());
+                            }
+                            // Selectable, monospace: the snippet is meant to be pasted.
+                            ui.add(
+                                egui::TextEdit::multiline(msg)
+                                    .font(egui::TextStyle::Monospace)
+                                    .desired_rows(6)
+                                    .desired_width(f32::INFINITY),
                             );
                         }
                         ui.separator();
@@ -3460,6 +3535,9 @@ impl State {
         }
         self.opacity = opacity;
         self.theme.cursor = cursor;
+        if let Some(i) = launch {
+            self.launch_agent(i);
+        }
         if let Some(name) = install_agent {
             let msg = match miao_term_ui::integration::install(name) {
                 Ok(path) => miao_term_ui::integration::AGENTS
@@ -3467,7 +3545,10 @@ impl State {
                     .find(|a| a.name == name)
                     .map(|a| miao_term_ui::integration::snippet(a, &path))
                     .unwrap_or_default(),
-                Err(e) => format!("install failed: {e}"),
+                Err(e) => format!(
+                    "{}: {e}",
+                    miao_term_ui::i18n::t(self.lang, "Install failed", "安装失败")
+                ),
             };
             self.integration_msg = Some(msg);
         }
