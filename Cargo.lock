@@ -2178,6 +2178,7 @@ dependencies = [
  "miao-term-ui",
  "miao-term-widget",
  "serde_json",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

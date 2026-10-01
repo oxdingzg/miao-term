@@ -8839,6 +8839,19 @@ impl ApplicationHandler<HostEvent> for Host {
             }
             return;
         }
+        // winit replays keys still held when the window gains focus as
+        // synthetic presses. They were never typed here: the Y of the Quick
+        // Terminal hotkey (Ctrl+Alt+Y) landed in the new pane as a "y".
+        if let WindowEvent::KeyboardInput {
+            event,
+            is_synthetic: true,
+            ..
+        } = &event
+        {
+            if event.state == ElementState::Pressed {
+                return;
+            }
+        }
         let mut ui_consumed = false;
         if let WindowEvent::KeyboardInput { event, .. } = &event {
             if event.state == ElementState::Pressed
