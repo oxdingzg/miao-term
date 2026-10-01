@@ -179,6 +179,9 @@ v0.0.4：[运行 36794301755](https://github.com/oxdingzg/miao-term/actions/runs
 的四个构建、AppImage/MSI 打包、包检查、汇总与分离签名验证全部通过。
 每个新候选版本仍须对其自身 commit 重跑完整 CI 和四 runner 打包演练。
 
+v0.0.6 的改动(mtty 更名、代理工作流、主机与 SFTP/FTP、经校验的更新,以及在真实 Linux 与 Windows 桌面上
+发现并修复的问题)见 [v0.0.6 发布说明](releases/v0.0.6.zh-CN.md)。
+
 v0.0.5 的改动与资源约束见[发布说明](releases/v0.0.5.zh-CN.md)和
 [性能报告](PERFORMANCE.zh-CN.md)。本地验证包含 workspace 测试、严格 clippy、release
 性能与分配门禁、强制 GPU 字形缓存测试及 macOS 桌面冒烟。已发布 commit 和安装包哈希
