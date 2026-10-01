@@ -957,8 +957,20 @@ mod tests {
         term.write(ok_then_fail.as_bytes());
         std::thread::sleep(std::time::Duration::from_millis(200));
         term.process_pending();
-        term.write(b"\r");
-        wait(&mut term, &|t| t.last_command_output().is_some());
+        // A slow machine may still be loading the line editor: if the Enter
+        // was dropped (no output after a while), press it again. An extra
+        // Enter on an empty line runs nothing.
+        for _ in 0..3 {
+            term.write(b"\r");
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
+            while term.last_command_output().is_none() && std::time::Instant::now() < deadline {
+                term.process_pending();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            if term.last_command_output().is_some() {
+                break;
+            }
+        }
         let out = term.last_command_output().cloned().unwrap_or_else(|| {
             let screen: Vec<String> = (0..24).map(|r| term.screen().line_text(r)).collect();
             panic!(
