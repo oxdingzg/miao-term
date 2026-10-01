@@ -245,6 +245,9 @@ mod tests {
             &["config", "user.email", "t@example.com"],
             &["config", "user.name", "t"],
             &["config", "commit.gpgsign", "false"],
+            // Windows runners default to autocrlf, which would check the
+            // merged file out with CRLF line endings.
+            &["config", "core.autocrlf", "false"],
         ] {
             git(&dir, args).unwrap();
         }
