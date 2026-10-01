@@ -171,7 +171,7 @@
 - [x] **B0.2 工作区正确性**(只读模式下 MTP `pane.send/run` 返回 `read_only` 错误;URL 打开新标签运行命令属用户显式操作,不拦截;新分屏 cwd 由单测覆盖,MTP 无分屏接口):新分屏/标签继承目录;复制标签保留标记与分组;关闭其他/下方可重开;
   只读模式拦截 MTP/URL 输入;Recipes 名称校验与读写失败提示;GPU 初始化失败给出错误而非 panic。
   验收:对应纯函数单测 + 冒烟检查新分屏 cwd。
-- [ ] **B0.3 系统集成**:macOS URL Apple Event(浏览器/Finder 打开链接);恢复的 SSH 标签显示
+- [x] **B0.3 系统集成**(`0417c1b` 及后续;`open -a dist/mtty.app mtty://quick` 冷启动与运行中均实测生效;另修:复制 SSH 标签会重新连接;IME 候选窗定位待桌面人工确认):macOS URL Apple Event(浏览器/Finder 打开链接);恢复的 SSH 标签显示
   "已断开 — 回车重连"并可重连;IME 候选窗定位到光标。
   验收:`open mtty://quick` 在已安装应用上生效;重连有单测;IME 需桌面人工核对 **[所有者]**。
 - [ ] **B0.4 View 规则与入口**:规则图标/徽章生效,支持按命令/host 匹配,`views.json` 热加载;

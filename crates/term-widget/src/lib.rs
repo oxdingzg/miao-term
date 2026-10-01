@@ -17,7 +17,7 @@ use miao_term_render::{ImageInstance, ImageRenderer, Quad, QuadRenderer, Span, T
 use miao_term_ui::layout::{Layout, Rect, SplitDir};
 use miao_term_ui::{build_rows, chrome, input, theme::Theme, Selection};
 use winit::application::ApplicationHandler;
-use winit::dpi::LogicalSize;
+use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::event::{ElementState, KeyEvent, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 
@@ -562,6 +562,8 @@ struct State {
     cursor: (f64, f64),
     /// Inline IME composition text (not yet committed to the shell).
     preedit: String,
+    /// Where the IME candidate window was last anchored (logical points).
+    ime_area: Option<(i32, i32)>,
     show_sidebar: bool,
     show_details: bool,
     renaming: Option<usize>,
@@ -2250,6 +2252,25 @@ impl State {
                     );
                 }
             }
+        }
+        // Anchor the OS candidate window at the terminal cursor. A focused text
+        // field (editor, Composer, dialogs) reports its own caret through egui.
+        if !ctx.wants_keyboard_input() {
+            if let Some((inner, (row, col))) = self.active_cursor() {
+                let area = (
+                    (inner.x + col as f32 * self.cw).round() as i32,
+                    (inner.y + row as f32 * self.ch).round() as i32,
+                );
+                if self.ime_area != Some(area) {
+                    self.ime_area = Some(area);
+                    self.window.set_ime_cursor_area(
+                        LogicalPosition::new(area.0, area.1),
+                        LogicalSize::new(self.cw, self.ch),
+                    );
+                }
+            }
+        } else {
+            self.ime_area = None;
         }
         if !self.preedit.is_empty() {
             if let Some((inner, (row, col))) = self.active_cursor() {
@@ -5039,6 +5060,7 @@ impl ApplicationHandler<HostEvent> for Host {
             cursor: (0.0, 0.0),
             // `MTTY_PREEDIT` seeds the IME overlay for captures/QA.
             preedit: miao_term_config::env("PREEDIT").unwrap_or_default(),
+            ime_area: None,
             show_sidebar: true,
             show_details: true,
             renaming: None,
