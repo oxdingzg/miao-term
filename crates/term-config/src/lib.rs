@@ -9,6 +9,7 @@ use serde::Deserialize;
 
 pub mod hosts;
 pub mod snippets;
+pub mod sync;
 pub mod view;
 
 /// The application's directory name under the XDG bases (ADR 0032).
@@ -213,6 +214,8 @@ struct RawConfig {
     quick_terminal_hotkey: Option<String>,
     #[serde(rename = "update-pubkey")]
     update_pubkey: Option<String>,
+    #[serde(rename = "sync-dir")]
+    sync_dir: Option<String>,
     theme: Option<String>,
     colors: Option<RawColors>,
 }
@@ -311,6 +314,9 @@ pub struct Config {
     pub quick_terminal_hotkey: Option<String>,
     /// minisign public key used to verify downloaded updates (see ADR 0023).
     pub update_pubkey: Option<String>,
+    /// The folder hosts and snippets sync through, encrypted (ADR 0033);
+    /// `None` (the default, or an empty value) leaves sync off.
+    pub sync_dir: Option<PathBuf>,
     pub theme: Theme,
     /// The named theme the colours started from (`theme = "…"`), if any.
     pub theme_name: Option<String>,
@@ -373,6 +379,7 @@ impl Default for Config {
             remote_listen: None,
             quick_terminal_hotkey: None,
             update_pubkey: None,
+            sync_dir: None,
             theme_name: None,
             imported_from: None,
             theme: Theme::default(),
@@ -434,6 +441,14 @@ fn ghostty_config_path() -> Option<PathBuf> {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
     Some(base.join("ghostty").join("config"))
+}
+
+/// `~/x` relative to the home directory; other paths unchanged.
+pub fn expand_home(path: &str) -> PathBuf {
+    match (path.strip_prefix("~/"), std::env::var_os("HOME")) {
+        (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
+        _ => PathBuf::from(path),
+    }
 }
 
 /// Replace or add top-level `key = value` assignments in config TOML text.
@@ -758,6 +773,12 @@ impl Config {
             let hotkey = hotkey.trim();
             if !hotkey.is_empty() {
                 cfg.quick_terminal_hotkey = Some(hotkey.to_string());
+            }
+        }
+        if let Some(dir) = raw.sync_dir {
+            let dir = dir.trim();
+            if !dir.is_empty() {
+                cfg.sync_dir = Some(expand_home(dir));
             }
         }
         if let Some(key) = raw.update_pubkey {
