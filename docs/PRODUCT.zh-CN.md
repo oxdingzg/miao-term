@@ -128,7 +128,7 @@
 | zsh shell 集成(OSC 7、命令历史) | 可用 | bash / fish / PowerShell 未覆盖 |
 | URL scheme 与单实例转发 | 部分 | 命令行传入可用;macOS 浏览器/Finder 发来的 URL 事件未处理 |
 | MTP 控制面与 `mtty-cli` | 可用 | 真实窗口冒烟覆盖 |
-| 版本检查 | 可用 | 只检查,不自动安装;`update-pubkey` 未使用 |
+| 版本检查与更新 | 可用 | 下载后程序内校验 SHA-256 与 minisign 签名(必需),macOS 安装并重启已端到端验证;AppImage/Windows 仅单元测试 |
 | 中英界面 | 部分 | details 面板部分行仍是英文 |
 
 ## 4. 路线图与执行批次
@@ -207,7 +207,7 @@
 
 - [ ] **B4.1** Windows/Linux 真实桌面验收(IME、热键、拖放、菜单)**[所有者 + 真机]**。
 - [ ] **B4.2** Apple 公证、Windows MSI 签名 **[所有者 + 凭证]**。
-- [ ] **B4.3** 自动更新:下载、`update-pubkey` 签名校验、替换安装。
+- [x] **B4.3** 自动更新:下载、`update-pubkey` 签名校验、替换安装。(内置发布公钥;Mac mini 上用打包 app + 测试密钥签名的发布包验证安装并重启,并验证篡改的包因校验和或签名被拒;已发布的 v0.0.5 包用仓库公钥验签通过。AppImage 与 Windows 辅助脚本尚未在真实桌面运行。)
 - [ ] **B4.4** bash / fish / PowerShell 的 shell 集成。
 - [ ] **B4.5** 可选的端到端加密同步,默认关闭。
 

@@ -143,9 +143,14 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
   for opencode. The user's agent config is never edited for them, and hooks
   only report for agents running inside an mtty pane. `miao` reports its state
   from a built-in integration, so it needs no hook wiring.
-- **Updates**: check the configured version manifest. Install published packages
-  using the platform installer; automatic download/install UI from the former
-  eframe application is not part of the unified native app.
+- **Updates**: *Check for Updates* reads the version manifest; *Download
+  Update* fetches this platform's package and checks its SHA-256 and its
+  minisign signature in process (against the release key built into mtty, or
+  `update-pubkey`); an unsigned or mismatching download is deleted and never
+  installed. *Install and Relaunch* (or the palette's *Update and Relaunch*,
+  all steps at once) replaces the macOS app with a rollback if the swap fails,
+  a running AppImage, or runs the Windows MSI; deb and tarball installs open
+  the verified download for the package manager.
 - **Host library**: hosts saved in `~/.config/mtty/hosts.toml` (name, address,
   user, port, group, tags, jump host) are listed in the sidebar and in Open
   Quickly; *Hosts…* searches, adds, deletes (confirmed) and imports the concrete
@@ -425,8 +430,9 @@ Still open:
   CI via Mesa software Vulkan (lavapipe) and Windows is driven over MTP on real
   hardware; a real Linux desktop session, the Wayland portal hotkey and the
   Windows IME/GUI paths still need an interactive machine.
-- **Update install**: automatic self-replacement is future work for the native
-  application; current upgrades use the published platform installers.
+- **Update install**: the macOS swap is checked end to end with a packaged app
+  and a test-signed release (and tampered packages are refused); the AppImage and
+  Windows helpers are unit-tested, not yet run on those desktops.
 - **Single native application**: mtty replaces the former dual-host release;
   see [APP-IDENTITY.md](docs/APP-IDENTITY.md).
 
