@@ -1,0 +1,29 @@
+# A Windows build of mtty with line-table debug info and its PDB, for
+# diagnosing a hang or crash on a real Windows machine (attach a debugger or
+# symbolize a minidump). Manual only; nothing is published.
+name: windows-debug-build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build with debug info
+        env:
+          CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
+        run: cargo build --release -p mtty-app -p mtty-cli
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mtty-windows-debug
+          path: |
+            target/release/mtty.exe
+            target/release/mtty.pdb
+            target/release/mtty-cli.exe
