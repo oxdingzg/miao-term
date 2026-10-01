@@ -11008,10 +11008,16 @@ mod tests {
     #[test]
     fn restored_ssh_panes_reconnect_on_enter_only() {
         let mut pending = Some("ssh -t 'work'".to_string());
+        // Typed for the local shell: " clear; …" for sh, "cls & …" for cmd.
+        let typed = miao_term_ui::ssh::Syntax::local().typed("ssh -t 'work'");
+        assert!(typed.ends_with("ssh -t 'work'\r"), "{typed}");
         assert_eq!(
             reconnect_input(&mut pending, b"\r").as_deref(),
-            Some(&b" clear; ssh -t 'work'\r"[..])
+            Some(typed.as_bytes())
         );
+        if cfg!(unix) {
+            assert_eq!(typed, " clear; ssh -t 'work'\r");
+        }
         assert!(pending.is_none(), "reconnect is offered once");
         let mut pending = Some("ssh -t 'work'".to_string());
         assert!(reconnect_input(&mut pending, b"l").is_none());
