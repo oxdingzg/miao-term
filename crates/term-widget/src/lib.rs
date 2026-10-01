@@ -8716,7 +8716,14 @@ impl ApplicationHandler<HostEvent> for Host {
                 return;
             }
         }
-        if !matches!(event, WindowEvent::RedrawRequested) {
+        // Tab (and Shift+Tab) in the terminal is the shell's completion. egui
+        // also treats it as focus navigation: with nothing focused it focuses
+        // the first focusable widget (the File menu), after which
+        // `wants_keyboard_input` stays true and every key went to that widget
+        // instead of the shell, until a click elsewhere. Tab reaches egui only
+        // while one of its widgets already has the focus (dialog fields).
+        let terminal_tab = keeps_tab_from_egui(&event, state.egui_ctx.wants_keyboard_input());
+        if !matches!(event, WindowEvent::RedrawRequested) && !terminal_tab {
             let resp = state.egui_state.on_window_event(&state.window, &event);
             // Just outside a side panel egui does not claim the pointer, but a
             // press on its resize edge must drag the edge, not select text.
@@ -9219,6 +9226,17 @@ fn find_in_cells(cells: &[(u16, char, u16)], query: &str) -> Vec<(u16, u16)> {
         }
     }
     out
+}
+
+/// Whether a key event is a Tab meant for the terminal, which egui must not
+/// see (it would move its focus away from the terminal).
+fn keeps_tab_from_egui(event: &WindowEvent, egui_has_focus: bool) -> bool {
+    !egui_has_focus
+        && matches!(
+            event,
+            WindowEvent::KeyboardInput { event, .. }
+                if matches!(event.logical_key, Key::Named(NamedKey::Tab))
+        )
 }
 
 fn terminal_paste_shortcut(
