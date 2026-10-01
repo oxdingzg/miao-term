@@ -63,8 +63,8 @@
 - **命令面板**(`⌘K`)与 **Open Quickly**(`⌘⇧O`):覆盖标签、agent、当前目录的文件与子目录,以及最近文件。
 - 右侧 details 面板含分页:**Info / Agent / Outline / Git / Files / Ports / Queue**
   (git 状态、目录列表、监听端口、提示队列)。
-- **Composer**(`⌘⇧E`)与**提示队列**(在 Queue 分页手动发送;agent 空闲时自动投递在路线图中);
-  由 agent 状态驱动的**通知**与**防休眠**。
+- **Composer**(`⌘⇧E`)与**提示队列**:队列项绑定入队时的 pane,该 pane 的 agent 每次转为空闲时
+  投递一条(重启后保留;"立即发送"会将其移出队列);由 agent 状态驱动的**通知**与**防休眠**。
 - **查看器/编辑器**:只读预览带行号,编辑态带行号栏与**可选的极简 vim 模式**(`editor-vim`)。
   保存失败会提示且保持"已修改";有未保存修改时需再次关闭才会丢弃。CommonMark 渲染
   (`egui_commonmark`):标题、列表、引用、表格、代码、链接、远程图片,外加 `graph`/`flowchart`、`sequenceDiagram`、`stateDiagram`、`classDiagram`、

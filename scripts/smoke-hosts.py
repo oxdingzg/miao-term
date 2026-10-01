@@ -48,6 +48,13 @@ def smoke(output, bundle=None):
             "layout": {"dir": "right", "ratio": 0.35, "a": {"leaf": "old-a"}, "b": {"leaf": "old-b"}},
         }],
     }))
+    # A queue saved for the restored pane "old-b" (B2.2): its id is remapped
+    # on restore and the prompts are typed in when that pane's agent turns idle.
+    queue_proof = fixture / "queue-proof.txt"
+    (legacy_config / "queue.json").write_text(json.dumps({"items": [
+        {"text": f"printf Q1 >> {shlex.quote(str(queue_proof))}", "pane": "old-b"},
+        {"text": f"printf Q2 >> {shlex.quote(str(queue_proof))}", "pane": "old-b"},
+    ]}))
     socket = case / "mtty.sock"
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(("MTTY_", "MIAOTTY_"))}
@@ -138,6 +145,33 @@ def smoke(output, bundle=None):
             eventually(lambda: '"awaiting"' in json.dumps(cli("state", "list")))
             assert cli("ping", via=case / "miaotty.sock"), "former socket path is not linked"
             checks.append("MTTY_*/MIAOTTY_* pane env, pre-rename hook script, former socket path")
+
+            target = panes[1]["id"]
+            def agent(state):
+                cli("state", "codex", "--pane", target, "--state", state)
+                time.sleep(0.4)
+            def delivered():
+                return queue_proof.read_text() if queue_proof.exists() else ""
+            agent("processing")
+            assert delivered() == "", "nothing is delivered while the agent works"
+            agent("idle")
+            try:
+                eventually(lambda: delivered() == "Q1")
+            except AssertionError:
+                dbg = fixture / "queue-debug.txt"
+                cli("pane", "run", "--pane", target, "--data",
+                    f"(od -c {shlex.quote(str(queue_proof))}; echo; fc -l -5 2>&1) > {shlex.quote(str(dbg))}")
+                time.sleep(1.5)
+                raise AssertionError(f"queue not delivered; state {cli('state', 'list')}; "
+                                     f"debug: {dbg.read_text() if dbg.exists() else 'none'}")
+            agent("idle")
+            time.sleep(0.8)
+            assert delivered() == "Q1", "a repeated idle must not deliver again"
+            # Back to back, as a fast agent reply does: both must be observed.
+            cli("state", "codex", "--pane", target, "--state", "processing")
+            cli("state", "codex", "--pane", target, "--state", "idle")
+            eventually(lambda: delivered() == "Q1Q2")
+            checks.append("prompt queue: remapped target, one prompt per transition to idle")
 
             cli("pane", "close", "--pane", panes[1]["id"])
             eventually(lambda: len(cli("pane", "list")["panes"]) == 1)

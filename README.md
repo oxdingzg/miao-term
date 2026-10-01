@@ -78,9 +78,10 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
   files and directories in the current folder, and recent files.
 - A right-hand details panel with tabs: **Info, Agent, Outline, Git, Files,
   Ports, Queue** (git status, directory listing, listening ports, prompt queue).
-- **Composer** (`⌘⇧E`) and a **prompt queue** (sent from the Queue tab; automatic
-  delivery when an agent turns idle is on the roadmap); **notifications** and a
-  **sleep guard** driven by agent state.
+- **Composer** (`⌘⇧E`) and a **prompt queue**: a queued prompt targets the pane
+  it was queued from and is typed in when that pane's agent turns idle, one per
+  transition (it survives restarts; Send now takes it out of the queue);
+  **notifications** and a **sleep guard** driven by agent state.
 - **Reader/editor**: read-only preview with line numbers, edit mode with a
   gutter and an opt-in minimal vim mode (`editor-vim`). A failed save is shown
   and keeps the buffer modified; closing unsaved changes asks for a second
