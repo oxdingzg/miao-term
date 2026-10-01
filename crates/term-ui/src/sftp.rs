@@ -54,22 +54,11 @@ pub fn parent(dir: &str) -> String {
 
 impl Remote {
     fn args(&self) -> Vec<String> {
-        let mut out: Vec<String> = [
-            "-q",
-            "-b",
-            "-",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "ControlMaster=auto",
-            "-o",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-        out.push(format!("ControlPath={}", crate::ssh::control_path()));
-        out.push("-o".into());
-        out.push("ControlPersist=60s".into());
+        let mut out: Vec<String> = ["-q", "-b", "-", "-o", "BatchMode=yes"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        out.extend(crate::ssh::reuse_options());
         // sftp spells the port flag -P; -J is the same.
         let mut opts = self.options.iter();
         while let Some(flag) = opts.next() {

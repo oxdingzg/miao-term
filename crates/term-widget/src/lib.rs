@@ -343,7 +343,7 @@ fn reconnect_input(pending: &mut Option<String>, bytes: &[u8]) -> Option<Vec<u8>
 /// of history (ignorespace), and `clear` wipes the echoed command line, so the
 /// pane starts with the remote session.
 fn typed_ssh(cmd: &str) -> String {
-    format!(" clear; {cmd}\r")
+    miao_term_ui::ssh::Syntax::local().typed(cmd)
 }
 
 struct Tab {
@@ -778,15 +778,30 @@ struct SnippetsView {
 /// An ssh command that runs `command` on a host in a terminal tab (its
 /// output stays visible; the tab returns to the local shell afterwards).
 fn remote_run_command(destination: &str, options: &[String], command: &str) -> String {
+    remote_run_command_with(
+        miao_term_ui::ssh::Syntax::local(),
+        destination,
+        options,
+        command,
+    )
+}
+
+/// The same for a given local shell syntax (tests pin POSIX).
+fn remote_run_command_with(
+    syn: miao_term_ui::ssh::Syntax,
+    destination: &str,
+    options: &[String],
+    command: &str,
+) -> String {
     let mut cmd = String::from("ssh -t");
     for option in options {
         cmd.push(' ');
-        cmd.push_str(&shell_quote(option));
+        cmd.push_str(&syn.quote(option));
     }
     cmd.push(' ');
-    cmd.push_str(&shell_quote(destination));
+    cmd.push_str(&syn.quote(destination));
     cmd.push(' ');
-    cmd.push_str(&shell_quote(command));
+    cmd.push_str(&syn.quote(command));
     cmd
 }
 
@@ -5449,7 +5464,7 @@ impl State {
                 }
             }
             // Drop onto the terminal: paste the shell-quoted path.
-            self.paste(&format!("{} ", shell_quote(&path.to_string_lossy())));
+            self.paste(&format!("{} ", local_path_arg(&path.to_string_lossy())));
         } else {
             self.open_editor(path);
         }
@@ -6817,6 +6832,7 @@ impl State {
             });
         }
         if let Some(host) = copy_key.and_then(|i| self.host_book.hosts.get(i).cloned()) {
+            let syn = miao_term_ui::ssh::Syntax::local();
             let mut cmd = String::from("ssh-copy-id");
             for (flag, value) in host
                 .ssh_options()
@@ -6824,16 +6840,15 @@ impl State {
                 .filter_map(|c| Some((c.first()?, c.get(1)?)))
             {
                 match flag.as_str() {
-                    "-p" => cmd.push_str(&format!(" -p {}", miao_term_ui::ssh::shell_quote(value))),
-                    "-J" => cmd.push_str(&format!(
-                        " -o {}",
-                        miao_term_ui::ssh::shell_quote(&format!("ProxyJump={value}"))
-                    )),
+                    "-p" => cmd.push_str(&format!(" -p {}", syn.quote(value))),
+                    "-J" => {
+                        cmd.push_str(&format!(" -o {}", syn.quote(&format!("ProxyJump={value}"))))
+                    }
                     _ => {}
                 }
             }
             cmd.push(' ');
-            cmd.push_str(&miao_term_ui::ssh::shell_quote(&host.destination()));
+            cmd.push_str(&syn.quote(&host.destination()));
             self.run_in_new_tab(&format!("ssh-copy-id {}", host.name), &cmd);
         }
         if new_key {
@@ -8199,6 +8214,31 @@ fn shell_escape_text(s: &str) -> String {
 
 /// Quote a path for the shell (single quotes when it contains anything
 /// unusual), so a dropped file can be pasted into the terminal.
+/// A local path as one argument for the pane's shell. Windows shells (cmd,
+/// PowerShell) take double quotes, not POSIX single quotes; a dropped path
+/// with a space was split into words there.
+fn local_path_arg(path: &str) -> String {
+    if cfg!(windows) {
+        windows_path_arg(path)
+    } else {
+        shell_quote(path)
+    }
+}
+
+/// `path` for cmd.exe and PowerShell: bare when it has no space or special
+/// character, otherwise in double quotes (a Windows path cannot contain `"`).
+fn windows_path_arg(path: &str) -> String {
+    let plain = !path.is_empty()
+        && !path
+            .chars()
+            .any(|c| c.is_whitespace() || "&()[]{}^=;!'+,`~$%@#".contains(c));
+    if plain {
+        path.to_string()
+    } else {
+        format!("\"{path}\"")
+    }
+}
+
 fn shell_quote(s: &str) -> String {
     if s.is_empty() {
         return "''".to_string();
@@ -10908,7 +10948,12 @@ mod tests {
     #[test]
     fn snippets_run_on_hosts_through_one_quoted_ssh_command() {
         let command = "df -h | grep '/dev' && echo \"$HOME\"";
-        let cmd = remote_run_command("deploy@203.0.113.5", &["-p".into(), "2222".into()], command);
+        let cmd = super::remote_run_command_with(
+            miao_term_ui::ssh::Syntax::Posix,
+            "deploy@203.0.113.5",
+            &["-p".into(), "2222".into()],
+            command,
+        );
         let args = cmd.strip_prefix("ssh -t ").unwrap();
         // The shell must split it back into exactly these arguments.
         let out = std::process::Command::new("sh")
@@ -11125,6 +11170,12 @@ mod tests {
 
     #[test]
     fn shell_quoting() {
+        assert_eq!(super::windows_path_arg(r"C:\work\a.txt"), r"C:\work\a.txt");
+        assert_eq!(
+            super::windows_path_arg(r"C:\mttyacc\drop\a file 中文.txt"),
+            r#""C:\mttyacc\drop\a file 中文.txt""#
+        );
+        assert_eq!(super::windows_path_arg(r"C:\a&b"), r#""C:\a&b""#);
         assert_eq!(super::shell_quote("/tmp/a.txt"), "/tmp/a.txt");
         assert_eq!(super::shell_quote("/a b/c"), "'/a b/c'");
         assert_eq!(super::shell_quote("it's"), "'it'\\''s'");

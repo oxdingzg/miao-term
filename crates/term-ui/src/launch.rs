@@ -136,7 +136,7 @@ pub fn command_for(arg: &str) -> Option<String> {
         "ssh" => ssh_command(rest),
         "x-man-page" => {
             let cmd = rest.split(['/', '?']).next().filter(|s| !s.is_empty())?;
-            Some(format!("man {}", crate::ssh::shell_quote(cmd)))
+            Some(format!("man {}", crate::ssh::Syntax::local().quote(cmd)))
         }
         _ => None,
     }
@@ -271,13 +271,14 @@ mod tests {
     fn ssh_variants() {
         let cmd = command_for("ssh://user@host:2222/some/path").unwrap();
         assert!(cmd.starts_with("ssh -t "));
-        assert!(cmd.contains("ControlMaster=auto"));
-        assert!(cmd.contains(" -p 2222 "));
-        assert!(cmd.contains("'user@host'"));
-        assert!(command_for("ssh://host").unwrap().contains("'host'"));
+        assert_eq!(cmd.contains("ControlMaster=auto"), !cfg!(windows));
+        let q = |s: &str| crate::ssh::Syntax::local().quote(s);
+        assert!(cmd.contains(&format!(" -p {} ", q("2222"))), "{cmd}");
+        assert!(cmd.contains(&q("user@host")), "{cmd}");
+        assert!(command_for("ssh://host").unwrap().contains(&q("host")));
         assert!(command_for("ssh://[::1]:2200")
             .unwrap()
-            .contains(" -p 2200 "));
+            .contains(&format!(" -p {} ", q("2200"))));
         assert!(command_for("ssh://").is_none());
     }
 

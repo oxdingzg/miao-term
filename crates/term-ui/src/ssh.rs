@@ -4,6 +4,122 @@
 
 use std::process::Command;
 
+/// How the pane's local shell reads a typed command line. ssh commands are
+/// typed into the pane's shell, so their arguments are quoted for it: POSIX
+/// shells take single quotes; cmd.exe neither knows single quotes nor `;` and
+/// `clear`, and PowerShell has its own rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Syntax {
+    Posix,
+    Cmd,
+    PowerShell,
+}
+
+impl Syntax {
+    /// The syntax of a shell program, from its file name.
+    pub fn of_shell(path: &str) -> Self {
+        let base = path
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(path)
+            .to_ascii_lowercase();
+        let base = base.strip_suffix(".exe").unwrap_or(&base);
+        match base {
+            "cmd" => Syntax::Cmd,
+            "pwsh" | "powershell" => Syntax::PowerShell,
+            _ => Syntax::Posix,
+        }
+    }
+
+    /// The syntax of the shell new panes run (term-core's default shell:
+    /// `COMSPEC` on Windows, else a POSIX `$SHELL`).
+    pub fn local() -> Self {
+        if cfg!(windows) {
+            Self::of_shell(&std::env::var("COMSPEC").unwrap_or_else(|_| "powershell.exe".into()))
+        } else {
+            Syntax::Posix
+        }
+    }
+
+    /// One argument for this shell.
+    pub fn quote(self, s: &str) -> String {
+        match self {
+            Syntax::Posix => shell_quote(s),
+            Syntax::PowerShell => {
+                let plain = !s.is_empty()
+                    && s.chars()
+                        .all(|c| c.is_ascii_alphanumeric() || "-_./:=+,".contains(c));
+                if plain {
+                    s.to_string()
+                } else {
+                    format!("'{}'", s.replace('\'', "''"))
+                }
+            }
+            Syntax::Cmd => {
+                let plain = !s.is_empty()
+                    && !s
+                        .chars()
+                        .any(|c| c.is_whitespace() || "\"&|<>^()%!,;=".contains(c));
+                if plain {
+                    return s.to_string();
+                }
+                // The MSVCRT rules the target program parses with: backslashes
+                // are literal unless they precede a quote.
+                let mut out = String::from("\"");
+                let mut slashes = 0;
+                for c in s.chars() {
+                    match c {
+                        '\\' => slashes += 1,
+                        '"' => {
+                            out.push_str(&"\\".repeat(slashes * 2 + 1));
+                            out.push('"');
+                            slashes = 0;
+                            continue;
+                        }
+                        _ => {
+                            out.push_str(&"\\".repeat(slashes));
+                            slashes = 0;
+                            out.push(c);
+                            continue;
+                        }
+                    }
+                }
+                out.push_str(&"\\".repeat(slashes * 2));
+                out.push('"');
+                out
+            }
+        }
+    }
+
+    /// `cmd` as typed into a pane: the screen is cleared first so the pane
+    /// starts with the remote session (POSIX: a leading space also keeps it
+    /// out of history).
+    pub fn typed(self, cmd: &str) -> String {
+        match self {
+            Syntax::Posix => format!(" clear; {cmd}\r"),
+            Syntax::Cmd => format!("cls & {cmd}\r"),
+            Syntax::PowerShell => format!("clear; {cmd}\r"),
+        }
+    }
+}
+
+/// ssh's shared-connection options. Windows' OpenSSH has no ControlMaster
+/// (it needs Unix sockets), so none there.
+pub(crate) fn reuse_options() -> Vec<String> {
+    if cfg!(windows) {
+        return Vec::new();
+    }
+    [
+        "-o".to_string(),
+        "ControlMaster=auto".to_string(),
+        "-o".to_string(),
+        format!("ControlPath={}", control_path()),
+        "-o".to_string(),
+        "ControlPersist=60s".to_string(),
+    ]
+    .into()
+}
+
 /// A user-typed target: `[user@]host[:port]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Target {
@@ -94,20 +210,30 @@ pub fn session_command(input: &str) -> Option<(String, String)> {
 /// The command for a saved host (B3.1): connection reuse, the host's own
 /// options (`-p`, `-J`), the destination and the terminfo bootstrap.
 pub fn host_command(destination: &str, options: &[String]) -> String {
+    host_command_with(
+        Syntax::local(),
+        destination,
+        options,
+        &bootstrap("xterm-256color"),
+    )
+}
+
+fn host_command_with(syn: Syntax, destination: &str, options: &[String], boot: &str) -> String {
     let mut cmd = String::from("ssh -t");
-    cmd.push_str(&format!(
-        " -o ControlMaster=auto -o ControlPath={}",
-        control_path()
-    ));
-    cmd.push_str(" -o ControlPersist=60s");
-    for option in options {
+    for arg in reuse_options().iter().chain(options) {
         cmd.push(' ');
-        cmd.push_str(&shell_quote(option));
+        cmd.push_str(
+            &if arg.contains('%') || arg.starts_with('-') && arg.len() == 2 {
+                arg.clone()
+            } else {
+                syn.quote(arg)
+            },
+        );
     }
     cmd.push(' ');
-    cmd.push_str(&shell_quote(destination));
+    cmd.push_str(&syn.quote(destination));
     cmd.push(' ');
-    cmd.push_str(&shell_quote(&bootstrap("xterm-256color")));
+    cmd.push_str(&syn.quote(boot));
     cmd
 }
 
@@ -162,12 +288,7 @@ pub fn persistent_host_command(
         boot = with_tmux(&boot, session);
     }
     if !mosh {
-        let plain = host_command(destination, options);
-        return plain.replacen(
-            &shell_quote(&bootstrap("xterm-256color")),
-            &shell_quote(&boot),
-            1,
-        );
+        return host_command_with(Syntax::local(), destination, options, &boot);
     }
     let mut cmd = String::from("mosh");
     if !options.is_empty() {
@@ -213,20 +334,11 @@ pub fn control_path() -> String {
 
 /// Build the `ssh` invocation: connection reuse plus the remote bootstrap.
 pub fn command(target: &Target, bootstrap: &str) -> String {
-    let mut cmd = String::from("ssh -t");
-    cmd.push_str(&format!(
-        " -o ControlMaster=auto -o ControlPath={}",
-        control_path()
-    ));
-    cmd.push_str(" -o ControlPersist=60s");
-    if let Some(port) = target.port {
-        cmd.push_str(&format!(" -p {port}"));
-    }
-    cmd.push(' ');
-    cmd.push_str(&shell_quote(&target.destination()));
-    cmd.push(' ');
-    cmd.push_str(&shell_quote(bootstrap));
-    cmd
+    let options: Vec<String> = target
+        .port
+        .map(|p| vec!["-p".to_string(), p.to_string()])
+        .unwrap_or_default();
+    host_command_with(Syntax::local(), &target.destination(), &options, bootstrap)
 }
 
 /// The remote bootstrap: install the local terminfo entry if the host lacks it,
@@ -316,16 +428,9 @@ pub fn write_args(dest: &str, path: &str) -> Vec<String> {
 }
 
 fn base_args() -> Vec<String> {
-    vec![
-        "-o".to_string(),
-        "BatchMode=yes".to_string(),
-        "-o".to_string(),
-        "ControlMaster=auto".to_string(),
-        "-o".to_string(),
-        format!("ControlPath={}", control_path()),
-        "-o".to_string(),
-        "ControlPersist=60s".to_string(),
-    ]
+    let mut args = vec!["-o".to_string(), "BatchMode=yes".to_string()];
+    args.extend(reuse_options());
+    args
 }
 
 /// Read a remote file over ssh (bounded). Errors carry the ssh stderr.
@@ -384,15 +489,25 @@ mod tests {
 
     #[test]
     fn host_commands_quote_options_and_destination() {
-        let cmd = host_command(
-            "deploy@203.0.113.7",
-            &["-p".into(), "2222".into(), "-J".into(), "bastion".into()],
-        );
+        let opts = ["-p".into(), "2222".into(), "-J".into(), "bastion".into()];
+        let cmd = host_command_with(Syntax::Posix, "deploy@203.0.113.7", &opts, "sh -c 'x'");
         assert!(
-            cmd.contains(" '-p' '2222' '-J' 'bastion' 'deploy@203.0.113.7' "),
+            cmd.contains(r#" -p '2222' -J 'bastion' 'deploy@203.0.113.7' 'sh -c '\''x'\'''"#),
             "{cmd}"
         );
-        assert!(cmd.contains("ControlMaster=auto"));
+        // Windows' OpenSSH has no ControlMaster.
+        assert_eq!(
+            host_command("h", &[]).contains("ControlMaster=auto"),
+            !cfg!(windows)
+        );
+        let boot = "sh -c 'exec ${SHELL:-sh} -l'";
+        let win = host_command_with(Syntax::Cmd, "administrator@127.0.0.1", &opts, boot);
+        assert!(
+            win.ends_with(
+                r#" -p 2222 -J bastion administrator@127.0.0.1 "sh -c 'exec ${SHELL:-sh} -l'""#
+            ),
+            "{win}"
+        );
     }
 
     #[test]
@@ -418,7 +533,8 @@ mod tests {
             true,
         );
         assert!(mosh.starts_with("mosh --ssh="), "{mosh}");
-        assert!(mosh.contains(" 'deploy@h' -- sh -c '"), "{mosh}");
+        let dest = Syntax::local().quote("deploy@h");
+        assert!(mosh.contains(&format!(" {dest} -- sh -c '")), "{mosh}");
         assert!(mosh.len() < 1000, "fits a PTY input line");
     }
 
@@ -466,13 +582,45 @@ mod tests {
     }
 
     #[test]
+    fn arguments_are_quoted_for_the_local_shell() {
+        assert_eq!(
+            Syntax::of_shell(r"C:\Windows\system32\cmd.exe"),
+            Syntax::Cmd
+        );
+        assert_eq!(Syntax::of_shell("pwsh"), Syntax::PowerShell);
+        assert_eq!(Syntax::of_shell("powershell.exe"), Syntax::PowerShell);
+        assert_eq!(Syntax::of_shell("/bin/zsh"), Syntax::Posix);
+        // cmd.exe: bare when safe, otherwise MSVCRT double-quote rules.
+        assert_eq!(Syntax::Cmd.quote("user@host"), "user@host");
+        assert_eq!(Syntax::Cmd.quote("a b"), r#""a b""#);
+        assert_eq!(Syntax::Cmd.quote(r#"say "hi""#), r#""say \"hi\"""#);
+        assert_eq!(Syntax::Cmd.quote(r"C:\dir\"), r"C:\dir\");
+        assert_eq!(Syntax::Cmd.quote(r"C:\my dir\"), r#""C:\my dir\\""#);
+        assert_eq!(Syntax::Cmd.quote(""), r#""""#);
+        // PowerShell: single quotes, doubled inside.
+        assert_eq!(Syntax::PowerShell.quote("it's here"), "'it''s here'");
+        assert_eq!(Syntax::PowerShell.quote("-p"), "-p");
+        // What is typed into a pane.
+        assert_eq!(Syntax::Cmd.typed("ssh h"), "cls & ssh h\r");
+        assert_eq!(Syntax::PowerShell.typed("ssh h"), "clear; ssh h\r");
+        assert_eq!(Syntax::Posix.typed("ssh h"), " clear; ssh h\r");
+        if !cfg!(windows) {
+            assert_eq!(Syntax::local(), Syntax::Posix);
+        }
+    }
+
+    #[test]
     fn sessions_connect_with_the_typed_alias() {
         // `Host work` options (IdentityFile, ProxyJump, …) only apply when ssh
         // is given the alias itself, so it must not be replaced by a hostname.
         let (title, cmd) = session_command("deploy@work:2200").unwrap();
         assert_eq!(title, "deploy@work");
-        assert!(cmd.contains(" -p 2200 "), "{cmd}");
-        assert!(cmd.contains("'deploy@work'"), "{cmd}");
+        let syn = Syntax::local();
+        assert!(
+            cmd.contains(&format!(" -p {} ", syn.quote("2200"))),
+            "{cmd}"
+        );
+        assert!(cmd.contains(&syn.quote("deploy@work")), "{cmd}");
         assert!(session_command("  ").is_none());
     }
 
@@ -516,10 +664,13 @@ mod tests {
         };
         let cmd = command(&t, "sh -c 'x'");
         assert!(cmd.starts_with("ssh -t "));
-        assert!(cmd.contains("ControlMaster=auto"));
-        assert!(cmd.contains("ControlPath=~/.ssh/mtty-cm-%r@%h:%p"));
-        assert!(cmd.contains(" -p 2200 "));
-        assert!(cmd.contains("'u@h'"));
+        assert_eq!(cmd.contains("ControlMaster=auto"), !cfg!(windows));
+        let syn = Syntax::local();
+        assert!(
+            cmd.contains(&format!(" -p {} ", syn.quote("2200"))),
+            "{cmd}"
+        );
+        assert!(cmd.contains(&syn.quote("u@h")), "{cmd}");
     }
 
     #[test]
