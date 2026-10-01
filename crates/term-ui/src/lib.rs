@@ -22,6 +22,7 @@ pub mod palette;
 pub mod selection;
 pub mod ssh;
 pub mod syntax;
+pub mod tasks;
 pub mod theme;
 pub mod update;
 pub mod vim;

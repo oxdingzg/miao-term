@@ -61,3 +61,11 @@ for QA and visual diffs when the fix is a rendering change:
 PPM is written as binary RGB (the native host swaps channels from its BGRA
 target), so a plain reader can sample pixels directly. Drive the running app with
 `mtty-cli pane run --pane <id> --data ...` while the capture deadline runs.
+
+- `MTTY_QA_COMMAND="<palette label>"` runs one command-palette command at
+  startup by its English label (for example `Agent Tasks…`), so windows that
+  only open from the palette can be captured too.
+- Use isolated state (`HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
+  `XDG_RUNTIME_DIR` pointing at a temporary directory) so a capture never reads
+  or writes your real configuration; keep the runtime path short (Unix sockets
+  are limited to ~100 bytes).

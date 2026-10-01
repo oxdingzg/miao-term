@@ -243,7 +243,7 @@ verified on its own:
 - [x] **B2.3 Command boundaries** (output is captured from the byte stream between C and D, so the scrollback cap shifting line numbers does not matter; real zsh end-to-end test; the smoke reads it back over MTP `pane.output`): OSC 133 (A/B/C/D) parsing, emitted by the zsh
   shim; "copy/send the last command's output". Acceptance: parser unit tests;
   the smoke runs a command and retrieves its output.
-- [ ] **B2.4 Worktree tasks**: a task = `git worktree add` + branch + agent pane;
+- [x] **B2.4 Worktree tasks** (4 integration tests on temporary repositories; the tasks window and the new-task dialog checked in real-window captures via `MTTY_QA_COMMAND`): a task = `git worktree add` + branch + agent pane;
   task list, diff view, merge or discard (destructive steps confirm).
   Acceptance: integration tests against a temporary repository.
 - [ ] **B2.5 Attention and miao**: clicking a notification jumps to its pane;

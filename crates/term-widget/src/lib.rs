@@ -592,6 +592,24 @@ enum JobDone {
         dir: std::path::PathBuf,
         entries: Vec<FileEntry>,
     },
+    TaskCreated {
+        result: Result<miao_term_ui::tasks::Task, String>,
+        agent: Option<usize>,
+    },
+    TasksListed {
+        repo: std::path::PathBuf,
+        result: Result<Vec<miao_term_ui::tasks::Task>, String>,
+    },
+    TaskDiff {
+        name: String,
+        result: Result<String, String>,
+    },
+    /// A merge (`merged`) or discard finished; the window then reloads.
+    TaskDone {
+        name: String,
+        merged: bool,
+        result: Result<String, String>,
+    },
     RemoteWrite {
         dest: String,
         path: String,
@@ -599,6 +617,16 @@ enum JobDone {
         text: String,
         result: std::io::Result<()>,
     },
+}
+
+/// The Agent Tasks window: the repository, its tasks and a pending
+/// confirmation for a destructive action.
+struct TasksView {
+    repo: std::path::PathBuf,
+    tasks: Vec<miao_term_ui::tasks::Task>,
+    loading: bool,
+    /// Index into `tasks` and whether it is a merge (else a discard).
+    confirm: Option<(usize, bool)>,
 }
 
 /// What a save request led to.
@@ -724,6 +752,10 @@ struct State {
     recipe_name: String,
     recipe_list: Vec<String>,
     ssh_dialog: Option<String>,
+    /// New Agent Task dialog: name and the chosen agent (B2.4).
+    task_dialog: Option<(String, Option<usize>)>,
+    /// The Agent Tasks window.
+    tasks_view: Option<TasksView>,
     remote_dialog: Option<(String, String)>,
     editor_vim: bool,
     vim: Option<miao_term_ui::vim::VimRuntime>,
@@ -2537,6 +2569,8 @@ impl State {
         self.editor_window(ctx);
         self.recipe_dialog_window(ctx);
         self.ssh_dialog_window(ctx);
+        self.task_dialog_window(ctx);
+        self.tasks_window(ctx);
         self.remote_dialog_window(ctx);
         self.composer_window(ctx);
         self.quick_window(ctx);
@@ -2921,6 +2955,9 @@ enum Cmd {
     NewTab,
     /// Launch `integration::AGENTS[i]` in a new tab (B2.1).
     LaunchAgent(usize),
+    /// Agent tasks in git worktrees (B2.4).
+    NewTask,
+    Tasks,
     /// The active pane's last command output (OSC 133, B2.3).
     CopyLastOutput,
     SendLastOutput,
@@ -2982,6 +3019,8 @@ impl State {
         vec![
             (Cmd::NewTab, t(l, "New Tab", "新建标签")),
             (Cmd::Composer, "Composer"),
+            (Cmd::NewTask, t(l, "New Agent Task…", "新建 Agent 任务…")),
+            (Cmd::Tasks, t(l, "Agent Tasks…", "Agent 任务…")),
             (
                 Cmd::CopyLastOutput,
                 t(l, "Copy Last Command Output", "复制上一条命令的输出"),
@@ -3108,6 +3147,28 @@ impl State {
     fn run_command(&mut self, cmd: Cmd) {
         match cmd {
             Cmd::LaunchAgent(i) => self.launch_agent(i),
+            Cmd::NewTask => {
+                self.refresh_agents_detected();
+                let first = self
+                    .agents_detected
+                    .as_ref()
+                    .and_then(|(_, found)| found.iter().position(|f| *f));
+                self.task_dialog = Some((String::new(), first));
+            }
+            Cmd::Tasks => match self.cwd() {
+                Some(repo) => {
+                    self.tasks_view = Some(TasksView {
+                        repo,
+                        tasks: Vec::new(),
+                        loading: true,
+                        confirm: None,
+                    });
+                    self.reload_tasks();
+                }
+                None => self.show_notice(
+                    miao_term_ui::i18n::t(self.lang, "No current directory", "没有当前目录").into(),
+                ),
+            },
             Cmd::CopyLastOutput | Cmd::SendLastOutput => {
                 match self
                     .active_pane()
@@ -4344,6 +4405,223 @@ impl State {
         self.publish_panes();
     }
 
+    /// List the tasks of the repository the window shows, in the background.
+    fn reload_tasks(&mut self) {
+        let Some(view) = self.tasks_view.as_mut() else {
+            return;
+        };
+        view.loading = true;
+        let repo = view.repo.clone();
+        self.spawn_job(move || {
+            let result = miao_term_ui::tasks::list(&repo);
+            JobDone::TasksListed { repo, result }
+        });
+    }
+
+    fn task_dialog_window(&mut self, ctx: &egui::Context) {
+        use miao_term_ui::i18n::t;
+        let Some((mut name, mut agent)) = self.task_dialog.take() else {
+            return;
+        };
+        let lang = self.lang;
+        let detected = self
+            .agents_detected
+            .as_ref()
+            .map(|(_, d)| d.clone())
+            .unwrap_or_default();
+        let mut open = true;
+        let mut create = false;
+        egui::Window::new(t(lang, "New Agent Task", "新建 Agent 任务"))
+            .collapsible(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label(t(
+                    lang,
+                    "A git worktree and branch of the current repository, with its own tab.",
+                    "当前仓库的一个 git worktree 与分支,并在独立标签中打开。",
+                ));
+                let r = ui.add(
+                    egui::TextEdit::singleline(&mut name)
+                        .hint_text(t(lang, "task name, e.g. fix-login", "任务名,如 fix-login"))
+                        .desired_width(260.0),
+                );
+                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if !enter {
+                    r.request_focus();
+                }
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut agent, None, t(lang, "shell only", "仅 shell"));
+                    for (i, a) in miao_term_ui::integration::AGENTS.iter().enumerate() {
+                        if detected.get(i).copied().unwrap_or(false) {
+                            ui.radio_value(&mut agent, Some(i), a.name);
+                        }
+                    }
+                });
+                let valid = miao_term_ui::tasks::valid_name(&name);
+                if !name.is_empty() && !valid {
+                    ui.label(
+                        egui::RichText::new(t(
+                            lang,
+                            "Use letters, digits, '-', '_' or '.'.",
+                            "只能使用字母、数字、'-'、'_' 或 '.'。",
+                        ))
+                        .color(egui::Color32::from_rgb(0xbf, 0x61, 0x6a)),
+                    );
+                }
+                if ui
+                    .add_enabled(valid, egui::Button::new(t(lang, "Create", "创建")))
+                    .clicked()
+                    || (enter && valid)
+                {
+                    create = true;
+                }
+            });
+        if create {
+            let Some(dir) = self.cwd() else {
+                return;
+            };
+            let msg = format!(
+                "{} {}…",
+                t(lang, "Creating task", "正在创建任务"),
+                name.trim()
+            );
+            self.show_notice(msg);
+            self.spawn_job(move || {
+                let result = miao_term_ui::tasks::create(&dir, &name);
+                JobDone::TaskCreated { result, agent }
+            });
+        } else if open && !ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.task_dialog = Some((name, agent));
+        }
+    }
+
+    fn tasks_window(&mut self, ctx: &egui::Context) {
+        use miao_term_ui::i18n::t;
+        let lang = self.lang;
+        let Some(view) = self.tasks_view.as_mut() else {
+            return;
+        };
+        let mut open = true;
+        let mut action: Option<(usize, &'static str)> = None;
+        egui::Window::new(t(lang, "Agent Tasks", "Agent 任务"))
+            .collapsible(false)
+            .open(&mut open)
+            .default_width(520.0)
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new(view.repo.display().to_string())
+                        .size(11.0)
+                        .color(egui::Color32::from_gray(150)),
+                );
+                if view.loading {
+                    ui.label(t(lang, "Loading…", "加载中…"));
+                } else if view.tasks.is_empty() {
+                    ui.label(t(
+                        lang,
+                        "No tasks in this repository.",
+                        "这个仓库还没有任务。",
+                    ));
+                }
+                for (i, task) in view.tasks.iter().enumerate() {
+                    ui.separator();
+                    ui.label(egui::RichText::new(&task.name).strong());
+                    ui.label(
+                        egui::RichText::new(format!("{} \u{2190} {}", task.branch, task.base))
+                            .size(11.0)
+                            .color(egui::Color32::from_gray(150)),
+                    );
+                    ui.horizontal(|ui| {
+                        if ui.button(t(lang, "Open", "打开")).clicked() {
+                            action = Some((i, "open"));
+                        }
+                        if ui.button(t(lang, "Diff", "查看改动")).clicked() {
+                            action = Some((i, "diff"));
+                        }
+                        match view.confirm {
+                            Some((c, merge)) if c == i => {
+                                let label = if merge {
+                                    t(lang, "Confirm merge", "确认合并")
+                                } else {
+                                    t(
+                                        lang,
+                                        "Confirm discard (deletes its work)",
+                                        "确认丢弃(删除其改动)",
+                                    )
+                                };
+                                if ui
+                                    .button(
+                                        egui::RichText::new(label)
+                                            .color(egui::Color32::from_rgb(0xeb, 0xcb, 0x8b)),
+                                    )
+                                    .clicked()
+                                {
+                                    action = Some((i, if merge { "merge" } else { "discard" }));
+                                }
+                                if ui.button(t(lang, "Cancel", "取消")).clicked() {
+                                    action = Some((i, "cancel"));
+                                }
+                            }
+                            _ => {
+                                if ui.button(t(lang, "Merge…", "合并…")).clicked() {
+                                    action = Some((i, "ask-merge"));
+                                }
+                                if ui.button(t(lang, "Discard…", "丢弃…")).clicked() {
+                                    action = Some((i, "ask-discard"));
+                                }
+                            }
+                        }
+                    });
+                }
+            });
+        if !open {
+            self.tasks_view = None;
+            return;
+        }
+        let Some((i, what)) = action else {
+            return;
+        };
+        let Some(task) = view.tasks.get(i).cloned() else {
+            return;
+        };
+        match what {
+            "ask-merge" => view.confirm = Some((i, true)),
+            "ask-discard" => view.confirm = Some((i, false)),
+            "cancel" => view.confirm = None,
+            "open" => {
+                self.new_tab_in(Some(task.path.clone()));
+                if let Some(tab) = self.tabs.last_mut() {
+                    tab.title = format!("task: {}", task.name);
+                    tab.title_set = true;
+                }
+                self.publish_panes();
+            }
+            "diff" => self.spawn_job(move || {
+                let result = miao_term_ui::tasks::diff(&task);
+                JobDone::TaskDiff {
+                    name: task.name.clone(),
+                    result,
+                }
+            }),
+            "merge" | "discard" => {
+                view.confirm = None;
+                let merged = what == "merge";
+                self.spawn_job(move || {
+                    let result = if merged {
+                        miao_term_ui::tasks::merge(&task)
+                    } else {
+                        miao_term_ui::tasks::discard(&task).map(|()| String::new())
+                    };
+                    JobDone::TaskDone {
+                        name: task.name.clone(),
+                        merged,
+                        result,
+                    }
+                });
+            }
+            _ => {}
+        }
+    }
+
     fn ssh_dialog_window(&mut self, ctx: &egui::Context) {
         let Some(ref mut input) = self.ssh_dialog else {
             return;
@@ -4858,6 +5136,88 @@ impl State {
         use miao_term_ui::i18n::t;
         match done {
             JobDone::DirListed { dir, entries } => self.tree_listed(dir, entries),
+            JobDone::TaskCreated { result, agent } => match result {
+                Ok(task) => {
+                    self.new_tab_in(Some(task.path.clone()));
+                    if let Some(tab) = self.tabs.last_mut() {
+                        tab.title = format!("task: {}", task.name);
+                        tab.title_set = true;
+                        let cmd = agent
+                            .and_then(|i| miao_term_ui::integration::AGENTS.get(i))
+                            .map(miao_term_ui::integration::launch_command);
+                        let active = tab.active.clone();
+                        if let (Some(cmd), Some(pane)) =
+                            (cmd, tab.panes.iter_mut().find(|p| p.id == active))
+                        {
+                            pane.term.write(format!("{cmd}\r").as_bytes());
+                        }
+                    }
+                    self.publish_panes();
+                    let msg = format!(
+                        "{} {} ({})",
+                        t(self.lang, "Task created on branch", "任务已创建,分支"),
+                        task.branch,
+                        task.path.display()
+                    );
+                    self.show_notice(msg);
+                }
+                Err(e) => {
+                    let msg = format!("{}: {e}", t(self.lang, "Task not created", "任务未创建"));
+                    self.show_notice(msg);
+                }
+            },
+            JobDone::TasksListed { repo, result } => {
+                if let Some(view) = self.tasks_view.as_mut().filter(|v| v.repo == repo) {
+                    view.loading = false;
+                    match result {
+                        Ok(tasks) => view.tasks = tasks,
+                        Err(e) => {
+                            self.tasks_view = None;
+                            let msg = format!("{}: {e}", t(self.lang, "No tasks", "没有任务"));
+                            self.show_notice(msg);
+                        }
+                    }
+                }
+            }
+            JobDone::TaskDiff { name, result } => match result {
+                Ok(text) => {
+                    let text = if text.trim().is_empty() {
+                        t(self.lang, "(no changes yet)", "(还没有改动)").to_string()
+                    } else {
+                        text
+                    };
+                    self.editor = Some(Editor {
+                        path: std::path::PathBuf::from(format!("{name}.diff")),
+                        original: text.clone(),
+                        text,
+                        preview: false,
+                        readonly: true,
+                        remote: None,
+                        close_armed: false,
+                        saving: false,
+                        quit_after_save: false,
+                    });
+                }
+                Err(e) => {
+                    let msg = format!("{} {name}: {e}", t(self.lang, "Diff failed", "diff 失败"));
+                    self.show_notice(msg);
+                }
+            },
+            JobDone::TaskDone {
+                name,
+                merged,
+                result,
+            } => {
+                let msg = match (&result, merged) {
+                    (Ok(summary), true) => {
+                        format!("{} {name}: {summary}", t(self.lang, "Merged", "已合并"))
+                    }
+                    (Ok(_), false) => format!("{} {name}", t(self.lang, "Discarded", "已丢弃")),
+                    (Err(e), _) => format!("{name}: {e}"),
+                };
+                self.show_notice(msg);
+                self.reload_tasks();
+            }
             JobDone::RemoteRead { dest, path, result } => match result {
                 Ok(bytes) => {
                     let text = String::from_utf8_lossy(&bytes).to_string();
@@ -5497,6 +5857,8 @@ impl ApplicationHandler<HostEvent> for Host {
             recipe_name: String::new(),
             recipe_list: Vec::new(),
             ssh_dialog: None,
+            task_dialog: None,
+            tasks_view: None,
             remote_dialog: None,
             editor_vim: cfg.editor_vim,
             vim: cfg.editor_vim.then(miao_term_ui::vim::VimRuntime::default),
@@ -5593,6 +5955,21 @@ impl ApplicationHandler<HostEvent> for Host {
         let intent = miao_term_ui::launch::Intent::from_args(&args);
         state.apply_launch(&intent);
         state.saved_settings = state.settings_values();
+        // QA: run a palette command by its English label at startup, so
+        // windows that only open from the palette can be captured.
+        if let Some(label) = miao_term_config::env("QA_COMMAND") {
+            let lang = state.lang;
+            state.lang = miao_term_ui::i18n::Lang::En;
+            let cmd = state
+                .commands()
+                .into_iter()
+                .find(|(_, l)| l.eq_ignore_ascii_case(label.trim()))
+                .map(|(c, _)| c);
+            state.lang = lang;
+            if let Some(cmd) = cmd {
+                state.run_command(cmd);
+            }
+        }
         if let Some(problem) = config_problem {
             let msg = format!(
                 "{} {problem}",
