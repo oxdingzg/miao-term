@@ -3,6 +3,8 @@
 // MSI) also opened a console window, and closing it killed mtty.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+mod panic_log;
+
 /// `--version` / `--help` from cmd or PowerShell: a GUI program has no console,
 /// so print into the parent's (redirected output works without this).
 fn attach_parent_console() {
@@ -22,6 +24,8 @@ fn attach_parent_console() {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // First, so a panic on any thread leaves a record even without stderr.
+    panic_log::install();
     let arg = std::env::args().nth(1);
     if matches!(arg.as_deref(), Some("--version" | "-V" | "--help" | "-h")) {
         attach_parent_console();
