@@ -49,7 +49,23 @@ pub struct Terminal {
     graphics_enabled: bool,
     scrollback: usize,
     cell_px: (u16, u16),
+    /// Output bytes of the running command, between OSC 133 `C` and `D`.
+    capture: Option<Vec<u8>>,
+    /// The last finished command's output (OSC 133 semantic prompts).
+    last_output: Option<CommandOutput>,
 }
+
+/// A finished command's output, as plain text, with its exit status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandOutput {
+    pub text: String,
+    pub exit: Option<i32>,
+    /// The output was longer than the capture limit and was cut.
+    pub truncated: bool,
+}
+
+/// The most output kept for one command.
+const MAX_CAPTURE: usize = 2 * 1024 * 1024;
 
 /// Closing the PTY can block: on Windows `ClosePseudoConsole` waits for the
 /// client process to exit, so a running shell would stall teardown for minutes
@@ -192,6 +208,8 @@ impl Terminal {
             graphics: crate::graphics::GraphicsLayer::new(),
             graphics_enabled: true,
             scrollback,
+            capture: None,
+            last_output: None,
             cell_px: (0, 0),
         })
     }
@@ -254,6 +272,10 @@ impl Terminal {
                             line_feeds += count_line_feeds(text);
                         }
                         self.screen.process(text);
+                        if let Some(buf) = self.capture.as_mut() {
+                            let room = MAX_CAPTURE.saturating_sub(buf.len());
+                            buf.extend_from_slice(&text[..text.len().min(room + 1)]);
+                        }
                         changed = true;
                     }
                 }
@@ -457,6 +479,36 @@ impl Terminal {
         }
     }
 
+    /// The last finished command's output, when the shell marks commands
+    /// with OSC 133 (the mtty zsh integration does).
+    pub fn last_command_output(&self) -> Option<&CommandOutput> {
+        self.last_output.as_ref()
+    }
+
+    /// OSC 133: `C` starts a command's output, `D[;exit]` ends it.
+    fn observe_semantic_prompt(&mut self, payload: &[u8]) {
+        match payload.first() {
+            Some(b'C') => self.capture = Some(Vec::new()),
+            Some(b'D') => {
+                let Some(buf) = self.capture.take() else {
+                    return;
+                };
+                let exit = std::str::from_utf8(payload)
+                    .ok()
+                    .and_then(|p| p.split(';').nth(1))
+                    .and_then(|code| code.trim().parse().ok());
+                let truncated = buf.len() > MAX_CAPTURE;
+                let end = buf.len().min(MAX_CAPTURE);
+                self.last_output = Some(CommandOutput {
+                    text: plain_text(&buf[..end]),
+                    exit,
+                    truncated,
+                });
+            }
+            _ => {}
+        }
+    }
+
     /// The window title reported via OSC 0/2, if any.
     pub fn title(&self) -> Option<&str> {
         self.title.as_deref()
@@ -472,6 +524,10 @@ impl Terminal {
             return;
         };
         let code = &bytes[..semi];
+        if code == b"133" {
+            self.observe_semantic_prompt(&bytes[semi + 1..]);
+            return;
+        }
         if !matches!(code, b"0" | b"2" | b"7") {
             return;
         }
@@ -489,6 +545,61 @@ impl Terminal {
             _ => {}
         }
     }
+}
+
+/// Terminal output as plain text: escape sequences removed, `\r\n` as
+/// newlines, a bare `\r` overwriting its line (progress bars), backspace
+/// erasing, trailing blank space trimmed.
+pub fn plain_text(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let mut lines: Vec<String> = Vec::new();
+    let mut line = String::new();
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\x1b' => match chars.next() {
+                // CSI: parameters, then a final byte in @..~.
+                Some('[') => {
+                    for c in chars.by_ref() {
+                        if ('@'..='~').contains(&c) {
+                            break;
+                        }
+                    }
+                }
+                // OSC / DCS / APC / PM / SOS: until BEL or ST (ESC \).
+                Some(']' | 'P' | '_' | '^' | 'X') => {
+                    while let Some(c) = chars.next() {
+                        if c == '\x07' || (c == '\x1b' && chars.next_if_eq(&'\\').is_some()) {
+                            break;
+                        }
+                    }
+                }
+                // Two-byte escapes (ESC 7, ESC ( B, …): drop the next char.
+                Some('(' | ')' | '*' | '+') => {
+                    chars.next();
+                }
+                _ => {}
+            },
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    continue;
+                }
+                line.clear();
+            }
+            '\n' => lines.push(std::mem::take(&mut line)),
+            '\x08' => {
+                line.pop();
+            }
+            c if c.is_control() && c != '\t' => {}
+            c => line.push(c),
+        }
+    }
+    lines.push(line);
+    let joined: Vec<String> = lines
+        .into_iter()
+        .map(|l| l.trim_end().to_string())
+        .collect();
+    joined.join("\n").trim_end().to_string()
 }
 
 /// A process's short name (`comm`).
@@ -787,6 +898,77 @@ mod tests {
         );
         term.write(b"sleep 3\r");
         assert_eq!(wait_for(&mut term, Some("sleep")).as_deref(), Some("sleep"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn zsh_integration_marks_commands_end_to_end() {
+        let zsh = std::path::Path::new("/bin/zsh");
+        if !zsh.exists() {
+            return;
+        }
+        // An empty HOME keeps the user's own zsh startup files out of the test.
+        let home = std::env::temp_dir().join(format!("mtty-zsh-home-{}", std::process::id()));
+        std::fs::create_dir_all(&home).unwrap();
+        let env = [("HOME".to_string(), home.to_string_lossy().to_string())];
+        let mut term = Terminal::new(
+            Some("/bin/zsh".into()),
+            80,
+            24,
+            100,
+            Some(home.clone()),
+            &env,
+            std::sync::Arc::new(|| {}),
+        )
+        .unwrap();
+        let wait = |term: &mut Terminal, done: &dyn Fn(&Terminal) -> bool| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !done(term) && std::time::Instant::now() < deadline {
+                term.process_pending();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        };
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        term.write(b"printf 'first\\nsecond\\n'; false\r");
+        wait(&mut term, &|t| t.last_command_output().is_some());
+        let out = term
+            .last_command_output()
+            .cloned()
+            .expect("OSC 133 C/D from the zsh shim");
+        assert_eq!(out.text, "first\nsecond");
+        assert_eq!(out.exit, Some(1));
+        term.write("echo 中文\r".as_bytes());
+        wait(&mut term, &|t| {
+            t.last_command_output().is_some_and(|o| o.exit == Some(0))
+        });
+        assert_eq!(term.last_command_output().unwrap().text, "中文");
+        drop(term);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn plain_text_drops_escapes_and_keeps_the_last_overwrite() {
+        let raw =
+            b"\x1b[31mred\x1b[0m line\r\nprogress 10%\rprogress 100%\r\nab\x08c\x1b]0;title\x07\n";
+        assert_eq!(plain_text(raw), "red line\nprogress 100%\nac");
+        assert_eq!(plain_text("中文 输出\r\n".as_bytes()), "中文 输出");
+    }
+
+    #[test]
+    fn semantic_prompts_capture_the_last_command_output() {
+        let mut t = make();
+        t.feed_for_test(b"$ \x1b]133;C\x07hello\r\n\x1b[1mworld\x1b[0m\r\n\x1b]133;D;1\x07$ ");
+        let out = t.last_command_output().unwrap();
+        assert_eq!(out.text, "hello\nworld");
+        assert_eq!(out.exit, Some(1));
+        assert!(!out.truncated);
+        // A D without a C (the first prompt) changes nothing.
+        t.feed_for_test(b"\x1b]133;D;0\x07");
+        assert_eq!(t.last_command_output().unwrap().exit, Some(1));
+        // The ST terminator works too, and a missing exit code is None.
+        t.feed_for_test(b"\x1b]133;C\x1b\\ok\r\n\x1b]133;D\x1b\\");
+        let out = t.last_command_output().unwrap();
+        assert_eq!((out.text.as_str(), out.exit), ("ok", None));
     }
 
     #[test]

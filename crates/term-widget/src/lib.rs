@@ -314,6 +314,8 @@ struct Pane {
     scroll: usize,
     /// A restored ssh session waiting for Enter to reconnect (the command).
     reconnect: Option<String>,
+    /// The last command output already published to the control plane.
+    published_output: Option<miao_term_core::CommandOutput>,
 }
 
 /// Input for a pane that offers to reconnect: Enter becomes the ssh command;
@@ -998,6 +1000,7 @@ impl State {
                     term,
                     scroll: 0,
                     reconnect: None,
+                    published_output: None,
                 }
             })
     }
@@ -2918,6 +2921,9 @@ enum Cmd {
     NewTab,
     /// Launch `integration::AGENTS[i]` in a new tab (B2.1).
     LaunchAgent(usize),
+    /// The active pane's last command output (OSC 133, B2.3).
+    CopyLastOutput,
+    SendLastOutput,
     Composer,
     OpenQuickly,
     CheckUpdates,
@@ -2976,6 +2982,18 @@ impl State {
         vec![
             (Cmd::NewTab, t(l, "New Tab", "新建标签")),
             (Cmd::Composer, "Composer"),
+            (
+                Cmd::CopyLastOutput,
+                t(l, "Copy Last Command Output", "复制上一条命令的输出"),
+            ),
+            (
+                Cmd::SendLastOutput,
+                t(
+                    l,
+                    "Send Last Command Output to Composer",
+                    "把上一条命令的输出发到 Composer",
+                ),
+            ),
             (Cmd::OpenQuickly, t(l, "Open Quickly", "快速打开")),
             (Cmd::QuickTerminal, t(l, "Quick Terminal", "快速终端")),
             (Cmd::CheckUpdates, t(l, "Check for Updates", "检查更新")),
@@ -3090,6 +3108,34 @@ impl State {
     fn run_command(&mut self, cmd: Cmd) {
         match cmd {
             Cmd::LaunchAgent(i) => self.launch_agent(i),
+            Cmd::CopyLastOutput | Cmd::SendLastOutput => {
+                match self
+                    .active_pane()
+                    .and_then(|p| p.term.last_command_output())
+                    .cloned()
+                {
+                    Some(out) => {
+                        if matches!(cmd, Cmd::CopyLastOutput) {
+                            self.egui_ctx.copy_text(out.text);
+                            let msg = miao_term_ui::i18n::t(self.lang, "Copied", "已复制");
+                            self.show_notice(msg.to_string());
+                        } else {
+                            // Fenced, so an agent sees where the output starts and ends.
+                            let draft = self.composer.take().unwrap_or_default();
+                            let sep = if draft.is_empty() { "" } else { "\n\n" };
+                            self.composer = Some(format!("{draft}{sep}```\n{}\n```\n", out.text));
+                        }
+                    }
+                    None => {
+                        let msg = miao_term_ui::i18n::t(
+                            self.lang,
+                            "No finished command here yet (needs the zsh integration).",
+                            "这里还没有已结束的命令(需要 zsh 集成)。",
+                        );
+                        self.show_notice(msg.to_string());
+                    }
+                }
+            }
             Cmd::NewTab => self.new_tab_in(self.active_cwd_for_new()),
             Cmd::QuickTerminal => self.toggle_quick_terminal(),
             Cmd::SplitRight => self.split(SplitDir::Right),
@@ -5603,6 +5649,21 @@ impl ApplicationHandler<HostEvent> for Host {
             for tab in &mut state.tabs {
                 for pane in &mut tab.panes {
                     changed |= pane.term.process_pending();
+                    // Publish a newly finished command's output (OSC 133).
+                    let latest = pane.term.last_command_output();
+                    if latest != pane.published_output.as_ref() {
+                        if let Some(out) = latest {
+                            state.mtp.set_output(
+                                &pane.id,
+                                serde_json::json!({
+                                    "text": out.text,
+                                    "exit": out.exit,
+                                    "truncated": out.truncated,
+                                }),
+                            );
+                        }
+                        pane.published_output = latest.cloned();
+                    }
                 }
             }
             if changed {

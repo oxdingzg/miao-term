@@ -173,6 +173,13 @@ def smoke(output, bundle=None):
             eventually(lambda: delivered() == "Q1Q2")
             checks.append("prompt queue: remapped target, one prompt per transition to idle")
 
+            # OSC 133 command boundaries (B2.3), as the zsh integration emits them.
+            cli("pane", "run", "--pane", target, "--data",
+                "printf '\\033]133;C\\007'; printf 'out 中文\\n'; printf '\\033]133;D;3\\007'")
+            output = eventually(lambda: cli("pane", "output", "--pane", target, ready=True))
+            assert output["text"] == "out 中文" and output["exit"] == 3, output
+            checks.append("last command output captured between OSC 133 C/D, read over MTP")
+
             cli("pane", "close", "--pane", panes[1]["id"])
             eventually(lambda: len(cli("pane", "list")["panes"]) == 1)
             checks.append("close one split pane while retaining the other shell")

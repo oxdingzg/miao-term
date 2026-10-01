@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 fn usage_text() -> &'static str {
     "usage: mtty-cli [--socket PATH|tcp://host:port] <command>\n\
      commands: ping | health | wait [--since N] | events [--topic T[,T]] | \
-     pane list|run|send|focus|close | \
+     pane list|run|send|focus|close|output | \
      state <agent> --state S | state list | history add|list |\n     view|edit <path> |\n     file read --path P [--offset N] [--length N] [--base64] |\n     file write --path P [--data D | --data-b64 B]"
 }
 
@@ -104,11 +104,11 @@ fn main() {
             )
         }
         ("pane", Some("list")) => client.call("pane", "list", json!({})),
-        ("pane", Some(m @ ("run" | "send" | "focus" | "close"))) => {
+        ("pane", Some(m @ ("run" | "send" | "focus" | "close" | "output"))) => {
             let pane = flag(&args, "--pane")
                 .map(str::to_string)
                 .or_else(pane_default);
-            if m == "focus" || m == "close" {
+            if m == "focus" || m == "close" || m == "output" {
                 client.call("pane", m, json!({ "pane_id": pane }))
             } else {
                 let data = flag(&args, "--data").unwrap_or("");

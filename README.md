@@ -108,8 +108,10 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
   [`docs/config.example.toml`](docs/config.example.toml).
 - Automatic import of ghostty `config` and alacritty `alacritty.toml` when no
   mtty config exists.
-- zsh shell integration (cwd via OSC 7, command history) installed through a
-  `ZDOTDIR` shim — the user's dotfiles are never modified.
+- zsh shell integration (cwd via OSC 7, command history, OSC 133 command
+  boundaries) installed through a `ZDOTDIR` shim — the user's dotfiles are never
+  modified. With it, *Copy Last Command Output* and *Send Last Command Output to
+  Composer* take exactly the last command's output (with its exit status).
 - **URL schemes**: `mtty://`, `ssh://` and `x-man-page://` open a tab with the
   matching command; a second launch — of mtty — is forwarded to the
   running instance (single instance, including "focus pane" and "quick"
@@ -143,7 +145,8 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 **Automation**
 - The **MTP control plane** over a per-user Unix socket (a named pipe on
   Windows): `core.ping/health`, `agent.state.*`, `history.*`,
-  `pane.list/send/run/focus/close`, `app.view/edit` (open a file in the app) and
+  `pane.list/send/run/focus/close`, `pane.output` (the last command's output;
+  capability `pane.read`), `app.view/edit` (open a file in the app) and
   `file.read/write` (bounded to 2 MB).
 - **`mtty-cli`**, a cross-platform client for the control plane.
 
@@ -285,6 +288,7 @@ mtty-cli events --topic agent.state    # ... filtered to one topic
 mtty-cli pane list
 mtty-cli pane run --pane ID --data "echo hello"
 mtty-cli pane focus --pane ID
+mtty-cli pane output --pane ID           # last command's output and exit status
 mtty-cli state claude --state processing --pane ID
 mtty-cli state list
 mtty-cli history add --command "cargo test" --cwd "$PWD"

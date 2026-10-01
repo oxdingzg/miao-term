@@ -17,7 +17,7 @@ pub mod perfgate;
 mod shell;
 mod term;
 
-pub use term::Terminal;
+pub use term::{plain_text, CommandOutput, Terminal};
 
 /// The screen model the app renders, backed by `alacritty_terminal` (ADR 0001).
 pub use aterm::ATerm;
