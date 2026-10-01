@@ -287,7 +287,10 @@ pub fn persistent_host_command(
     if let Some(session) = tmux {
         boot = with_tmux(&boot, session);
     }
-    if !mosh {
+    // mosh has no native Windows client, and the command below relies on a
+    // POSIX shell splitting the bootstrap after `--`, which cmd does not do:
+    // on Windows the session uses ssh (tmux still keeps it alive).
+    if !mosh || cfg!(windows) {
         return host_command_with(Syntax::local(), destination, options, &boot);
     }
     let mut cmd = String::from("mosh");
@@ -532,10 +535,14 @@ mod tests {
             Some("mtty"),
             true,
         );
-        assert!(mosh.starts_with("mosh --ssh="), "{mosh}");
-        let dest = Syntax::local().quote("deploy@h");
-        assert!(mosh.contains(&format!(" {dest} -- sh -c '")), "{mosh}");
         assert!(mosh.len() < 1000, "fits a PTY input line");
+        if cfg!(windows) {
+            assert!(mosh.starts_with("ssh "), "{mosh}");
+            assert!(mosh.contains("new-session -A -s mtty"), "{mosh}");
+        } else {
+            assert!(mosh.starts_with("mosh --ssh="), "{mosh}");
+            assert!(mosh.contains(" 'deploy@h' -- sh -c '"), "{mosh}");
+        }
     }
 
     /// The tmux bootstrap really runs: with a fake `tmux` on PATH it is
@@ -686,7 +693,11 @@ mod tests {
     fn remote_args_reuse_control_master_and_quote() {
         let r = read_args("u@h", "/tmp/a b.txt");
         assert!(r.iter().any(|a| a == "BatchMode=yes"));
-        assert!(r.iter().any(|a| a.starts_with("ControlPath=")));
+        // Windows' OpenSSH has no ControlMaster.
+        assert_eq!(
+            r.iter().any(|a| a.starts_with("ControlPath=")),
+            !cfg!(windows)
+        );
         assert_eq!(r.last().unwrap(), "cat -- '/tmp/a b.txt'");
         let w = write_args("u@h", "x");
         assert_eq!(w.last().unwrap(), "cat > 'x'");

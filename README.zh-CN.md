@@ -136,7 +136,7 @@ mtty 与 miao 是两个独立项目,任意一个都可以单独使用。在 mtty
 - **FTP/FTPS**:*连接 FTP/FTPS…* 经系统 `curl` 打开同一个双栏文件浏览器(默认显式 TLS;明文 FTP 会标注未加密)。
   口令只保存在内存中;留空则使用 `~/.netrc` 或匿名登录。
 - **持久会话**:在已保存主机上勾选 *在 tmux 中保持 shell*,重连后回到原会话;*使用 mosh 连接* 可跨休眠和网络切换
-  (两端都需安装 mosh;本机没有 mosh 时退回 ssh)。
+  (两端都需安装 mosh;本机没有 mosh 时退回 ssh,Windows 没有原生 mosh 客户端,始终使用 ssh)。
 - **加密同步(可选,默认关闭)**:*同步主机与片段…* 把主机与片段加密后写入你已在同步的文件夹(iCloud Drive、
   Dropbox、Syncthing)。无需账号、没有服务器;密钥保存在 `~/.config/mtty/sync.key`,第二台设备用配对码加入
   (ADR 0033)。
