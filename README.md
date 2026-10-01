@@ -118,9 +118,9 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
   [`docs/config.example.toml`](docs/config.example.toml).
 - Automatic import of ghostty `config` and alacritty `alacritty.toml` when no
   mtty config exists.
-- zsh shell integration (cwd via OSC 7, command history, OSC 133 command
-  boundaries) installed through a `ZDOTDIR` shim — the user's dotfiles are never
-  modified. With it, *Copy Last Command Output* and *Send Last Command Output to
+- Shell integration for zsh, bash, fish and PowerShell (cwd via OSC 7, command
+  history, OSC 133 command boundaries), installed through a shim per shell — the
+  user's dotfiles are never modified. With it, *Copy Last Command Output* and *Send Last Command Output to
   Composer* take exactly the last command's output (with its exit status).
 - **URL schemes**: `mtty://`, `ssh://` and `x-man-page://` open a tab with the
   matching command; a second launch — of mtty — is forwarded to the
@@ -303,10 +303,20 @@ If no mtty config exists, ghostty's `config` and alacritty's
 
 ### Shell integration
 
-On startup, mtty installs a zsh `ZDOTDIR` shim that reports the working
-directory (OSC 7) and command history. The shim is written to a private,
-user-only directory and restores the user's real `ZDOTDIR`, so existing dotfiles
-are left untouched. No manual setup is required.
+A new pane's shell reports its working directory (OSC 7), where each command's
+output starts and ends with its exit code (OSC 133) and its history, with no
+manual setup. Shims are written to a private, user-only directory and load the
+user's own startup files first:
+
+| Shell | How the shim is loaded |
+|---|---|
+| zsh | a `ZDOTDIR` whose `.zshenv` restores the real `ZDOTDIR` |
+| bash | `--rcfile`, which sources `~/.bashrc`; `PS0` on bash 4.4+, a DEBUG trap on older bash (macOS 3.2) |
+| fish | a `vendor_conf.d` script found through `XDG_DATA_DIRS`, which it restores |
+| PowerShell | `-NoExit -Command` after the profile; wraps `prompt` and PSReadLine (history needs PowerShell 7) |
+
+Each is tested end to end in a real PTY (zsh, bash 3.2/5.x, fish 3.7, PowerShell
+7.5 on Linux; Windows PowerShell runs in CI).
 
 ---
 

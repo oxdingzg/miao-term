@@ -144,7 +144,7 @@ feature-by-feature review of the native host code for this baseline.
 | Feature | Status | Notes |
 |---|---|---|
 | Config file + ghostty / alacritty import | Works | Fixed now: a `config.toml` with syntax errors is reported with the reason |
-| zsh shell integration (OSC 7, history) | Works | bash / fish / PowerShell not covered |
+| Shell integration (OSC 7, OSC 133, history) | Works | zsh, bash, fish, PowerShell |
 | URL schemes and single-instance forwarding | Partial | Command-line URLs work; macOS URL events from a browser/Finder are not handled |
 | MTP control plane and `mtty-cli` | Works | Covered by the real-window smoke |
 | Version check and update | Works | SHA-256 and a required minisign signature are checked in process; macOS install-and-relaunch checked end to end; AppImage/Windows unit-tested only |
@@ -290,7 +290,9 @@ verified on its own:
   a test-signed release, and tampered packages were refused by checksum and by
   signature; the published v0.0.5 package verifies against the repository key.
   The AppImage and Windows helpers have not run on real desktops yet.)
-- [ ] **B4.4** Shell integration for bash / fish / PowerShell.
+- [x] **B4.4** Shell integration for bash / fish / PowerShell. (End-to-end PTY tests
+  for zsh, bash 3.2/5.3 on macOS, bash 5.2, fish 3.7 and PowerShell 7.5 on Linux;
+  Windows PowerShell runs in CI. Windows PowerShell 5.1 records no history.)
 - [ ] **B4.5** Optional end-to-end-encrypted sync, off by default.
 
 ## 5. Non-goals
