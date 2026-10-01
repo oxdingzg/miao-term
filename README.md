@@ -196,7 +196,8 @@ mtty instead.
   `~/.netrc` or log in anonymously.
 - **Persistent sessions**: per saved host, *Keep the shell in tmux* reattaches
   the same session on reconnect, and *Connect with mosh* survives sleep and
-  network changes (mosh needed on both ends; mtty falls back to ssh without it).
+  network changes (mosh needed on both ends; mtty falls back to ssh without it, and always on
+  Windows, which has no native mosh client).
 - **Encrypted sync (optional, off by default)**: *Sync Hosts and Snippets…*
   writes hosts and snippets, encrypted, to a folder you already sync (iCloud
   Drive, Dropbox, Syncthing). No account and no server; the key stays in

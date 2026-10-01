@@ -284,11 +284,9 @@ mod tests {
 
     #[test]
     fn man_page_and_activation() {
-        assert_eq!(command_for("x-man-page://ls").as_deref(), Some("man 'ls'"));
-        assert_eq!(
-            command_for("x-man-page://git/commit").as_deref(),
-            Some("man 'git'")
-        );
+        let man = |page: &str| format!("man {}", crate::ssh::Syntax::local().quote(page));
+        assert_eq!(command_for("x-man-page://ls"), Some(man("ls")));
+        assert_eq!(command_for("x-man-page://git/commit"), Some(man("git")));
         assert!(command_for("miaotty://open").is_none());
         assert!(command_for("mtty://open").is_none());
         assert!(command_for("unknown://x").is_none());
