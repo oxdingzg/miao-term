@@ -35,6 +35,7 @@ pub const MAX_FILE_BYTES: usize = 2 * 1024 * 1024;
 pub const HOST_CAPS: &[&str] = &[
     "core.basic",
     "app.view.write",
+    "pane.read",
     "file.read",
     "file.write",
     "agent.state.read",
@@ -199,6 +200,8 @@ pub struct ServerState {
     /// Every pane state change in order, so the host sees each transition
     /// even when several arrive between two of its loop iterations.
     transitions: Mutex<Vec<StateChange>>,
+    /// Each pane's last finished command output (OSC 133), published by the host.
+    outputs: Mutex<BTreeMap<String, Value>>,
 }
 
 /// One `agent.state.set` for a pane, as the host should observe it.
@@ -315,6 +318,14 @@ impl ServerState {
     }
 
     /// Replace the advertised pane list (called by the app on tab changes).
+    /// Publish a pane's last command output (`{text, exit, truncated}`).
+    pub fn set_output(&self, pane: &str, output: Value) {
+        self.outputs
+            .lock()
+            .unwrap()
+            .insert(pane.to_string(), output);
+    }
+
     pub fn set_panes(&self, panes: Vec<Value>) {
         *self.panes.lock().unwrap() = panes.clone();
         self.broadcast(json!({ "topic": "panes", "panes": panes }));
@@ -466,6 +477,8 @@ fn str_field(v: &Value, key: &str) -> Option<String> {
 fn method_cap(ns: &str, method: &str) -> &'static str {
     match (ns, method) {
         ("core", "ping" | "health" | "wait" | "subscribe") => "core.basic",
+        // A pane's output may hold secrets: reading it is its own capability.
+        ("pane", "output") => "pane.read",
         ("pane", _) | ("app", _) => "app.view.write",
         ("file", "read") => "file.read",
         ("file", "write") => "file.write",
@@ -546,6 +559,18 @@ fn dispatch(state: &ServerState, req: Request) -> Response {
             };
             state.queue_write(pane, bytes);
             Response::ok(id, rev, json!({ "ok": true }))
+        }
+        ("pane", "output") => {
+            let pane = str_field(&params, "pane_id").unwrap_or_default();
+            match state.outputs.lock().unwrap().get(&pane) {
+                Some(output) => Response::ok(id, rev, output.clone()),
+                None => Response::err(
+                    id,
+                    rev,
+                    "no_output",
+                    "no finished command in this pane (needs the shell integration)",
+                ),
+            }
         }
         ("pane", "focus") | ("pane", "close") => {
             let pane = str_field(&params, "pane_id").unwrap_or_default();

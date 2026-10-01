@@ -240,7 +240,7 @@ verified on its own:
   idle; persisted in `queue.json` (old format still read). Acceptance: unit
   tests for transitions and delivery, including no double delivery on repeated
   events.
-- [ ] **B2.3 Command boundaries**: OSC 133 (A/B/C/D) parsing, emitted by the zsh
+- [x] **B2.3 Command boundaries** (output is captured from the byte stream between C and D, so the scrollback cap shifting line numbers does not matter; real zsh end-to-end test; the smoke reads it back over MTP `pane.output`): OSC 133 (A/B/C/D) parsing, emitted by the zsh
   shim; "copy/send the last command's output". Acceptance: parser unit tests;
   the smoke runs a command and retrieves its output.
 - [ ] **B2.4 Worktree tasks**: a task = `git worktree add` + branch + agent pane;

@@ -20,7 +20,15 @@ fi
 [[ -r "${ZDOTDIR:-$HOME}/.zshenv" ]] && source "${ZDOTDIR:-$HOME}/.zshenv"
 
 _mtty_osc7() { printf '\033]7;file://%s%s\033\\' "${HOST:-localhost}" "$PWD"; }
+# OSC 133 semantic prompts: C when a command starts, D;<exit> when it ends,
+# so the terminal can tell a command's output apart from the prompt.
+_mtty_precmd() {
+  local s=$?
+  printf '\033]133;D;%s\007' "$s"
+  _mtty_osc7
+}
 _mtty_preexec() {
+  printf '\033]133;C\007'
   local cli="${MTTY_CLI:-mtty-cli}"
   command -v "$cli" >/dev/null 2>&1 || return 0
   ( "$cli" history add --command "$1" --cwd "$PWD" >/dev/null 2>&1 & )
@@ -28,9 +36,10 @@ _mtty_preexec() {
 autoload -Uz add-zsh-hook 2>/dev/null
 if (( $+functions[add-zsh-hook] )); then
   add-zsh-hook chpwd _mtty_osc7
-  add-zsh-hook precmd _mtty_osc7
   add-zsh-hook preexec _mtty_preexec
 fi
+# First in line, so it sees the command's own exit status.
+precmd_functions=(_mtty_precmd ${precmd_functions[@]})
 _mtty_osc7
 "#;
 

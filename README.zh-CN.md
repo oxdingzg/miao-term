@@ -81,7 +81,9 @@
   `language`(英文或简体中文)、`editor`、agent 开关、`quick-terminal-hotkey`、
   `update-check-url` / `update-pubkey` —— 见 [`docs/config.example.toml`](docs/config.example.toml)。
 - 当不存在 mtty 配置时,自动导入 ghostty 的 `config` 与 alacritty 的 `alacritty.toml`。
-- zsh shell 集成(经 OSC 7 上报 cwd、命令历史),通过 `ZDOTDIR` shim 安装 —— 不修改用户点文件。
+- zsh shell 集成(经 OSC 7 上报 cwd、命令历史、OSC 133 命令边界),通过 `ZDOTDIR` shim 安装 ——
+  不修改用户点文件。有了它,*复制上一条命令的输出* 与 *把上一条命令的输出发到 Composer* 只取上一条
+  命令的输出(含退出码)。
 - **URL scheme**:`mtty://`、`ssh://`、`x-man-page://` 会用对应命令新开标签;二次启动会转发给
   正在运行的实例(单实例,含"聚焦 pane""quick"意图),无参数的二次启动会把窗口带到前台。
   URL 目前经命令行参数传入;macOS 从浏览器/Finder 发来的 URL 事件尚未处理。
@@ -102,8 +104,9 @@
 
 **自动化**
 - **MTP 控制面**,经 per-user Unix socket(Windows 为命名管道):
-  `core.ping/health`、`agent.state.*`、`history.*`、`pane.list/send/run/focus/close`,
-  以及 `app.view/edit`(在应用中打开文件)与 `file.read/write`(上限 2 MB)。
+  `core.ping/health`、`agent.state.*`、`history.*`、`pane.list/send/run/focus/close`、
+  `pane.output`(上一条命令的输出,能力 `pane.read`),以及 `app.view/edit`(在应用中打开文件)与
+  `file.read/write`(上限 2 MB)。
 - **`mtty-cli`**,跨平台的控制面客户端。
 
 ---
@@ -236,6 +239,7 @@ mtty-cli events --topic agent.state    # ...仅订阅某个 topic
 mtty-cli pane list
 mtty-cli pane run --pane ID --data "echo hello"
 mtty-cli pane focus --pane ID
+mtty-cli pane output --pane ID           # 上一条命令的输出与退出码
 mtty-cli state claude --state processing --pane ID
 mtty-cli state list
 mtty-cli history add --command "cargo test" --cwd "$PWD"
