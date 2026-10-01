@@ -1,6 +1,6 @@
 {
-  "build_rows_frame_ms": 0.06907648666666667,
-  "palette_rank_10k_ms": 0.5322622499999999,
-  "screen_snapshot_30_rows_ms": 0.008763504,
-  "vt_parse_mbps": 84.9071660780577
+  "build_rows_frame_ms": 0.09155458666666667,
+  "palette_rank_10k_ms": 0.98038885,
+  "screen_snapshot_30_rows_ms": 0.008819058,
+  "vt_parse_mbps": 79.16400586282255
 }
