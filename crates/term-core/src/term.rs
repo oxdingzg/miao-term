@@ -945,10 +945,24 @@ mod tests {
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
         };
-        // The first prompt reports the start directory. Line editors such as
-        // PSReadLine start after the prompt is drawn and drop a typed-ahead
-        // Enter, so give them a moment, as a person would.
-        wait(&mut term, &|t| t.cwd().is_some());
+        // Line editors such as PSReadLine start after the prompt is drawn and
+        // drop a typed-ahead Enter, so after the prompt give them a moment,
+        // as a person would.
+        // `cwd()` starts as the spawn directory, so it cannot tell that the
+        // shell is up. Nothing has been typed yet, so anything on screen is
+        // the shell's own (banner or prompt): wait for that, as long as a cold
+        // PowerShell start on a CI runner needs.
+        let started = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while (0..24).all(|r| term.screen().line_text(r).trim().is_empty())
+            && std::time::Instant::now() < started
+        {
+            term.process_pending();
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(
+            (0..24).any(|r| !term.screen().line_text(r).trim().is_empty()),
+            "{shell}: no prompt within 60 s"
+        );
         let settle = std::time::Instant::now() + std::time::Duration::from_millis(1500);
         while std::time::Instant::now() < settle {
             term.process_pending();
