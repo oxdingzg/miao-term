@@ -196,7 +196,22 @@ pub struct ServerState {
     subscribers: Mutex<Vec<std::sync::mpsc::Sender<Value>>>,
     /// The host is in read-only mode: input to panes is refused.
     read_only: std::sync::atomic::AtomicBool,
+    /// Every pane state change in order, so the host sees each transition
+    /// even when several arrive between two of its loop iterations.
+    transitions: Mutex<Vec<StateChange>>,
 }
+
+/// One `agent.state.set` for a pane, as the host should observe it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StateChange {
+    pub pane: String,
+    pub agent: String,
+    pub state: String,
+}
+
+/// Unconsumed transitions kept at most (a host that stopped draining must
+/// not grow memory without bound).
+const MAX_TRANSITIONS: usize = 1024;
 
 /// UI-side control actions queued by MTP methods.
 #[derive(Debug, Clone)]
@@ -314,6 +329,11 @@ impl ServerState {
             .get(&k)
             .cloned()
             .unwrap_or_default()
+    }
+
+    /// Pane state changes since the last call, oldest first.
+    pub fn take_transitions(&self) -> Vec<StateChange> {
+        std::mem::take(&mut *self.transitions.lock().unwrap())
     }
 
     /// Agent state entry for a pane, if any.
@@ -623,6 +643,19 @@ fn dispatch(state: &ServerState, req: Request) -> Response {
             }
             let revision = state.bump();
             state.states.lock().unwrap().insert(k, entry.clone());
+            if let (Some(pane), Some(new_state)) =
+                (pane.clone(), params.get("state").and_then(Value::as_str))
+            {
+                let mut log = state.transitions.lock().unwrap();
+                if log.len() >= MAX_TRANSITIONS {
+                    log.remove(0);
+                }
+                log.push(StateChange {
+                    pane,
+                    agent: agent.clone(),
+                    state: new_state.to_string(),
+                });
+            }
             state.broadcast(json!({
                 "topic": "agent.state",
                 "pane": pane,
@@ -1104,6 +1137,32 @@ mod tests {
         assert!(!missing.ok);
         assert_eq!(missing.error.unwrap().code, "io_error");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn quick_state_changes_are_all_observed_in_order() {
+        let state = ServerState::new();
+        for s in ["processing", "idle", "processing", "idle"] {
+            let r = dispatch(
+                &state,
+                request(
+                    "agent",
+                    "state.set",
+                    json!({ "pane_id": "p1", "agent": "codex", "state": s }),
+                ),
+            );
+            assert!(r.ok);
+        }
+        let seen: Vec<String> = state
+            .take_transitions()
+            .into_iter()
+            .map(|c| c.state)
+            .collect();
+        assert_eq!(seen, ["processing", "idle", "processing", "idle"]);
+        assert!(
+            state.take_transitions().is_empty(),
+            "each change is taken once"
+        );
     }
 
     #[test]

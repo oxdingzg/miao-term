@@ -236,7 +236,7 @@ verified on its own:
   (codex/claude/opencode/miao, optional directory); a Copy button for wiring
   snippets; a codex hook snippet and verification script. Acceptance: launch
   command unit tests; a fake agent reports state in the smoke.
-- [ ] **B2.2 Queue**: items target a pane and are delivered when its agent turns
+- [x] **B2.2 Queue** (also fixed: Send now left the prompt queued, so it was delivered again; per-frame state sampling missed a quick processing -> idle, now the control plane records transitions in order; the smoke with back-to-back states passed 8 runs in a row): items target a pane and are delivered when its agent turns
   idle; persisted in `queue.json` (old format still read). Acceptance: unit
   tests for transitions and delivery, including no double delivery on repeated
   events.

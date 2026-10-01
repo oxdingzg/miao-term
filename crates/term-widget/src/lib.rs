@@ -784,7 +784,8 @@ struct State {
     details_data: Option<DetailsData>,
     details_rx: Option<std::sync::mpsc::Receiver<(std::path::PathBuf, DetailsData)>>,
     details_at: Instant,
-    prompts: Vec<String>,
+    /// Prompts waiting for an agent pane to become idle (ADR 0010, B2.2).
+    prompt_queue: miao_term_ui::agentloop::PromptQueue,
     prompt_input: String,
     last_title: Option<String>,
     focused: bool,
@@ -1853,7 +1854,6 @@ impl State {
     }
 
     fn render(&mut self) {
-        self.agent_loop();
         self.refresh_search();
         self.poll_details();
         self.ensure_details();
@@ -2611,7 +2611,7 @@ impl State {
             if let Some(dir) = path.parent() {
                 let _ = std::fs::create_dir_all(dir);
             }
-            let body = serde_json::json!({ "prompts": self.prompts });
+            let body = self.prompt_queue.to_json();
             let _ = std::fs::write(path, serde_json::to_vec(&body).unwrap_or_default());
         }
     }
@@ -2664,6 +2664,8 @@ impl State {
             if panes.is_empty() {
                 continue;
             }
+            // Queued prompts follow their panes to the new ids.
+            self.prompt_queue.remap(&map);
             let layout = t
                 .get("layout")
                 .and_then(|l| json_to_layout(l, &map))
@@ -3791,54 +3793,87 @@ impl State {
     }
 
     /// Notifications + sleep guard (ADR 0010).
-    fn agent_loop(&mut self) {
-        if !self.notifications && !self.prevent_sleep {
+    /// Type a queued prompt into its pane (or the active pane when it has no
+    /// target). Read-only mode holds it back.
+    fn deliver_prompt(&mut self, item: miao_term_ui::agentloop::QueuedPrompt) {
+        if self.read_only {
+            self.prompt_queue.items.insert(0, item);
             return;
         }
-        let focused_id = self.active_pane_id();
-        let mut states: Vec<(String, String, String)> = Vec::new();
-        let mut any_processing = false;
-        for tab in &self.tabs {
-            for pane in &tab.panes {
-                let Some(a) = self.mtp.agent_for(&pane.id) else {
-                    continue;
-                };
-                let state = a
-                    .get("state")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let agent = a
-                    .get("agent")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("agent")
-                    .to_string();
-                if state == "processing" {
-                    any_processing = true;
-                }
-                states.push((pane.id.clone(), agent, state));
+        let target = item.pane.clone().or_else(|| self.active_pane_id());
+        let pane = self
+            .tabs
+            .iter_mut()
+            .flat_map(|t| t.panes.iter_mut())
+            .find(|p| Some(&p.id) == target.as_ref());
+        match pane {
+            Some(pane) => {
+                pane.scroll = 0;
+                pane.term.write(format!("{}\r", item.text).as_bytes());
             }
+            // The pane is gone: keep the prompt for the user to resend.
+            None => self
+                .prompt_queue
+                .items
+                .push(miao_term_ui::agentloop::QueuedPrompt { pane: None, ..item }),
         }
+    }
+
+    fn agent_loop(&mut self) {
+        // Transitions come from the control plane in order, so a quick
+        // processing -> idle between two loop iterations is still seen (the
+        // prompt queue and notifications both act on transitions).
+        let focused_id = self.active_pane_id();
         let mut alert: Option<(String, String)> = None;
-        for (id, agent, state) in states {
-            let prev = self.agent_states.insert(id.clone(), state.clone());
-            let changed = prev.as_deref() != Some(state.as_str());
-            let wants = matches!(state.as_str(), "awaiting" | "error");
-            let focused = Some(&id) == focused_id.as_ref();
+        let mut deliveries = Vec::new();
+        for change in self.mtp.take_transitions() {
+            let prev = self
+                .agent_states
+                .insert(change.pane.clone(), change.state.clone());
+            if let Some(item) =
+                self.prompt_queue
+                    .on_state(&change.pane, prev.as_deref(), &change.state)
+            {
+                deliveries.push(item);
+            }
+            let changed = prev.as_deref() != Some(change.state.as_str());
+            let wants = matches!(change.state.as_str(), "awaiting" | "error");
+            let focused = Some(&change.pane) == focused_id.as_ref();
             if changed && wants && self.notifications && !self.focused && !focused {
                 let body = self
                     .tabs
                     .iter()
-                    .find(|t| t.panes.iter().any(|p| p.id == id))
+                    .find(|t| t.panes.iter().any(|p| p.id == change.pane))
                     .map(|t| self.title_of(t))
                     .unwrap_or_default();
-                alert = Some((format!("{agent} \u{00b7} {state}"), body));
+                let agent = if change.agent.is_empty() {
+                    "agent"
+                } else {
+                    change.agent.as_str()
+                };
+                alert = Some((format!("{agent} \u{00b7} {}", change.state), body));
             }
+        }
+        if !deliveries.is_empty() {
+            for item in deliveries {
+                self.deliver_prompt(item);
+            }
+            self.save_queue();
         }
         if let Some((title, body)) = alert {
             miao_term_ui::agentloop::notify(&title, &body);
         }
         if self.prevent_sleep {
+            let any_processing = self.tabs.iter().flat_map(|t| &t.panes).any(|p| {
+                self.mtp
+                    .agent_for(&p.id)
+                    .and_then(|a| {
+                        a.get("state")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s == "processing")
+                    })
+                    .unwrap_or(false)
+            });
             self.sleep.set_awake(any_processing);
         }
     }
@@ -4173,7 +4208,7 @@ impl State {
             self.composer = None;
             self.write_input(format!("{draft}\r").as_bytes());
         } else if queue {
-            self.prompts.push(draft);
+            self.prompt_queue.push(draft, self.active_pane_id());
             self.save_queue();
             self.composer = None;
         } else if !open {
@@ -5484,7 +5519,7 @@ impl ApplicationHandler<HostEvent> for Host {
             details_data: None,
             details_rx: None,
             details_at: Instant::now(),
-            prompts: load_queue(),
+            prompt_queue: load_queue(),
             prompt_input: String::new(),
             last_title: None,
             focused: false,
@@ -5596,6 +5631,9 @@ impl ApplicationHandler<HostEvent> for Host {
                 state.window.request_redraw();
             }
             state.poll_jobs();
+            // Agent transitions: every loop iteration, not only on redraw (an
+            // occluded window may not be redrawn at all).
+            state.agent_loop();
             state.reload_rules_if_changed();
             if let Some(rx) = state.update_rx.take() {
                 match rx.try_recv() {
@@ -6688,23 +6726,15 @@ fn queue_file() -> Option<std::path::PathBuf> {
 }
 
 /// Load the persisted prompt queue (agent Composer drafts).
-fn load_queue() -> Vec<String> {
+fn load_queue() -> miao_term_ui::agentloop::PromptQueue {
     let Some(path) = queue_file() else {
-        return Vec::new();
+        return Default::default();
     };
     let read_path = legacy_state_path(&path, "native-queue.json");
-    let Ok(bytes) = std::fs::read(&read_path) else {
-        return Vec::new();
-    };
-    serde_json::from_slice::<serde_json::Value>(&bytes)
+    std::fs::read(&read_path)
         .ok()
-        .and_then(|v| {
-            v.get("prompts").and_then(|p| p.as_array()).map(|a| {
-                a.iter()
-                    .filter_map(|x| x.as_str().map(str::to_string))
-                    .collect()
-            })
-        })
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .map(|v| miao_term_ui::agentloop::PromptQueue::from_json(&v))
         .unwrap_or_default()
 }
 
@@ -6920,7 +6950,23 @@ impl chrome::Chrome for State {
         self.status_text()
     }
     fn queue(&self) -> Vec<String> {
-        self.prompts.clone()
+        // Show where each prompt goes; untargeted ones are sent by hand.
+        self.prompt_queue
+            .items
+            .iter()
+            .map(|item| {
+                let target = item.pane.as_ref().and_then(|pane| {
+                    self.tabs
+                        .iter()
+                        .find(|t| t.panes.iter().any(|p| &p.id == pane))
+                        .map(|t| self.title_of(t))
+                });
+                match target {
+                    Some(tab) => format!("{} \u{2192} {tab}", item.text),
+                    None => item.text.clone(),
+                }
+            })
+            .collect()
     }
     fn take_queue_input(&mut self) -> String {
         std::mem::take(&mut self.prompt_input)
@@ -7059,30 +7105,33 @@ impl chrome::Chrome for State {
     fn on_queue_add(&mut self) {
         if !self.prompt_input.is_empty() {
             let p = std::mem::take(&mut self.prompt_input);
-            self.prompts.push(p);
+            self.prompt_queue.push(p, self.active_pane_id());
             self.save_queue();
         }
     }
     fn on_queue_send(&mut self, i: usize) {
-        if let Some(item) = self.prompts.get(i).cloned() {
-            self.write_input(format!("{item}\r").as_bytes());
+        // Sending takes the prompt out of the queue, so it is not delivered
+        // again when the agent next turns idle.
+        if i < self.prompt_queue.items.len() {
+            let item = self.prompt_queue.items.remove(i);
+            self.deliver_prompt(item);
+            self.save_queue();
         }
     }
     fn on_queue_remove(&mut self, i: usize) {
-        if i < self.prompts.len() {
-            self.prompts.remove(i);
+        if i < self.prompt_queue.items.len() {
+            self.prompt_queue.items.remove(i);
             self.save_queue();
         }
     }
     fn on_queue_send_all(&mut self) {
-        let items = std::mem::take(&mut self.prompts);
-        for item in items {
-            self.write_input(format!("{item}\r").as_bytes());
+        for item in std::mem::take(&mut self.prompt_queue.items) {
+            self.deliver_prompt(item);
         }
         self.save_queue();
     }
     fn on_queue_clear(&mut self) {
-        self.prompts.clear();
+        self.prompt_queue.items.clear();
         self.save_queue();
     }
     fn on_menu(&mut self, id: chrome::MenuId) {

@@ -183,7 +183,7 @@
 
 - [x] **B2.1 启动与接入**(codex 片段按其 `hooks.json` 格式生成,需 `[features] hooks = true`;钩子脚本端到端测试覆盖 `--stdin` 取 session、pane 过滤、不阻塞;未改动用户真实的 agent 配置):设置与命令面板中"启动 agent"(codex/claude/opencode/miao,可选目录);
   接入片段带"复制"按钮;codex hook 片段与验证脚本。验收:启动命令单测;冒烟用假 agent 上报状态。
-- [ ] **B2.2 队列**:队列项绑定目标 pane,agent 转为 idle 时自动投递,持久化到 `queue.json`(兼容旧格式)。
+- [x] **B2.2 队列**(另修:"立即发送"不移出队列导致重复投递;状态按帧采样会漏掉快速的 processing→idle,改为 MTP 按序记录的状态变化;冒烟背靠背发送状态连续 8 次通过):队列项绑定目标 pane,agent 转为 idle 时自动投递,持久化到 `queue.json`(兼容旧格式)。
   验收:状态转换与投递单测(含重复事件不重复投递)。
 - [ ] **B2.3 命令边界**:OSC 133(A/B/C/D)解析,zsh shim 发送;"复制/发送上一条命令输出"。
   验收:解析单测;冒烟中运行命令后取回其输出。
