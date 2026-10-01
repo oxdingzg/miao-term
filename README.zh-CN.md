@@ -238,7 +238,8 @@ Linux `.deb`/AppImage 以及 Windows MSI。[`dist-workspace.toml`](dist-workspac
 ## 配置
 
 mtty 读取 `~/.config/mtty/config.toml`(或
-`$XDG_CONFIG_HOME/mtty/config.toml`)。所有键均可选;完整参考见
+`$XDG_CONFIG_HOME/mtty/config.toml`;Windows 上为 `%APPDATA%\mtty\config.toml`)。本 README 中其他
+`~/.config/mtty/...` 文件也都在同一目录。所有键均可选;完整参考见
 [`docs/config.example.toml`](docs/config.example.toml)。
 
 ```toml

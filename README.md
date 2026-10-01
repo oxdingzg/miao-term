@@ -310,7 +310,9 @@ app bundle, a Linux `.deb`/AppImage and a Windows MSI.
 ## Configuration
 
 mtty reads `~/.config/mtty/config.toml` (or
-`$XDG_CONFIG_HOME/mtty/config.toml`). Every key is optional; see
+`$XDG_CONFIG_HOME/mtty/config.toml`; on Windows `%APPDATA%\mtty\config.toml`).
+The other files named `~/.config/mtty/...` in this README live in the same
+directory. Every key is optional; see
 [`docs/config.example.toml`](docs/config.example.toml) for the full reference.
 
 ```toml

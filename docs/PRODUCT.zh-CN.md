@@ -205,13 +205,19 @@
 
 ### M4 跨平台交付
 
-- [ ] **B4.1** Windows/Linux 真实桌面验收(IME、热键、拖放、菜单)**[所有者 + 真机]**。
+- [x] **B4.1** Windows/Linux 真实桌面验收(IME、热键、拖放、菜单)**[所有者 + 真机]**。
   Linux,2026-10-01(Ubuntu 24.04、GNOME 46、Wayland,经 uinput 注入输入):键盘输入、菜单及菜单动作正常;拼音输入法
   的预编辑、候选框位置与上屏正常;Quick Terminal 快捷键可通过 GNOME 自定义快捷键执行 `mtty --quick` 实现(GNOME 46
   没有 GlobalShortcuts portal)。**发现并已修复:** 原生 Wayland 下拖放文件无反应(winit 0.30 只为 X11 实现了拖放),
   现由我们自己的 `wl_data_device` 处理;由于 GNOME 每个客户端只认一个 data device,剪贴板读取也改由它完成;应用快捷键
   原用 Super(被桌面占用),现改为以 Ctrl+Shift 为主(见 README 表格);终端里按 Tab 会让 egui 焦点跳到 File 菜单并吞掉
-  后续输入。Windows:待进行。
+  后续输入。
+  Windows,2026-10-01(Windows 11 22H2,在已登录会话中经 SendInput 注入输入):键盘输入、Tab 补全、菜单、微软拼音(预编辑、
+  候选框位置、上屏)、文件拖放、剪贴板(Ctrl+Shift+C/V)与 Quick Terminal 热键均正常。**发现并已修复:** 启动即退出(egui
+  没有 CJK 字体);切换输入语言后窗口永久卡死(wgpu 的 OpenGL 探测留下一个隐藏窗口从不处理消息的线程 —— 通过带符号的
+  minidump 定位);输入到 cmd.exe 的所有 ssh 命令都失败(POSIX 引号、`clear;`、ControlMaster);config.toml、主机、片段与
+  会话都被忽略(Windows 没有 `HOME`;现为 `%APPDATA%\mtty`);启动时多出控制台窗口;聚焦时仍按着的键(热键的 Y)被输入
+  到 pane;拖放路径用了单引号。
 - [ ] **B4.2** Apple 公证、Windows MSI 签名 **[所有者 + 凭证]**。
 - [x] **B4.3** 自动更新:下载、`update-pubkey` 签名校验、替换安装。(内置发布公钥;Mac mini 上用打包 app + 测试密钥签名的发布包验证安装并重启,并验证篡改的包因校验和或签名被拒;已发布的 v0.0.5 包用仓库公钥验签通过。AppImage 与 Windows 辅助脚本尚未在真实桌面运行。)
 - [x] **B4.4** bash / fish / PowerShell 的 shell 集成。(真实 PTY 端到端测试:macOS 上的 zsh、bash 3.2/5.3,Linux 上的 bash 5.2、fish 3.7、PowerShell 7.5;Windows 上的 PowerShell 由 CI 运行。Windows PowerShell 5.1 不记录历史。)
