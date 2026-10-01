@@ -217,7 +217,7 @@ verified on its own:
   blocks MTP/URL input; recipe names validated and read/write failures shown;
   GPU init failure shows an error instead of panicking. Acceptance: unit tests
   for the pure parts plus a smoke check of a new split's cwd.
-- [ ] **B0.3 System integration**: macOS URL Apple Events (links opened from a
+- [x] **B0.3 System integration** (`0417c1b` and after; `open -a dist/mtty.app mtty://quick` verified on a cold start and on the running app; also: duplicating an ssh tab connects again; IME candidate placement awaits a desktop check): macOS URL Apple Events (links opened from a
   browser/Finder); restored SSH tabs show "disconnected — press Enter to
   reconnect" and reconnect; the IME candidate window follows the cursor.
   Acceptance: `open mtty://quick` works on the installed app; reconnect has unit
