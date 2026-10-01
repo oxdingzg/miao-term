@@ -107,7 +107,8 @@
 - **主机库**:保存在 `~/.config/mtty/hosts.toml` 的主机(名称、地址、用户、端口、分组、标签、跳板机)
   显示在侧栏与 Open Quickly 中;*主机…* 可搜索、添加、删除(需确认),并导入 `~/.ssh/config` 中的具体
   `Host` 条目 —— 导入的主机按别名连接,ssh 对该条目的所有配置都会生效。`mtty://host/<名称>` 可从脚本或
-  启动器直接连接。不保存密码或密钥。
+  启动器直接连接。不保存密码或密钥。*主机…* 还显示 ssh-agent 中的密钥,检查主机密钥是否与 `known_hosts`
+  一致(未知密钥显示指纹供核对后信任;已变化的密钥会被拒绝),并在终端标签中运行 `ssh-keygen` / `ssh-copy-id`。
 - **SSH 会话与远端 view/edit**:*新建 SSH 会话…* 遵循 `~/.ssh/config`,复用 ControlMaster 连接,
   远端零安装引导 terminfo;*查看/编辑远端文件…* 经该连接读写(主机在对话框中填写)。SFTP 与端口转发在路线图中([`docs/PRODUCT.zh-CN.md`](docs/PRODUCT.zh-CN.md))。
 
