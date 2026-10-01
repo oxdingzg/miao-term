@@ -204,6 +204,10 @@ passed all four builds, AppImage/MSI packaging, package checks, assembly and
 detached-signature verification. Each new candidate must repeat full CI and the
 four-runner packaging rehearsal for its own commit.
 
+The v0.0.6 changes (the mtty rename, agent workflows, hosts and SFTP/FTP,
+verified updates, and the fixes found on real Linux and Windows desktops) are
+in [the v0.0.6 release notes](releases/v0.0.6.md).
+
 The v0.0.5 changes and resource limits are described in
 [the release notes](releases/v0.0.5.md) and [the performance report](PERFORMANCE.md).
 Local verification includes workspace tests, strict clippy, release performance
