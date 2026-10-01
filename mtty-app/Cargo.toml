@@ -38,7 +38,7 @@ miao-term-widget = { path = "../crates/term-widget" }
 
 [target.'cfg(windows)'.dependencies]
 # AttachConsole for --version/--help (already in the tree through winit).
-windows-sys = { version = "0.59", features = ["Win32_System_Console"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Console"] }
 
 [dev-dependencies]
 miao-term-core = { path = "../crates/term-core" }

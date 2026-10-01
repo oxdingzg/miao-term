@@ -6,11 +6,18 @@
 /// `--version` / `--help` from cmd or PowerShell: a GUI program has no console,
 /// so print into the parent's (redirected output works without this).
 fn attach_parent_console() {
+    // Only when output goes nowhere: a redirect (`> file`, a pipe) already
+    // gave the process a valid handle, and attaching would take it over.
     #[cfg(windows)]
     unsafe {
-        windows_sys::Win32::System::Console::AttachConsole(
-            windows_sys::Win32::System::Console::ATTACH_PARENT_PROCESS,
-        );
+        use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+        use windows_sys::Win32::System::Console::{
+            AttachConsole, GetStdHandle, ATTACH_PARENT_PROCESS, STD_OUTPUT_HANDLE,
+        };
+        let out = GetStdHandle(STD_OUTPUT_HANDLE);
+        if out.is_null() || out == INVALID_HANDLE_VALUE {
+            AttachConsole(ATTACH_PARENT_PROCESS);
+        }
     }
 }
 
