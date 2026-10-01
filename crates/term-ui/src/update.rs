@@ -291,9 +291,235 @@ pub fn verify_file(path: &std::path::Path, expected: &str) -> std::io::Result<bo
     Ok(actual.eq_ignore_ascii_case(expected.trim()))
 }
 
+/// The release signing key (`minisign.pub` at the repository root); the
+/// `update-pubkey` setting replaces it.
+pub const RELEASE_PUBKEY: &str = include_str!("../../../minisign.pub");
+
+/// Check a minisign signature over a file without reading it all into memory.
+/// `pubkey` is a whole `minisign.pub` file or just its base64 line. When the
+/// signature's trusted comment names a file, it must be `file_name`, so a
+/// genuine signature cannot vouch for a different artifact.
+pub fn verify_signature(
+    path: &std::path::Path,
+    signature: &str,
+    pubkey: &str,
+    file_name: &str,
+) -> Result<(), String> {
+    use minisign_verify::{PublicKey, Signature};
+    let key = if pubkey.trim_start().starts_with("untrusted comment:") {
+        PublicKey::decode(pubkey.trim())
+    } else {
+        PublicKey::from_base64(pubkey.trim())
+    }
+    .map_err(|e| format!("bad update public key: {e}"))?;
+    let sig = Signature::decode(signature.trim()).map_err(|e| format!("bad signature: {e}"))?;
+    let mut verifier = key
+        .verify_stream(&sig)
+        .map_err(|e| format!("signature not usable: {e}"))?;
+    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        verifier.update(&buf[..n]);
+    }
+    verifier
+        .finalize()
+        .map_err(|_| "the signature does not match the download".to_string())?;
+    let named = sig
+        .trusted_comment()
+        .split('\t')
+        .find_map(|field| field.strip_prefix("file:"));
+    match named {
+        Some(named) if named != file_name => {
+            Err(format!("the signature is for {named}, not {file_name}"))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// The file name at the end of a URL (query and fragment dropped).
+pub fn url_file_name(url: &str) -> Option<String> {
+    let path = url.split(['?', '#']).next()?;
+    let name = path.rsplit('/').next()?;
+    let ok = !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains(['\\', ':'])
+        && name.chars().all(|c| !c.is_control());
+    ok.then(|| name.to_string())
+}
+
+/// Download an artifact into `dir` and check it before anything uses it: the
+/// manifest's SHA-256 and a minisign signature, which is required. A file that
+/// fails either check is deleted. Blocks: run it off the UI thread.
+pub fn download_verified(
+    artifact: &Artifact,
+    pubkey: &str,
+    dir: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    let sig_url = artifact
+        .signature
+        .as_deref()
+        .ok_or("the update is not signed, so it will not be installed")?;
+    let name = url_file_name(&artifact.url).ok_or("the update URL has no file name")?;
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let path = dir.join(&name);
+    let curl = |args: &[&str]| {
+        std::process::Command::new("curl")
+            .args(["-fsSL", "--proto", "=https,file"])
+            .args(args)
+            .output()
+            .map_err(|e| format!("curl: {e}"))
+    };
+    let out = curl(&[
+        "--max-time",
+        "900",
+        "-o",
+        &path.to_string_lossy(),
+        &artifact.url,
+    ])?;
+    if !out.status.success() {
+        let _ = std::fs::remove_file(&path);
+        return Err(format!(
+            "download failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    let checked = (|| {
+        if !artifact.sha256.trim().is_empty()
+            && !verify_file(&path, &artifact.sha256).map_err(|e| e.to_string())?
+        {
+            return Err("the checksum does not match".to_string());
+        }
+        let sig = curl(&["--max-time", "60", sig_url])?;
+        if !sig.status.success() {
+            return Err("could not fetch the signature".to_string());
+        }
+        verify_signature(&path, &String::from_utf8_lossy(&sig.stdout), pubkey, &name)
+    })();
+    match checked {
+        Ok(()) => Ok(path),
+        Err(e) => {
+            let _ = std::fs::remove_file(&path);
+            Err(e)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A throwaway key pair made with minisign 0.12 for these tests only.
+    const TEST_PUBKEY: &str = "untrusted comment: minisign public key 4D488B93977FBD3F
+RWQ/vX+Xk4tITeKYOzgjMfBzFifPoGVTPI7xbE6k2IfMqeqVaOwi1qR8
+";
+    const TEST_CONTENT: &str = "mtty update test artifact\n";
+    const TEST_SIG: &str = "untrusted comment: signature from minisign secret key
+RUQ/vX+Xk4tITQUxpMgHQ6UzBw+zqfSjBhLKh2THDXW8/OjUwGWoMkkiUhJcGhGDI5fBdZxResztwM6MCwX7y6vlcATOG1gqhA4=
+trusted comment: timestamp:1790849763\tfile:mtty-test.zip\thashed
+t+gWHfmlkGM5SoMqXUkBvKwxms2sV0uR79Q4Xsnk42jdyFJ1AS1RuLQKXe0dIrQgW0flxW8/q6jndgI30/2wDQ==
+";
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("mtty-update-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn signatures_are_checked_in_process() {
+        let dir = scratch("sig");
+        let file = dir.join("mtty-test.zip");
+        std::fs::write(&file, TEST_CONTENT).unwrap();
+        verify_signature(&file, TEST_SIG, TEST_PUBKEY, "mtty-test.zip").unwrap();
+        // Just the base64 line works too.
+        let b64 = TEST_PUBKEY.lines().nth(1).unwrap();
+        verify_signature(&file, TEST_SIG, b64, "mtty-test.zip").unwrap();
+        // A genuine signature for another file name is refused.
+        let e = verify_signature(&file, TEST_SIG, TEST_PUBKEY, "mtty-other.zip").unwrap_err();
+        assert!(e.contains("mtty-test.zip"), "{e}");
+        // So is another key, and a changed file.
+        assert!(verify_signature(&file, TEST_SIG, RELEASE_PUBKEY, "mtty-test.zip").is_err());
+        std::fs::write(&file, "mtty update test artifact!\n").unwrap();
+        let e = verify_signature(&file, TEST_SIG, TEST_PUBKEY, "mtty-test.zip").unwrap_err();
+        assert!(e.contains("does not match"), "{e}");
+        assert!(verify_signature(&file, "garbage", TEST_PUBKEY, "mtty-test.zip").is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_release_key_is_the_repository_key() {
+        assert!(RELEASE_PUBKEY.contains("RWS6BkKxSQSAwHVm241oVIBam75S9RLwSDV9+k2T0s5mKtgPuXDWJHYm"));
+        assert!(minisign_verify::PublicKey::decode(RELEASE_PUBKEY.trim()).is_ok());
+    }
+
+    #[test]
+    fn downloads_require_checksum_and_signature() {
+        let src = scratch("src");
+        std::fs::write(src.join("mtty-test.zip"), TEST_CONTENT).unwrap();
+        std::fs::write(src.join("mtty-test.zip.sig"), TEST_SIG).unwrap();
+        let url = |name: &str| format!("file://{}/{name}", src.display());
+        let good = Artifact {
+            url: url("mtty-test.zip"),
+            sha256: hex(&sha256(TEST_CONTENT.as_bytes())),
+            signature: Some(url("mtty-test.zip.sig")),
+        };
+        let out = scratch("out");
+        let path = download_verified(&good, TEST_PUBKEY, &out).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), TEST_CONTENT);
+        let unsigned = Artifact {
+            signature: None,
+            ..good.clone()
+        };
+        assert!(download_verified(&unsigned, TEST_PUBKEY, &out)
+            .unwrap_err()
+            .contains("not signed"));
+        std::fs::remove_file(&path).unwrap();
+        let bad_sum = Artifact {
+            sha256: "00".repeat(32),
+            ..good.clone()
+        };
+        assert!(download_verified(&bad_sum, TEST_PUBKEY, &out).is_err());
+        assert!(!path.exists(), "a failed download is deleted");
+        assert!(download_verified(&good, RELEASE_PUBKEY, &out).is_err());
+        assert!(!path.exists());
+        assert_eq!(
+            url_file_name("https://x/a/mtty.zip?x=1").as_deref(),
+            Some("mtty.zip")
+        );
+        assert_eq!(url_file_name("https://x/a/"), None);
+        std::fs::remove_dir_all(src).unwrap();
+        std::fs::remove_dir_all(out).unwrap();
+    }
+
+    /// The published release end to end: `MTTY_UPDATE_TEST_REAL=1` downloads
+    /// the manifest and this platform's artifact and checks it against the
+    /// repository key.
+    #[test]
+    fn the_published_release_verifies() {
+        if std::env::var_os("MTTY_UPDATE_TEST_REAL").is_none() {
+            return;
+        }
+        let url = "https://github.com/oxdingzg/miao-term/releases/latest/download/latest.json";
+        let out = std::process::Command::new("curl")
+            .args(["-fsSL", url])
+            .output()
+            .unwrap();
+        let manifest = parse_checked(&String::from_utf8_lossy(&out.stdout)).unwrap();
+        let artifact = manifest
+            .for_platform()
+            .or_else(|| manifest.artifacts.values().next())
+            .unwrap();
+        let dir = scratch("real");
+        let path = download_verified(artifact, RELEASE_PUBKEY, &dir).unwrap();
+        assert!(std::fs::metadata(&path).unwrap().len() > 1_000_000);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn sha256_vectors() {

@@ -43,8 +43,19 @@ enum UpdateResult {
     Current,
     Available {
         version: String,
-        url: Option<String>,
+        artifact: Option<miao_term_ui::update::Artifact>,
     },
+    Failed(String),
+}
+
+/// Downloading and installing an available update (B4.3).
+#[derive(Debug, Clone, PartialEq)]
+enum UpdateInstall {
+    Idle,
+    /// Downloading, then checking the checksum and signature.
+    Working,
+    /// Verified and ready to install.
+    Ready(std::path::PathBuf),
     Failed(String),
 }
 
@@ -664,6 +675,8 @@ enum JobDone {
         dir: String,
         result: Result<Vec<miao_term_ui::sftp::RemoteEntry>, String>,
     },
+    /// A verified update download, or why it failed (B4.3).
+    UpdateDownloaded(Result<std::path::PathBuf, String>),
     SftpLocalListed {
         dir: std::path::PathBuf,
         entries: Vec<FileEntry>,
@@ -976,6 +989,11 @@ struct State {
     search_key: String,
     update_url: Option<String>,
     update_rx: Option<std::sync::mpsc::Receiver<UpdateResult>>,
+    update_install: UpdateInstall,
+    /// Carry on from check to download to install without further clicks.
+    update_auto: bool,
+    /// minisign key for updates: `update-pubkey`, else the release key.
+    update_pubkey: String,
     update_result: Option<UpdateResult>,
     update_notice_until: Option<Instant>,
     /// A transient status-line message (failed saves, opens) and its expiry.
@@ -2574,6 +2592,8 @@ impl State {
             let mut open = true;
             let mut dismiss = false;
             let mut retry = false;
+            let mut download: Option<miao_term_ui::update::Artifact> = None;
+            let mut install: Option<std::path::PathBuf> = None;
             egui::Window::new(t(lang, "Software Update", "软件更新"))
                 .id(egui::Id::new("software_update"))
                 .open(&mut open)
@@ -2590,7 +2610,7 @@ impl State {
                         });
                     } else {
                         match &self.update_result {
-                            Some(UpdateResult::Available { version, url }) => {
+                            Some(UpdateResult::Available { version, artifact }) => {
                                 ui.heading(t(lang, "A new version is available", "发现新版本"));
                                 ui.add_space(6.0);
                                 ui.label(format!("mtty {version}"));
@@ -2599,12 +2619,49 @@ impl State {
                                     t(lang, "Current version:", "当前版本："),
                                     env!("CARGO_PKG_VERSION")
                                 ));
-                                if url.is_none() {
-                                    ui.label(t(
-                                        lang,
-                                        "No download is available for this platform.",
-                                        "暂未提供此平台的下载。",
-                                    ));
+                                match artifact {
+                                    None => {
+                                        ui.label(t(
+                                            lang,
+                                            "No download is available for this platform.",
+                                            "暂未提供此平台的下载。",
+                                        ));
+                                    }
+                                    Some(a) if a.signature.is_none() => {
+                                        ui.label(t(
+                                            lang,
+                                            "This download is not signed, so mtty will not install it.",
+                                            "该下载未签名,mtty 不会自动安装。",
+                                        ));
+                                    }
+                                    Some(_) => {}
+                                }
+                                ui.add_space(4.0);
+                                match &self.update_install {
+                                    UpdateInstall::Working => {
+                                        ui.horizontal(|ui| {
+                                            ui.spinner();
+                                            ui.label(t(
+                                                lang,
+                                                "Downloading and checking the signature…",
+                                                "正在下载并校验签名…",
+                                            ));
+                                        });
+                                    }
+                                    UpdateInstall::Ready(_) => {
+                                        ui.label(t(
+                                            lang,
+                                            "Downloaded; checksum and signature verified.",
+                                            "已下载;校验和与签名均已验证。",
+                                        ));
+                                    }
+                                    UpdateInstall::Failed(e) => {
+                                        ui.label(
+                                            egui::RichText::new(e)
+                                                .color(egui::Color32::from_rgb(0xbf, 0x61, 0x6a)),
+                                        );
+                                    }
+                                    UpdateInstall::Idle => {}
                                 }
                             }
                             Some(UpdateResult::Failed(error)) => {
@@ -2618,12 +2675,33 @@ impl State {
                     ui.add_space(16.0);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         match &self.update_result {
-                            Some(UpdateResult::Available { url: Some(url), .. }) if !checking => {
-                                if ui.button(t(lang, "Download Update", "下载更新")).clicked() {
-                                    open_external(url);
-                                    dismiss = true;
+                            Some(UpdateResult::Available {
+                                artifact: Some(a), ..
+                            }) if !checking => match (&self.update_install, &a.signature) {
+                                (UpdateInstall::Ready(path), _) => {
+                                    if ui
+                                        .button(t(lang, "Install and Relaunch", "安装并重启"))
+                                        .clicked()
+                                    {
+                                        install = Some(path.clone());
+                                    }
                                 }
-                            }
+                                (UpdateInstall::Working, _) => {}
+                                (_, Some(_)) => {
+                                    if ui.button(t(lang, "Download Update", "下载更新")).clicked() {
+                                        download = Some(a.clone());
+                                    }
+                                }
+                                (_, None) => {
+                                    if ui
+                                        .button(t(lang, "Open Download Page", "打开下载页"))
+                                        .clicked()
+                                    {
+                                        open_external(&a.url);
+                                        dismiss = true;
+                                    }
+                                }
+                            },
                             Some(UpdateResult::Failed(_)) if !checking => {
                                 retry = ui.button(t(lang, "Try Again", "重试")).clicked();
                             }
@@ -2637,6 +2715,12 @@ impl State {
                 open && !dismiss && !ctx.input(|i| i.key_pressed(egui::Key::Escape));
             if retry {
                 self.check_updates();
+            }
+            if let Some(artifact) = download {
+                self.start_update_download(artifact);
+            }
+            if let Some(path) = install {
+                self.install_update(&path);
             }
         }
         // Hyperlink hover cue: hand cursor + underline while Cmd/Ctrl is held.
@@ -3206,6 +3290,8 @@ enum Cmd {
     Composer,
     OpenQuickly,
     CheckUpdates,
+    /// Check, download, verify and install in one go (B4.3).
+    UpdateAndRelaunch,
     NewSsh,
     OpenRemote,
     SaveRecipe,
@@ -3300,6 +3386,10 @@ impl State {
             (Cmd::OpenQuickly, t(l, "Open Quickly", "快速打开")),
             (Cmd::QuickTerminal, t(l, "Quick Terminal", "快速终端")),
             (Cmd::CheckUpdates, t(l, "Check for Updates", "检查更新")),
+            (
+                Cmd::UpdateAndRelaunch,
+                t(l, "Update and Relaunch", "更新并重启"),
+            ),
             (Cmd::NewSsh, t(l, "New SSH Session…", "新建 SSH 会话…")),
             (Cmd::OpenRemote, t(l, "Open Remote File…", "打开远端文件…")),
             (Cmd::SaveRecipe, t(l, "Save Recipe…", "保存配方…")),
@@ -3689,6 +3779,15 @@ impl State {
             Cmd::Composer => self.composer = Some(String::new()),
             Cmd::OpenQuickly => self.quick = Some(String::new()),
             Cmd::CheckUpdates => self.check_updates(),
+            Cmd::UpdateAndRelaunch => {
+                self.update_auto = true;
+                self.update_dialog = true;
+                if matches!(self.update_result, Some(UpdateResult::Available { .. })) {
+                    self.continue_auto_update();
+                } else {
+                    self.check_updates();
+                }
+            }
             Cmd::NewSsh => self.ssh_dialog = Some(String::new()),
             Cmd::OpenRemote => {
                 // From an ssh tab the host is already known.
@@ -4844,10 +4943,10 @@ impl State {
                         Ok(m) => {
                             if miao_term_ui::update::is_newer(&m.version, env!("CARGO_PKG_VERSION"))
                             {
-                                let url = m.for_platform().map(|artifact| artifact.url.clone());
+                                let artifact = m.for_platform().cloned();
                                 UpdateResult::Available {
                                     version: m.version,
-                                    url,
+                                    artifact,
                                 }
                             } else {
                                 UpdateResult::Current
@@ -5106,6 +5205,58 @@ impl State {
         }
         if open {
             self.snippets_view = Some(view);
+        }
+    }
+
+    fn start_update_download(&mut self, artifact: miao_term_ui::update::Artifact) {
+        if self.update_install == UpdateInstall::Working {
+            return;
+        }
+        self.update_install = UpdateInstall::Working;
+        let key = self.update_pubkey.clone();
+        self.spawn_job(move || {
+            let dir = std::env::temp_dir().join(format!("mtty-download-{}", std::process::id()));
+            JobDone::UpdateDownloaded(miao_term_ui::update::download_verified(
+                &artifact, &key, &dir,
+            ))
+        });
+    }
+
+    /// The next step of *Update and Relaunch*; it stops at anything that
+    /// needs the user (no update, no signed download, a failure).
+    fn continue_auto_update(&mut self) {
+        let signed = match &self.update_result {
+            Some(UpdateResult::Available {
+                artifact: Some(a), ..
+            }) if a.signature.is_some() => Some(a.clone()),
+            _ => None,
+        };
+        match (self.update_install.clone(), signed) {
+            (UpdateInstall::Ready(path), _) => {
+                self.update_auto = false;
+                self.install_update(&path);
+            }
+            (UpdateInstall::Working, _) => {}
+            (UpdateInstall::Idle, Some(artifact)) => self.start_update_download(artifact),
+            _ => self.update_auto = false,
+        }
+    }
+
+    /// Hand a verified update to the platform helper and quit, or open the
+    /// download where this install cannot replace itself.
+    fn install_update(&mut self, path: &std::path::Path) {
+        match miao_term_ui::install::prepare(path) {
+            Ok(miao_term_ui::install::Plan::Helper(script)) => {
+                match miao_term_ui::install::launch(&script) {
+                    Ok(()) => self.run_command(Cmd::Quit),
+                    Err(e) => self.update_install = UpdateInstall::Failed(e.to_string()),
+                }
+            }
+            Ok(miao_term_ui::install::Plan::OpenDownload(reason)) => {
+                self.show_notice(format!("{reason}: {}", path.display()));
+                open_external(&path.to_string_lossy());
+            }
+            Err(e) => self.update_install = UpdateInstall::Failed(e),
         }
     }
 
@@ -7038,6 +7189,15 @@ impl State {
                     }
                 }
             }
+            JobDone::UpdateDownloaded(result) => {
+                self.update_install = match result {
+                    Ok(path) => UpdateInstall::Ready(path),
+                    Err(e) => UpdateInstall::Failed(e),
+                };
+                if self.update_auto {
+                    self.continue_auto_update();
+                }
+            }
             JobDone::SftpLocalListed { dir, entries } => {
                 if let Some(view) = self.sftp_view.as_mut().filter(|v| v.local_dir == dir) {
                     view.local_entries = entries;
@@ -7851,6 +8011,12 @@ impl ApplicationHandler<HostEvent> for Host {
             search_key: String::new(),
             update_url: cfg.update_check_url.clone(),
             update_rx: None,
+            update_install: UpdateInstall::Idle,
+            update_auto: false,
+            update_pubkey: cfg
+                .update_pubkey
+                .clone()
+                .unwrap_or_else(|| miao_term_ui::update::RELEASE_PUBKEY.to_string()),
             update_result: None,
             update_notice_until: None,
             notice: None,
@@ -8037,6 +8203,9 @@ impl ApplicationHandler<HostEvent> for Host {
                             state.update_dialog = false;
                         }
                         state.update_result = Some(result);
+                        if state.update_auto {
+                            state.continue_auto_update();
+                        }
                         state.window.request_redraw();
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) => state.update_rx = Some(rx),
