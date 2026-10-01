@@ -37,6 +37,48 @@ pub fn notify(title: &str, body: &str) {
     }
 }
 
+/// Show a blocking error dialog, for failures before any window can draw
+/// (an app started from Finder or a launcher has no visible stderr).
+/// Best-effort: without a dialog tool it does nothing.
+pub fn alert(title: &str, body: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        let script = format!(
+            "display alert \"{}\" message \"{}\" as critical",
+            escape(title),
+            escape(body)
+        );
+        let _ = Command::new("osascript").arg("-e").arg(script).status();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let text = format!("{title}\n\n{body}");
+        let shown = Command::new("zenity")
+            .args(["--error", "--no-markup", "--text", &text])
+            .status()
+            .is_ok_and(|s| s.success());
+        if !shown {
+            let _ = Command::new("kdialog").args(["--error", &text]).status();
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let script = format!(
+            "Add-Type -AssemblyName PresentationFramework; \
+             [System.Windows.MessageBox]::Show('{}', '{}', 'OK', 'Error') | Out-Null",
+            escape_ps(body),
+            escape_ps(title)
+        );
+        let _ = Command::new("powershell")
+            .args(["-NoProfile", "-Command", &script])
+            .status();
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        let _ = (title, body);
+    }
+}
+
 /// Escape a string for an AppleScript double-quoted literal.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn escape(s: &str) -> String {

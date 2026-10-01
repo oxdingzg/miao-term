@@ -205,6 +205,14 @@ fn export_pane_environment() {
     }
 }
 
+/// Report a failure that keeps the window from opening and quit: stderr for
+/// terminal launches, a dialog for everyone else.
+fn startup_failure(event_loop: &ActiveEventLoop, what: &str, err: impl std::fmt::Display) {
+    eprintln!("mtty: {what}: {err}");
+    miao_term_ui::agentloop::alert("mtty cannot start", &format!("{what}: {err}"));
+    event_loop.exit();
+}
+
 /// Run a native terminal window until it is closed.
 pub fn run(title: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
     // Single instance (ADR 0019): a later launch — a deep link or a second
@@ -347,6 +355,33 @@ fn remove_whole_tab(tabs: &mut Vec<Tab>, active: &mut usize, i: usize) -> bool {
     }
     *active = (*active).min(tabs.len() - 1);
     true
+}
+
+/// Remove every tab except `keep` (Close Other Tabs); returns the removed
+/// tabs in their original order, for the reopen stack.
+fn take_other_tabs(tabs: &mut Vec<Tab>, keep: usize) -> Vec<Tab> {
+    if keep >= tabs.len() {
+        return Vec::new();
+    }
+    let kept = tabs.remove(keep);
+    std::mem::replace(tabs, vec![kept])
+}
+
+/// Remove the tabs after `i` (Close Tabs Below); returns them in order.
+fn take_tabs_below(tabs: &mut Vec<Tab>, i: usize) -> Vec<Tab> {
+    if i + 1 >= tabs.len() {
+        return Vec::new();
+    }
+    tabs.split_off(i + 1)
+}
+
+/// The directory a new tab or split starts in: the active pane's, unless that
+/// pane is an ssh session (its cwd is remote) or the directory is gone.
+fn inherited_cwd(ssh: bool, cwd: Option<std::path::PathBuf>) -> Option<std::path::PathBuf> {
+    if ssh {
+        return None;
+    }
+    cwd.filter(|dir| dir.is_dir())
 }
 
 /// Background-computed details (git status / directory listing / ports).
@@ -773,8 +808,9 @@ impl State {
         // inheriting the process cwd would drop every pane in the filesystem
         // root. Only trust it when it names a real place to work, and fall back
         // to the home directory otherwise; a launch from a terminal keeps the
-        // directory the user typed `mtty` in.
-        let cwd = cwd.or_else(|| {
+        // directory the user typed `mtty` in. A requested directory that no
+        // longer exists falls back the same way.
+        let cwd = cwd.filter(|dir| dir.is_dir()).or_else(|| {
             std::env::current_dir()
                 .ok()
                 .filter(|dir| dir.as_path() != std::path::Path::new("/"))
@@ -818,6 +854,24 @@ impl State {
 
     fn new_tab(&mut self) {
         self.new_tab_in(None);
+    }
+
+    /// The active pane's directory for a new tab or split (see [`inherited_cwd`]).
+    fn active_cwd_for_new(&self) -> Option<std::path::PathBuf> {
+        let ssh = self.tabs.get(self.active_tab).is_some_and(|t| t.ssh);
+        inherited_cwd(ssh, self.cwd())
+    }
+
+    /// Remember closed tabs' directories for Reopen Closed Tab.
+    fn remember_closed(&mut self, tabs: &[Tab]) {
+        for tab in tabs {
+            let cwd = tab
+                .panes
+                .iter()
+                .find(|p| p.id == tab.active)
+                .and_then(|p| p.term.cwd().map(std::path::PathBuf::from));
+            self.closed.push(cwd);
+        }
     }
 
     fn new_tab_in(&mut self, cwd: Option<std::path::PathBuf>) {
@@ -1085,12 +1139,16 @@ impl State {
             }
         };
         let caps = surface.get_capabilities(&self.adapter);
-        let format = caps
+        let Some(format) = caps
             .formats
             .iter()
             .copied()
             .find(|f| f.is_srgb())
-            .unwrap_or(caps.formats[0]);
+            .or_else(|| caps.formats.first().copied())
+        else {
+            self.show_notice("picture-in-picture: no surface format".to_string());
+            return;
+        };
         let size = window.inner_size();
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -1252,16 +1310,26 @@ impl State {
 
     fn duplicate_tab(&mut self) {
         let cwd = self.cwd();
-        let (title, ssh, prefix) = self
+        let (title, ssh, prefix, mark, group) = self
             .tabs
             .get(self.active_tab)
-            .map(|t| (t.title.clone(), t.ssh, t.prefix.clone()))
+            .map(|t| {
+                (
+                    t.title.clone(),
+                    t.ssh,
+                    t.prefix.clone(),
+                    t.mark.clone(),
+                    t.group.clone(),
+                )
+            })
             .unwrap_or_default();
-        self.new_tab_in(cwd);
+        self.new_tab_in(inherited_cwd(ssh, cwd));
         if let Some(t) = self.tabs.last_mut() {
             t.title = title;
             t.ssh = ssh;
             t.prefix = prefix;
+            t.mark = mark;
+            t.group = group;
         }
         self.publish_panes();
     }
@@ -1280,7 +1348,7 @@ impl State {
     }
 
     fn split(&mut self, dir: SplitDir) {
-        let Some(pane) = self.spawn_pane(None) else {
+        let Some(pane) = self.spawn_pane(self.active_cwd_for_new()) else {
             return;
         };
         let new_id = pane.id.clone();
@@ -2720,7 +2788,7 @@ impl State {
 
     fn run_command(&mut self, cmd: Cmd) {
         match cmd {
-            Cmd::NewTab => self.new_tab(),
+            Cmd::NewTab => self.new_tab_in(self.active_cwd_for_new()),
             Cmd::QuickTerminal => self.toggle_quick_terminal(),
             Cmd::SplitRight => self.split(SplitDir::Right),
             Cmd::SplitDown => self.split(SplitDir::Down),
@@ -2797,7 +2865,10 @@ impl State {
                 }
             }
             Cmd::FindInAllTabs => self.find_in_all_tabs(),
-            Cmd::ReadOnly => self.read_only = !self.read_only,
+            Cmd::ReadOnly => {
+                self.read_only = !self.read_only;
+                self.mtp.set_read_only(self.read_only);
+            }
             Cmd::HintMode => self.build_hints(),
             Cmd::Pip => {
                 if self.pip.is_some() {
@@ -3922,25 +3993,53 @@ impl State {
                     }
                 }
             });
-        if do_save && !self.recipe_name.is_empty() {
-            if let Some(dir) = recipes_dir() {
-                let _ = std::fs::create_dir_all(&dir);
-                let _ = std::fs::write(
-                    dir.join(format!("{}.json", self.recipe_name)),
-                    serde_json::to_vec(&self.session_value()).unwrap_or_default(),
-                );
+        if do_save {
+            match recipe_file_name(&self.recipe_name) {
+                Err(why) => self.show_notice(t(lang, why.0, why.1).to_string()),
+                Ok(file) => {
+                    let result = recipes_dir()
+                        .ok_or_else(|| std::io::Error::other("no config directory"))
+                        .and_then(|dir| {
+                            std::fs::create_dir_all(&dir)?;
+                            let data = serde_json::to_vec(&self.session_value())
+                                .map_err(std::io::Error::other)?;
+                            std::fs::write(dir.join(file), data)
+                        });
+                    let msg = match result {
+                        Ok(()) => format!(
+                            "{} {}",
+                            t(lang, "Saved recipe", "已保存配方"),
+                            self.recipe_name.trim()
+                        ),
+                        Err(e) => format!("{}: {e}", t(lang, "Recipe not saved", "配方未保存")),
+                    };
+                    self.show_notice(msg);
+                    self.recipe_dialog = None;
+                }
             }
-            self.recipe_dialog = None;
         }
         if let Some(name) = open_recipe {
-            if let Some(dir) = recipes_dir() {
-                if let Ok(bytes) = std::fs::read(dir.join(format!("{name}.json"))) {
-                    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-                        self.clear_tabs();
-                        if !self.restore_from_value(&v) {
-                            self.new_tab();
-                        }
+            let loaded = recipes_dir()
+                .ok_or_else(|| "no config directory".to_string())
+                .and_then(|dir| {
+                    std::fs::read(dir.join(format!("{name}.json"))).map_err(|e| e.to_string())
+                })
+                .and_then(|bytes| {
+                    serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|e| e.to_string())
+                });
+            match loaded {
+                Ok(v) => {
+                    self.clear_tabs();
+                    if !self.restore_from_value(&v) {
+                        self.new_tab();
                     }
+                }
+                Err(e) => {
+                    let msg = format!(
+                        "{} {name}: {e}",
+                        t(lang, "Could not open recipe", "无法打开配方")
+                    );
+                    self.show_notice(msg);
                 }
             }
             self.recipe_dialog = None;
@@ -4747,22 +4846,14 @@ impl ApplicationHandler<HostEvent> for Host {
             .with_transparent(opacity < 1.0);
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
-            Err(e) => {
-                eprintln!("mtty: create_window failed: {e}");
-                event_loop.exit();
-                return;
-            }
+            Err(e) => return startup_failure(event_loop, "could not create a window", e),
         };
         window.set_ime_allowed(true);
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
         let surface = match instance.create_surface(window.clone()) {
             Ok(s) => s,
-            Err(e) => {
-                eprintln!("mtty: create_surface failed: {e}");
-                event_loop.exit();
-                return;
-            }
+            Err(e) => return startup_failure(event_loop, "could not create a drawing surface", e),
         };
         let adapter =
             match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -4772,21 +4863,33 @@ impl ApplicationHandler<HostEvent> for Host {
             })) {
                 Some(a) => a,
                 None => {
-                    eprintln!("mtty: no wgpu adapter");
-                    event_loop.exit();
-                    return;
+                    return startup_failure(
+                        event_loop,
+                        "no usable GPU adapter (Metal, Vulkan or DX12)",
+                        "wgpu found none",
+                    )
                 }
             };
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None))
-                .expect("device");
+        let (device, queue) = match pollster::block_on(
+            adapter.request_device(&wgpu::DeviceDescriptor::default(), None),
+        ) {
+            Ok(pair) => pair,
+            Err(e) => return startup_failure(event_loop, "could not open the GPU device", e),
+        };
         let caps = surface.get_capabilities(&adapter);
-        let format = caps
+        let Some(format) = caps
             .formats
             .iter()
             .copied()
             .find(|f| f.is_srgb())
-            .unwrap_or(caps.formats[0]);
+            .or_else(|| caps.formats.first().copied())
+        else {
+            return startup_failure(
+                event_loop,
+                "the window surface offers no pixel format",
+                "empty surface capabilities",
+            );
+        };
         let size = window.inner_size();
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -6108,6 +6211,27 @@ fn install_egui_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
+/// The file name for a recipe called `name`, or why the name cannot be used
+/// (English, Chinese). A name is a single file in the recipes directory: no
+/// separators, no `..`, no hidden or control characters.
+fn recipe_file_name(name: &str) -> Result<String, (&'static str, &'static str)> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(("Enter a recipe name.", "请输入配方名称。"));
+    }
+    let bad = name.starts_with('.')
+        || name.contains(['/', '\\', ':'])
+        || name.chars().any(char::is_control)
+        || name.chars().count() > 80;
+    if bad {
+        return Err((
+            "A recipe name cannot contain / \\ : or start with a dot.",
+            "配方名称不能包含 / \\ : 或以点开头。",
+        ));
+    }
+    Ok(format!("{name}.json"))
+}
+
 fn recipes_dir() -> Option<std::path::PathBuf> {
     window_file().map(|p| p.with_file_name("recipes"))
 }
@@ -6356,7 +6480,7 @@ impl chrome::Chrome for State {
         self.prompt_input = input;
     }
     fn on_new_tab(&mut self) {
-        self.new_tab();
+        self.new_tab_in(self.active_cwd_for_new());
     }
     fn on_switch_tab(&mut self, i: usize) {
         if i < self.tabs.len() {
@@ -6394,8 +6518,8 @@ impl chrome::Chrome for State {
     }
     fn on_close_others(&mut self, i: usize) {
         if i < self.tabs.len() {
-            let keep = self.tabs.remove(i);
-            self.tabs = vec![keep];
+            let removed = take_other_tabs(&mut self.tabs, i);
+            self.remember_closed(&removed);
             self.active_tab = 0;
             self.selection = None;
             self.publish_panes();
@@ -6403,7 +6527,8 @@ impl chrome::Chrome for State {
     }
     fn on_close_below(&mut self, i: usize) {
         if i < self.tabs.len() {
-            self.tabs.truncate(i + 1);
+            let removed = take_tabs_below(&mut self.tabs, i);
+            self.remember_closed(&removed);
             self.active_tab = self.active_tab.min(self.tabs.len() - 1);
             self.selection = None;
             self.publish_panes();
@@ -6712,6 +6837,43 @@ mod tests {
             (restored.prefix, restored.mark, restored.group),
             (None, None, None)
         );
+    }
+
+    #[test]
+    fn recipe_names_stay_inside_the_recipes_directory() {
+        assert_eq!(recipe_file_name(" work 工作 ").unwrap(), "work 工作.json");
+        for bad in ["", "  ", "../x", "a/b", "a\\b", ".hidden", "c:x", "a\nb"] {
+            assert!(recipe_file_name(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn close_others_and_below_return_what_they_removed() {
+        let mut tabs = vec![
+            empty_tab("a"),
+            empty_tab("b"),
+            empty_tab("c"),
+            empty_tab("d"),
+        ];
+        let below = take_tabs_below(&mut tabs, 1);
+        let names = |t: &[Tab]| t.iter().map(|t| t.title.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&below), ["c", "d"]);
+        assert_eq!(names(&tabs), ["a", "b"]);
+        assert!(take_tabs_below(&mut tabs, 1).is_empty());
+        let others = take_other_tabs(&mut tabs, 1);
+        assert_eq!(names(&others), ["a"]);
+        assert_eq!(names(&tabs), ["b"]);
+        assert!(take_other_tabs(&mut tabs, 5).is_empty());
+    }
+
+    #[test]
+    fn new_tabs_inherit_only_a_real_local_directory() {
+        let here = std::env::temp_dir();
+        assert_eq!(inherited_cwd(false, Some(here.clone())), Some(here.clone()));
+        assert_eq!(inherited_cwd(true, Some(here)), None, "ssh cwd is remote");
+        let gone = std::env::temp_dir().join("mtty-no-such-dir-for-test");
+        assert_eq!(inherited_cwd(false, Some(gone)), None);
+        assert_eq!(inherited_cwd(false, None), None);
     }
 
     #[test]

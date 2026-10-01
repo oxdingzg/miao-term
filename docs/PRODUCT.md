@@ -212,7 +212,7 @@ verified on its own:
   child processes; non-git directories are reported as such. Acceptance:
   background-task unit tests; no frame stalls in the smoke while opening a
   remote file or a large directory (timed in the log).
-- [ ] **B0.2 Workspace correctness**: new splits/tabs inherit the directory;
+- [x] **B0.2 Workspace correctness** (read-only makes MTP `pane.send/run` fail with `read_only`; a URL that opens a new tab to run a command is an explicit user action and is not blocked; a new split's cwd is unit-tested, as MTP has no split method): new splits/tabs inherit the directory;
   Duplicate keeps mark and group; Close Others/Below are reopenable; read-only
   blocks MTP/URL input; recipe names validated and read/write failures shown;
   GPU init failure shows an error instead of panicking. Acceptance: unit tests

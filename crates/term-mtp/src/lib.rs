@@ -194,6 +194,8 @@ pub struct ServerState {
     waker: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     /// Event stream subscribers (`core.subscribe`). Dead channels are pruned.
     subscribers: Mutex<Vec<std::sync::mpsc::Sender<Value>>>,
+    /// The host is in read-only mode: input to panes is refused.
+    read_only: std::sync::atomic::AtomicBool,
 }
 
 /// UI-side control actions queued by MTP methods.
@@ -231,6 +233,12 @@ impl ServerState {
             allow,
             ..Default::default()
         })
+    }
+
+    /// Mirror the host's read-only mode: while on, `pane.send` / `pane.run`
+    /// fail with `read_only` instead of typing into a pane.
+    pub fn set_read_only(&self, on: bool) {
+        self.read_only.store(on, Ordering::SeqCst);
     }
 
     /// Parse a comma-separated `MTTY_MTP_ALLOW` value into a policy.
@@ -507,6 +515,9 @@ fn dispatch(state: &ServerState, req: Request) -> Response {
             let data = str_field(&params, "data").unwrap_or_default();
             if pane.is_empty() {
                 return Response::err(id, rev, "no_pane", "pane_id is required");
+            }
+            if state.read_only.load(Ordering::SeqCst) {
+                return Response::err(id, rev, "read_only", "the terminal is in read-only mode");
             }
             let bytes = if req.method == "run" {
                 format!("{data}\r").into_bytes()
@@ -1093,6 +1104,29 @@ mod tests {
         assert!(!missing.ok);
         assert_eq!(missing.error.unwrap().code, "io_error");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_only_mode_refuses_pane_input() {
+        let state = ServerState::new();
+        let send = || {
+            dispatch(
+                &state,
+                request(
+                    "pane",
+                    "run",
+                    json!({ "pane_id": "p1", "data": "rm -rf x" }),
+                ),
+            )
+        };
+        state.set_read_only(true);
+        let refused = send();
+        assert!(!refused.ok);
+        assert_eq!(refused.error.unwrap().code, "read_only");
+        assert!(state.take_writes().is_empty());
+        state.set_read_only(false);
+        assert!(send().ok);
+        assert_eq!(state.take_writes().len(), 1);
     }
 
     #[test]
