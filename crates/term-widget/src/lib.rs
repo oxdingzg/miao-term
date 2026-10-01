@@ -714,6 +714,17 @@ struct TasksView {
     confirm: Option<(usize, bool)>,
 }
 
+/// Connect to an FTP/FTPS server. The password stays in memory only.
+#[derive(Default)]
+struct FtpDialog {
+    address: String,
+    password: String,
+    /// 0 plain, 1 explicit TLS, 2 implicit TLS.
+    security: usize,
+    insecure: bool,
+    error: Option<String>,
+}
+
 /// The Snippets window: search, the add form, hosts picked for a run.
 #[derive(Default)]
 struct SnippetsView {
@@ -743,7 +754,7 @@ fn remote_run_command(destination: &str, options: &[String], command: &str) -> S
 /// The SFTP window (B3.4): this machine on the left, the host on the right.
 struct SftpView {
     title: String,
-    remote: miao_term_ui::sftp::Remote,
+    remote: miao_term_ui::sftp::Endpoint,
     remote_dir: Option<String>,
     remote_entries: Vec<miao_term_ui::sftp::RemoteEntry>,
     remote_sel: Option<String>,
@@ -922,6 +933,7 @@ struct State {
     /// Running port forwards by (host name, rule spec) (B3.3).
     tunnels: HashMap<(String, String), miao_term_ui::forward::Tunnel>,
     remote_dialog: Option<(String, String)>,
+    ftp_dialog: Option<FtpDialog>,
     editor_vim: bool,
     vim: Option<miao_term_ui::vim::VimRuntime>,
     vim_for: String,
@@ -2779,6 +2791,7 @@ impl State {
         self.hosts_window(ctx);
         self.sftp_window(ctx);
         self.snippets_window(ctx);
+        self.ftp_dialog_window(ctx);
         self.remote_dialog_window(ctx);
         self.composer_window(ctx);
         self.quick_window(ctx);
@@ -3179,6 +3192,8 @@ enum Cmd {
     Hosts,
     /// SFTP for the active ssh tab (B3.4).
     SftpCurrent,
+    /// Browse an FTP/FTPS server (B3.6).
+    ConnectFtp,
     /// Snippets and broadcast input (B3.5).
     Snippets,
     ToggleBroadcast,
@@ -3248,6 +3263,10 @@ impl State {
             (Cmd::Composer, "Composer"),
             (Cmd::Hosts, t(l, "Hosts…", "主机…")),
             (Cmd::Snippets, t(l, "Snippets…", "命令片段…")),
+            (
+                Cmd::ConnectFtp,
+                t(l, "Connect over FTP/FTPS…", "连接 FTP/FTPS…"),
+            ),
             (
                 Cmd::ToggleBroadcast,
                 t(
@@ -3435,6 +3454,12 @@ impl State {
                         .into(),
                     ),
                 }
+            }
+            Cmd::ConnectFtp => {
+                self.ftp_dialog = Some(FtpDialog {
+                    security: 1,
+                    ..Default::default()
+                })
             }
             Cmd::Snippets => {
                 self.reload_snippets();
@@ -5084,7 +5109,115 @@ impl State {
         }
     }
 
+    fn ftp_dialog_window(&mut self, ctx: &egui::Context) {
+        use miao_term_ui::i18n::t;
+        let lang = self.lang;
+        let Some(mut d) = self.ftp_dialog.take() else {
+            return;
+        };
+        let mut open = true;
+        let mut connect = false;
+        app_window(t(lang, "Connect over FTP/FTPS", "连接 FTP/FTPS"), ctx)
+            .open(&mut open)
+            .default_size([460.0, 260.0])
+            .show(ctx, |ui| {
+                window_body(ui, |ui| {
+                    ui.label(t(
+                        lang,
+                        "Server ([user@]host[:port])",
+                        "服务器([用户@]主机[:端口])",
+                    ));
+                    let r = ui.add(
+                        egui::TextEdit::singleline(&mut d.address)
+                            .hint_text("deploy@ftp.example.com")
+                            .desired_width(f32::INFINITY),
+                    );
+                    if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        connect = true;
+                    }
+                    if !r.has_focus() && d.address.is_empty() {
+                        r.request_focus();
+                    }
+                    ui.label(t(
+                        lang,
+                        "Password (kept in memory only; empty: ~/.netrc or anonymous)",
+                        "口令(仅保存在内存中;留空则用 ~/.netrc 或匿名)",
+                    ));
+                    let r = ui.add(
+                        egui::TextEdit::singleline(&mut d.password)
+                            .password(true)
+                            .desired_width(f32::INFINITY),
+                    );
+                    if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        connect = true;
+                    }
+                    ui.horizontal(|ui| {
+                        ui.radio_value(
+                            &mut d.security,
+                            1,
+                            t(lang, "FTPS (explicit TLS)", "FTPS(显式 TLS)"),
+                        );
+                        ui.radio_value(
+                            &mut d.security,
+                            2,
+                            t(lang, "FTPS (implicit)", "FTPS(隐式)"),
+                        );
+                        ui.radio_value(
+                            &mut d.security,
+                            0,
+                            t(lang, "FTP (unencrypted)", "FTP(不加密)"),
+                        );
+                    });
+                    if d.security != 0 {
+                        ui.checkbox(
+                            &mut d.insecure,
+                            t(
+                                lang,
+                                "Accept any certificate (self-signed; unsafe)",
+                                "接受任意证书(自签名;不安全)",
+                            ),
+                        );
+                    }
+                    if let Some(e) = &d.error {
+                        ui.label(
+                            egui::RichText::new(e).color(egui::Color32::from_rgb(0xbf, 0x61, 0x6a)),
+                        );
+                    }
+                    if ui.button(t(lang, "Connect", "连接")).clicked() {
+                        connect = true;
+                    }
+                });
+            });
+        if connect {
+            // A typed scheme wins over the radio buttons.
+            let typed = d.address.trim();
+            let address = if typed.contains("://") {
+                typed.to_string()
+            } else {
+                let scheme = ["ftp", "ftpes", "ftps"][d.security.min(2)];
+                format!("{scheme}://{typed}")
+            };
+            match miao_term_ui::ftp::Remote::parse(&address) {
+                Ok(mut remote) => {
+                    remote.password =
+                        Some(std::mem::take(&mut d.password)).filter(|p| !p.is_empty());
+                    remote.insecure = d.insecure && !remote.is_plaintext();
+                    self.open_files(remote.label(), miao_term_ui::sftp::Endpoint::Ftp(remote));
+                    return;
+                }
+                Err(e) => d.error = Some(e),
+            }
+        }
+        if open {
+            self.ftp_dialog = Some(d);
+        }
+    }
+
     fn open_sftp(&mut self, title: String, remote: miao_term_ui::sftp::Remote) {
+        self.open_files(title, miao_term_ui::sftp::Endpoint::Sftp(remote));
+    }
+
+    fn open_files(&mut self, title: String, remote: miao_term_ui::sftp::Endpoint) {
         let local_dir = self
             .active_cwd_for_new()
             .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from))
@@ -5153,7 +5286,7 @@ impl State {
         &mut self,
         label: String,
         progress: Option<(std::path::PathBuf, u64)>,
-        work: impl FnOnce(&miao_term_ui::sftp::Remote) -> Result<(), String> + Send + 'static,
+        work: impl FnOnce(&miao_term_ui::sftp::Endpoint) -> Result<(), String> + Send + 'static,
     ) {
         let Some(view) = self.sftp_view.as_mut() else {
             return;
@@ -5210,10 +5343,29 @@ impl State {
         if view.busy.is_some() {
             ctx.request_repaint_after(Duration::from_millis(250));
         }
-        let response = app_window(format!("SFTP \u{00b7} {}", view.title), ctx)
+        let kind = match &view.remote {
+            miao_term_ui::sftp::Endpoint::Sftp(_) => "SFTP",
+            miao_term_ui::sftp::Endpoint::Ftp(r) => match r.security {
+                miao_term_ui::ftp::Security::Plain => "FTP",
+                _ => "FTPS",
+            },
+        };
+        let plaintext = view.remote.is_plaintext();
+        let is_ftp = matches!(view.remote, miao_term_ui::sftp::Endpoint::Ftp(_));
+        let response = app_window(format!("{kind} \u{00b7} {}", view.title), ctx)
             .open(&mut open)
             .default_size([860.0, 520.0])
             .show(ctx, |ui| {
+                if plaintext {
+                    ui.label(
+                        egui::RichText::new(t(
+                            lang,
+                            "Plain FTP: the password and the files cross the network unencrypted.",
+                            "明文 FTP:口令与文件均以未加密方式在网络上传输。",
+                        ))
+                        .color(egui::Color32::from_rgb(0xbf, 0x61, 0x6a)),
+                    );
+                }
                 ui.horizontal(|ui| {
                     if let Some(text) = &busy_text {
                         ui.spinner();
@@ -5503,7 +5655,18 @@ impl State {
             return;
         };
         let path = miao_term_ui::sftp::join(&dir, &entry.name);
-        if download {
+        if download && is_ftp && entry.is_dir {
+            if let Some(v) = self.sftp_view.as_mut() {
+                v.error = Some(
+                    t_lang(
+                        lang,
+                        "Folders cannot be downloaded over FTP; download the files",
+                        "FTP 不支持下载整个文件夹,请逐个下载文件",
+                    )
+                    .into(),
+                );
+            }
+        } else if download {
             let target = local_dir.join(&entry.name);
             let progress = (!entry.is_dir).then_some((target, entry.size));
             let dest = local_dir.clone();
@@ -5550,7 +5713,23 @@ impl State {
     /// Connect to a saved host (B3.1).
     fn open_host(&mut self, host: &miao_term_config::hosts::Host) {
         let destination = host.destination();
-        let cmd = miao_term_ui::ssh::host_command(&destination, &host.ssh_options());
+        let mosh = host.mosh && miao_term_ui::ssh::on_path("mosh");
+        if host.mosh && !mosh {
+            self.show_notice(
+                t_lang(
+                    self.lang,
+                    "mosh is not installed here; connecting with ssh",
+                    "本机未安装 mosh,改用 ssh 连接",
+                )
+                .into(),
+            );
+        }
+        let cmd = miao_term_ui::ssh::persistent_host_command(
+            &destination,
+            &host.ssh_options(),
+            host.tmux.as_deref(),
+            mosh,
+        );
         self.open_ssh_command(host.name.clone(), cmd, destination);
     }
 
@@ -5618,6 +5797,7 @@ impl State {
         let mut copy_key: Option<usize> = None;
         let mut new_key = false;
         let mut open_files: Option<usize> = None;
+        let mut persist: Option<(usize, Option<String>, bool)> = None;
         // (host index, rule index, start?) / (host index, rule index) / host index
         let mut toggle_forward: Option<(usize, usize, bool)> = None;
         let mut remove_forward: Option<(usize, usize)> = None;
@@ -5749,6 +5929,23 @@ impl State {
                                 }
                             });
                         });
+                        egui::CollapsingHeader::new(t(lang, "Persistent session", "持久会话"))
+                            .id_salt(("persist", &host.name))
+                            .show(ui, |ui| {
+                                let mut tmux = host.tmux.is_some();
+                                let mut mosh = host.mosh;
+                                let a = ui.checkbox(
+                                    &mut tmux,
+                                    t(lang, "Keep the shell in tmux (reconnecting returns to it)", "在 tmux 中保持 shell(重连后回到原会话)"),
+                                );
+                                let b = ui.checkbox(
+                                    &mut mosh,
+                                    t(lang, "Connect with mosh (survives sleep and network changes)", "使用 mosh 连接(休眠、换网络不断线)"),
+                                );
+                                if a.changed() || b.changed() {
+                                    persist = Some((*i, tmux.then(|| host.tmux.clone().unwrap_or_else(|| "mtty".into())), mosh));
+                                }
+                            });
                         let title = format!(
                             "{} ({})",
                             t(lang, "Port forwards", "端口转发"),
@@ -5990,6 +6187,18 @@ impl State {
                     if !host.forwards.contains(&fwd) {
                         host.forwards.push(fwd);
                         self.save_hosts();
+                    }
+                }
+            }
+        }
+        if let Some((i, tmux, mosh)) = persist {
+            if let Some(host) = self.host_book.hosts.get_mut(i) {
+                let before = (host.tmux.clone(), host.mosh);
+                host.tmux = tmux;
+                host.mosh = mosh;
+                if !self.save_hosts() {
+                    if let Some(host) = self.host_book.hosts.get_mut(i) {
+                        (host.tmux, host.mosh) = before;
                     }
                 }
             }
@@ -7585,6 +7794,7 @@ impl ApplicationHandler<HostEvent> for Host {
             hosts_view: None,
             tunnels: HashMap::new(),
             sftp_view: None,
+            ftp_dialog: None,
             broadcast: false,
             snippet_book: Default::default(),
             snippet_book_error: None,

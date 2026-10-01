@@ -269,8 +269,13 @@ verified on its own:
   rename/permissions; remote editing reuses the pane's connection.
 - [x] **B3.5 Snippets and broadcast** (on several hosts a snippet runs as `ssh -t host 'command'` in a tab each, quoting checked by letting sh split it; broadcast goes through the keyboard path, which MTP cannot drive, so it awaits a desktop check): a command library run in the current pane
   or on several hosts; broadcast input to several panes.
-- [ ] **B3.6 FTP/FTPS and persistent sessions**: FTP/FTPS in the same browser
-  (plaintext flagged); optional tmux/mosh reconnect.
+- [x] **B3.6 FTP/FTPS and persistent sessions**: FTP/FTPS in the same browser
+  (plaintext flagged); optional tmux/mosh reconnect. (FTP runs through the
+  system curl, the password only in memory and passed on stdin; plain FTP and
+  explicit FTPS round-trip against a real server; whole folders are not
+  transferred over FTP. tmux checked over real ssh: after a detach, reconnecting
+  returns to the same shell. mosh: command construction tested only, not
+  against a real mosh-server.)
   Acceptance (M3 overall): an automated smoke against a test host; credentials
   never reach logs, session files or MTP responses.
 
