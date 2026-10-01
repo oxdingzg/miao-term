@@ -382,6 +382,18 @@ fn remove_whole_tab(tabs: &mut Vec<Tab>, active: &mut usize, i: usize) -> bool {
     true
 }
 
+fn views_mtime() -> Option<std::time::SystemTime> {
+    let path = miao_term_config::view::RuleSet::path()?;
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
+/// The host part of an ssh target as typed (`deploy@work:2200` → `work`).
+fn ssh_host(target: &str) -> String {
+    miao_term_ui::ssh::Target::parse(target)
+        .map(|t| t.host)
+        .unwrap_or_else(|| target.to_string())
+}
+
 /// The automatic title new tabs get (`shell 3`), as opposed to a chosen one.
 fn is_default_title(title: &str) -> bool {
     title
@@ -554,6 +566,10 @@ struct State {
     active_tab: usize,
     theme: Theme,
     rules: miao_term_config::view::RuleSet,
+    /// `views.json`'s modification time when last loaded, and when it was
+    /// last checked: edits apply without a restart.
+    rules_mtime: Option<std::time::SystemTime>,
+    rules_checked: Instant,
     cw: f32,
     ch: f32,
     font_size: f32,
@@ -1646,26 +1662,51 @@ impl State {
             .mtp
             .agent_for(&pane.id)
             .and_then(|a| a.get("agent").and_then(|v| v.as_str()).map(str::to_string));
+        let cwd = pane.term.cwd().map(str::to_string);
+        // The git branch is known for the directory the details worker last
+        // looked at; only use it when that is this pane's directory.
+        let branch = self
+            .details_data
+            .as_ref()
+            .filter(|_| {
+                self.details_cwd
+                    .as_deref()
+                    .map(|p| p.to_string_lossy().to_string())
+                    == cwd
+            })
+            .and_then(|d| d.git.iter().find(|(k, _)| k == "branch"))
+            .and_then(|(_, v)| v.split("...").next())
+            .map(|b| b.split_whitespace().next().unwrap_or(b).to_string());
+        let index = self
+            .tabs
+            .iter()
+            .position(|t| t.active == tab.active)
+            .map(|i| i + 1);
         let ctx = miao_term_config::view::Context {
-            cwd: pane.term.cwd().map(str::to_string),
-            command: None,
+            cwd,
+            command: pane.term.foreground_command(),
             agent,
-            host: None,
+            host: tab.ssh_target.as_deref().map(ssh_host),
             file: None,
             user: std::env::var("USER").ok(),
             shell: std::env::var("SHELL").ok(),
-            branch: None,
+            branch,
             osc_title: pane.term.title().map(str::to_string),
-            index: None,
+            index,
         };
         self.rules.evaluate(&ctx)
     }
 
     fn title_of(&self, tab: &Tab) -> String {
+        self.title_with(tab, self.view_for(tab))
+    }
+
+    /// The displayed title, given the tab's evaluated view rules.
+    fn title_with(&self, tab: &Tab, view: Option<miao_term_config::view::Resolved>) -> String {
         if tab.title_set && !tab.title.is_empty() {
             return tab.title.clone();
         }
-        if let Some(res) = self.view_for(tab) {
+        if let Some(res) = view {
             if !res.title.is_empty() {
                 return res.title;
             }
@@ -4454,6 +4495,21 @@ impl State {
         });
     }
 
+    /// Pick up edits to `views.json` (checked at most every 2 s).
+    fn reload_rules_if_changed(&mut self) {
+        if self.rules_checked.elapsed() < Duration::from_secs(2) {
+            return;
+        }
+        self.rules_checked = Instant::now();
+        let mtime = views_mtime();
+        if mtime != self.rules_mtime {
+            self.rules_mtime = mtime;
+            self.rules = miao_term_config::view::RuleSet::load();
+            self.publish_panes();
+            self.window.request_redraw();
+        }
+    }
+
     fn poll_jobs(&mut self) {
         while let Ok(done) = self.jobs_rx.try_recv() {
             self.finish_job(done);
@@ -5076,6 +5132,8 @@ impl ApplicationHandler<HostEvent> for Host {
             active_tab: 0,
             theme,
             rules: miao_term_config::view::RuleSet::load(),
+            rules_mtime: views_mtime(),
+            rules_checked: Instant::now(),
             cw,
             ch,
             font_size,
@@ -5289,6 +5347,7 @@ impl ApplicationHandler<HostEvent> for Host {
                 state.window.request_redraw();
             }
             state.poll_jobs();
+            state.reload_rules_if_changed();
             if let Some(rx) = state.update_rx.take() {
                 match rx.try_recv() {
                     Ok(result) => {
@@ -6469,19 +6528,34 @@ impl chrome::Chrome for State {
             .iter()
             .map(|t| {
                 let badge = self.agent_badge(&t.active);
-                let icon = if badge.is_some() {
+                let builtin = if badge.is_some() {
                     miao_term_ui::icons::Icon::Agent
                 } else if t.ssh {
                     miao_term_ui::icons::Icon::Server
                 } else {
                     miao_term_ui::icons::Icon::Terminal
                 };
-                let mut title = self.title_of(t);
+                let view = self.view_for(t);
+                let mut icon = miao_term_ui::icons::TabIcon::from(builtin);
+                if let Some(rule) = view.as_ref().and_then(|v| v.icon.as_ref()) {
+                    let color = rule.rgb();
+                    icon.glyph = miao_term_ui::icons::rule_glyph(
+                        rule.name.as_deref(),
+                        rule.emoji.as_deref(),
+                        color.is_some(),
+                    );
+                    icon.color = color.map(|c| miao_term_ui::theme::Rgb(c.0, c.1, c.2));
+                }
+                let rule_badge = view.as_ref().and_then(|v| v.badge.clone());
+                let mut title = self.title_with(t, view);
                 if let Some(p) = &t.prefix {
                     title = format!("[{p}] {title}");
                 }
                 if let Some(m) = &t.mark {
                     title = format!("{title}{m}");
+                }
+                if let Some(b) = rule_badge.filter(|b| !b.trim().is_empty()) {
+                    title = format!("{title} \u{00b7} {b}");
                 }
                 chrome::ChromeTab { title, badge, icon }
             })
@@ -6964,6 +7038,12 @@ mod tests {
             (restored.prefix, restored.mark, restored.group),
             (None, None, None)
         );
+    }
+
+    #[test]
+    fn view_rules_match_the_ssh_host() {
+        assert_eq!(ssh_host("deploy@work:2200"), "work");
+        assert_eq!(ssh_host("work"), "work");
     }
 
     #[test]

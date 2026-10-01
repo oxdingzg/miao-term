@@ -334,7 +334,41 @@ fn glob_opt(pattern: &Option<String>, value: Option<&str>, expand: bool) -> bool
     } else {
         value.to_string()
     };
-    glob_match(&pattern, &value)
+    if glob_match(&pattern, &value) {
+        return true;
+    }
+    // Paths: the cwd a shell reports is resolved (`/private/var/…` on macOS,
+    // the real target of a symlinked folder); resolve the pattern's literal
+    // directory prefix the same way before giving up.
+    expand && canonical_pattern(&pattern).is_some_and(|p| glob_match(&p, &value))
+}
+
+/// `pattern` with its leading wildcard-free directories resolved through
+/// symlinks, or `None` when that changes nothing or the prefix does not exist.
+fn canonical_pattern(pattern: &str) -> Option<String> {
+    // Rules are evaluated every frame; resolve each pattern once.
+    thread_local! {
+        static CACHE: std::cell::RefCell<std::collections::HashMap<String, Option<String>>> =
+            Default::default();
+    }
+    if let Some(hit) = CACHE.with(|c| c.borrow().get(pattern).cloned()) {
+        return hit;
+    }
+    let resolved = resolve_pattern_prefix(pattern);
+    CACHE.with(|c| c.borrow_mut().insert(pattern.to_string(), resolved.clone()));
+    resolved
+}
+
+fn resolve_pattern_prefix(pattern: &str) -> Option<String> {
+    let wild = pattern.find(['*', '?', '[']).unwrap_or(pattern.len());
+    let prefix_end = pattern[..wild].rfind('/')?;
+    let prefix = &pattern[..prefix_end];
+    if prefix.is_empty() {
+        return None;
+    }
+    let resolved = std::fs::canonicalize(prefix).ok()?;
+    let resolved = resolved.to_string_lossy();
+    (resolved != prefix).then(|| format!("{resolved}{}", &pattern[prefix_end..]))
 }
 
 fn exact_opt(pattern: &Option<String>, value: Option<&str>) -> bool {
@@ -378,6 +412,30 @@ fn glob(pattern: &[u8], text: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    #[cfg(unix)]
+    #[test]
+    fn path_rules_match_through_symlinked_folders() {
+        let root = std::env::temp_dir().join(format!("mtty-view-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("real/api")).unwrap();
+        std::os::unix::fs::symlink(root.join("real"), root.join("link")).unwrap();
+        let real = std::fs::canonicalize(root.join("real/api")).unwrap();
+        let set = RuleSet::from_json(&format!(
+            r#"{{"rules":[{{"match":{{"path":"{}/**"}},"alias":"work"}}]}}"#,
+            root.join("link").display()
+        ))
+        .unwrap();
+        let ctx = Context {
+            cwd: Some(real.to_string_lossy().to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            set.evaluate(&ctx).and_then(|r| r.alias).as_deref(),
+            Some("work")
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
     use super::*;
 
     fn ctx(cwd: &str) -> Context {

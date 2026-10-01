@@ -439,6 +439,24 @@ impl Terminal {
         self.child.process_id()
     }
 
+    /// The program running in the foreground of this pane (`vim`, `cargo`),
+    /// or `None` while the shell itself is waiting for input. Unix only.
+    pub fn foreground_command(&self) -> Option<String> {
+        #[cfg(unix)]
+        {
+            let leader = self.master.as_ref()?.process_group_leader()?;
+            let leader = u32::try_from(leader).ok()?;
+            if Some(leader) == self.pid() {
+                return None;
+            }
+            process_name(leader)
+        }
+        #[cfg(not(unix))]
+        {
+            None
+        }
+    }
+
     /// The window title reported via OSC 0/2, if any.
     pub fn title(&self) -> Option<&str> {
         self.title.as_deref()
@@ -470,6 +488,34 @@ impl Terminal {
             b"0" | b"2" => self.title = Some(payload.to_string()),
             _ => {}
         }
+    }
+}
+
+/// A process's short name (`comm`).
+#[cfg(unix)]
+fn process_name(pid: u32) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut buf = [0u8; 256];
+        // proc_name writes at most `buf.len()` bytes and returns the length.
+        let n = unsafe {
+            libc::proc_name(
+                pid as libc::c_int,
+                buf.as_mut_ptr().cast(),
+                buf.len() as u32,
+            )
+        };
+        if n <= 0 {
+            return None;
+        }
+        String::from_utf8(buf[..n as usize].to_vec()).ok()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        std::fs::read_to_string(format!("/proc/{pid}/comm"))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
     }
 }
 
@@ -708,6 +754,39 @@ mod tests {
         );
         drop(term);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn foreground_command_names_the_running_program() {
+        let mut term = Terminal::new(
+            Some("/bin/sh".into()),
+            80,
+            24,
+            100,
+            None,
+            &[],
+            std::sync::Arc::new(|| {}),
+        )
+        .unwrap();
+        let wait_for = |term: &mut Terminal, want: Option<&str>| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                term.process_pending();
+                let got = term.foreground_command();
+                if got.as_deref() == want || std::time::Instant::now() > deadline {
+                    return got;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        };
+        assert_eq!(
+            wait_for(&mut term, None),
+            None,
+            "an idle shell has no command"
+        );
+        term.write(b"sleep 3\r");
+        assert_eq!(wait_for(&mut term, Some("sleep")).as_deref(), Some("sleep"));
     }
 
     #[test]
