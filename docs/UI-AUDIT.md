@@ -2,7 +2,8 @@
 
 > Historical audit before application consolidation. Current identity and
 > the single-app packaged smoke are documented in [APP-IDENTITY.md](APP-IDENTITY.md).
-> The current smoke script targets native miaotty only.
+> The current smoke script targets mtty only; commands below use the
+> current package names (`mtty-app`, `mtty-cli`; formerly `miaotty-*`).
 
 [简体中文](UI-AUDIT.zh-CN.md)
 
@@ -12,8 +13,8 @@
 cargo fmt --all --check
 cargo clippy --workspace --all-targets
 cargo test --workspace
-cargo test --release -p miao-term-core -p miaotty-app -- --ignored
-cargo build --release -p miao-term-widget -p miaotty-app -p miaotty-cli
+cargo test --release -p miao-term-core -p mtty-app -- --ignored
+cargo build --release -p miao-term-widget -p mtty-app -p mtty-cli
 python3 scripts/smoke-hosts.py
 ```
 
@@ -29,7 +30,7 @@ For stable-machine baseline comparison, run performance tests **separately from
 builds, GPU tests and desktop smoke**:
 
 ```sh
-PERF_ENFORCE=1 cargo test --release -p miao-term-core -p miaotty-app -- --ignored --nocapture --test-threads=1
+PERF_ENFORCE=1 cargo test --release -p miao-term-core -p mtty-app -- --ignored --nocapture --test-threads=1
 ```
 
 ## Fixes and regression coverage

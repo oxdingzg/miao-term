@@ -1,7 +1,7 @@
 # UI 与基础功能校验 — 2026-10-01
 
 > 本文是应用统一前的历史审计。当前命名、迁移及单应用安装包冒烟见
-> [APP-IDENTITY.zh-CN.md](APP-IDENTITY.zh-CN.md)；当前脚本只验证 native miaotty。
+> [APP-IDENTITY.zh-CN.md](APP-IDENTITY.zh-CN.md)；当前脚本只验证 mtty;下文命令已使用当前包名(`mtty-app`、`mtty-cli`,原 `miaotty-*`)。
 
 [English](UI-AUDIT.md)
 
@@ -11,8 +11,8 @@
 cargo fmt --all --check
 cargo clippy --workspace --all-targets
 cargo test --workspace
-cargo test --release -p miao-term-core -p miaotty-app -- --ignored
-cargo build --release -p miao-term-widget -p miaotty-app -p miaotty-cli
+cargo test --release -p miao-term-core -p mtty-app -- --ignored
+cargo build --release -p miao-term-widget -p mtty-app -p mtty-cli
 python3 scripts/smoke-hosts.py
 ```
 
@@ -24,7 +24,7 @@ HOME、配置、数据和运行目录，启动真实 `/bin/sh`，经 CLI 驱动�
 性能基线比较应与编译、GPU 测试和桌面冒烟分开执行：
 
 ```sh
-PERF_ENFORCE=1 cargo test --release -p miao-term-core -p miaotty-app -- --ignored --nocapture --test-threads=1
+PERF_ENFORCE=1 cargo test --release -p miao-term-core -p mtty-app -- --ignored --nocapture --test-threads=1
 ```
 
 ## 修复与回归检查
