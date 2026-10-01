@@ -9741,7 +9741,47 @@ fn configure_egui(ctx: &egui::Context) {
     ctx.set_style(style);
 }
 
-fn install_egui_fonts(ctx: &egui::Context) {
+/// System fonts with CJK coverage for the egui chrome, first match wins.
+fn cjk_font_candidates() -> Vec<std::path::PathBuf> {
+    let mut out: Vec<std::path::PathBuf> = [
+        // macOS
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/STHeiti Light.ttc",
+        "/System/Library/Fonts/Hiragino Sans GB.ttc",
+        // Linux: Debian/Ubuntu, Arch, Fedora, then WenQuanYi
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "/usr/share/fonts/wenquanyi/wqy-microhei/wqy-microhei.ttc",
+    ]
+    .iter()
+    .map(std::path::PathBuf::from)
+    .collect();
+    // Windows: Microsoft YaHei, SimSun, then Traditional Chinese, Japanese
+    // and Korean system fonts.
+    let windir = std::env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into());
+    let fonts = std::path::PathBuf::from(windir).join("Fonts");
+    for name in [
+        "msyh.ttc",
+        "msyh.ttf",
+        "simsun.ttc",
+        "msjh.ttc",
+        "YuGothR.ttc",
+        "meiryo.ttc",
+        "malgun.ttf",
+    ] {
+        out.push(fonts.join(name));
+    }
+    out
+}
+
+/// The egui fonts: the bundled symbol fonts plus the first CJK font found.
+/// The `cjk` family member is added only with font data behind it: egui
+/// panics on a family that names missing data, which crashed mtty at start
+/// on every machine without one of the listed fonts (all of Windows).
+fn egui_font_definitions(cjk: &[std::path::PathBuf]) -> egui::FontDefinitions {
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
         "nerd".to_owned(),
@@ -9749,22 +9789,21 @@ fn install_egui_fonts(ctx: &egui::Context) {
             "../../../assets/fonts/SymbolsNerdFontMono-Regular.ttf"
         ))),
     );
-    for path in [
-        "/System/Library/Fonts/PingFang.ttc",
-        "/System/Library/Fonts/STHeiti Light.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-    ] {
-        if let Ok(bytes) = std::fs::read(path) {
+    let have_cjk = cjk.iter().any(|path| match std::fs::read(path) {
+        Ok(bytes) => {
             fonts.font_data.insert(
                 "cjk".to_owned(),
                 Arc::new(egui::FontData::from_owned(bytes)),
             );
-            break;
+            true
         }
-    }
+        Err(_) => false,
+    });
     for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
         let list = fonts.families.entry(family).or_default();
-        list.push("cjk".to_owned());
+        if have_cjk {
+            list.push("cjk".to_owned());
+        }
         list.push("nerd".to_owned());
     }
     // Tabler Icons (MIT), subset to the glyphs we use, as the UI icon family.
@@ -9778,7 +9817,11 @@ fn install_egui_fonts(ctx: &egui::Context) {
         egui::FontFamily::Name("tabler".into()),
         vec!["tabler".to_owned()],
     );
-    ctx.set_fonts(fonts);
+    fonts
+}
+
+fn install_egui_fonts(ctx: &egui::Context) {
+    ctx.set_fonts(egui_font_definitions(&cjk_font_candidates()));
 }
 
 /// The file name for a recipe called `name`, or why the name cannot be used
@@ -10370,6 +10413,28 @@ mod tests {
                 start + Duration::from_millis(deadline)
             );
         }
+    }
+
+    /// Without any CJK font (a Windows machine before the fix had none of
+    /// the listed paths) egui must still lay out text instead of panicking.
+    #[test]
+    fn egui_fonts_work_without_a_cjk_font() {
+        for candidates in [
+            vec![],
+            vec![std::path::PathBuf::from("/nonexistent/font.ttc")],
+        ] {
+            let ctx = egui::Context::default();
+            ctx.set_fonts(super::egui_font_definitions(&candidates));
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.label("mtty 中文 \u{f07c}");
+                });
+            });
+        }
+        // The real candidates include the system font paths of every platform.
+        let all = super::cjk_font_candidates();
+        assert!(all.iter().any(|p| p.ends_with("msyh.ttc")));
+        assert!(all.iter().any(|p| p.ends_with("PingFang.ttc")));
     }
 
     #[test]
