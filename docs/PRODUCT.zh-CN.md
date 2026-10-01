@@ -209,7 +209,7 @@
 - [ ] **B4.2** Apple 公证、Windows MSI 签名 **[所有者 + 凭证]**。
 - [x] **B4.3** 自动更新:下载、`update-pubkey` 签名校验、替换安装。(内置发布公钥;Mac mini 上用打包 app + 测试密钥签名的发布包验证安装并重启,并验证篡改的包因校验和或签名被拒;已发布的 v0.0.5 包用仓库公钥验签通过。AppImage 与 Windows 辅助脚本尚未在真实桌面运行。)
 - [x] **B4.4** bash / fish / PowerShell 的 shell 集成。(真实 PTY 端到端测试:macOS 上的 zsh、bash 3.2/5.3,Linux 上的 bash 5.2、fish 3.7、PowerShell 7.5;Windows 上的 PowerShell 由 CI 运行。Windows PowerShell 5.1 不记录历史。)
-- [ ] **B4.5** 可选的端到端加密同步,默认关闭。
+- [x] **B4.5** 可选的端到端加密同步,默认关闭。(ADR 0033:主机与片段经用户已在同步的文件夹传递,XChaCha20-Poly1305 加密,密钥不进入该文件夹,每台设备一个文件,按条目合并并记录删除。在 Mac mini 上用两个应用实例经共享文件夹完成汇合,文件夹中无明文。)
 
 ## 5. 不做的事
 

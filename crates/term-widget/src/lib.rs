@@ -677,6 +677,8 @@ enum JobDone {
     },
     /// A verified update download, or why it failed (B4.3).
     UpdateDownloaded(Result<std::path::PathBuf, String>),
+    /// A sync finished (B4.5).
+    Synced(Result<miao_term_config::sync::Outcome, String>),
     SftpLocalListed {
         dir: std::path::PathBuf,
         entries: Vec<FileEntry>,
@@ -725,6 +727,28 @@ struct TasksView {
     loading: bool,
     /// Index into `tasks` and whether it is a merge (else a discard).
     confirm: Option<(usize, bool)>,
+}
+
+/// End-to-end-encrypted sync of hosts and snippets (B4.5, ADR 0033).
+struct SyncState {
+    dir: Option<std::path::PathBuf>,
+    key: Option<miao_term_config::sync::Key>,
+    running: bool,
+    /// When the next background sync is due.
+    due: Option<Instant>,
+    last: Option<(
+        std::time::SystemTime,
+        Result<miao_term_config::sync::Outcome, String>,
+    )>,
+}
+
+/// The Sync window's form.
+#[derive(Default)]
+struct SyncView {
+    dir: String,
+    pairing: String,
+    show_code: bool,
+    error: Option<String>,
 }
 
 /// Connect to an FTP/FTPS server. The password stays in memory only.
@@ -947,6 +971,8 @@ struct State {
     tunnels: HashMap<(String, String), miao_term_ui::forward::Tunnel>,
     remote_dialog: Option<(String, String)>,
     ftp_dialog: Option<FtpDialog>,
+    sync: SyncState,
+    sync_view: Option<SyncView>,
     editor_vim: bool,
     vim: Option<miao_term_ui::vim::VimRuntime>,
     vim_for: String,
@@ -2876,6 +2902,7 @@ impl State {
         self.sftp_window(ctx);
         self.snippets_window(ctx);
         self.ftp_dialog_window(ctx);
+        self.sync_window(ctx);
         self.remote_dialog_window(ctx);
         self.composer_window(ctx);
         self.quick_window(ctx);
@@ -3278,6 +3305,9 @@ enum Cmd {
     SftpCurrent,
     /// Browse an FTP/FTPS server (B3.6).
     ConnectFtp,
+    /// Encrypted sync of hosts and snippets (B4.5).
+    SyncSettings,
+    SyncNow,
     /// Snippets and broadcast input (B3.5).
     Snippets,
     ToggleBroadcast,
@@ -3353,6 +3383,11 @@ impl State {
                 Cmd::ConnectFtp,
                 t(l, "Connect over FTP/FTPS…", "连接 FTP/FTPS…"),
             ),
+            (
+                Cmd::SyncSettings,
+                t(l, "Sync Hosts and Snippets…", "同步主机与片段…"),
+            ),
+            (Cmd::SyncNow, t(l, "Sync Now", "立即同步")),
             (
                 Cmd::ToggleBroadcast,
                 t(
@@ -3543,6 +3578,25 @@ impl State {
                         )
                         .into(),
                     ),
+                }
+            }
+            Cmd::SyncSettings => {
+                self.sync_view = Some(SyncView {
+                    dir: self
+                        .sync
+                        .dir
+                        .as_ref()
+                        .map(|d| d.display().to_string())
+                        .unwrap_or_default(),
+                    ..Default::default()
+                });
+            }
+            Cmd::SyncNow => {
+                if self.sync.dir.is_some() && self.sync.key.is_some() {
+                    self.sync.due = Some(Instant::now());
+                    self.sync_tick();
+                } else {
+                    self.sync_view = Some(SyncView::default());
                 }
             }
             Cmd::ConnectFtp => {
@@ -5021,6 +5075,7 @@ impl State {
             self.show_notice(msg);
             return false;
         }
+        self.sync_soon();
         true
     }
 
@@ -5257,6 +5312,237 @@ impl State {
                 open_external(&path.to_string_lossy());
             }
             Err(e) => self.update_install = UpdateInstall::Failed(e),
+        }
+    }
+
+    /// A local change: sync in a moment rather than at the next minute.
+    fn sync_soon(&mut self) {
+        if self.sync.dir.is_some() && self.sync.key.is_some() {
+            self.sync.due = Some(Instant::now() + Duration::from_secs(2));
+        }
+    }
+
+    /// Start a background sync when one is due.
+    fn sync_tick(&mut self) {
+        let (Some(dir), Some(key)) = (self.sync.dir.clone(), self.sync.key.clone()) else {
+            return;
+        };
+        if self.sync.running || self.sync.due.map_or(true, |due| Instant::now() < due) {
+            return;
+        }
+        let Some(paths) = miao_term_config::sync::Paths::default_paths() else {
+            return;
+        };
+        self.sync.running = true;
+        self.sync.due = None;
+        self.spawn_job(move || {
+            JobDone::Synced(miao_term_config::sync::run(
+                &dir,
+                &key,
+                &paths,
+                miao_term_config::sync::now_ms(),
+            ))
+        });
+    }
+
+    fn sync_window(&mut self, ctx: &egui::Context) {
+        use miao_term_ui::i18n::t;
+        let lang = self.lang;
+        let Some(mut view) = self.sync_view.take() else {
+            return;
+        };
+        let mut open = true;
+        let mut turn_on = false;
+        let mut turn_off = false;
+        let mut new_key = false;
+        let mut join = false;
+        let mut sync_now = false;
+        let have_key = self.sync.key.is_some();
+        let on = self.sync.dir.is_some() && have_key;
+        let red = egui::Color32::from_rgb(0xbf, 0x61, 0x6a);
+        let code = self.sync.key.as_ref().map(|k| k.pairing_code());
+        let status = if self.sync.running {
+            t(lang, "Syncing…", "正在同步…").to_string()
+        } else {
+            match &self.sync.last {
+                Some((when, Ok(out))) => format!(
+                    "{} {}s · {} {}",
+                    t(lang, "Last sync", "上次同步"),
+                    when.elapsed().map(|d| d.as_secs()).unwrap_or(0),
+                    out.devices,
+                    t(lang, "other device(s)", "台其他设备")
+                ),
+                Some((_, Err(e))) => e.clone(),
+                None if on => t(lang, "Not synced yet", "尚未同步").to_string(),
+                None => t(lang, "Sync is off", "同步未开启").to_string(),
+            }
+        };
+        let running = self.sync.running;
+        app_window(t(lang, "Sync Hosts and Snippets", "同步主机与片段"), ctx)
+            .open(&mut open)
+            .default_size([540.0, 360.0])
+            .show(ctx, |ui| {
+                window_body(ui, |ui| {
+                    ui.label(t(
+                        lang,
+                        "Hosts and snippets are encrypted on this machine and written to a folder you already sync (iCloud Drive, Dropbox, Syncthing…). No account and no mtty server; the key never goes into the folder.",
+                        "主机与片段在本机加密后写入一个你已在同步的文件夹(iCloud Drive、Dropbox、Syncthing…)。无需账号,不经 mtty 服务器;密钥永不进入该文件夹。",
+                    ));
+                    ui.add_space(8.0);
+                    ui.label(t(lang, "Folder", "文件夹"));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut view.dir)
+                            .hint_text("~/Dropbox")
+                            .desired_width(f32::INFINITY),
+                    );
+                    ui.add_space(8.0);
+                    if let Some(code) = &code {
+                        ui.horizontal(|ui| {
+                            ui.label(t(lang, "Key: on this machine", "密钥:已在本机"));
+                            let label = if view.show_code {
+                                t(lang, "Hide pairing code", "隐藏配对码")
+                            } else {
+                                t(lang, "Show pairing code", "显示配对码")
+                            };
+                            if ui.button(label).clicked() {
+                                view.show_code = !view.show_code;
+                            }
+                        });
+                        if view.show_code {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(code).monospace().size(11.0));
+                                if ui.small_button(t(lang, "Copy", "复制")).clicked() {
+                                    ui.ctx().copy_text(code.clone());
+                                }
+                            });
+                            ui.label(
+                                egui::RichText::new(t(
+                                    lang,
+                                    "Paste it on your other device. Anyone with it can read the synced folder.",
+                                    "在另一台设备上粘贴它。拿到配对码的人可以读取同步文件夹。",
+                                ))
+                                .size(11.0)
+                                .color(red),
+                            );
+                        }
+                    } else {
+                        ui.label(t(
+                            lang,
+                            "First device: create a key. Another device: paste the first one's pairing code.",
+                            "第一台设备:创建密钥。其他设备:粘贴第一台设备的配对码。",
+                        ));
+                        ui.horizontal(|ui| {
+                            if ui.button(t(lang, "Create key", "创建密钥")).clicked() {
+                                new_key = true;
+                            }
+                            ui.add(
+                                egui::TextEdit::singleline(&mut view.pairing)
+                                    .password(true)
+                                    .hint_text("mtty-sync:…")
+                                    .desired_width(220.0),
+                            );
+                            if ui
+                                .add_enabled(
+                                    !view.pairing.trim().is_empty(),
+                                    egui::Button::new(t(lang, "Join", "加入")),
+                                )
+                                .clicked()
+                            {
+                                join = true;
+                            }
+                        });
+                    }
+                    if let Some(e) = &view.error {
+                        ui.label(egui::RichText::new(e).color(red));
+                    }
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if on {
+                            if ui
+                                .add_enabled(!running, egui::Button::new(t(lang, "Sync Now", "立即同步")))
+                                .clicked()
+                            {
+                                sync_now = true;
+                            }
+                            if ui.button(t(lang, "Save folder", "保存文件夹")).clicked() {
+                                turn_on = true;
+                            }
+                            if ui.button(t(lang, "Turn off", "关闭同步")).clicked() {
+                                turn_off = true;
+                            }
+                        } else if ui
+                            .add_enabled(
+                                have_key && !view.dir.trim().is_empty(),
+                                egui::Button::new(t(lang, "Turn on", "开启同步")),
+                            )
+                            .clicked()
+                        {
+                            turn_on = true;
+                        }
+                    });
+                    ui.label(
+                        egui::RichText::new(&status)
+                            .size(11.0)
+                            .color(egui::Color32::from_gray(140)),
+                    );
+                });
+            });
+        if new_key || join {
+            let key = if join {
+                miao_term_config::sync::Key::from_pairing_code(&view.pairing)
+            } else {
+                Ok(miao_term_config::sync::Key::generate())
+            };
+            let saved = key.and_then(|key| {
+                let path = miao_term_config::sync::Key::path().ok_or("no config directory")?;
+                key.save_to(&path)?;
+                Ok(key)
+            });
+            match saved {
+                Ok(key) => {
+                    self.sync.key = Some(key);
+                    view.pairing.clear();
+                    view.error = None;
+                    view.show_code = new_key;
+                }
+                Err(e) => view.error = Some(e),
+            }
+        }
+        if turn_on {
+            let dir = miao_term_config::expand_home(view.dir.trim());
+            if !dir.is_dir() {
+                view.error = Some(format!(
+                    "{}: {}",
+                    t(lang, "Not a folder", "不是文件夹"),
+                    dir.display()
+                ));
+            } else {
+                let value = miao_term_config::toml_string(&dir.to_string_lossy());
+                match miao_term_config::Config::save_settings(&[("sync-dir", value)]) {
+                    Ok(_) => {
+                        self.sync.dir = Some(dir);
+                        self.sync.due = Some(Instant::now());
+                        view.error = None;
+                    }
+                    Err(e) => view.error = Some(e.to_string()),
+                }
+            }
+        }
+        if turn_off {
+            match miao_term_config::Config::save_settings(&[("sync-dir", "\"\"".to_string())]) {
+                Ok(_) => {
+                    self.sync.dir = None;
+                    self.sync.last = None;
+                }
+                Err(e) => view.error = Some(e.to_string()),
+            }
+        }
+        if sync_now {
+            self.sync.due = Some(Instant::now());
+        }
+        self.sync_tick();
+        if open {
+            self.sync_view = Some(view);
         }
     }
 
@@ -5923,7 +6209,10 @@ impl State {
             return false;
         }
         match self.host_book.save() {
-            Ok(()) => true,
+            Ok(()) => {
+                self.sync_soon();
+                true
+            }
             Err(e) => {
                 let msg = format!("{}: {e}", t(self.lang, "Hosts not saved", "主机未保存"));
                 self.show_notice(msg);
@@ -7189,6 +7478,33 @@ impl State {
                     }
                 }
             }
+            JobDone::Synced(result) => {
+                self.sync.running = false;
+                self.sync.due = Some(Instant::now() + Duration::from_secs(60));
+                match &result {
+                    Ok(out) => {
+                        if out.hosts_changed {
+                            self.reload_hosts();
+                        }
+                        if out.snippets_changed {
+                            self.reload_snippets();
+                        }
+                        if !out.problems.is_empty() {
+                            let msg = format!(
+                                "{}: {}",
+                                t_lang(self.lang, "Sync skipped files", "同步跳过了文件"),
+                                out.problems.join("; ")
+                            );
+                            self.show_notice(msg);
+                        }
+                    }
+                    Err(e) => {
+                        let msg = format!("{}: {e}", t_lang(self.lang, "Sync failed", "同步失败"));
+                        self.show_notice(msg);
+                    }
+                }
+                self.sync.last = Some((std::time::SystemTime::now(), result));
+            }
             JobDone::UpdateDownloaded(result) => {
                 self.update_install = match result {
                     Ok(path) => UpdateInstall::Ready(path),
@@ -7955,6 +8271,15 @@ impl ApplicationHandler<HostEvent> for Host {
             tunnels: HashMap::new(),
             sftp_view: None,
             ftp_dialog: None,
+            sync: SyncState {
+                dir: cfg.sync_dir.clone(),
+                key: miao_term_config::sync::Key::path()
+                    .and_then(|p| miao_term_config::sync::Key::load_from(&p).ok().flatten()),
+                running: false,
+                due: Some(Instant::now()),
+                last: None,
+            },
+            sync_view: None,
             broadcast: false,
             snippet_book: Default::default(),
             snippet_book_error: None,
@@ -8191,6 +8516,7 @@ impl ApplicationHandler<HostEvent> for Host {
             // occluded window may not be redrawn at all).
             state.agent_loop();
             state.reload_rules_if_changed();
+            state.sync_tick();
             if let Some(rx) = state.update_rx.take() {
                 match rx.try_recv() {
                     Ok(result) => {

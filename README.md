@@ -173,6 +173,11 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 - **Persistent sessions**: per saved host, *Keep the shell in tmux* reattaches
   the same session on reconnect, and *Connect with mosh* survives sleep and
   network changes (mosh needed on both ends; mtty falls back to ssh without it).
+- **Encrypted sync (optional, off by default)**: *Sync Hosts and Snippets…*
+  writes hosts and snippets, encrypted, to a folder you already sync (iCloud
+  Drive, Dropbox, Syncthing). No account and no server; the key stays in
+  `~/.config/mtty/sync.key` and a second device joins with its pairing code
+  (ADR 0033).
 - **Snippets and broadcast**: *Snippets…* keeps commands in
   `~/.config/mtty/snippets.toml` (name, command, tags) to run in the current
   pane or on several saved hosts (a tab each); Open Quickly finds them too.

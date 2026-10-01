@@ -293,7 +293,11 @@ verified on its own:
 - [x] **B4.4** Shell integration for bash / fish / PowerShell. (End-to-end PTY tests
   for zsh, bash 3.2/5.3 on macOS, bash 5.2, fish 3.7 and PowerShell 7.5 on Linux;
   Windows PowerShell runs in CI. Windows PowerShell 5.1 records no history.)
-- [ ] **B4.5** Optional end-to-end-encrypted sync, off by default.
+- [x] **B4.5** Optional end-to-end-encrypted sync, off by default. (ADR 0033:
+  hosts and snippets through a folder the user already syncs, XChaCha20-Poly1305
+  with a key that never enters the folder, one file per device, per-entry merge
+  with tombstones. Two app instances converged through a shared folder on the
+  Mac mini, with no plaintext in it.)
 
 ## 5. Non-goals
 
