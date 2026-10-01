@@ -329,6 +329,9 @@ struct Tab {
     panes: Vec<Pane>,
     active: String,
     title: String,
+    /// The title was chosen (Rename Tab, an ssh target, Quick) rather than a
+    /// default: it wins over view rules, the program title and the folder.
+    title_set: bool,
     /// Opened as an ssh session (shows a server icon).
     ssh: bool,
     /// The ssh target as the user typed it, to reconnect after a restore.
@@ -352,6 +355,7 @@ impl Tab {
             "title": self.title, "active": self.active,
             "layout": layout_to_json(&self.layout), "panes": panes,
             "prefix": self.prefix, "mark": self.mark, "group": self.group,
+            "title_set": self.title_set,
             "ssh": self.ssh, "ssh_target": self.ssh_target,
         })
     }
@@ -376,6 +380,13 @@ fn remove_whole_tab(tabs: &mut Vec<Tab>, active: &mut usize, i: usize) -> bool {
     }
     *active = (*active).min(tabs.len() - 1);
     true
+}
+
+/// The automatic title new tabs get (`shell 3`), as opposed to a chosen one.
+fn is_default_title(title: &str) -> bool {
+    title
+        .strip_prefix("shell ")
+        .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
 }
 
 /// Remove every tab except `keep` (Close Other Tabs); returns the removed
@@ -909,6 +920,7 @@ impl State {
             panes: vec![pane],
             active: id,
             title: format!("shell {n}"),
+            title_set: false,
             ssh: false,
             ssh_target: None,
             prefix: None,
@@ -949,6 +961,7 @@ impl State {
         self.new_tab();
         if let Some(tab) = self.tabs.last_mut() {
             tab.title = miao_term_ui::i18n::t(self.lang, "Quick", "快速").to_string();
+            tab.title_set = true;
             if let Some(pane) = tab.panes.first() {
                 self.quick_pane = Some(pane.id.clone());
             }
@@ -971,6 +984,7 @@ impl State {
             panes: vec![pane],
             active: id,
             title: format!("shell {n}"),
+            title_set: false,
             ssh: false,
             ssh_target: None,
             prefix: None,
@@ -1336,11 +1350,12 @@ impl State {
 
     fn duplicate_tab(&mut self) {
         let cwd = self.cwd();
-        let (title, ssh, target, prefix, mark, group) = self
+        let (title_set, title, ssh, target, prefix, mark, group) = self
             .tabs
             .get(self.active_tab)
             .map(|t| {
                 (
+                    t.title_set,
                     t.title.clone(),
                     t.ssh,
                     t.ssh_target.clone(),
@@ -1357,7 +1372,10 @@ impl State {
             None => self.new_tab_in(inherited_cwd(ssh, cwd)),
         }
         if let Some(t) = self.tabs.last_mut() {
-            t.title = title;
+            if title_set {
+                t.title = title;
+                t.title_set = true;
+            }
             t.prefix = prefix;
             t.mark = mark;
             t.group = group;
@@ -1644,6 +1662,9 @@ impl State {
     }
 
     fn title_of(&self, tab: &Tab) -> String {
+        if tab.title_set && !tab.title.is_empty() {
+            return tab.title.clone();
+        }
         if let Some(res) = self.view_for(tab) {
             if !res.title.is_empty() {
                 return res.title;
@@ -2497,11 +2518,18 @@ impl State {
                 .map(|old| map.get(old).cloned().unwrap_or_else(|| old.to_string()))
                 .filter(|id| panes.iter().any(|p| &p.id == id))
                 .unwrap_or_else(|| panes[0].id.clone());
+            // Sessions saved before the flag existed: a title other than the
+            // default "shell N" was chosen by the user.
+            let title_set = t
+                .get("title_set")
+                .and_then(|x| x.as_bool())
+                .unwrap_or_else(|| !is_default_title(&title));
             let mut tab = Tab {
                 layout,
                 panes,
                 active,
                 title,
+                title_set,
                 ssh,
                 ssh_target: ssh_target.filter(|_| ssh),
                 prefix: None,
@@ -3938,6 +3966,7 @@ impl State {
         if let Some(tab) = self.tabs.last_mut() {
             tab.ssh_target = Some(input.trim().to_string());
             tab.title = title;
+            tab.title_set = true;
             tab.ssh = true;
             let active = tab.active.clone();
             if let Some(pane) = tab.panes.iter_mut().find(|p| p.id == active) {
@@ -4630,8 +4659,11 @@ impl State {
         self.rename_buf = buf;
         if commit {
             if let Some(tab) = self.tabs.get_mut(i) {
-                if !self.rename_buf.is_empty() {
-                    tab.title = self.rename_buf.clone();
+                // An empty name goes back to the automatic title.
+                let name = self.rename_buf.trim().to_string();
+                tab.title_set = !name.is_empty();
+                if !name.is_empty() {
+                    tab.title = name;
                 }
             }
             self.renaming = None;
@@ -6905,6 +6937,7 @@ mod tests {
             panes: vec![],
             active: title.into(),
             title: title.into(),
+            title_set: false,
             ssh: false,
             ssh_target: None,
             prefix: None,
@@ -6931,6 +6964,22 @@ mod tests {
             (restored.prefix, restored.mark, restored.group),
             (None, None, None)
         );
+    }
+
+    #[test]
+    fn default_titles_are_told_apart_from_chosen_ones() {
+        assert!(is_default_title("shell 1"));
+        assert!(is_default_title("shell 12"));
+        for chosen in [
+            "shell",
+            "shell x",
+            "deploy@work",
+            "Quick",
+            "api 服务",
+            "shell 1a",
+        ] {
+            assert!(!is_default_title(chosen), "{chosen}");
+        }
     }
 
     #[test]
