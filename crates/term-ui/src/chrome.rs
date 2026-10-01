@@ -1,4 +1,4 @@
-//! Reusable egui chrome widgets for miaotty and embedders. They only take plain
+//! Reusable egui chrome widgets for mtty and embedders. They only take plain
 //! data and return actions, so they are independent of any host's state type.
 
 use crate::theme::{Chrome as ChromeColors, Rgb};

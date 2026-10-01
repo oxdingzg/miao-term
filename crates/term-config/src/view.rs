@@ -2,7 +2,7 @@
 //!
 //! Maps a pane's context — working directory, foreground command, agent, host,
 //! file — to an alias, icon, tab title and badge. The rule set is plain JSON at
-//! `~/.config/miaotty/views.json`, so it is user-editable and round-trippable.
+//! `~/.config/mtty/views.json`, so it is user-editable and round-trippable.
 
 use std::path::PathBuf;
 
@@ -124,12 +124,9 @@ pub struct Resolved {
 }
 
 impl RuleSet {
-    /// `~/.config/miaotty/views.json` (respecting `XDG_CONFIG_HOME`).
+    /// `~/.config/mtty/views.json` (respecting `XDG_CONFIG_HOME`).
     pub fn path() -> Option<PathBuf> {
-        let base = std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-        Some(base.join("miaotty").join("views.json"))
+        Some(crate::config_dir()?.join("views.json"))
     }
 
     /// Load from the default path; a missing or malformed file yields an empty

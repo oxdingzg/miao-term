@@ -24,9 +24,9 @@ class ManifestTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name)
-        for name in ("miaotty-macos-arm64.zip", "miaotty-macos-x86_64.zip",
-                     "miaotty-linux-x86_64.tar.gz", "miaotty_0.0.1-1_amd64.deb",
-                     "miaotty-windows-x86_64.zip"):
+        for name in ("mtty-macos-arm64.zip", "mtty-macos-x86_64.zip",
+                     "mtty-linux-x86_64.tar.gz", "mtty_0.0.1-1_amd64.deb",
+                     "mtty-windows-x86_64.zip"):
             (self.directory / name).write_bytes(b"artifact")
 
     def build(self, signed=False):
@@ -40,34 +40,36 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(linux["sha256"], hashlib.sha256(b"artifact").hexdigest())
 
     def test_installers_preferred(self):
-        for name in ("miaotty-linux-x86_64.AppImage", "miaotty-app-0.0.1-x86_64.msi"):
+        for name in ("mtty-linux-x86_64.AppImage", "mtty-app-0.0.1-x86_64.msi"):
             (self.directory / name).write_bytes(b"installer")
         artifacts = self.build()["artifacts"]
         self.assertTrue(artifacts["linux-x86_64"]["url"].endswith(".AppImage"))
         self.assertTrue(artifacts["windows-x86_64"]["url"].endswith(".msi"))
-        self.assertTrue(artifacts["macos-aarch64"]["url"].endswith("miaotty-macos-arm64.zip"))
+        self.assertTrue(artifacts["macos-aarch64"]["url"].endswith("mtty-macos-arm64.zip"))
 
-    def test_retired_native_artifact_cannot_be_published(self):
-        native = self.directory / "miaotty-native-macos-arm64.zip"
-        native.write_bytes(b"old second app")
-        with self.assertRaisesRegex(ValueError, "retired second application"):
-            self.build()
-        with self.assertRaisesRegex(ValueError, "retired second application"):
-            module.collect_artifacts(self.directory)
+    def test_retired_artifacts_cannot_be_published(self):
+        for name in ("miaotty-native-macos-arm64.zip", "miaotty-macos-arm64.zip", "miaotty_0.0.1-1_amd64.deb"):
+            retired = self.directory / name
+            retired.write_bytes(b"retired")
+            with self.assertRaisesRegex(ValueError, "retired application"):
+                self.build()
+            with self.assertRaisesRegex(ValueError, "retired application"):
+                module.collect_artifacts(self.directory)
+            retired.unlink()
 
     def test_linux_and_windows_installers_have_only_one_gui(self):
         import tomllib
         import xml.etree.ElementTree as ET
         root = Path(__file__).parent.parent
-        cargo = tomllib.loads((root / "miaotty-app/Cargo.toml").read_text())
+        cargo = tomllib.loads((root / "mtty-app/Cargo.toml").read_text())
         executables = [asset[0] for asset in cargo["package"]["metadata"]["deb"]["assets"] if asset[0].startswith("target/release/")]
-        self.assertEqual(executables, ["target/release/miaotty", "target/release/miaotty-cli"])
-        wix = ET.parse(root / "miaotty-app/wix/main.wxs")
+        self.assertEqual(executables, ["target/release/mtty", "target/release/mtty-cli"])
+        wix = ET.parse(root / "mtty-app/wix/main.wxs")
         names = {file.get("Name") for file in wix.findall(".//{http://schemas.microsoft.com/wix/2006/wi}File") if file.get("Name")}
-        self.assertEqual(names, {"miaotty.exe", "miaotty-cli.exe"})
+        self.assertEqual(names, {"mtty.exe", "mtty-cli.exe"})
 
     def test_missing_platform_rejected(self):
-        (self.directory / "miaotty-macos-x86_64.zip").unlink()
+        (self.directory / "mtty-macos-x86_64.zip").unlink()
         with self.assertRaisesRegex(ValueError, "missing platform artifacts"):
             self.build()
 
@@ -82,11 +84,11 @@ class ManifestTests(unittest.TestCase):
     def test_nested_uploads_are_collected_before_signing_and_selection(self):
         nested = self.directory / "dist"
         nested.mkdir()
-        deb = self.directory / "miaotty_0.0.1-1_amd64.deb"
+        deb = self.directory / "mtty_0.0.1-1_amd64.deb"
         deb.rename(nested / deb.name)
         wix = self.directory / "target/wix"
         wix.mkdir(parents=True)
-        msi = wix / "miaotty-app-0.0.1-x86_64.msi"
+        msi = wix / "mtty-app-0.0.1-x86_64.msi"
         msi.write_bytes(b"MSI payload")
         module.collect_artifacts(self.directory)
         artifacts = self.build()["artifacts"]
@@ -99,7 +101,7 @@ class ManifestTests(unittest.TestCase):
     def test_collect_rejects_collisions_without_moving_payloads(self):
         nested = self.directory / "dist"
         nested.mkdir()
-        duplicate = nested / "miaotty-macos-arm64.zip"
+        duplicate = nested / "mtty-macos-arm64.zip"
         duplicate.write_bytes(b"different payload")
         with self.assertRaisesRegex(ValueError, "duplicate artifact filename"):
             module.collect_artifacts(self.directory)
@@ -116,15 +118,15 @@ class AppRunTests(unittest.TestCase):
             binaries.mkdir(parents=True)
             launcher = bundle / "AppRun"
             shutil.copyfile(Path(__file__).parent.parent / "assets/AppRun", launcher)
-            host = binaries / "miaotty"
-            host.write_text('#!/bin/sh\nprintf "%s\\n" "$PWD" "$@"\ncommand -v miaotty-cli\nexit 7\n')
+            host = binaries / "mtty"
+            host.write_text('#!/bin/sh\nprintf "%s\\n" "$PWD" "$@"\ncommand -v mtty-cli\nexit 7\n')
             host.chmod(0o755)
-            cli = binaries / "miaotty-cli"
+            cli = binaries / "mtty-cli"
             cli.write_text("#!/bin/sh\nexit 0\n")
             cli.chmod(0o755)
             working_directory = root / "working directory"
             working_directory.mkdir()
-            arguments = ["miaotty://quick", "argument with spaces"]
+            arguments = ["mtty://quick", "argument with spaces"]
             result = subprocess.run(
                 ["sh", str(launcher), *arguments], cwd=working_directory,
                 env=dict(os.environ, PATH="/usr/bin:/bin"), capture_output=True, text=True,

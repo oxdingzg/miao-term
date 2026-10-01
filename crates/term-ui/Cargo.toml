@@ -1,6 +1,6 @@
 [package]
 name = "miao-term-ui"
-description = "Host-agnostic pieces shared by the miaotty hosts: theme, input encoding, selection, row building, split layout, and egui chrome widgets"
+description = "Host-agnostic pieces shared by the mtty hosts: theme, input encoding, selection, row building, split layout, and egui chrome widgets"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

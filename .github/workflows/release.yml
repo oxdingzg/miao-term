@@ -29,7 +29,7 @@ jobs:
           cache-on-failure: true
 
       - name: Build
-        run: cargo build --release -p miaotty-app -p miaotty-cli
+        run: cargo build --release -p mtty-app -p mtty-cli
 
       - name: Package (macOS)
         if: runner.os == 'macOS'
@@ -52,33 +52,34 @@ jobs:
             security import cert.p12 -k tmp.keychain -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
             security set-key-partition-list -S apple-tool:,apple: -s -k actions tmp.keychain
             IDENTITY=$(security find-identity -v -p codesigning tmp.keychain | awk '{print $2}' | head -1)
-            codesign --force --deep --options runtime --sign "$IDENTITY" dist/miaotty.app
-            (cd dist && zip -qry "../miaotty-macos-$ARCH.zip" miaotty.app)
-            xcrun notarytool submit "miaotty-macos-$ARCH.zip" \
+            codesign --force --deep --options runtime --sign "$IDENTITY" dist/mtty.app
+            (cd dist && zip -qry "../mtty-macos-$ARCH.zip" mtty.app)
+            xcrun notarytool submit "mtty-macos-$ARCH.zip" \
               --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
               --password "$APPLE_APP_PASSWORD" --wait
-            xcrun stapler staple dist/miaotty.app
-            rm -f "miaotty-macos-$ARCH.zip"
+            xcrun stapler staple dist/mtty.app
+            rm -f "mtty-macos-$ARCH.zip"
           else
             echo "no signing secrets; shipping ad-hoc signed build"
           fi
-          (cd dist && zip -qry "../miaotty-macos-$ARCH.zip" miaotty.app)
+          (cd dist && zip -qry "../mtty-macos-$ARCH.zip" mtty.app)
 
       - name: Verify single macOS application
         if: runner.os == 'macOS'
         run: |
-          python3 scripts/check-macos-bundle.py dist/miaotty.app
-          dist/miaotty.app/Contents/MacOS/miaotty --version
+          python3 scripts/check-macos-bundle.py dist/mtty.app
+          dist/mtty.app/Contents/MacOS/mtty --version
           test ! -e dist/miaotty-native.app
+          test ! -e dist/miaotty.app
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
         run: |
           mkdir -p dist
-          cp target/release/miaotty target/release/miaotty-cli dist/
-          tar -C dist -czf miaotty-linux-x86_64.tar.gz .
+          cp target/release/mtty target/release/mtty-cli dist/
+          tar -C dist -czf mtty-linux-x86_64.tar.gz .
           cargo install cargo-deb --locked
-          cargo deb -p miaotty-app --no-build
+          cargo deb -p mtty-app --no-build
           cp target/debian/*.deb dist/
 
       - name: AppImage (Linux)
@@ -88,51 +89,47 @@ jobs:
           AppDir=AppDir
           mkdir -p "$AppDir/usr/bin" "$AppDir/usr/share/applications" \
                    "$AppDir/usr/share/icons/hicolor/256x256/apps"
-          cp target/release/miaotty target/release/miaotty-cli "$AppDir/usr/bin/"
+          cp target/release/mtty target/release/mtty-cli "$AppDir/usr/bin/"
           cp assets/AppRun "$AppDir/AppRun"
           chmod +x "$AppDir/AppRun"
-          cat > "$AppDir/miaotty.desktop" <<'EOF'
-          [Desktop Entry]
-          Type=Application
-          Name=miaotty
-          Exec=miaotty %u
-          Icon=miaotty
-          Categories=System;TerminalEmulator;
-          MimeType=x-scheme-handler/miaotty;x-scheme-handler/ssh;x-scheme-handler/x-man-page;
-          Terminal=false
-          EOF
-          cp "$AppDir/miaotty.desktop" "$AppDir/usr/share/applications/"
+          cp assets/mtty.desktop "$AppDir/mtty.desktop"
+          cp "$AppDir/mtty.desktop" "$AppDir/usr/share/applications/"
           # A real 256x256 icon: appimagetool rejects a 1x1 placeholder.
-          python3 scripts/make-icon.py "$AppDir/miaotty.png" 2e3440
-          cp "$AppDir/miaotty.png" "$AppDir/usr/share/icons/hicolor/256x256/apps/miaotty.png"
+          python3 scripts/make-icon.py "$AppDir/mtty.png" 2e3440
+          cp "$AppDir/mtty.png" "$AppDir/usr/share/icons/hicolor/256x256/apps/mtty.png"
           wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage -O appimagetool
           chmod +x appimagetool
-          ARCH=x86_64 ./appimagetool --appimage-extract-and-run "$AppDir" miaotty-linux-x86_64.AppImage
+          ARCH=x86_64 ./appimagetool --appimage-extract-and-run "$AppDir" mtty-linux-x86_64.AppImage
 
       - name: Verify Linux package contents
         if: runner.os == 'Linux'
         run: |
           set -euo pipefail
           dpkg-deb --extract dist/*.deb "$RUNNER_TEMP/deb-check"
-          chmod +x miaotty-linux-x86_64.AppImage
-          ./miaotty-linux-x86_64.AppImage --appimage-extract
-          for binary in miaotty miaotty-cli; do
+          chmod +x mtty-linux-x86_64.AppImage
+          ./mtty-linux-x86_64.AppImage --appimage-extract
+          for binary in mtty mtty-cli; do
             test -x "$RUNNER_TEMP/deb-check/usr/bin/$binary"
             test -x "squashfs-root/usr/bin/$binary"
           done
+          # Pre-rename aliases (ADR 0032).
+          for alias in miaotty miaotty-cli; do
+            test -x "$RUNNER_TEMP/deb-check/usr/bin/$alias"
+          done
+          dpkg-deb --field dist/*.deb Replaces | grep -qw miaotty
           test -x squashfs-root/AppRun
           cmp assets/AppRun squashfs-root/AppRun
-          "$RUNNER_TEMP/deb-check/usr/bin/miaotty-cli" --help
-          squashfs-root/usr/bin/miaotty-cli --help
+          "$RUNNER_TEMP/deb-check/usr/bin/mtty-cli" --help
+          squashfs-root/usr/bin/mtty-cli --help
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item target/release/miaotty.exe dist/
-          Copy-Item target/release/miaotty-cli.exe dist/
-          Compress-Archive -Path dist/* -DestinationPath miaotty-windows-x86_64.zip
+          Copy-Item target/release/mtty.exe dist/
+          Copy-Item target/release/mtty-cli.exe dist/
+          Compress-Archive -Path dist/* -DestinationPath mtty-windows-x86_64.zip
 
       - name: MSI (Windows)
         if: runner.os == 'Windows'
@@ -141,11 +138,11 @@ jobs:
           # picks it up through the WIX environment variable.
           choco install -y wixtoolset --no-progress
           cargo install cargo-wix --locked
-          cargo build --release -p miaotty-cli
-          # The WiX template lives in miaotty-app/wix and references wix\License.rtf
+          cargo build --release -p mtty-cli
+          # The WiX template lives in mtty-app/wix and references wix\License.rtf
           # relative to the crate, so build from there.
-          cd miaotty-app
-          cargo wix --package miaotty-app --nocapture
+          cd mtty-app
+          cargo wix --package mtty-app --nocapture
 
       - name: Verify MSI install and uninstall
         if: runner.os == 'Windows'
@@ -156,19 +153,21 @@ jobs:
           $install = Start-Process msiexec.exe -ArgumentList @('/i', "`"$msi`"", '/qn', '/norestart') -Wait -PassThru
           if ($install.ExitCode -notin @(0, 3010)) { throw "MSI installation failed: $($install.ExitCode)" }
           try {
-            $bin = Join-Path $env:ProgramFiles 'miaotty/bin'
-            foreach ($name in @('miaotty.exe', 'miaotty-cli.exe')) {
+            $bin = Join-Path $env:ProgramFiles 'mtty/bin'
+            foreach ($name in @('mtty.exe', 'mtty-cli.exe')) {
               if (-not (Test-Path (Join-Path $bin $name))) { throw "Missing installed binary: $name" }
             }
-            & (Join-Path $bin 'miaotty-cli.exe') --help
+            & (Join-Path $bin 'mtty-cli.exe') --help
             if ($LASTEXITCODE -ne 0) { throw 'Installed CLI failed' }
-            $command = (Get-Item 'Registry::HKEY_CLASSES_ROOT\miaotty\shell\open\command').GetValue('')
-            if (-not $command.Contains('miaotty.exe')) { throw 'Missing URL handler' }
+            foreach ($scheme in @('mtty', 'miaotty')) {
+              $command = (Get-Item "Registry::HKEY_CLASSES_ROOT\$scheme\shell\open\command").GetValue('')
+              if (-not $command.Contains('mtty.exe')) { throw "Missing URL handler: $scheme" }
+            }
           } finally {
             $uninstall = Start-Process msiexec.exe -ArgumentList @('/x', "`"$msi`"", '/qn', '/norestart') -Wait -PassThru
             if ($uninstall.ExitCode -notin @(0, 3010)) { throw "MSI uninstall failed: $($uninstall.ExitCode)" }
           }
-          if (Test-Path (Join-Path $env:ProgramFiles 'miaotty/bin/miaotty.exe')) { throw 'MSI left an installed binary behind' }
+          if (Test-Path (Join-Path $env:ProgramFiles 'mtty/bin/mtty.exe')) { throw 'MSI left an installed binary behind' }
 
       - name: Sign MSI (Windows, optional)
         if: runner.os == 'Windows'
@@ -188,12 +187,12 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: miaotty-${{ matrix.os }}
+          name: mtty-${{ matrix.os }}
           path: |
-            miaotty-*.zip
-            miaotty-*.tar.gz
-            miaotty-*.AppImage
-            miaotty-*.sig
+            mtty-*.zip
+            mtty-*.tar.gz
+            mtty-*.AppImage
+            mtty-*.sig
             dist/*.deb
             dist/*.deb.sig
             target/wix/*.msi

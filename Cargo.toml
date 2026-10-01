@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/*", "miaotty-app", "miaotty-cli"]
+members = ["crates/*", "mtty-app", "mtty-cli"]
 
 [workspace.package]
 version = "0.0.5"
@@ -8,7 +8,7 @@ edition = "2021"
 rust-version = "1.80"
 license = "Apache-2.0"
 repository = "https://github.com/oxdingzg/miao-term"
-authors = ["miaotty contributors"]
+authors = ["mtty contributors"]
 
 [profile.release]
 lto = "thin"

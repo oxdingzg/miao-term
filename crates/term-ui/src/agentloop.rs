@@ -85,7 +85,7 @@ impl Drop for SleepGuard {
     }
 }
 
-// Both inhibitors also watch our pid, so they end with miaotty even when it
+// Both inhibitors also watch our pid, so they end with mtty even when it
 // exits without dropping the guard (process::exit, a crash, a kill).
 #[cfg(target_os = "macos")]
 fn spawn_inhibitor() -> Option<Child> {
@@ -101,7 +101,7 @@ fn spawn_inhibitor() -> Option<Child> {
     Command::new("systemd-inhibit")
         .args([
             "--what=idle:sleep",
-            "--why=miaotty: agent processing",
+            "--why=mtty: agent processing",
             "--mode=block",
             "tail",
             &format!("--pid={}", std::process::id()),

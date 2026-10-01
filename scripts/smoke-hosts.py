@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real-window/PTY smoke for the native miaotty app on macOS, using isolated state.
+"""Real-window/PTY smoke for the native mtty app on macOS, using isolated state.
 
 Build release binaries first. Results and screenshots stay in a temporary
 folder. This exercises MTP-driven features; pointer routing is covered by the
@@ -29,16 +29,18 @@ def eventually(check, timeout=12):
 
 
 def smoke(output, bundle=None):
-    host = "miaotty"
+    host = "mtty"
     case = output / host
     case.mkdir()
     fixture = case / "fixture space 目录"
     fixture.mkdir()
     marker = fixture / "visible-marker.txt"
     marker.write_text("HOST_SMOKE_VIEW_OK\n目录 fixture\n", encoding="utf-8")
-    config = case / "config/miaotty"
-    config.mkdir(parents=True)
-    legacy_session = config / "native-session.json"
+    # State written by the former miaotty builds; mtty must copy it (ADR 0032).
+    legacy_config = case / "config/miaotty"
+    legacy_config.mkdir(parents=True)
+    config = case / "config/mtty"
+    legacy_session = legacy_config / "native-session.json"
     legacy_session.write_text(json.dumps({
         "active_tab": 0, "recent": [str(marker)], "tabs": [{
             "title": "migrated-workspace", "group": "QA", "active": "old-b",
@@ -46,24 +48,22 @@ def smoke(output, bundle=None):
             "layout": {"dir": "right", "ratio": 0.35, "a": {"leaf": "old-a"}, "b": {"leaf": "old-b"}},
         }],
     }))
-    socket = case / "miaotty.sock"
-    env = os.environ.copy()
-    for name in ("MIAOTTY_MTP_TOKEN", "MIAOTTY_MTP_ALLOW", "MIAOTTY_SOCKET",
-                 "MIAOTTY_NATIVE_SHOT", "MIAOTTY_NATIVE_SHOT_AFTER", "MIAOTTY_SHOT_AFTER"):
-        env.pop(name, None)
+    socket = case / "mtty.sock"
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("MTTY_", "MIAOTTY_"))}
     env.update(HOME=str(case), XDG_CONFIG_HOME=str(case / "config"),
                XDG_DATA_HOME=str(case / "data"), XDG_RUNTIME_DIR=str(case),
                SHELL="/bin/sh")
-    env["MIAOTTY_SHOT_AFTER"] = "10"
-    shot = Path("/tmp/miaotty_shot.ppm")
+    env["MTTY_SHOT_AFTER"] = "10"
+    shot = Path("/tmp/mtty_shot.ppm")
     launched_at = time.time()
     binaries = bundle / "Contents/MacOS" if bundle else ROOT / "target/release"
-    cli_path = binaries / "miaotty-cli"
-    identity = subprocess.check_output([str(binaries / "miaotty"), "--version"], text=True).strip()
+    cli_path = binaries / "mtty-cli"
+    identity = subprocess.check_output([str(binaries / "mtty"), "--version"], text=True).strip()
     assert identity.endswith(" (native)"), "smoke must exercise the native main application"
 
-    def cli(*args, ready=False):
-        proc = subprocess.run([str(cli_path), "--socket", str(socket), *map(str, args)],
+    def cli(*args, ready=False, via=None):
+        proc = subprocess.run([str(cli_path), "--socket", str(via or socket), *map(str, args)],
                               env=env, capture_output=True, text=True, timeout=5)
         if ready and proc.returncode:
             return None
@@ -82,7 +82,8 @@ def smoke(output, bundle=None):
             assert saved["tabs"][0]["group"] == "QA"
             assert abs(saved["tabs"][0]["layout"]["ratio"] - 0.35) < 1e-6
             assert legacy_session.exists(), "migration deleted the legacy session"
-            checks.append("native session migration preserving split ratio, group and source file")
+            assert (config / "native-session.json").exists(), "former config dir was not copied"
+            checks.append("former miaotty config dir copied; session restored with ratio, group, source")
             pane = panes[0]["id"]
             # Bring only the test window forward for desktop verification.
             # Activate only this test process; no keyboard/mouse injection.
@@ -114,6 +115,29 @@ def smoke(output, bundle=None):
             assert Path(lines[1]).resolve() == fixture.resolve()
             assert all(int(n) > 0 for n in lines[2].split()) and len(lines[2].split()) == 2
             checks.append("real shell command, cd with spaces/CJK, PTY resize")
+
+            # ADR 0032: panes carry both names, and pre-rename integrations work.
+            env_proof = fixture / "env-proof.txt"
+            cli("pane", "run", "--pane", pane, "--data",
+                "printf '%s\\n' \"$MTTY_PANE_ID\" \"$MIAOTTY_PANE_ID\" \"$MTTY_CLI\" "
+                f"\"$MIAOTTY_CLI\" \"$MTTY_SOCKET\" > {shlex.quote(str(env_proof))}")
+            eventually(lambda: env_proof.exists() and len(env_proof.read_text().splitlines()) >= 5)
+            ids = env_proof.read_text().splitlines()
+            assert ids[0] == ids[1] == pane, ids
+            assert Path(ids[2]).resolve() == cli_path.resolve() == Path(ids[3]).resolve(), ids
+            assert Path(ids[4]).resolve() == socket.resolve(), ids
+            old_hook = fixture / "old-claude-hook.sh"
+            old_hook.write_text(
+                "#!/bin/sh\n"
+                "exe=\"${MIAOTTY_CLI:-miaotty-cli}\"\n"
+                "command -v \"$exe\" >/dev/null 2>&1 || exit 0\n"
+                "set -- state claude --state \"$1\"\n"
+                "[ -n \"${MIAOTTY_PANE_ID:-}\" ] && set -- \"$@\" --pane \"$MIAOTTY_PANE_ID\"\n"
+                "\"$exe\" \"$@\"\n")
+            cli("pane", "run", "--pane", pane, "--data", f"sh {shlex.quote(str(old_hook))} awaiting")
+            eventually(lambda: '"awaiting"' in json.dumps(cli("state", "list")))
+            assert cli("ping", via=case / "miaotty.sock"), "former socket path is not linked"
+            checks.append("MTTY_*/MIAOTTY_* pane env, pre-rename hook script, former socket path")
 
             cli("pane", "close", "--pane", panes[1]["id"])
             eventually(lambda: len(cli("pane", "list")["panes"]) == 1)
@@ -158,15 +182,15 @@ def smoke(output, bundle=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--bundle", type=Path, help="test the packaged miaotty.app and its bundled CLI")
+    parser.add_argument("--bundle", type=Path, help="test the packaged mtty.app and its bundled CLI")
     args = parser.parse_args()
     if sys.platform != "darwin":
         parser.error("this real-window capture smoke currently targets macOS")
     binaries = args.bundle.resolve() / "Contents/MacOS" if args.bundle else ROOT / "target/release"
-    for name in ["miaotty", "miaotty-cli"]:
+    for name in ["mtty", "mtty-cli"]:
         if not (binaries / name).exists():
             parser.error("build release binaries first; see docs/UI-AUDIT.md")
-    output = Path(tempfile.mkdtemp(prefix="miaotty-smoke-"))
+    output = Path(tempfile.mkdtemp(prefix="mtty-smoke-"))
     print(f"Local artifacts: {output}", flush=True)
     reports = [smoke(output, args.bundle.resolve() if args.bundle else None)]
     (output / "report.json").write_text(json.dumps(reports, indent=2) + "\n")

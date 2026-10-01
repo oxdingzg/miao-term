@@ -1,8 +1,8 @@
 //! Agent integration: detect agents, install state hooks, launch them
 //! (ADR 0016).
 //!
-//! Hooks are shell scripts under `~/.config/miaotty/hooks/<agent>.sh` that call
-//! `miaotty-cli state <agent> --state <s>`; installing writes the script and
+//! Hooks are shell scripts under `~/.config/mtty/hooks/<agent>.sh` that call
+//! `mtty-cli state <agent> --state <s>`; installing writes the script and
 //! returns the snippet the user wires into the agent's own hook config. We
 //! never edit an agent's config for it.
 
@@ -16,7 +16,7 @@ pub struct Agent {
     pub launch: &'static str,
     /// Where the hook is registered, for the snippet text.
     pub hook_via: &'static str,
-    /// The agent reports its own state from inside miaotty; no hook wiring is
+    /// The agent reports its own state from inside mtty; no hook wiring is
     /// required of the user.
     pub auto: bool,
 }
@@ -63,12 +63,9 @@ pub fn detected(bin: &str) -> bool {
     })
 }
 
-/// `~/.config/miaotty/hooks`.
+/// `~/.config/mtty/hooks`.
 pub fn hooks_dir() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("miaotty").join("hooks"))
+    Some(miao_term_config::config_dir()?.join("hooks"))
 }
 
 pub fn script_path(agent: &str) -> Option<PathBuf> {
@@ -79,17 +76,18 @@ pub fn script_path(agent: &str) -> Option<PathBuf> {
 pub fn hook_script(agent: &str) -> String {
     format!(
         "#!/bin/sh\n\
-         # miaotty agent hook for {agent} (generated).\n\
+         # mtty agent hook for {agent} (generated).\n\
          # Usage: hook.sh <processing|idle|awaiting|error> [session-id]\n\
          set -eu\n\
          state=\"${{1:-}}\"\n\
          [ -n \"$state\" ] || {{ echo \"usage: $0 <state> [session-id]\" >&2; exit 2; }}\n\
          session=\"${{2:-}}\"\n\
-         exe=\"${{MIAOTTY_CLI:-miaotty-cli}}\"\n\
+         exe=\"${{MTTY_CLI:-${{MIAOTTY_CLI:-mtty-cli}}}}\"\n\
+         pane=\"${{MTTY_PANE_ID:-${{MIAOTTY_PANE_ID:-}}}}\"\n\
          command -v \"$exe\" >/dev/null 2>&1 || exit 0\n\
          set -- state {agent} --state \"$state\"\n\
          [ -n \"$session\" ] && set -- \"$@\" --session \"$session\"\n\
-         [ -n \"${{MIAOTTY_PANE_ID:-}}\" ] && set -- \"$@\" --pane \"$MIAOTTY_PANE_ID\"\n\
+         [ -n \"$pane\" ] && set -- \"$@\" --pane \"$pane\"\n\
          \"$exe\" \"$@\" >/dev/null 2>&1 || true\n"
     )
 }
@@ -121,7 +119,7 @@ pub fn install(agent: &str) -> std::io::Result<PathBuf> {
 pub fn snippet(agent: &Agent, path: &Path) -> String {
     if agent.auto {
         return format!(
-            "{}: reports its state automatically when launched inside miaotty; no hook wiring needed.",
+            "{}: reports its state automatically when launched inside mtty; no hook wiring needed.",
             agent.name
         );
     }
@@ -133,7 +131,7 @@ pub fn snippet(agent: &Agent, path: &Path) -> String {
     )
 }
 
-/// Tools that can bind a system-wide hotkey to `miaotty --quick`, for
+/// Tools that can bind a system-wide hotkey to `mtty --quick`, for
 /// platforms (Linux) where the app has no built-in global grab.
 pub const HOTKEY_TOOLS: &[&str] = &[
     "skhd",
@@ -147,19 +145,19 @@ pub const HOTKEY_TOOLS: &[&str] = &[
 /// A ready-to-paste binding for the given tool.
 pub fn hotkey_snippet(tool: &str) -> String {
     match tool {
-        "skhd" => "# ~/.skhdrc\ncmd + shift - t : miaotty --quick".to_string(),
+        "skhd" => "# ~/.skhdrc\ncmd + shift - t : mtty --quick".to_string(),
         "hammerspoon" => {
-            "hs.hotkey.bind({\"cmd\",\"shift\"}, \"T\", function()\n  hs.execute(\"miaotty --quick\")\nend)"
+            "hs.hotkey.bind({\"cmd\",\"shift\"}, \"T\", function()\n  hs.execute(\"mtty --quick\")\nend)"
                 .to_string()
         }
-        "autohotkey" => "; AutoHotkey v2\n#+t::Run \"miaotty --quick\"".to_string(),
+        "autohotkey" => "; AutoHotkey v2\n#+t::Run \"mtty --quick\"".to_string(),
         "gnome" => "# GNOME: Settings → Keyboard → Custom Shortcuts\n\
-                    # Name: Quick Terminal    Command: miaotty --quick"
+                    # Name: Quick Terminal    Command: mtty --quick"
             .to_string(),
         // Wayland compositors: bind the app's own intent, no global grab needed.
-        "sway" => "# ~/.config/sway/config\nbindsym $mod+Shift+t exec miaotty --quick".to_string(),
+        "sway" => "# ~/.config/sway/config\nbindsym $mod+Shift+t exec mtty --quick".to_string(),
         "hyprland" => {
-            "# ~/.config/hypr/hyprland.conf\nbind = SUPER SHIFT, T, exec, miaotty --quick"
+            "# ~/.config/hypr/hyprland.conf\nbind = SUPER SHIFT, T, exec, mtty --quick"
                 .to_string()
         }
         _ => String::new(),
@@ -200,7 +198,7 @@ mod tests {
         let s = hook_script("claude");
         assert!(s.starts_with("#!/bin/sh"));
         assert!(s.contains("state claude --state"));
-        assert!(s.contains("MIAOTTY_PANE_ID"));
+        assert!(s.contains("MTTY_PANE_ID") && s.contains("MIAOTTY_PANE_ID"));
         assert!(syntax_ok(&s), "hook script must pass `sh -n`");
     }
 
@@ -216,7 +214,7 @@ mod tests {
     fn hotkey_snippets_mention_quick() {
         for tool in HOTKEY_TOOLS {
             let snippet = hotkey_snippet(tool);
-            assert!(snippet.contains("miaotty --quick"), "{tool} snippet");
+            assert!(snippet.contains("mtty --quick"), "{tool} snippet");
         }
         assert!(hotkey_snippet("nope").is_empty());
     }

@@ -3,7 +3,7 @@
 //! These are `#[ignore]`d so the normal test run stays fast; CI runs them in
 //! release mode (`cargo test --release -- --ignored`). Budgets are absolute with
 //! generous headroom so an order-of-magnitude regression fails while runner
-//! jitter does not. `MIAOTTY_PERF_SCALE` relaxes them on slow machines.
+//! jitter does not. `MTTY_PERF_SCALE` (or the former `MIAOTTY_PERF_SCALE`) relaxes them on slow machines.
 
 use std::time::Instant;
 
@@ -11,7 +11,8 @@ use miao_term_core::aterm::ATerm;
 use miao_term_core::perfgate::baseline_gate;
 
 fn scale() -> f64 {
-    std::env::var("MIAOTTY_PERF_SCALE")
+    std::env::var("MTTY_PERF_SCALE")
+        .or_else(|_| std::env::var("MIAOTTY_PERF_SCALE"))
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(1.0)

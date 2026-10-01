@@ -60,17 +60,17 @@
 
     <Product
         Id='*'
-        Name='miaotty'
+        Name='mtty'
         UpgradeCode='ECB69ED8-A51D-45DD-9F13-4685F9F5CD8D'
-        Manufacturer='miaotty contributors'
+        Manufacturer='mtty contributors'
         Language='1033'
         Codepage='1252'
         Version='$(var.Version)'>
 
         <Package Id='*'
             Keywords='Installer'
-            Description='The miaotty terminal application, built on the miao-term engine'
-            Manufacturer='miaotty contributors'
+            Description='The mtty terminal application, built on the miao-term engine'
+            Manufacturer='mtty contributors'
             InstallerVersion='450'
             Languages='1033'
             Compressed='yes'
@@ -83,11 +83,11 @@
             DowngradeErrorMessage='A newer version of [ProductName] is already installed. Setup will now exit.'/>
 
         <Media Id='1' Cabinet='media1.cab' EmbedCab='yes' DiskPrompt='CD-ROM #1'/>
-        <Property Id='DiskPrompt' Value='miaotty Installation'/>
+        <Property Id='DiskPrompt' Value='mtty Installation'/>
 
         <Directory Id='TARGETDIR' Name='SourceDir'>
             <Directory Id='$(var.PlatformProgramFilesFolder)' Name='PFiles'>
-                <Directory Id='APPLICATIONFOLDER' Name='miaotty'>
+                <Directory Id='APPLICATIONFOLDER' Name='mtty'>
                     <!--
                       Disabling the license sidecar file in the installer is a two step process:
 
@@ -116,17 +116,17 @@
                         <Component Id='binary0' Guid='*'>
                             <File
                                 Id='exe0'
-                                Name='miaotty.exe'
+                                Name='mtty.exe'
                                 DiskId='1'
-                                Source='$(var.CargoTargetBinDir)\miaotty.exe'
+                                Source='$(var.CargoTargetBinDir)\mtty.exe'
                                 KeyPath='yes'/>
                         </Component>
                         <Component Id='binary1' Guid='*'>
                             <File
                                 Id='exe1'
-                                Name='miaotty-cli.exe'
+                                Name='mtty-cli.exe'
                                 DiskId='1'
-                                Source='$(var.CargoTargetBinDir)\miaotty-cli.exe'
+                                Source='$(var.CargoTargetBinDir)\mtty-cli.exe'
                                 KeyPath='yes'/>
                         </Component>
                     </Directory>
@@ -134,12 +134,23 @@
             </Directory>
         </Directory>
 
+        <Component Id='ProtocolMtty' Guid='*' Directory='Bin'>
+            <RegistryKey Root='HKCR' Key='mtty'>
+                <RegistryValue Type='string' Value='URL:mtty Protocol' KeyPath='yes'/>
+                <RegistryValue Name='URL Protocol' Type='string' Value=''/>
+                <RegistryKey Key='shell\open\command'>
+                    <RegistryValue Type='string' Value='&quot;[Bin]mtty.exe&quot; &quot;%1&quot;'/>
+                </RegistryKey>
+            </RegistryKey>
+        </Component>
+
+        <!-- The pre-rename scheme stays registered (ADR 0032). -->
         <Component Id='ProtocolMiaotty' Guid='*' Directory='Bin'>
             <RegistryKey Root='HKCR' Key='miaotty'>
                 <RegistryValue Type='string' Value='URL:miaotty Protocol' KeyPath='yes'/>
                 <RegistryValue Name='URL Protocol' Type='string' Value=''/>
                 <RegistryKey Key='shell\open\command'>
-                    <RegistryValue Type='string' Value='&quot;[Bin]miaotty.exe&quot; &quot;%1&quot;'/>
+                    <RegistryValue Type='string' Value='&quot;[Bin]mtty.exe&quot; &quot;%1&quot;'/>
                 </RegistryKey>
             </RegistryKey>
         </Component>
@@ -161,8 +172,10 @@
             
             <ComponentRef Id='binary0'/>
             <ComponentRef Id='binary1'/>
-            <!-- `miaotty://` deep links. `ssh://` and `x-man-page://` are left to
-                 the user's choice on Windows rather than hijacked per-machine. -->
+            <!-- `mtty://` (and `miaotty://`) deep links. `ssh://` and
+                 `x-man-page://` are left to the user's choice on Windows rather
+                 than hijacked per-machine. -->
+            <ComponentRef Id='ProtocolMtty'/>
             <ComponentRef Id='ProtocolMiaotty'/>
 
             <Feature

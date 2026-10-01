@@ -1,9 +1,9 @@
 [Desktop Entry]
 Type=Application
-Name=miaotty
+Name=mtty
 Comment=A terminal with an agent sidebar
-Exec=miaotty %u
+Exec=mtty %u
 Terminal=false
-Icon=miaotty
+Icon=mtty
 Categories=System;TerminalEmulator;
-MimeType=x-scheme-handler/miaotty;x-scheme-handler/ssh;x-scheme-handler/x-man-page;
+MimeType=x-scheme-handler/mtty;x-scheme-handler/miaotty;x-scheme-handler/ssh;x-scheme-handler/x-man-page;

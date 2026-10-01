@@ -10,12 +10,15 @@ import re
 
 # Preference is explicit: installable artifacts precede archive fallbacks.
 PATTERNS = {
-    "macos-aarch64": [r"miaotty-macos-arm64\.zip"],
-    "macos-x86_64": [r"miaotty-macos-x86_64\.zip"],
-    "linux-x86_64": [r"miaotty-linux-x86_64\.AppImage", r"miaotty-linux-x86_64\.tar\.gz"],
-    "linux-x86_64-deb": [r"miaotty_.*_amd64\.deb"],
-    "windows-x86_64": [r"miaotty-.*\.msi", r"miaotty-windows-x86_64\.zip"],
+    "macos-aarch64": [r"mtty-macos-arm64\.zip"],
+    "macos-x86_64": [r"mtty-macos-x86_64\.zip"],
+    "linux-x86_64": [r"mtty-linux-x86_64\.AppImage", r"mtty-linux-x86_64\.tar\.gz"],
+    "linux-x86_64-deb": [r"mtty_.*_amd64\.deb"],
+    "windows-x86_64": [r"mtty-.*\.msi", r"mtty-windows-x86_64\.zip"],
 }
+# Names that must never be published again: the retired second app and the
+# pre-rename application name (ADR 0032).
+RETIRED = ("miaotty-native-", "miaotty-", "miaotty_")
 REQUIRED = ("macos-aarch64", "macos-x86_64", "linux-x86_64", "linux-x86_64-deb", "windows-x86_64")
 
 
@@ -25,8 +28,8 @@ def collect_artifacts(directory):
     for path in sorted(directory.rglob("*")):
         if not path.is_file() or not path.name.endswith((".zip", ".tar.gz", ".AppImage", ".deb", ".msi", ".sig")):
             continue
-        if path.name.startswith("miaotty-native-"):
-            raise ValueError(f"retired second application artifact: {path.name}")
+        if path.name.startswith(RETIRED):
+            raise ValueError(f"retired application artifact: {path.name}")
         if path.name in packages:
             raise ValueError(f"duplicate artifact filename: {path.name}")
         packages[path.name] = path
@@ -45,8 +48,8 @@ def build_manifest(directory, tag, repository, require_signatures=False):
     if not re.fullmatch(r"v\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?", tag):
         raise ValueError("tag must be a version such as v0.0.1")
     files = sorted(path for path in directory.iterdir() if path.is_file())
-    if any(path.name.startswith("miaotty-native-") for path in files):
-        raise ValueError("retired second application artifact in release")
+    if any(path.name.startswith(RETIRED) for path in files):
+        raise ValueError("retired application artifact in release")
     base = f"https://github.com/{repository}/releases/download/{tag}"
     artifacts = {}
     for platform, patterns in PATTERNS.items():

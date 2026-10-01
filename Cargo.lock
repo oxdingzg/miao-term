@@ -2007,24 +2007,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "miaotty-app"
-version = "0.0.5"
-dependencies = [
- "miao-term-core",
- "miao-term-ui",
- "miao-term-widget",
- "serde_json",
-]
-
-[[package]]
-name = "miaotty-cli"
-version = "0.0.5"
-dependencies = [
- "miao-term-mtp",
- "serde_json",
-]
-
-[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2090,6 +2072,24 @@ checksum = "bb85c154ba489f01b25c0d36ae69a87e4a1c73a72631fc6c0eb6dde34a73e44b"
 dependencies = [
  "num-traits",
  "pxfm",
+]
+
+[[package]]
+name = "mtty-app"
+version = "0.0.5"
+dependencies = [
+ "miao-term-core",
+ "miao-term-ui",
+ "miao-term-widget",
+ "serde_json",
+]
+
+[[package]]
+name = "mtty-cli"
+version = "0.0.5"
+dependencies = [
+ "miao-term-mtp",
+ "serde_json",
 ]
 
 [[package]]

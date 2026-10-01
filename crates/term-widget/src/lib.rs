@@ -108,7 +108,7 @@ mod appmenu {
         let mut submenus: Vec<Submenu> = Vec::new();
         let menu = Menu::new();
         // AppKit treats the first submenu as the application menu.
-        let app_sub = Submenu::new("miaotty", true);
+        let app_sub = Submenu::new("mtty", true);
         let _ = app_sub.append(&PredefinedMenuItem::about(None, None));
         let _ = app_sub.append(&PredefinedMenuItem::separator());
         let _ = app_sub.append(&PredefinedMenuItem::services(None));
@@ -119,7 +119,7 @@ mod appmenu {
         let _ = app_sub.append(&PredefinedMenuItem::separator());
         let quit = MenuItem::with_id(
             MudaId::new(miao_term_ui::menu::key(miao_term_ui::chrome::MenuId::Quit)),
-            "Quit miaotty",
+            "Quit mtty",
             true,
             Accelerator::from_str("CmdOrCtrl+Q").ok(),
         );
@@ -190,43 +190,78 @@ mod appmenu {
     }
 }
 
+/// Point `MTTY_CLI` (and the former `MIAOTTY_CLI`, read by installed hooks and
+/// miao) at the CLI shipped beside this executable: inside an app bundle it is
+/// not on `PATH`, and an inherited value may belong to another build.
+fn export_pane_environment() {
+    let cli = std::env::current_exe()
+        .ok()
+        .map(|exe| exe.with_file_name(format!("mtty-cli{}", std::env::consts::EXE_SUFFIX)));
+    let Some(cli) = cli.filter(|p| p.is_file()) else {
+        return;
+    };
+    for name in ["MTTY_CLI", "MIAOTTY_CLI"] {
+        std::env::set_var(name, &cli);
+    }
+}
+
 /// Run a native terminal window until it is closed.
 pub fn run(title: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
     // Single instance (ADR 0019): a later launch — a deep link or a second
-    // `miaotty <url>` — is handed to the running instance, which drains
+    // `mtty <url>` — is handed to the running instance, which drains
     // its inbox, and this process exits without opening a window.
     let args: Vec<String> = std::env::args().skip(1).collect();
     let intent = miao_term_ui::launch::Intent::from_args(&args);
     if miao_term_ui::launch::forward_to_running(&intent.encode()) {
-        eprintln!("miaotty: forwarded to the running instance");
+        eprintln!("mtty: forwarded to the running instance");
         return Ok(());
     }
 
-    // MTP control plane (ADR 0005): the shell inherits `MIAOTTY_SOCKET`, so
-    // `miaotty-cli`, plugins and agent hooks use the same control plane.
+    // ADR 0032: carry the pre-rename config directory over once.
+    match miao_term_config::migrate_legacy_config() {
+        Ok(true) => eprintln!("mtty: copied the former miaotty configuration"),
+        Ok(false) => {}
+        Err(e) => eprintln!("mtty: could not copy the former miaotty configuration: {e}"),
+    }
+    export_pane_environment();
+
+    // MTP control plane (ADR 0005): the shell inherits `MTTY_SOCKET` (and the
+    // former `MIAOTTY_SOCKET`), so `mtty-cli`, plugins and agent hooks use the
+    // same control plane.
     let socket = miao_term_mtp::default_socket();
-    std::env::set_var("MIAOTTY_SOCKET", &socket);
-    // MIAOTTY_MTP_TOKEN (if set) requires it on every request; MIAOTTY_MTP_ALLOW
+    for name in ["MTTY_SOCKET", "MIAOTTY_SOCKET"] {
+        std::env::set_var(name, &socket);
+    }
+    // MTTY_MTP_TOKEN (if set) requires it on every request; MTTY_MTP_ALLOW
     // (if set) restricts which capabilities are accepted.
     let mtp = miao_term_mtp::ServerState::with_config(
-        std::env::var("MIAOTTY_MTP_TOKEN").ok(),
-        miao_term_mtp::ServerState::parse_allow(std::env::var("MIAOTTY_MTP_ALLOW").ok()),
+        miao_term_config::env("MTP_TOKEN"),
+        miao_term_mtp::ServerState::parse_allow(miao_term_config::env("MTP_ALLOW")),
     );
     match miao_term_mtp::serve(&socket, mtp.clone()) {
-        Ok(()) => eprintln!("miaotty: MTP host on {}", socket.display()),
-        Err(e) => eprintln!("miaotty: MTP host failed: {e}"),
+        Ok(()) => {
+            eprintln!("mtty: MTP host on {}", socket.display());
+            // Older CLIs default to the pre-rename socket path.
+            #[cfg(unix)]
+            if let Err(e) =
+                miao_term_mtp::link_legacy_socket(&socket, &miao_term_mtp::legacy_socket())
+            {
+                eprintln!("mtty: could not link the former socket path: {e}");
+            }
+        }
+        Err(e) => eprintln!("mtty: MTP host failed: {e}"),
     }
     if let Some(addr) = miao_term_config::Config::load().remote_listen {
         match miao_term_mtp::serve_tcp(&addr, mtp.clone()) {
-            Ok(()) => eprintln!("miaotty: remote MTP access on {addr}"),
-            Err(e) => eprintln!("miaotty: remote access disabled: {e}"),
+            Ok(()) => eprintln!("mtty: remote MTP access on {addr}"),
+            Err(e) => eprintln!("mtty: remote access disabled: {e}"),
         }
     }
 
     let event_loop = EventLoop::<HostEvent>::with_user_event().build()?;
     event_loop.set_control_flow(ControlFlow::Wait);
     let proxy = event_loop.create_proxy();
-    // Let the control plane wake the loop, so `miaotty-cli` commands apply
+    // Let the control plane wake the loop, so `mtty-cli` commands apply
     // immediately even while the window is idle or unfocused.
     {
         let proxy = proxy.clone();
@@ -689,14 +724,18 @@ impl State {
         // inheriting the process cwd would drop every pane in the filesystem
         // root. Only trust it when it names a real place to work, and fall back
         // to the home directory otherwise; a launch from a terminal keeps the
-        // directory the user typed `miaotty` in.
+        // directory the user typed `mtty` in.
         let cwd = cwd.or_else(|| {
             std::env::current_dir()
                 .ok()
                 .filter(|dir| dir.as_path() != std::path::Path::new("/"))
                 .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from))
         });
-        let env = vec![("MIAOTTY_PANE_ID".to_string(), id.clone())];
+        // Both names: installed hooks and miao read the former one (ADR 0032).
+        let env = vec![
+            ("MTTY_PANE_ID".to_string(), id.clone()),
+            ("MIAOTTY_PANE_ID".to_string(), id.clone()),
+        ];
         Terminal::new(None, cols, rows, 10_000, cwd, &env, waker)
             .ok()
             .map(|mut term| {
@@ -961,20 +1000,20 @@ impl State {
             return;
         }
         let attrs = Window::default_attributes()
-            .with_title("miaotty \u{00b7} picture-in-picture")
+            .with_title("mtty \u{00b7} picture-in-picture")
             .with_inner_size(LogicalSize::new(720.0, 400.0))
             .with_window_level(winit::window::WindowLevel::AlwaysOnTop);
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
-                eprintln!("miaotty: picture-in-picture window failed: {e}");
+                eprintln!("mtty: picture-in-picture window failed: {e}");
                 return;
             }
         };
         let surface = match self.instance.create_surface(window.clone()) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("miaotty: pip surface failed: {e}");
+                eprintln!("mtty: pip surface failed: {e}");
                 return;
             }
         };
@@ -1843,9 +1882,8 @@ impl State {
             &screen,
         );
         if self.shot_now
-            || std::env::var_os("MIAOTTY_SHOT")
-                .or_else(|| std::env::var_os("MIAOTTY_NATIVE_SHOT"))
-                .is_some()
+            || miao_term_config::env("SHOT").is_some()
+            || std::env::var_os("MIAOTTY_NATIVE_SHOT").is_some()
         {
             self.capture(
                 &draws,
@@ -1955,7 +1993,7 @@ impl State {
                             Some(UpdateResult::Available { version, url }) => {
                                 ui.heading(t(lang, "A new version is available", "发现新版本"));
                                 ui.add_space(6.0);
-                                ui.label(format!("miaotty {version}"));
+                                ui.label(format!("mtty {version}"));
                                 ui.label(format!(
                                     "{} {}",
                                     t(lang, "Current version:", "当前版本："),
@@ -2304,12 +2342,8 @@ impl State {
         let Some(config) = path.parent() else {
             return false;
         };
-        let data = std::env::var_os("XDG_DATA_HOME")
-            .map(std::path::PathBuf::from)
-            .or_else(|| {
-                std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/share"))
-            })
-            .map(|p| p.join("miaotty"));
+        // The retired eframe app kept its session in the pre-rename data dir.
+        let data = miao_term_config::legacy_data_dir();
         let Some(v) = session::load(config, data.as_deref()) else {
             return false;
         };
@@ -2435,7 +2469,7 @@ impl State {
         let mut s = self
             .cwd()
             .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "miaotty".to_string());
+            .unwrap_or_else(|| "mtty".to_string());
         // Notices lead the line so a long cwd cannot truncate them away.
         if let Some((msg, until)) = &self.notice {
             if Instant::now() < *until {
@@ -3229,7 +3263,7 @@ impl State {
             }
         }
         drop(data);
-        let _ = std::fs::write("/tmp/miaotty_shot.ppm", ppm);
+        let _ = std::fs::write("/tmp/mtty_shot.ppm", ppm);
         std::process::exit(0);
     }
 
@@ -4020,7 +4054,7 @@ impl State {
                                     )
                                     .selectable(false),
                                 );
-                                let text_id = egui::Id::new("miaotty-editor-text");
+                                let text_id = egui::Id::new("mtty-editor-text");
                                 let mut edit = egui::TextEdit::multiline(&mut ed.text)
                                     .id(text_id)
                                     .code_editor()
@@ -4510,7 +4544,7 @@ impl ApplicationHandler<HostEvent> for Host {
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
-                eprintln!("miaotty: create_window failed: {e}");
+                eprintln!("mtty: create_window failed: {e}");
                 event_loop.exit();
                 return;
             }
@@ -4521,7 +4555,7 @@ impl ApplicationHandler<HostEvent> for Host {
         let surface = match instance.create_surface(window.clone()) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("miaotty: create_surface failed: {e}");
+                eprintln!("mtty: create_surface failed: {e}");
                 event_loop.exit();
                 return;
             }
@@ -4534,7 +4568,7 @@ impl ApplicationHandler<HostEvent> for Host {
             })) {
                 Some(a) => a,
                 None => {
-                    eprintln!("miaotty: no wgpu adapter");
+                    eprintln!("mtty: no wgpu adapter");
                     event_loop.exit();
                     return;
                 }
@@ -4578,7 +4612,7 @@ impl ApplicationHandler<HostEvent> for Host {
         );
         let egui_renderer = egui_wgpu::Renderer::new(&device, format, None, 1, false);
 
-        // Config (ADR: read `~/.config/miaotty/config.toml`).
+        // Config (ADR: read `~/.config/mtty/config.toml`).
         let (cfg, config_problem) = miao_term_config::Config::load_checked();
         let font_size = cfg.font_size;
         let line_ratio = cfg.line_height;
@@ -4609,7 +4643,7 @@ impl ApplicationHandler<HostEvent> for Host {
             instance,
             adapter,
             pip: None,
-            pip_request: std::env::var_os("MIAOTTY_PIP").is_some(),
+            pip_request: miao_term_config::env("PIP").is_some(),
             graphics_enabled: cfg.graphics,
             renderers: HashMap::new(),
             mtp: self.mtp.clone(),
@@ -4631,8 +4665,8 @@ impl ApplicationHandler<HostEvent> for Host {
             divider_drag: None,
             mouse_captured: None,
             cursor: (0.0, 0.0),
-            // `MIAOTTY_PREEDIT` seeds the IME overlay for captures/QA.
-            preedit: std::env::var("MIAOTTY_PREEDIT").unwrap_or_default(),
+            // `MTTY_PREEDIT` seeds the IME overlay for captures/QA.
+            preedit: miao_term_config::env("PREEDIT").unwrap_or_default(),
             show_sidebar: true,
             show_details: true,
             renaming: None,
@@ -4700,8 +4734,7 @@ impl ApplicationHandler<HostEvent> for Host {
             saved_settings: Vec::new(),
             config_imported_from: cfg.imported_from,
             update_dialog: false,
-            details_tab: std::env::var("MIAOTTY_DETAILS_TAB")
-                .ok()
+            details_tab: miao_term_config::env("DETAILS_TAB")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0),
             details_cwd: None,
@@ -4729,7 +4762,7 @@ impl ApplicationHandler<HostEvent> for Host {
             let proxy = self.proxy.clone();
             match appmenu::install(state.lang, proxy) {
                 Some(menu) => self.menu = Some(menu),
-                None => eprintln!("miaotty: could not install the application menu"),
+                None => eprintln!("mtty: could not install the application menu"),
             }
         }
         let args: Vec<String> = std::env::args().skip(1).collect();
@@ -4753,7 +4786,7 @@ impl ApplicationHandler<HostEvent> for Host {
                 let _ = proxy.send_event(HostEvent::Hotkey);
             });
             if state.hotkeys.is_none() {
-                eprintln!("miaotty: could not register hotkey {spec}");
+                eprintln!("mtty: could not register hotkey {spec}");
             }
         }
         state.window.request_redraw();
@@ -4859,8 +4892,8 @@ impl ApplicationHandler<HostEvent> for Host {
             state.poll_details();
             state.ensure_details();
             if !state.shot_now {
-                if let Ok(v) = std::env::var("MIAOTTY_SHOT_AFTER")
-                    .or_else(|_| std::env::var("MIAOTTY_NATIVE_SHOT_AFTER"))
+                if let Some(v) = miao_term_config::env("SHOT_AFTER")
+                    .or_else(|| std::env::var("MIAOTTY_NATIVE_SHOT_AFTER").ok())
                 {
                     let secs = v.parse::<f64>().unwrap_or(-1.0);
                     if secs >= 0.0 {
@@ -5855,12 +5888,7 @@ fn load_queue() -> Vec<String> {
 }
 
 fn window_file() -> Option<std::path::PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config"))
-        })?;
-    Some(base.join("miaotty").join("window"))
+    Some(miao_term_config::config_dir()?.join("window"))
 }
 
 fn legacy_state_path(path: &std::path::Path, legacy: &str) -> std::path::PathBuf {
@@ -6444,7 +6472,7 @@ mod tests {
 
     #[test]
     fn failed_save_keeps_the_buffer_dirty() {
-        let dir = std::env::temp_dir().join(format!("miaotty-save-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("mtty-save-{}", std::process::id()));
         let mut ed = editor_at(dir.join("missing-dir").join("file.txt"));
         assert!(ed.write().is_err());
         assert_eq!(

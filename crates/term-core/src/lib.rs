@@ -1,7 +1,7 @@
 //! `miao-term-core` — the terminal core.
 //!
 //! Owns the hot path `pty → vte → grid → term` and nothing else: no GPU, no
-//! windowing, no miaotty business logic.
+//! windowing, no mtty business logic.
 //!
 //! Planned modules (see the architecture doc):
 //! - `pty`   spawn/write/resize (Unix + ConPTY)

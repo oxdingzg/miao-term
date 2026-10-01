@@ -102,7 +102,7 @@ pub fn resolve(target: &Target) -> Target {
 
 /// The shared ControlMaster socket, using ssh's `%` tokens.
 pub fn control_path() -> String {
-    "~/.ssh/miaotty-cm-%r@%h:%p".to_string()
+    "~/.ssh/mtty-cm-%r@%h:%p".to_string()
 }
 
 /// Build the `ssh` invocation: connection reuse plus the remote bootstrap.
@@ -306,18 +306,18 @@ mod tests {
         let cmd = command(&t, "sh -c 'x'");
         assert!(cmd.starts_with("ssh -t "));
         assert!(cmd.contains("ControlMaster=auto"));
-        assert!(cmd.contains("ControlPath=~/.ssh/miaotty-cm-%r@%h:%p"));
+        assert!(cmd.contains("ControlPath=~/.ssh/mtty-cm-%r@%h:%p"));
         assert!(cmd.contains(" -p 2200 "));
         assert!(cmd.contains("'u@h'"));
     }
 
     #[test]
     fn bootstrap_variants() {
-        assert!(bootstrap_with(None, "miaotty").contains("xterm-256color"));
-        let with = bootstrap_with(Some("QUJD"), "miaotty");
+        assert!(bootstrap_with(None, "mtty").contains("xterm-256color"));
+        let with = bootstrap_with(Some("QUJD"), "mtty");
         assert!(with.contains("base64 -d"));
         assert!(with.contains("QUJD"));
-        assert!(with.contains("export TERM=miaotty"));
+        assert!(with.contains("export TERM=mtty"));
     }
 
     #[test]

@@ -1,13 +1,99 @@
 //! `miao-term-config` — configuration and theming.
 //!
-//! A small TOML config (`~/.config/miaotty/config.toml`) with sensible defaults
-//! matching miaotty's look (Nord). ghostty/alacritty import is a later step.
+//! A small TOML config (`~/.config/mtty/config.toml`) with sensible defaults
+//! matching mtty's look (Nord), plus ghostty/alacritty import.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
 pub mod view;
+
+/// The application's directory name under the XDG bases (ADR 0032).
+pub const APP_DIR: &str = "mtty";
+/// The former name, read for compatibility only (ADR 0032).
+pub const LEGACY_APP_DIR: &str = "miaotty";
+
+fn xdg_base(var: &str, home_rel: &str) -> Option<PathBuf> {
+    std::env::var_os(var)
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(home_rel)))
+}
+
+/// `$XDG_CONFIG_HOME/mtty` (default `~/.config/mtty`): config and saved state.
+pub fn config_dir() -> Option<PathBuf> {
+    Some(xdg_base("XDG_CONFIG_HOME", ".config")?.join(APP_DIR))
+}
+
+/// The pre-rename config directory, `$XDG_CONFIG_HOME/miaotty`.
+pub fn legacy_config_dir() -> Option<PathBuf> {
+    Some(xdg_base("XDG_CONFIG_HOME", ".config")?.join(LEGACY_APP_DIR))
+}
+
+/// `$XDG_DATA_HOME/mtty` (default `~/.local/share/mtty`).
+pub fn data_dir() -> Option<PathBuf> {
+    Some(xdg_base("XDG_DATA_HOME", ".local/share")?.join(APP_DIR))
+}
+
+/// The pre-rename data directory (the retired eframe app kept its session here).
+pub fn legacy_data_dir() -> Option<PathBuf> {
+    Some(xdg_base("XDG_DATA_HOME", ".local/share")?.join(LEGACY_APP_DIR))
+}
+
+/// An environment setting by its unprefixed name: `MTTY_<name>`, falling back
+/// to the pre-rename `MIAOTTY_<name>` (ADR 0032). Empty values count as unset.
+pub fn env(name: &str) -> Option<String> {
+    ["MTTY_", "MIAOTTY_"]
+        .iter()
+        .filter_map(|prefix| std::env::var(format!("{prefix}{name}")).ok())
+        .find(|v| !v.is_empty())
+}
+
+/// Copy the pre-rename config directory to the new one, once. Returns true when
+/// a copy happened. Never overwrites: nothing is done when the new directory
+/// already exists. The old directory is kept, so older builds still work.
+pub fn migrate_legacy_config() -> std::io::Result<bool> {
+    match (legacy_config_dir(), config_dir()) {
+        (Some(from), Some(to)) => migrate_dir(&from, &to),
+        _ => Ok(false),
+    }
+}
+
+/// Copy `from` to `to` when `to` does not exist yet. The copy is assembled in a
+/// sibling staging directory and renamed into place, so an interrupted copy
+/// never leaves a half-filled `to` that would block the next attempt. The
+/// runtime `inbox` is not copied.
+pub fn migrate_dir(from: &Path, to: &Path) -> std::io::Result<bool> {
+    if to.exists() || !from.is_dir() {
+        return Ok(false);
+    }
+    let name = to.file_name().map(|n| n.to_string_lossy().to_string());
+    let staging = to.with_file_name(format!(".{}.migrating", name.unwrap_or_default()));
+    let _ = std::fs::remove_dir_all(&staging);
+    copy_tree(from, &staging, true)?;
+    std::fs::rename(&staging, to)?;
+    Ok(true)
+}
+
+fn copy_tree(from: &Path, to: &Path, top: bool) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        let name = entry.file_name();
+        if top && name == "inbox" {
+            continue;
+        }
+        let target = to.join(&name);
+        if kind.is_dir() {
+            copy_tree(&entry.path(), &target, false)?;
+        } else if kind.is_file() {
+            std::fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
+}
 
 /// An RGB color parsed from `#rrggbb`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -216,7 +302,7 @@ pub struct Config {
     /// Inline terminal graphics (Sixel / Kitty / iTerm2). On by default.
     pub graphics: bool,
     /// `addr:port` to serve the MTP control plane over TCP (remote access).
-    /// Requires `MIAOTTY_MTP_TOKEN`; `None` (default) is unix-socket only.
+    /// Requires `MTTY_MTP_TOKEN`; `None` (default) is unix-socket only.
     pub remote_listen: Option<String>,
     /// System-wide accelerator that toggles the Quick Terminal, e.g.
     /// `cmd+shift+t` (see ADR 0019). `None` disables it.
@@ -417,15 +503,12 @@ impl Config {
         Ok(path)
     }
 
-    /// Config file path: `$XDG_CONFIG_HOME/miaotty/config.toml` or `~/.config/miaotty/config.toml`.
+    /// Config file path: `$XDG_CONFIG_HOME/mtty/config.toml` or `~/.config/mtty/config.toml`.
     pub fn path() -> Option<PathBuf> {
-        let base = std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-        Some(base.join("miaotty").join("config.toml"))
+        Some(config_dir()?.join("config.toml"))
     }
 
-    /// Load from the default path. If there is no miaotty config, fall back to
+    /// Load from the default path. If there is no mtty config, fall back to
     /// importing a ghostty config, then to defaults.
     pub fn load() -> Self {
         Self::load_checked().0
@@ -725,6 +808,72 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg(test)]
 mod tests {
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("mtty-config-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn migration_copies_once_and_keeps_the_old_directory() {
+        let root = scratch("migrate");
+        let old = root.join("miaotty");
+        let new = root.join("mtty");
+        std::fs::create_dir_all(old.join("hooks")).unwrap();
+        std::fs::create_dir_all(old.join("inbox")).unwrap();
+        std::fs::write(old.join("config.toml"), "font-size = 15\n").unwrap();
+        std::fs::write(old.join("hooks/claude.sh"), "#!/bin/sh\n").unwrap();
+        std::fs::write(old.join("inbox/1"), "quick").unwrap();
+
+        assert!(migrate_dir(&old, &new).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(new.join("config.toml")).unwrap(),
+            "font-size = 15\n"
+        );
+        assert!(new.join("hooks/claude.sh").is_file());
+        assert!(!new.join("inbox").exists(), "runtime inbox is not migrated");
+        assert!(
+            old.join("config.toml").is_file(),
+            "the old directory is kept"
+        );
+        assert!(!root.join(".mtty.migrating").exists());
+
+        // Never overwrite: a second run (or an existing new dir) does nothing.
+        std::fs::write(old.join("config.toml"), "font-size = 20\n").unwrap();
+        assert!(!migrate_dir(&old, &new).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(new.join("config.toml")).unwrap(),
+            "font-size = 15\n"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn migration_without_an_old_directory_does_nothing() {
+        let root = scratch("fresh");
+        assert!(!migrate_dir(&root.join("miaotty"), &root.join("mtty")).unwrap());
+        assert!(!root.join("mtty").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn env_prefers_the_new_prefix() {
+        // Unique names keep this test independent of the real environment.
+        std::env::set_var("MIAOTTY_CFGTEST_A", "old");
+        assert_eq!(env("CFGTEST_A").as_deref(), Some("old"));
+        std::env::set_var("MTTY_CFGTEST_A", "new");
+        assert_eq!(env("CFGTEST_A").as_deref(), Some("new"));
+        std::env::set_var("MTTY_CFGTEST_B", "");
+        std::env::set_var("MIAOTTY_CFGTEST_B", "old");
+        assert_eq!(
+            env("CFGTEST_B").as_deref(),
+            Some("old"),
+            "empty counts as unset"
+        );
+        assert_eq!(env("CFGTEST_NONE"), None);
+    }
 
     #[test]
     fn upsert_keeps_comments_and_tables() {
