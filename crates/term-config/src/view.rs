@@ -272,7 +272,7 @@ fn folder_of(path: &str) -> &str {
 }
 
 fn home_dir() -> Option<String> {
-    std::env::var("HOME").ok().filter(|h| !h.is_empty())
+    crate::home_dir().map(|h| h.to_string_lossy().into_owned())
 }
 
 /// Replace a leading `~` with the home directory.

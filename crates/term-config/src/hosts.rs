@@ -280,8 +280,8 @@ pub fn parse_ssh_config(text: &str) -> Vec<Host> {
 
 /// `~/.ssh/config`, if readable.
 pub fn read_ssh_config() -> Option<String> {
-    let home = std::env::var_os("HOME")?;
-    std::fs::read_to_string(PathBuf::from(home).join(".ssh/config")).ok()
+    let home = crate::home_dir()?;
+    std::fs::read_to_string(home.join(".ssh").join("config")).ok()
 }
 
 #[cfg(test)]
