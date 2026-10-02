@@ -18,8 +18,10 @@ glyphon/cosmic-text,ADR 0030),并受性能门约束;egui 只画外围界面。�
 
 **编辑器是一种 pane,与终端平级**,由 mtty 自己的字形渲染器绘制,由现有的分屏树布局。
 
-1. **pane 类型。** `Pane` 改为持有 `PaneContent::{Terminal, Editor}`,而不是 `Terminal`。布局树(只记录 id)不变。
-   会话条目增加 `kind`、`path`、光标与滚动位置;MTP `pane.list` 报告类型。
+1. **pane 类型。** 一个标签同时持有终端 pane 与编辑器 pane(`Tab::panes`、`Tab::editors`);布局树按 id 指向任一种,
+   保持不变,终端相关的代码路径因此原样不动。(实现说明,E2:这取代了原计划的 `PaneContent` 枚举,后者会改动全部 66 处
+   `pane.term` 调用。)会话条目增加带路径、光标与滚动位置的 `editors`;MTP `pane.list` 报告每个 pane 的 `kind`。发给编辑器的
+   `pane.send`/`pane.run` 在其光标处插入文本(一个撤销步骤);`pane.close` 不会关闭有未保存修改的编辑器。
 2. **不依赖 GPU 的内核 crate `term-editor`。** rope(`ropey`)缓冲区;带撤销/重做历史的事务;多选区;基于 rope 的搜索
    (`regex`);换行符与 UTF-8/BOM 识别;外部修改时重新加载。纯函数,有单元测试和独立的性能基准。
 3. **用 tree-sitter 做语法。** 每次编辑后增量重新解析,只高亮可见范围;内置一组语法(起步约 20 种),高亮查询映射到 mtty

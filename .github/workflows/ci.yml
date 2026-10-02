@@ -146,7 +146,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # Performance gate (ADR 0018/0028): release-mode budgets plus a comparison
       # against the durable baseline committed at benches/perf-baseline.json.
-      - run: cargo test --release -p miao-term-core -p miao-term-graphics -p miao-term-editor -p mtty-app -- --ignored
+      - run: cargo test --release -p miao-term-core -p miao-term-graphics -p miao-term-editor -p miao-term-widget -p mtty-app -- --ignored
       - name: Compare against the committed baseline
         run: python3 scripts/check-perf-baseline.py
       - name: Refresh the baseline (main, nightly / manual)

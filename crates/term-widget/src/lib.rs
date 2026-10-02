@@ -34,6 +34,7 @@ enum HostEvent {
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
+mod editor_pane;
 #[cfg(target_os = "macos")]
 mod macos_url;
 mod session;
@@ -382,6 +383,9 @@ struct Tab {
     group: Option<String>,
     /// Something happened here while it was in the background (B2.5).
     attention: Option<Attention>,
+    /// Editor panes (ADR 0034); the layout's leaves name either these or
+    /// `panes` by id.
+    editors: Vec<editor_pane::EditorPane>,
 }
 
 /// Why a background tab wants a look, most urgent last (so `max` wins).
@@ -421,9 +425,20 @@ impl Tab {
             .iter()
             .map(|p| serde_json::json!({ "id": p.id, "cwd": p.term.cwd() }))
             .collect();
+        let editors: Vec<_> = self
+            .editors
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "id": e.id, "path": e.path,
+                    "cursor": e.doc.selection().primary().head,
+                    "scroll": e.scroll_line,
+                })
+            })
+            .collect();
         serde_json::json!({
             "title": self.title, "active": self.active,
-            "layout": layout_to_json(&self.layout), "panes": panes,
+            "layout": layout_to_json(&self.layout), "panes": panes, "editors": editors,
             "prefix": self.prefix, "mark": self.mark, "group": self.group,
             "title_set": self.title_set,
             "ssh": self.ssh, "ssh_target": self.ssh_target, "ssh_cmd": self.ssh_cmd,
@@ -486,6 +501,10 @@ fn localize_detail(lang: miao_term_ui::i18n::Lang, text: &str) -> &str {
         "session_id" => "会话 ID",
         "agent" => "Agent",
         "tty" => "终端设备",
+        "File" => "文件",
+        "Lines" => "行数",
+        "Cursor" => "光标",
+        "Line ending" => "换行符",
         _ => text,
     }
 }
@@ -1435,7 +1454,15 @@ impl State {
                     .title()
                     .map(str::to_string)
                     .unwrap_or_else(|| tab.title.clone());
-                panes.push(serde_json::json!({ "id": p.id, "title": title }));
+                panes.push(serde_json::json!({ "id": p.id, "title": title, "kind": "terminal" }));
+            }
+            for e in &tab.editors {
+                panes.push(serde_json::json!({
+                    "id": e.id,
+                    "title": e.title(),
+                    "kind": "editor",
+                    "path": e.path,
+                }));
             }
         }
         self.mtp.set_panes(panes);
@@ -1483,6 +1510,7 @@ impl State {
             mark: None,
             group: None,
             attention: None,
+            editors: Vec::new(),
         });
         self.active_tab = self.tabs.len() - 1;
         self.selection = None;
@@ -1549,6 +1577,7 @@ impl State {
             mark: None,
             group: None,
             attention: None,
+            editors: Vec::new(),
         });
         self.active_tab = self.tabs.len() - 1;
         self.selection = None;
@@ -1556,6 +1585,9 @@ impl State {
     }
 
     fn close_pane(&mut self) {
+        if !self.confirm_close_active_editor() {
+            return;
+        }
         let cwd = self
             .active_pane()
             .and_then(|p| p.term.cwd().map(std::path::PathBuf::from));
@@ -1563,7 +1595,19 @@ impl State {
             return;
         };
         let target = tab.active.clone();
-        if tab.panes.len() <= 1 {
+        if tab.panes.len() + tab.editors.len() <= 1 {
+            // The last tab stays alive as a shell: closing a lone editor there
+            // opens a terminal tab in its place.
+            let lone_editor = tab.panes.is_empty();
+            if self.tabs.len() == 1 && lone_editor {
+                let closing = self.active_tab;
+                self.new_tab_in(cwd.clone());
+                self.tabs.remove(closing);
+                self.active_tab = self.tabs.len() - 1;
+                self.selection = None;
+                self.publish_panes();
+                return;
+            }
             // Close the tab.
             if self.tabs.len() > 1 {
                 self.closed.push(cwd);
@@ -1575,6 +1619,7 @@ impl State {
             return;
         }
         tab.panes.retain(|p| p.id != target);
+        tab.editors.retain(|e| e.id != target);
         let _ = tab.layout.remove(&target);
         tab.active = tab.layout.ids().first().cloned().unwrap_or_default();
         self.selection = None;
@@ -1593,6 +1638,11 @@ impl State {
     /// The active pane's inner rect and cursor cell, for cursor-anchored
     /// overlays (IME preedit). `None` while the view is scrolled back.
     fn active_cursor(&self) -> Option<(Rect, (u16, u16))> {
+        if let Some(ed) = self.active_editor() {
+            let inner = self.active_inner()?;
+            let (row, col) = ed.caret_cell()?;
+            return Some((inner, (row as u16, col as u16)));
+        }
         let id = self.active_pane_id()?;
         let pane = self
             .tabs
@@ -1858,6 +1908,47 @@ impl State {
 
     /// Close one pane by id (drops its tab when it was the last one).
     fn close_pane_id(&mut self, id: &str) {
+        // An editor pane closes only without unsaved changes: a client cannot
+        // answer "discard them?".
+        if let Some(ti) = self
+            .tabs
+            .iter()
+            .position(|t| t.editors.iter().any(|e| e.id == id))
+        {
+            let tab = &mut self.tabs[ti];
+            if let Some(e) = tab.editors.iter().find(|e| e.id == id) {
+                if e.doc.is_modified() {
+                    let msg = format!(
+                        "{}: {}",
+                        e.title(),
+                        miao_term_ui::i18n::t(
+                            self.lang,
+                            "unsaved changes; not closed",
+                            "有未保存的修改,未关闭"
+                        )
+                    );
+                    self.show_notice(msg);
+                    return;
+                }
+            }
+            tab.editors.retain(|e| e.id != id);
+            let _ = tab.layout.remove(id);
+            if tab.panes.is_empty() && tab.editors.is_empty() {
+                if self.tabs.len() == 1 {
+                    // Keep a shell when the last tab empties.
+                    self.new_tab_in(None);
+                }
+                self.tabs.remove(ti);
+                if ti < self.active_tab {
+                    self.active_tab -= 1;
+                }
+                self.active_tab = self.active_tab.min(self.tabs.len() - 1);
+            } else if tab.active == id {
+                tab.active = tab.layout.ids().first().cloned().unwrap_or_default();
+            }
+            self.publish_panes();
+            return;
+        }
         let Some(ti) = self
             .tabs
             .iter()
@@ -2091,6 +2182,13 @@ impl State {
     }
 
     fn copy_selection(&self, ctx: &egui::Context) {
+        if let Some(ed) = self.active_editor() {
+            let text = ed.copy();
+            if !text.is_empty() {
+                ctx.copy_text(text);
+            }
+            return;
+        }
         if let Some(text) = self.selection_text() {
             if !text.is_empty() {
                 ctx.copy_text(text);
@@ -2130,6 +2228,11 @@ impl State {
 
     fn paste(&mut self, text: &str) {
         if self.read_only {
+            return;
+        }
+        if let Some(ed) = self.active_editor_mut() {
+            ed.paste(text);
+            self.window.request_redraw();
             return;
         }
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
@@ -2272,6 +2375,9 @@ impl State {
         if tab.title_set && !tab.title.is_empty() {
             return tab.title.clone();
         }
+        if let Some(ed) = tab.editors.iter().find(|e| e.id == tab.active) {
+            return ed.title();
+        }
         if let Some(res) = view {
             if !res.title.is_empty() {
                 return res.title;
@@ -2319,16 +2425,23 @@ impl State {
                     p.term.write(&data);
                     p.scroll = 0;
                 }
+                // An editor pane takes the text at its carets (`run`'s
+                // trailing CR becomes a line break), as one undo step.
+                if let Some(e) = tab.editors.iter_mut().find(|e| e.id == pane_id) {
+                    let text = String::from_utf8_lossy(&data)
+                        .replace("\r\n", "\n")
+                        .replace('\r', "\n");
+                    e.paste(&text);
+                }
             }
         }
         // MTP `pane.focus` / `pane.close` / `app.view` / `app.edit`.
         for command in self.mtp.take_commands() {
             match command {
                 miao_term_mtp::Command::Focus(id) => {
-                    let found = self
-                        .tabs
-                        .iter()
-                        .position(|t| t.panes.iter().any(|p| p.id == id));
+                    let found = self.tabs.iter().position(|t| {
+                        t.panes.iter().any(|p| p.id == id) || t.editors.iter().any(|e| e.id == id)
+                    });
                     if let Some(ti) = found {
                         self.tabs[ti].active = id.clone();
                         self.active_tab = ti;
@@ -2392,6 +2505,22 @@ impl State {
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
             for (pane_idx, (id, r)) in rects.iter().enumerate() {
                 let Some(pane) = tab.panes.iter_mut().find(|p| &p.id == id) else {
+                    if let Some(ed) = tab.editors.iter_mut().find(|e| &e.id == id) {
+                        draws.push(draw_editor(
+                            ed,
+                            id,
+                            *r,
+                            EditorFrame {
+                                scale,
+                                cw,
+                                ch,
+                                theme: &theme,
+                                panel_bg,
+                                focused: id == &active_id,
+                                carets_on: self.cursor_on,
+                            },
+                        ));
+                    }
                     continue;
                 };
                 let inner = card_inner(*r);
@@ -2760,6 +2889,14 @@ impl State {
             match ev {
                 egui::Event::Copy => self.copy_selection(&self.egui_ctx),
                 egui::Event::Paste(text) => self.paste(text),
+                egui::Event::Cut if !self.read_only => {
+                    if let Some(ed) = self.active_editor_mut() {
+                        let text = ed.cut();
+                        if !text.is_empty() {
+                            self.egui_ctx.copy_text(text);
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -3195,21 +3332,59 @@ impl State {
                     }
                 }
             }
-            if panes.is_empty() {
-                continue;
+            // Editor panes reopen their files; one whose file is gone is
+            // dropped (and pruned from the layout below).
+            let mut editors = Vec::new();
+            if let Some(arr) = t.get("editors").and_then(|e| e.as_array()) {
+                for e in arr {
+                    let Some(path) = e.get("path").and_then(|x| x.as_str()) else {
+                        continue;
+                    };
+                    let id = gen_id();
+                    if let Ok(mut ed) =
+                        editor_pane::EditorPane::open(id.clone(), std::path::Path::new(path))
+                    {
+                        let len = ed.doc.rope().len_chars();
+                        let cursor = e.get("cursor").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                        ed.doc
+                            .set_selection(miao_term_editor::Selection::cursor(cursor.min(len)));
+                        ed.scroll_line =
+                            e.get("scroll").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                        if let Some(old) = e.get("id").and_then(|x| x.as_str()) {
+                            map.insert(old.to_string(), id);
+                        }
+                        editors.push(ed);
+                    }
+                }
             }
+            let first = panes
+                .first()
+                .map(|p| p.id.clone())
+                .or_else(|| editors.first().map(|e| e.id.clone()));
+            let Some(first) = first else {
+                continue;
+            };
             // Queued prompts follow their panes to the new ids.
             self.prompt_queue.remap(&map);
-            let layout = t
+            let mut layout = t
                 .get("layout")
                 .and_then(|l| json_to_layout(l, &map))
-                .unwrap_or_else(|| Layout::leaf(panes[0].id.clone()));
+                .unwrap_or_else(|| Layout::leaf(first.clone()));
+            for leaf in layout.ids() {
+                let known =
+                    panes.iter().any(|p| p.id == leaf) || editors.iter().any(|e| e.id == leaf);
+                if !known {
+                    let _ = layout.remove(&leaf);
+                }
+            }
             let active = t
                 .get("active")
                 .and_then(|x| x.as_str())
                 .map(|old| map.get(old).cloned().unwrap_or_else(|| old.to_string()))
-                .filter(|id| panes.iter().any(|p| &p.id == id))
-                .unwrap_or_else(|| panes[0].id.clone());
+                .filter(|id| {
+                    panes.iter().any(|p| &p.id == id) || editors.iter().any(|e| &e.id == id)
+                })
+                .unwrap_or(first);
             // Sessions saved before the flag existed: a title other than the
             // default "shell N" was chosen by the user.
             let title_set = t
@@ -3229,6 +3404,7 @@ impl State {
                 mark: None,
                 group: None,
                 attention: None,
+                editors,
             };
             tab.restore_decorations(t);
             if tab.ssh {
@@ -3281,6 +3457,10 @@ impl State {
     fn cwd(&self) -> Option<std::path::PathBuf> {
         self.active_pane()
             .and_then(|p| p.term.cwd().map(std::path::PathBuf::from))
+            .or_else(|| {
+                self.active_editor()
+                    .and_then(|e| e.path.parent().map(std::path::Path::to_path_buf))
+            })
     }
 
     fn agent_rows(&self) -> Vec<(String, String)> {
@@ -3397,6 +3577,15 @@ impl State {
                 let (r, c) = pane.term.screen().size();
                 rows.push(("Size".into(), format!("{c} × {r}")));
                 rows.push(("Pane".into(), pane.id.clone()));
+            }
+            if let Some(ed) = tab.editors.iter().find(|e| e.id == tab.active) {
+                let (line, col) = ed.caret_line_col();
+                rows.push(("Title".into(), self.title_of(tab)));
+                rows.push(("File".into(), ed.path.display().to_string()));
+                rows.push(("Lines".into(), ed.doc.rope().len_lines().to_string()));
+                rows.push(("Cursor".into(), format!("{line}:{col}")));
+                rows.push(("Line ending".into(), ed.line_ending_name().into()));
+                rows.push(("Pane".into(), ed.id.clone()));
             }
         }
         rows
@@ -3962,6 +4151,10 @@ impl State {
                 if self.edit_in_text_field(select_all) {
                     return;
                 }
+                if let Some(ed) = self.active_editor_mut() {
+                    ed.run(editor_pane::Command::SelectAll);
+                    return;
+                }
                 if let Some(id) = self.active_pane_id() {
                     if let Some(tab) = self.tabs.get(self.active_tab) {
                         if let Some(p) = tab.panes.iter().find(|p| p.id == id) {
@@ -4029,7 +4222,11 @@ impl State {
             }
             Cmd::OpenFile => self.show_open = true,
             Cmd::Save => {
-                let _ = self.save_editor();
+                if self.active_editor().is_some() {
+                    self.save_active_editor();
+                } else {
+                    let _ = self.save_editor();
+                }
             }
             Cmd::Copy => {
                 if !self.edit_in_text_field(egui::Event::Copy) {
@@ -4045,6 +4242,10 @@ impl State {
             }
             Cmd::Settings => self.show_settings = true,
             Cmd::Quit => {
+                let all: Vec<usize> = (0..self.tabs.len()).collect();
+                if !self.confirm_close_tabs(&all) {
+                    return;
+                }
                 let s = self.window.inner_size();
                 save_window_size(
                     s.width as f32 / self.window.scale_factor() as f32,
@@ -7377,12 +7578,259 @@ impl State {
 
     /// Open a local file in the built-in editor. Returns false if it can't be
     /// read. Resets the vim runtime so a new file starts in Normal mode.
+    fn active_editor(&self) -> Option<&editor_pane::EditorPane> {
+        let tab = self.tabs.get(self.active_tab)?;
+        tab.editors.iter().find(|e| e.id == tab.active)
+    }
+
+    fn active_editor_mut(&mut self) -> Option<&mut editor_pane::EditorPane> {
+        let tab = self.tabs.get_mut(self.active_tab)?;
+        let active = tab.active.clone();
+        tab.editors.iter_mut().find(|e| e.id == active)
+    }
+
+    /// The text-area cell of the active editor pane under a pointer position
+    /// (physical pixels). With `clamp`, a position outside the pane maps to
+    /// its nearest cell (a drag past an edge); otherwise it must be inside.
+    fn editor_cell(&self, px: f32, py: f32, clamp: bool) -> Option<(usize, usize)> {
+        let scale = self.window.scale_factor() as f32;
+        let (x, y) = (px / scale, py / scale);
+        let tab = self.tabs.get(self.active_tab)?;
+        let (id, r) = if clamp {
+            self.pane_rects()
+                .into_iter()
+                .find(|(id, _)| *id == tab.active)?
+        } else {
+            self.pane_rects()
+                .into_iter()
+                .find(|(_, r)| r.contains(x, y))?
+        };
+        let ed = tab.editors.iter().find(|e| e.id == id)?;
+        let inner = card_inner(r);
+        let col = ((x - inner.x) / self.cw).floor();
+        let row = ((y - inner.y) / self.ch).floor();
+        let col = (col - ed.gutter() as f32).max(0.0) as usize;
+        // Past the bottom maps to the row just below the view, so a drag
+        // there scrolls a line at a time (the pane reveals the caret); above
+        // the top stops at the first row.
+        let row = (row.max(0.0) as usize).min(ed.rows);
+        Some((row, col))
+    }
+
+    /// A key for the focused editor pane. False when it is the app's (⌘S,
+    /// ⌘W, ⌘T…), so the shortcut path gets it.
+    fn editor_key(&mut self, event: &KeyEvent) -> bool {
+        use editor_pane::Command;
+        let kind = winit_key_kind(event);
+        let (shift, alt) = (self.mods.shift_key(), self.mods.alt_key());
+        let (sup, ctrl) = (self.mods.super_key(), self.mods.control_key());
+        let read_only = self.read_only;
+        let Some(ed) = self.active_editor_mut() else {
+            return false;
+        };
+        if let Some(command) = editor_pane::keymap(kind, shift, alt, sup, ctrl) {
+            let edits = !matches!(
+                command,
+                Command::Move(..)
+                    | Command::SelectAll
+                    | Command::SelectLine
+                    | Command::SelectNextOccurrence
+                    | Command::AddCursor(_)
+                    | Command::Escape
+            );
+            if !(read_only && edits) {
+                ed.run(command);
+            }
+            return true;
+        }
+        if sup || ctrl {
+            return false;
+        }
+        if matches!(kind, input::KeyKind::Char(_) | input::KeyKind::Other) {
+            if let Some(text) = event.text.as_ref().filter(|t| !t.is_empty()) {
+                if !text.chars().all(char::is_control) {
+                    if !read_only {
+                        ed.type_text(text);
+                    }
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Open `path` in an editor pane in a new tab, or switch to the pane
+    /// that already has it.
+    fn open_editor_pane(&mut self, path: &std::path::Path) -> bool {
+        let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        let open = self.tabs.iter().enumerate().find_map(|(ti, tab)| {
+            tab.editors
+                .iter()
+                .find(|e| e.path == path)
+                .map(|e| (ti, e.id.clone()))
+        });
+        if let Some((ti, id)) = open {
+            self.tabs[ti].active = id;
+            self.active_tab = ti;
+            self.selection = None;
+            return true;
+        }
+        let id = gen_id();
+        match editor_pane::EditorPane::open(id.clone(), &path) {
+            Ok(ed) => {
+                let title = ed.title();
+                self.tabs.push(Tab {
+                    layout: Layout::leaf(id.clone()),
+                    panes: Vec::new(),
+                    active: id,
+                    title,
+                    title_set: false,
+                    ssh: false,
+                    ssh_target: None,
+                    ssh_cmd: None,
+                    prefix: None,
+                    mark: None,
+                    group: None,
+                    attention: None,
+                    editors: vec![ed],
+                });
+                self.active_tab = self.tabs.len() - 1;
+                self.selection = None;
+                let key = path.to_string_lossy().to_string();
+                *self.open_counts.entry(key.clone()).or_insert(0) += 1;
+                self.recent_files.retain(|k| *k != key);
+                self.recent_files.insert(0, key);
+                self.recent_files.truncate(50);
+                self.publish_panes();
+                true
+            }
+            Err(e) => {
+                let msg = format!(
+                    "{} {}: {e}",
+                    miao_term_ui::i18n::t(self.lang, "Open failed", "打开失败"),
+                    path.display()
+                );
+                self.show_notice(msg);
+                false
+            }
+        }
+    }
+
+    /// ⌘S in an editor pane. A failure stays visible and the pane modified.
+    fn save_active_editor(&mut self) {
+        let lang = self.lang;
+        let Some(ed) = self.active_editor_mut() else {
+            return;
+        };
+        let msg = match ed.save() {
+            Ok(()) => format!(
+                "{} {}",
+                miao_term_ui::i18n::t(lang, "Saved", "已保存"),
+                ed.path.display()
+            ),
+            Err(e) => format!(
+                "{} {}: {e}",
+                miao_term_ui::i18n::t(lang, "Save failed", "保存失败"),
+                ed.path.display()
+            ),
+        };
+        self.show_notice(msg);
+        self.publish_panes();
+    }
+
+    /// Closing the active editor pane: with unsaved changes the first close
+    /// only warns; the next one discards.
+    fn confirm_close_active_editor(&mut self) -> bool {
+        let lang = self.lang;
+        let Some(ed) = self.active_editor_mut() else {
+            return true;
+        };
+        if !ed.doc.is_modified() || ed.close_armed {
+            return true;
+        }
+        ed.close_armed = true;
+        let msg = format!(
+            "{}: {}",
+            ed.title(),
+            miao_term_ui::i18n::t(
+                lang,
+                "unsaved changes. Save, or close again to discard them.",
+                "有未保存的修改。请保存,或再次关闭以放弃修改。"
+            )
+        );
+        self.show_notice(msg);
+        false
+    }
+
+    /// Closing these tabs (or quitting): unsaved editor panes in them warn
+    /// once; closing again discards.
+    fn confirm_close_tabs(&mut self, tabs: &[usize]) -> bool {
+        let mut names = Vec::new();
+        for &i in tabs {
+            if let Some(tab) = self.tabs.get_mut(i) {
+                for e in &mut tab.editors {
+                    if e.doc.is_modified() && !e.close_armed {
+                        e.close_armed = true;
+                        names.push(e.title());
+                    }
+                }
+            }
+        }
+        if names.is_empty() {
+            return true;
+        }
+        let msg = format!(
+            "{}: {}",
+            names.join(", "),
+            miao_term_ui::i18n::t(
+                self.lang,
+                "unsaved changes. Save, or close again to discard them.",
+                "有未保存的修改。请保存,或再次关闭以放弃修改。"
+            )
+        );
+        self.show_notice(msg);
+        false
+    }
+
+    /// Close Others / Close Below never discard unsaved files: with any in
+    /// those tabs nothing closes.
+    fn refuse_unsaved(&mut self, tabs: &[usize]) -> bool {
+        let names: Vec<String> = tabs
+            .iter()
+            .filter_map(|&i| self.tabs.get(i))
+            .flat_map(|t| t.editors.iter())
+            .filter(|e| e.doc.is_modified())
+            .map(|e| e.title())
+            .collect();
+        if names.is_empty() {
+            return true;
+        }
+        let msg = format!(
+            "{}: {}",
+            names.join(", "),
+            miao_term_ui::i18n::t(
+                self.lang,
+                "unsaved changes. Save or close these first.",
+                "有未保存的修改。请先保存或单独关闭它们。"
+            )
+        );
+        self.show_notice(msg);
+        false
+    }
+
     fn open_editor(&mut self, path: std::path::PathBuf) -> bool {
         self.open_editor_ro(path, false)
     }
 
     /// Open a file in the built-in editor; `readonly` is used by MTP `app.view`.
     fn open_editor_ro(&mut self, path: std::path::PathBuf, readonly: bool) -> bool {
+        let markdown = path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"));
+        let large = std::fs::metadata(&path).is_ok_and(|m| m.len() > editor_pane::MAX_PANE_BYTES);
+        if !readonly && !markdown && !large {
+            return self.open_editor_pane(&path);
+        }
         match std::fs::read_to_string(&path) {
             Ok(text) => {
                 let name = path
@@ -9096,6 +9544,10 @@ impl ApplicationHandler<HostEvent> for Host {
         }
         match event {
             WindowEvent::CloseRequested => {
+                let all: Vec<usize> = (0..state.tabs.len()).collect();
+                if !state.confirm_close_tabs(&all) {
+                    return;
+                }
                 let s = state.window.inner_size();
                 save_window_size(
                     s.width as f32 / state.window.scale_factor() as f32,
@@ -9141,7 +9593,14 @@ impl ApplicationHandler<HostEvent> for Host {
                 let control_only = !text.is_empty() && text.chars().all(char::is_control);
                 state.preedit.clear();
                 if !control_only && !state.egui_ctx.wants_keyboard_input() {
-                    state.write_input(text.as_bytes());
+                    if state.read_only {
+                        // Read-only blocks typing into any pane.
+                    } else if let Some(ed) = state.active_editor_mut() {
+                        ed.type_text(&text);
+                        state.window.request_redraw();
+                    } else {
+                        state.write_input(text.as_bytes());
+                    }
                 }
             }
             WindowEvent::DroppedFile(path) => state.drop_file(path),
@@ -9181,6 +9640,16 @@ impl ApplicationHandler<HostEvent> for Host {
                                 }
                             }
                         }
+                        if !divider {
+                            if let Some((row, col)) = state.editor_cell(px, py, false) {
+                                let (shift, add) = (state.mods.shift_key(), state.mods.alt_key());
+                                if let Some(ed) = state.active_editor_mut() {
+                                    ed.press(row, col, shift, add, Instant::now());
+                                }
+                                state.window.request_redraw();
+                                return;
+                            }
+                        }
                         // ⌘/Ctrl-click stays a terminal-level link gesture.
                         let linked = if state.mods.super_key() || state.mods.control_key() {
                             match state.link_at_pointer() {
@@ -9209,6 +9678,9 @@ impl ApplicationHandler<HostEvent> for Host {
                             }
                         }
                     } else {
+                        if let Some(ed) = state.active_editor_mut() {
+                            ed.dragging = false;
+                        }
                         if state.mouse_captured.take() == Some(0) {
                             state.forward_mouse(px, py, 0, false, false);
                         } else if state.divider_drag.take().is_none() {
@@ -9254,7 +9726,15 @@ impl ApplicationHandler<HostEvent> for Host {
                 }
                 let scale = state.window.scale_factor() as f32;
                 let (px, py) = (position.x as f32, position.y as f32);
-                if let Some((path, dir, area)) = state.divider_drag.clone() {
+                if state.active_editor().is_some_and(|e| e.dragging) {
+                    if let Some((row, col)) = state.editor_cell(px, py, true) {
+                        if let Some(ed) = state.active_editor_mut() {
+                            ed.drag_to(row, col);
+                            ed.reveal_cursor();
+                        }
+                        state.window.request_redraw();
+                    }
+                } else if let Some((path, dir, area)) = state.divider_drag.clone() {
                     let r = divider_ratio(dir, area, px, py, scale);
                     if let Some(tab) = state.tabs.get_mut(state.active_tab) {
                         tab.layout.set_ratio(&path, r);
@@ -9311,6 +9791,13 @@ impl ApplicationHandler<HostEvent> for Host {
                             .find(|(_, r)| r.contains(px / scale, py / scale))
                             .map(|(id, _)| id);
                         if let Some(tab) = state.tabs.get_mut(state.active_tab) {
+                            if let Some(ed) = tab
+                                .editors
+                                .iter_mut()
+                                .find(|e| Some(&e.id) == hovered.as_ref())
+                            {
+                                ed.scroll_by(-(lines as isize) * 3);
+                            }
                             if let Some(pane) = tab
                                 .panes
                                 .iter_mut()
@@ -9329,6 +9816,17 @@ impl ApplicationHandler<HostEvent> for Host {
                 state.window.request_redraw();
             }
             WindowEvent::KeyboardInput { event, .. } => {
+                // An editor pane takes its keys first: its chords (⌘D next
+                // occurrence, ⇧⌘Z redo) win over the app's while it has focus.
+                if state.active_editor().is_some() && !state.hint_mode {
+                    if event.state == ElementState::Pressed && state.editor_key(&event) {
+                        state.window.request_redraw();
+                        return;
+                    }
+                    if shortcut(&event, state.mods).is_none() {
+                        return;
+                    }
+                }
                 if state.hint_mode && event.state == ElementState::Pressed {
                     {
                         let key = match &event.logical_key {
@@ -9657,6 +10155,94 @@ fn json_to_layout(
         a: Box::new(a),
         b: Box::new(b),
     })
+}
+
+/// What drawing an editor pane needs from the frame.
+struct EditorFrame<'a> {
+    scale: f32,
+    cw: f32,
+    ch: f32,
+    theme: &'a miao_term_ui::theme::Theme,
+    panel_bg: miao_term_ui::theme::Rgb,
+    focused: bool,
+    carets_on: bool,
+}
+
+/// An editor pane's card, current-line band, selection and carets as quads,
+/// and its glyph rows, in the same pipeline as a terminal pane.
+fn draw_editor(
+    ed: &mut editor_pane::EditorPane,
+    id: &str,
+    r: Rect,
+    f: EditorFrame<'_>,
+) -> PaneDraw {
+    let inner = card_inner(r);
+    let cols = ((inner.w * f.scale) / f.cw).floor().max(1.0) as usize;
+    let rows = ((inner.h * f.scale) / f.ch).floor().max(1.0) as usize;
+    ed.resize(cols, rows);
+    let chrome = f.theme.chrome();
+    let rgb = |c: miao_term_ui::theme::Rgb| (c.0, c.1, c.2);
+    let d = ed.draw(
+        editor_pane::Palette {
+            fg: rgb(f.theme.fg),
+            gutter: rgb(chrome.muted),
+            gutter_current: rgb(chrome.text),
+        },
+        f.focused,
+        f.carets_on,
+    );
+    let (ox, oy) = (inner.x * f.scale, inner.y * f.scale);
+    let (cw, ch) = (f.cw, f.ch);
+    let cell = |row: usize, col: usize, w: usize, c: (u8, u8, u8, u8)| {
+        Quad::new(
+            (ox + col as f32 * cw, oy + row as f32 * ch),
+            (ox + (col + w) as f32 * cw, oy + (row + 1) as f32 * ch),
+            c,
+        )
+    };
+    let mut quads = Vec::new();
+    let card = Rect {
+        x: r.x + CARD_MARGIN,
+        y: r.y + CARD_MARGIN,
+        w: (r.w - CARD_MARGIN * 2.0).max(1.0),
+        h: (r.h - CARD_MARGIN * 2.0).max(1.0),
+    };
+    let bg = f.panel_bg;
+    quads.push(Quad::rounded(
+        (card.x * f.scale, card.y * f.scale),
+        ((card.x + card.w) * f.scale, (card.y + card.h) * f.scale),
+        (bg.0, bg.1, bg.2, 255),
+        CARD_RADIUS * f.scale,
+    ));
+    if let (true, Some(row)) = (f.focused, d.current_line) {
+        let h = chrome.hover;
+        quads.push(cell(
+            row,
+            d.gutter,
+            cols.saturating_sub(d.gutter),
+            (h.0, h.1, h.2, 90),
+        ));
+    }
+    let sel = f.theme.selection;
+    for s in &d.selection {
+        quads.push(cell(s.row, s.col, s.width, (sel.0, sel.1, sel.2, 255)));
+    }
+    let fg = f.theme.fg;
+    for (row, col) in &d.carets {
+        let x = ox + *col as f32 * cw;
+        let y = oy + *row as f32 * ch;
+        quads.push(Quad::new(
+            (x, y),
+            (x + 2.0 * f.scale, y + ch),
+            (fg.0, fg.1, fg.2, 255),
+        ));
+    }
+    PaneDraw {
+        id: id.to_string(),
+        rect: inner,
+        quads,
+        rows: d.rows,
+    }
 }
 
 fn card_inner(r: Rect) -> Rect {
@@ -10306,6 +10892,10 @@ impl chrome::Chrome for State {
         self.read_only
     }
     fn status_right(&self) -> String {
+        if let Some(ed) = self.active_editor() {
+            let (line, col) = ed.caret_line_col();
+            return format!("{line}:{col} \u{00b7} {}", ed.line_ending_name());
+        }
         if let Some(p) = self.active_pane() {
             if let Some(a) = self
                 .mtp
@@ -10462,6 +11052,9 @@ impl chrome::Chrome for State {
         }
     }
     fn on_close_tab(&mut self, i: usize) {
+        if !self.confirm_close_tabs(&[i]) {
+            return;
+        }
         let cwd = self.tabs.get(i).and_then(|tab| {
             tab.panes
                 .iter()
@@ -10490,6 +11083,10 @@ impl chrome::Chrome for State {
         }
     }
     fn on_close_others(&mut self, i: usize) {
+        let others: Vec<usize> = (0..self.tabs.len()).filter(|&j| j != i).collect();
+        if !self.refuse_unsaved(&others) {
+            return;
+        }
         if i < self.tabs.len() {
             let removed = take_other_tabs(&mut self.tabs, i);
             self.remember_closed(&removed);
@@ -10499,6 +11096,10 @@ impl chrome::Chrome for State {
         }
     }
     fn on_close_below(&mut self, i: usize) {
+        let below: Vec<usize> = (i + 1..self.tabs.len()).collect();
+        if !self.refuse_unsaved(&below) {
+            return;
+        }
         if i < self.tabs.len() {
             let removed = take_tabs_below(&mut self.tabs, i);
             self.remember_closed(&removed);
@@ -11462,6 +12063,7 @@ mod tests {
             mark: None,
             group: None,
             attention: None,
+            editors: Vec::new(),
         }
     }
 
