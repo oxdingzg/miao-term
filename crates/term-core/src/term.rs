@@ -137,6 +137,9 @@ impl Terminal {
         }
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
+        if let Some((k, v)) = default_colour_env(|name| std::env::var_os(name).is_some()) {
+            cmd.env(k, v);
+        }
         #[cfg(unix)]
         if ["LC_ALL", "LC_CTYPE", "LANG"]
             .iter()
@@ -653,6 +656,14 @@ pub fn plain_text(bytes: &[u8]) -> String {
     joined.join("\n").trim_end().to_string()
 }
 
+/// Colour on by default for tools that ask for it (BSD/macOS `ls` with
+/// `CLICOLOR`), unless the user chose otherwise: an existing `CLICOLOR`, or
+/// `NO_COLOR` (no-color.org). Tools still colour only when writing to a
+/// terminal, so pipes and redirected output stay plain.
+fn default_colour_env(is_set: impl Fn(&str) -> bool) -> Option<(&'static str, &'static str)> {
+    (!is_set("CLICOLOR") && !is_set("NO_COLOR")).then_some(("CLICOLOR", "1"))
+}
+
 /// A process's short name (`comm`).
 #[cfg(unix)]
 fn process_name(pid: u32) -> Option<String> {
@@ -858,6 +869,14 @@ fn parse_osc7(payload: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn colour_is_on_by_default_unless_the_user_chose() {
+        let set = |names: &'static [&'static str]| move |n: &str| names.contains(&n);
+        assert_eq!(default_colour_env(set(&[])), Some(("CLICOLOR", "1")));
+        assert_eq!(default_colour_env(set(&["CLICOLOR"])), None, "keep theirs");
+        assert_eq!(default_colour_env(set(&["NO_COLOR"])), None, "no-color.org");
+    }
 
     fn make() -> Terminal {
         let waker: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(|| {});
