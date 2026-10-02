@@ -17,7 +17,7 @@ unicode-segmentation = "1.12"
 unicode-width = "0.2"
 # Fallback highlighting for languages without a built-in grammar: syntect's
 # default (Sublime) syntax set, pure-Rust regexes, no themes.
-syntect = { version = "5", default-features = false, features = ["parsing", "default-syntaxes", "regex-fancy"] }
+syntect = { version = "5", default-features = false, features = ["parsing", "dump-load", "regex-fancy"] }
 # Syntax highlighting (ADR 0034, E3): the core and the built-in grammars.
 tree-sitter = "0.25"
 tree-sitter-bash = "0.25"
@@ -99,3 +99,7 @@ tree-sitter-svelte-ng = "1.0"
 tree-sitter-vim = "0.4"
 tree-sitter-xml = "0.7"
 tree-sitter-zig = "1.1"
+
+[build-dependencies]
+# Builds the embedded syntax dump (syntect's defaults plus vendor/syntaxes).
+syntect = { version = "5", default-features = false, features = ["parsing", "default-syntaxes", "yaml-load", "dump-create", "regex-fancy"] }

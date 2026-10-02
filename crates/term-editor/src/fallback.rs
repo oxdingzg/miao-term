@@ -1,6 +1,8 @@
-//! Fallback highlighting with syntect's built-in Sublime syntaxes, for files
-//! no tree-sitter grammar claims (ADR 0034, E3): OCaml, LaTeX, D, Pascal,
-//! Tcl, Graphviz and the rest of syntect's default set.
+//! Fallback highlighting with Sublime syntaxes, for files no tree-sitter
+//! grammar claims (ADR 0034, E3): syntect's default set (OCaml, LaTeX, D,
+//! Pascal, Tcl, Graphviz…) plus the permissively licensed syntaxes vendored
+//! from bat under `vendor/syntaxes` (Julia, Crystal, nginx, VHDL,
+//! SystemVerilog, Odin, Org, Apache conf, crontab…).
 //!
 //! Sublime syntaxes are line-based and need the parser state from the top of
 //! the file, so a checkpoint of that state is kept every [`STRIDE`] lines.
@@ -21,9 +23,16 @@ use crate::syntax::Highlight;
 /// Lines between parser checkpoints.
 const STRIDE: usize = 64;
 
+/// syntect's default set plus `vendor/syntaxes`, compiled by `build.rs`.
 fn syntaxes() -> &'static SyntaxSet {
     static SET: OnceLock<SyntaxSet> = OnceLock::new();
-    SET.get_or_init(SyntaxSet::load_defaults_newlines)
+    SET.get_or_init(|| {
+        syntect::dumps::from_uncompressed_data(include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/syntaxes.packdump"
+        )))
+        .expect("the embedded syntax dump loads")
+    })
 }
 
 /// What a TextMate scope paints, by its most specific known prefix.
@@ -230,6 +239,53 @@ mod tests {
             .highlights(&edited, mid)
             .iter()
             .all(|(_, k)| *k != Highlight::Comment));
+    }
+
+    #[test]
+    fn every_syntax_parses_with_the_pure_rust_regex_engine() {
+        // fancy-regex lacks a few Oniguruma features; a syntax using them
+        // fails when a line reaches the pattern. Parse a few lines in each.
+        let sample = "x = 1 # c\n\"s\" <a b='c'>{ f(2) }</a>\n";
+        let mut broken = Vec::new();
+        for syntax in syntaxes().syntaxes() {
+            let mut state = ParseState::new(syntax);
+            for line in sample.split_inclusive('\n') {
+                if let Err(e) = state.parse_line(line, syntaxes()) {
+                    broken.push(format!("{}: {e}", syntax.name));
+                    break;
+                }
+            }
+        }
+        assert!(broken.is_empty(), "{broken:#?}");
+    }
+
+    #[test]
+    fn vendored_syntaxes_are_in_the_set() {
+        let has = |name: &str| syntaxes().find_syntax_by_name(name).is_some();
+        for name in [
+            "Julia",
+            "Crystal",
+            "nginx",
+            "SystemVerilog",
+            "VHDL",
+            "orgmode",
+            "Odin",
+        ] {
+            assert!(
+                has(name),
+                "{name} missing; have {:?}",
+                syntaxes()
+                    .syntaxes()
+                    .iter()
+                    .map(|s| &s.name)
+                    .collect::<Vec<_>>()
+            );
+        }
+        assert!(Fallback::for_file(Path::new("nginx.conf"), "").is_some());
+        assert_eq!(
+            Fallback::for_file(Path::new("a.jl"), "").unwrap().name(),
+            "Julia"
+        );
     }
 
     #[test]
