@@ -2800,6 +2800,15 @@ impl State {
                         self.go_active_editor_to(line, column);
                     }
                 }
+                miao_term_mtp::Command::Propose {
+                    pane,
+                    path,
+                    edits,
+                    text,
+                    label,
+                } => {
+                    self.apply_proposal(pane, path, edits, text, label);
+                }
             }
         }
         // Drain every pane.
@@ -4293,6 +4302,9 @@ enum Cmd {
     SendSelectionToAgent,
     SendDiagnosticsToAgent,
     SendLastOutputToAgent,
+    /// Accept / reject the active editor's pending agent edit (ADR 0040, A1).
+    AcceptAgentEdit,
+    RejectAgentEdit,
     Composer,
     OpenQuickly,
     CheckUpdates,
@@ -4434,6 +4446,14 @@ impl State {
                     "Send Last Command Output to Agent",
                     "把上一条命令的输出发给 Agent",
                 ),
+            ),
+            (
+                Cmd::AcceptAgentEdit,
+                t(l, "Accept Agent Edit", "接受 Agent 修改"),
+            ),
+            (
+                Cmd::RejectAgentEdit,
+                t(l, "Reject Agent Edit", "拒绝 Agent 修改"),
             ),
             (Cmd::OpenQuickly, t(l, "Open Quickly", "快速打开")),
             (Cmd::QuickTerminal, t(l, "Quick Terminal", "快速终端")),
@@ -4827,6 +4847,27 @@ impl State {
                         self.show_notice(msg);
                     }
                 }
+            }
+            Cmd::AcceptAgentEdit => {
+                if let Some(ed) = self.active_editor_mut() {
+                    ed.accept_proposal();
+                }
+                self.window.request_redraw();
+            }
+            Cmd::RejectAgentEdit => {
+                let rejected = self
+                    .active_editor_mut()
+                    .is_some_and(|ed| ed.reject_proposal());
+                if rejected {
+                    let msg = miao_term_ui::i18n::t(
+                        self.lang,
+                        "Agent edit rejected.",
+                        "已拒绝 agent 的修改。",
+                    )
+                    .to_string();
+                    self.show_notice(msg);
+                }
+                self.window.request_redraw();
             }
             Cmd::NewTab => self.new_tab_in(self.active_cwd_for_new()),
             Cmd::QuickTerminal => self.toggle_quick_terminal(),
@@ -10927,6 +10968,66 @@ impl State {
         }
     }
 
+    /// Apply an agent's proposed edit to the target editor pane as one
+    /// undoable transaction (ADR 0040, A1). The pane is found by id, else by
+    /// path (opening it if needed), else the active pane.
+    fn apply_proposal(
+        &mut self,
+        pane: Option<String>,
+        path: Option<String>,
+        edits: Vec<miao_term_mtp::ProposedEdit>,
+        text: Option<String>,
+        label: Option<String>,
+    ) {
+        if let Some(p) = &path {
+            let open = self.tabs.iter().any(|t| {
+                t.editors
+                    .iter()
+                    .any(|e| e.path.to_string_lossy() == p.as_str())
+            });
+            if !open {
+                self.open_editor(std::path::PathBuf::from(p));
+            }
+        }
+        let target = pane.or_else(|| match &path {
+            Some(p) => self
+                .tabs
+                .iter()
+                .flat_map(|t| t.editors.iter())
+                .find(|e| e.path.to_string_lossy() == p.as_str())
+                .map(|e| e.id.clone()),
+            None => self.tabs.get(self.active_tab).map(|t| t.active.clone()),
+        });
+        let Some(target) = target else {
+            return;
+        };
+        let mut applied = false;
+        for tab in &mut self.tabs {
+            if let Some(ed) = tab.editors.iter_mut().find(|e| e.id == target) {
+                let changes: Vec<(usize, usize, String)> = match text {
+                    Some(t) => vec![(0, ed.doc.rope().len_chars(), t)],
+                    None => edits
+                        .iter()
+                        .map(|e| (e.start, e.end, e.text.clone()))
+                        .collect(),
+                };
+                ed.propose(changes, label.clone());
+                applied = true;
+                break;
+            }
+        }
+        if applied {
+            let msg = miao_term_ui::i18n::t(
+                self.lang,
+                "Agent edit applied — keep editing to accept, or Reject in the palette to undo.",
+                "已应用 agent 的修改——继续编辑即视为接受,或在命令面板中“拒绝”以撤销。",
+            )
+            .to_string();
+            self.show_notice(msg);
+            self.window.request_redraw();
+        }
+    }
+
     /// ⌘S in an editor pane. A failure stays visible and the pane modified.
     fn save_active_editor(&mut self) {
         let lang = self.lang;
@@ -14083,6 +14184,10 @@ fn draw_editor(
             (h.0, h.1, h.2, 90),
         ));
     }
+    // A pending agent proposal: its changed lines tinted green.
+    for c in &d.proposal {
+        quads.push(cell(c.row, c.col, c.width, (0x2f, 0x5d, 0x3a, 90)));
+    }
     // Find matches under the selection, in the terminal's match colours.
     for (c, current) in ed.match_cells(f.matches, f.current_match) {
         let color = if current {
@@ -14989,6 +15094,16 @@ impl chrome::Chrome for State {
             let (errors, warnings) = ed.problem_counts();
             if errors + warnings > 0 {
                 s.push_str(&format!(" \u{00b7} \u{2716} {errors} \u{26a0} {warnings}"));
+            }
+            if let Some(p) = ed.proposal() {
+                let label = p.label.clone().unwrap_or_else(|| {
+                    miao_term_ui::i18n::t(self.lang, "agent", "agent").to_string()
+                });
+                s.push_str(&format!(
+                    " \u{00b7} \u{270e} {label}: {} {}",
+                    p.lines.len(),
+                    miao_term_ui::i18n::t(self.lang, "lines (Accept/Reject)", "行(接受/拒绝)")
+                ));
             }
             return s;
         }
