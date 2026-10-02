@@ -1036,6 +1036,8 @@ struct State {
     sync: SyncState,
     sync_view: Option<SyncView>,
     editor_vim: bool,
+    /// The `editor` config key: what Edit in Tab runs (ADR 0017).
+    editor_command: Option<String>,
     vim: Option<miao_term_ui::vim::VimRuntime>,
     vim_for: String,
     cmark: egui_commonmark::CommonMarkCache,
@@ -7489,6 +7491,7 @@ impl State {
         let mut open = true;
         let mut save = false;
         let mut quit = false;
+        let mut edit_in_tab = false;
         app_window(title, ctx).open(&mut open).show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if ed.readonly {
@@ -7516,6 +7519,32 @@ impl State {
                         egui::RichText::new(miao_term_ui::i18n::t(self.lang, "modified", "已修改"))
                             .color(egui::Color32::from_rgb(0xeb, 0xcb, 0x8b)),
                     );
+                }
+                // A local file only: the external editor reads it from disk,
+                // so unsaved changes must be saved (or dropped) first.
+                if ed.remote.is_none() {
+                    let resp = ui.add_enabled(
+                        !modified,
+                        egui::Button::new(miao_term_ui::i18n::t(
+                            self.lang,
+                            "Edit in Tab",
+                            "在标签中编辑",
+                        )),
+                    );
+                    let resp = if modified {
+                        resp.on_disabled_hover_text(miao_term_ui::i18n::t(
+                            self.lang,
+                            "Save first: the editor opens the file on disk",
+                            "请先保存:外部编辑器打开的是磁盘上的文件",
+                        ))
+                    } else {
+                        resp.on_hover_text(edit_in_tab_command(
+                            self.editor_command.as_deref(),
+                            std::env::var("EDITOR").ok().as_deref(),
+                            &ed.path.to_string_lossy(),
+                        ))
+                    };
+                    edit_in_tab = resp.clicked();
                 }
             });
             ui.separator();
@@ -7605,6 +7634,25 @@ impl State {
                 }
                 SaveOutcome::Failed => {}
             }
+        }
+        if edit_in_tab {
+            if let Some(ed) = self.editor.take() {
+                // The new tab starts in the active directory, not the file's.
+                let path = std::path::absolute(&ed.path).unwrap_or(ed.path.clone());
+                let cmd = edit_in_tab_command(
+                    self.editor_command.as_deref(),
+                    std::env::var("EDITOR").ok().as_deref(),
+                    &path.to_string_lossy(),
+                );
+                let title = ed
+                    .path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                self.vim = None;
+                self.run_in_new_tab(&title, &cmd);
+            }
+            return;
         }
         if !open {
             self.close_editor();
@@ -8301,6 +8349,20 @@ fn windows_path_arg(path: &str) -> String {
     }
 }
 
+/// The command Edit in Tab types into its new tab (ADR 0017): the `editor`
+/// config key, else `$EDITOR`, else `vi` (Notepad on Windows), then the path
+/// quoted for the pane's shell.
+fn edit_in_tab_command(editor: Option<&str>, env_editor: Option<&str>, path: &str) -> String {
+    let fallback = if cfg!(windows) { "notepad" } else { "vi" };
+    let editor = [editor, env_editor]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|e| !e.is_empty())
+        .unwrap_or(fallback);
+    format!("{editor} {}", local_path_arg(path))
+}
+
 fn shell_quote(s: &str) -> String {
     if s.is_empty() {
         return "''".to_string();
@@ -8558,6 +8620,7 @@ impl ApplicationHandler<HostEvent> for Host {
             snippets_view: None,
             remote_dialog: None,
             editor_vim: cfg.editor_vim,
+            editor_command: cfg.editor.clone(),
             vim: cfg.editor_vim.then(miao_term_ui::vim::VimRuntime::default),
             vim_for: String::new(),
             cmark: egui_commonmark::CommonMarkCache::default(),
@@ -11063,6 +11126,33 @@ mod tests {
             "an absolute path ignores the document directory"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn edit_in_tab_prefers_the_config_then_editor_then_vi() {
+        let path = if cfg!(windows) {
+            "C:\\notes\\a b.md"
+        } else {
+            "/tmp/a b.md"
+        };
+        let quoted = local_path_arg(path);
+        assert_eq!(
+            edit_in_tab_command(Some("code --wait"), Some("nvim"), path),
+            format!("code --wait {quoted}")
+        );
+        assert_eq!(
+            edit_in_tab_command(Some("  "), Some("nvim"), path),
+            format!("nvim {quoted}"),
+            "a blank config value falls through"
+        );
+        let fallback = if cfg!(windows) { "notepad" } else { "vi" };
+        assert_eq!(
+            edit_in_tab_command(None, None, path),
+            format!("{fallback} {quoted}")
+        );
+        if !cfg!(windows) {
+            assert_eq!(quoted, "'/tmp/a b.md'", "spaces stay in one argument");
+        }
     }
 
     #[test]
