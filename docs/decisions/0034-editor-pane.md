@@ -25,9 +25,14 @@ core.
 **An editor is a pane, peer of the terminal**, rendered by mtty's own glyph
 renderer and laid out by the existing split tree.
 
-1. **Pane kinds.** `Pane` holds `PaneContent::{Terminal, Editor}` instead of
-   a `Terminal`. The layout tree (ids only) is unchanged. Session entries gain
-   `kind`, `path`, cursor and scroll; MTP `pane.list` reports the kind.
+1. **Pane kinds.** A tab holds terminal panes and editor panes side by side
+   (`Tab::panes`, `Tab::editors`); the layout tree names either by id and is
+   unchanged, so the terminal code paths stay as they are. (Implementation
+   note, E2: this replaced the planned `PaneContent` enum, which would have
+   touched every one of the 66 `pane.term` call sites.) Session entries gain
+   `editors` with path, cursor and scroll; MTP `pane.list` reports each pane's
+   `kind`. `pane.send`/`pane.run` to an editor insert the text at its carets
+   (one undo step); `pane.close` leaves an editor with unsaved changes open.
 2. **A GPU-free core crate, `term-editor`.** A rope (`ropey`) buffer;
    transactions with an undo/redo history; multiple selections; search
    (`regex`) over the rope; line-ending and UTF-8/BOM detection; reload on
