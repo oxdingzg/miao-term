@@ -61,6 +61,7 @@
 
 验证证据:`cargo test --workspace`(183 项)、`cargo clippy -D warnings`、
 `scripts/smoke-hosts.py`(真实窗口 + 真实 shell + GPU 截图),以及本次对 native 代码的逐项核对。
+2026-10-02 按代码重新逐项核对并更新本表(此时 282 项测试),M0–M3 已修复的问题不再列出。
 
 ### 3.1 终端内核
 
@@ -71,7 +72,7 @@
 | 查找 `⌘F`(高亮 + 计数) | 可用 | 本次修复:中文查询不匹配、含中文行高亮错位 |
 | 键盘编码:Ctrl/Alt/修饰键导航、F1–F12、Insert | 可用 | 本次修复:F1–F12 与 Insert 此前完全不发送 |
 | kitty keyboard 协议 | 部分 | 只支持 disambiguate 级别 |
-| 输入法(IME)内联预编辑 | 部分 | 候选窗未定位到光标(缺 `set_ime_cursor_area`) |
+| 输入法(IME)内联预编辑 | 可用 | 候选窗定位到光标(`set_ime_cursor_area`);macOS 上的位置待桌面人工确认 |
 | 终端内联图片 Sixel / Kitty / iTerm2 | 可用 | 不模拟 Kitty z-index;会话恢复不保留图片 |
 | 鼠标上报(SGR / X10) | 可用 | |
 
@@ -79,17 +80,17 @@
 
 | 功能 | 状态 | 备注 |
 |---|---|---|
-| 会话侧栏(占满高度)与标签栏(收起侧栏时):拖拽重排、`+`、`×`、右键菜单(重命名/前缀/标记/分组/复制/移动/关闭其他/关闭下方) | 可用 | 复制标签不带标记和分组;关闭其他/下方不进"重开"栈 |
-| 分屏树 `⌘D` / `⇧⌘D`、拖动分隔条、每个 pane 的关闭按钮 | 可用 | 新分屏/新标签不继承当前目录 |
+| 会话侧栏(占满高度)与标签栏(收起侧栏时):拖拽重排、`+`、`×`、右键菜单(重命名/前缀/标记/分组/复制/移动/关闭其他/关闭下方) | 可用 | 复制标签保留标记和分组;关闭其他/下方可重开 |
+| 分屏树 `⌘D` / `⇧⌘D`、拖动分隔条、每个 pane 的关闭按钮 | 可用 | 新分屏/新标签继承当前目录(SSH 标签除外) |
 | 快速终端 `⌘⇧T`、重开关闭的标签 `⌘⇧Z` | 可用 | 重开只恢复目录 |
 | 全局快速终端热键 | 可用 | 本次修复:一次按键触发两个动作(切到 Quick 后又隐藏窗口) |
 | 命令面板 `⌘K` | 可用 | |
-| Open Quickly `⌘⇧O` | 部分 | 只列标签、目录、最近文件;无文件、agent、内容命中 |
-| details 面板:Info / Agent / Outline / Git / Files / Ports / Queue | 部分 | Ports 只看 shell 进程本身;非 git 目录显示 clean;面板隐藏时仍每 2 秒轮询 |
+| Open Quickly `⌘⇧O` | 可用 | 标签、agent、片段、主机、当前目录的文件与目录、最近文件;不搜索文件内容与回滚 |
+| details 面板:Info / Agent / Outline / Git / Files / Ports / Queue | 可用 | Ports 覆盖 shell 及其子进程;非 git 目录如实显示;隐藏时只每 10 秒查一次 git(状态栏显示分支) |
 | 会话恢复(布局、目录、标题、分组) | 可用 | 本次修复:`⌘Q` 退出不保存会话。恢复的是布局,不是仍在运行的进程 |
-| Recipes 保存/打开工作区 | 部分 | 写入失败不提示;名称未做文件名校验 |
-| 画中画、Hint、只读模式 | 可用 | 只读模式不拦截 MTP `pane.send/run` |
-| View 规则 | 部分 | 只生效别名和标题;图标、徽章、按命令/host/文件匹配未生效;不热加载 |
+| Recipes 保存/打开工作区 | 可用 | 名称做文件名校验,写入失败会提示 |
+| 画中画、Hint、只读模式 | 可用 | 只读模式拦截 MTP `pane.send/run` |
+| View 规则 | 可用 | 别名、标题、图标、徽章;按目录/命令/agent/host/文件匹配(文件取前台程序打开的文件);`views.json` 热加载 |
 | macOS 原生菜单栏 | 可用 | 本次修复:文本框有焦点时菜单的复制/粘贴/全选作用于终端 |
 | 设置窗口 `⌘,` | 可用 | 本次修复:此前改动不落盘、主题名被强制为 Nord;配置语法错误时静默回退 |
 
@@ -98,27 +99,29 @@
 | 功能 | 状态 | 备注 |
 |---|---|---|
 | 只读查看、编辑、行号、语法高亮、极简 vim 模式 | 可用 | 本次修复:保存失败被吞掉且显示为已保存;关闭时不确认未保存修改 |
-| Markdown 渲染 + Mermaid 子集 | 部分 | 相对路径本地图片不显示;外部 `mermaid-command` 在 UI 线程同步执行 |
-| 跳转行高亮、Open Externally、Edit in Tab | 未提供 | `editor` 配置项当前未被读取 |
+| Markdown 渲染 + Mermaid 子集 | 可用 | 相对路径图片按文档目录解析,表格单元格自动换行;外部 `mermaid-command` 在后台执行 |
+| Edit in Tab | 可用 | 本地文件;运行配置项 `editor`,否则 `$EDITOR`,否则 `vi`(Windows 为记事本);有未保存修改时不可用 |
+| 跳转行高亮、Open Externally | 未提供 | |
 
 ### 3.4 Agent
 
 | 功能 | 状态 | 备注 |
 |---|---|---|
-| 检测 claude / codex / opencode / miao,安装状态 hook,显示接入片段 | 可用 | 片段没有"复制"按钮 |
+| 检测 claude / codex / opencode / miao,安装状态 hook,显示接入片段 | 可用 | 片段带"复制"按钮 |
 | 状态徽章、需要关注标记、系统通知、防休眠 | 可用 | 本次修复:防休眠进程在应用退出后可能残留 |
 | Composer `⌘⇧E`、提示队列(手动发送) | 可用 | |
-| agent 空闲时自动投递队列 | 未提供 | 队列没有目标 pane 的数据模型 |
-| 从界面启动 agent | 未提供 | |
-| Resume(会话 id)、配额显示 | 可用 | 依赖 hook 上报的字段 |
+| agent 空闲时自动投递队列 | 可用 | 队列项绑定目标 pane;旧版本保存的无 pane 项只能手动发送 |
+| 从界面启动 agent | 可用 | 设置与命令面板 |
+| 显示 hook 上报的会话 id | 可用 | Agent 面板显示 agent、状态、会话 id、tty |
+| Resume、配额显示 | 未提供 | 尚无设计 |
 
 ### 3.5 远程与运维
 
 | 功能 | 状态 | 备注 |
 |---|---|---|
-| 新建 SSH 会话(遵循 `~/.ssh/config`、ControlMaster 复用、零安装 terminfo) | 部分 | `ssh -G` 在 UI 线程同步执行;恢复的 SSH 标签变成本地 shell |
-| 远端文件查看/编辑(经 ssh) | 部分 | 主机需手填;读写在 UI 线程同步执行(失败现在会提示) |
-| 主机库、分组、密钥管理、SFTP、FTP、端口转发、Snippets | 未提供 | 见 M3 |
+| 新建 SSH 会话(遵循 `~/.ssh/config`、ControlMaster 复用、零安装 terminfo) | 可用 | 不在 UI 线程执行 `ssh -G`;恢复的 SSH 标签提示已断开,按回车重新连接 |
+| 远端文件查看/编辑(经 ssh) | 可用 | 主机取自当前 SSH 标签(其他情况手填);读写在后台执行,失败会提示 |
+| 主机库、分组、密钥管理、SFTP、FTP、端口转发、Snippets | 可用 | 见 M3;mosh 只验证了命令构造 |
 
 ### 3.6 系统集成与自动化
 
@@ -126,10 +129,10 @@
 |---|---|---|
 | 配置文件 + ghostty / alacritty 导入 | 可用 | 本次修复:语法错误的 `config.toml` 会在状态栏提示原因 |
 | shell 集成(OSC 7、OSC 133、命令历史) | 可用 | zsh、bash、fish、PowerShell |
-| URL scheme 与单实例转发 | 部分 | 命令行传入可用;macOS 浏览器/Finder 发来的 URL 事件未处理 |
+| URL scheme 与单实例转发 | 可用 | 命令行与 macOS 浏览器/Finder 发来的 URL 事件均可 |
 | MTP 控制面与 `mtty-cli` | 可用 | 真实窗口冒烟覆盖 |
 | 版本检查与更新 | 可用 | 下载后程序内校验 SHA-256 与 minisign 签名(必需),macOS 安装并重启已端到端验证;AppImage/Windows 仅单元测试 |
-| 中英界面 | 部分 | details 面板部分行仍是英文 |
+| 中英界面 | 可用 | 少量示例/agent 串刻意保留英文 |
 
 ## 4. 路线图与执行批次
 
@@ -158,7 +161,7 @@
   - `release.yml`、`ci.yml`、更新清单脚本与其测试、冒烟/性能脚本、`windows-verify.ps1`。
   - 验收:`scripts/package-macos.sh` + `check-macos-bundle.py` + `smoke-hosts.py --bundle` 通过;
     `test-release-manifest.py` 通过;release 工作流手动演练 **[所有者]**。
-- [ ] **B1.3 文档与官网**
+- [x] **B1.3 文档与官网**(2026-10-02 核对:仓库内 `miaotty` 只出现在兼容说明与历史记录中,mtty.dev 主分支已改为 mtty,`check-privacy.sh` 通过)
   - README(中英)、`docs/*`、AGENTS.md、配置示例改为 mtty;APP-IDENTITY 改写为迁移说明;历史 ADR 不改。
   - mtty.dev 站点的安装、配置、CLI 示例改为 mtty(独立仓库,单独提交)。
   - 验收:`check-privacy.sh` 通过;仓库内除兼容说明与历史记录外不再出现 `miaotty`。
