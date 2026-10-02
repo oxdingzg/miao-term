@@ -441,10 +441,19 @@ impl CommonMarkViewerInternal {
                 // truncating (see PATCHES.miao.md).
                 let right = ui.max_rect().right();
                 let columns = header.len();
-                egui::Grid::new(id).striped(true).show(ui, |ui| {
+                // miao patch: the gap between columns, which upstream got
+                // from the `End(TableCell)` label (see `skip_cell_event`).
+                let spacing = egui::vec2(12.0, ui.spacing().item_spacing.y);
+                egui::Grid::new(id)
+                    .striped(true)
+                    .spacing(spacing)
+                    .show(ui, |ui| {
                     for (i, col) in header.into_iter().enumerate() {
                         wrapped_cell(ui, right, columns - i - 1, |ui| {
                             for (e, src_span) in col {
+                                if skip_cell_event(&e) {
+                                    continue;
+                                }
                                 let tmp_start =
                                     std::mem::replace(&mut self.line.should_start_newline, false);
                                 let tmp_end =
@@ -462,6 +471,9 @@ impl CommonMarkViewerInternal {
                         for (i, col) in row.into_iter().enumerate() {
                             wrapped_cell(ui, right, columns.saturating_sub(i + 1), |ui| {
                                 for (e, src_span) in col {
+                                    if skip_cell_event(&e) {
+                                        continue;
+                                    }
                                     let tmp_start = std::mem::replace(
                                         &mut self.line.should_start_newline,
                                         false,
@@ -760,6 +772,17 @@ impl CommonMarkViewerInternal {
     }
 }
 
+/// miao patch: `parse_table` splits a row one event late, so each cell after
+/// the first starts with the previous cell's `End(TableCell)`, whose handler
+/// adds a two-space label. In a wrapping cell that indented only the first
+/// line; the grid's column spacing provides the gap instead.
+fn skip_cell_event(e: &pulldown_cmark::Event) -> bool {
+    matches!(e, pulldown_cmark::Event::End(pulldown_cmark::TagEnd::TableCell))
+}
+
+/// miao patch: the height asked for a table cell; see [`wrapped_cell`].
+const CELL_FRAME_HEIGHT: f32 = 100_000.0;
+
 /// miao patch: the narrowest a table column is squeezed to so a long cell
 /// before it leaves room for the rest of the row.
 const MIN_TABLE_COLUMN: f32 = 60.0;
@@ -776,8 +799,25 @@ fn wrapped_cell<R>(
 ) -> egui::InnerResponse<R> {
     let width = (right - ui.cursor().left() - after as f32 * MIN_TABLE_COLUMN)
         .max(MIN_TABLE_COLUMN);
-    ui.set_max_width(width);
-    ui.horizontal_wrapped(add)
+    // The limit belongs to this cell alone: narrowing the grid's own `ui`
+    // squeezed every later column back onto the first. A grid centres a cell
+    // vertically in its row (as tall as last frame's), so a short request
+    // started wrapped text mid-row and the next row's stripe hid its last
+    // line; asking for more height than any row keeps the cell at the top.
+    // The grid records only the height the content used.
+    ui.allocate_ui_with_layout(
+        egui::vec2(width, CELL_FRAME_HEIGHT),
+        egui::Layout::left_to_right(egui::Align::Min).with_main_wrap(true),
+        |ui| {
+            // A wrapping row starts as tall as the frame; make it one line,
+            // as the viewer does for the whole document.
+            ui.set_row_height(ui.text_style_height(&TextStyle::Body));
+            // Text runs carry their own spaces (the viewer sets this for
+            // the document too); a gap here indented each cell's first line.
+            ui.spacing_mut().item_spacing.x = 0.0;
+            add(ui)
+        },
+    )
 }
 
 /// miao patch: `file://` URL for an absolute local path without a scheme.
