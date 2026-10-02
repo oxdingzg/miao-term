@@ -505,6 +505,8 @@ fn localize_detail(lang: miao_term_ui::i18n::Lang, text: &str) -> &str {
         "Lines" => "行数",
         "Cursor" => "光标",
         "Line ending" => "换行符",
+        "Language" => "语言",
+        "Plain Text" => "纯文本",
         _ => text,
     }
 }
@@ -3587,6 +3589,10 @@ impl State {
                 rows.push(("Lines".into(), ed.doc.rope().len_lines().to_string()));
                 rows.push(("Cursor".into(), format!("{line}:{col}")));
                 rows.push(("Line ending".into(), ed.line_ending_name().into()));
+                rows.push((
+                    "Language".into(),
+                    ed.language().unwrap_or("Plain Text").into(),
+                ));
                 rows.push(("Pane".into(), ed.id.clone()));
             }
         }
@@ -10196,6 +10202,7 @@ fn draw_editor(
     let cols = ((inner.w * f.scale) / f.cw).floor().max(1.0) as usize;
     let rows = ((inner.h * f.scale) / f.ch).floor().max(1.0) as usize;
     ed.resize(cols, rows);
+    ed.sync_syntax();
     let chrome = f.theme.chrome();
     let rgb = |c: miao_term_ui::theme::Rgb| (c.0, c.1, c.2);
     let d = ed.draw(
@@ -10936,7 +10943,11 @@ impl chrome::Chrome for State {
     fn status_right(&self) -> String {
         if let Some(ed) = self.active_editor() {
             let (line, col) = ed.caret_line_col();
-            return format!("{line}:{col} \u{00b7} {}", ed.line_ending_name());
+            let lang = ed.language().unwrap_or("Plain Text");
+            return format!(
+                "{lang} \u{00b7} {line}:{col} \u{00b7} {}",
+                ed.line_ending_name()
+            );
         }
         if let Some(p) = self.active_pane() {
             if let Some(a) = self

@@ -3,7 +3,7 @@
 
 use ropey::Rope;
 
-use crate::change::{Assoc, Change, Transaction};
+use crate::change::{Assoc, ByteEdit, Change, Transaction};
 use crate::history::{EditKind, History};
 use crate::layout;
 use crate::motion;
@@ -87,6 +87,8 @@ pub struct Document {
     saved_state: u64,
     /// Bumped on every change to the text, for caches (render rows, search).
     revision: u64,
+    /// Byte edits since the last `take_edits`, for a syntax tree.
+    edits: Vec<ByteEdit>,
 }
 
 impl Default for Document {
@@ -108,6 +110,7 @@ impl Document {
             tab_width: 4,
             saved_state: 0,
             revision: 0,
+            edits: Vec::new(),
         }
     }
 
@@ -158,6 +161,11 @@ impl Document {
         self.revision
     }
 
+    /// The byte edits made since the last call, in order, for a syntax tree.
+    pub fn take_edits(&mut self) -> Vec<ByteEdit> {
+        std::mem::take(&mut self.edits)
+    }
+
     /// Unsaved changes: the text differs from the last save (undoing back to
     /// it counts as unmodified).
     pub fn is_modified(&self) -> bool {
@@ -182,6 +190,7 @@ impl Document {
             return;
         }
         let before = self.selection.clone();
+        self.edits.extend(tx.byte_edits(&self.rope));
         let inverse = tx.apply(&mut self.rope);
         self.revision += 1;
         self.selection = after.clamp(self.rope.len_chars());
@@ -673,6 +682,7 @@ impl Document {
             return false;
         };
         for tx in &steps {
+            self.edits.extend(tx.byte_edits(&self.rope));
             tx.apply(&mut self.rope);
         }
         self.revision += 1;
@@ -685,6 +695,7 @@ impl Document {
             return false;
         };
         for tx in &steps {
+            self.edits.extend(tx.byte_edits(&self.rope));
             tx.apply(&mut self.rope);
         }
         self.revision += 1;

@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use miao_term_editor::{layout, motion, Document, Motion, Range, Selection};
+use miao_term_editor::{layout, motion, Document, Highlight, Motion, Range, Selection, Syntax};
 use miao_term_render::Span;
 use miao_term_ui::input::KeyKind;
 
@@ -45,6 +45,23 @@ pub struct Palette {
     pub fg: (u8, u8, u8),
     pub gutter: (u8, u8, u8),
     pub gutter_current: (u8, u8, u8),
+}
+
+impl Palette {
+    /// A syntax highlight's colour (One Dark, as the built-in editor used).
+    pub fn highlight(&self, h: Highlight) -> (u8, u8, u8) {
+        match h {
+            Highlight::Keyword => (0xc6, 0x78, 0xdd),
+            Highlight::String | Highlight::Heading => (0x98, 0xc3, 0x79),
+            Highlight::Escape | Highlight::Operator => (0x56, 0xb6, 0xc2),
+            Highlight::Comment => (0x7f, 0x84, 0x8e),
+            Highlight::Number | Highlight::Constant | Highlight::Attribute => (0xd1, 0x9a, 0x66),
+            Highlight::Function | Highlight::Link => (0x61, 0xaf, 0xef),
+            Highlight::Type => (0xe5, 0xc0, 0x7b),
+            Highlight::Property | Highlight::Variable | Highlight::Tag => (0xe0, 0x6c, 0x75),
+            Highlight::Punctuation => self.fg,
+        }
+    }
 }
 
 /// A command a key press maps to. Kept separate from applying it so the
@@ -134,6 +151,8 @@ pub struct EditorPane {
     pub dragging: bool,
     /// Closing with unsaved changes was asked once; the next close discards.
     pub close_armed: bool,
+    /// The parse tree for highlighting, for a built-in language.
+    pub syntax: Option<Syntax>,
     last_click: Option<(Instant, usize, u8)>,
 }
 
@@ -152,8 +171,11 @@ impl EditorPane {
         Ok(Self::with_doc(id, path.to_path_buf(), doc))
     }
 
-    pub fn with_doc(id: String, path: PathBuf, doc: Document) -> Self {
+    pub fn with_doc(id: String, path: PathBuf, mut doc: Document) -> Self {
+        let syntax = Syntax::for_file(&path, doc.rope());
+        doc.take_edits();
         EditorPane {
+            syntax,
             id,
             doc,
             path,
@@ -211,6 +233,22 @@ impl EditorPane {
         } else {
             name
         }
+    }
+
+    /// Catch the parse tree up with the edits made since the last call (call
+    /// before drawing; cheap when nothing changed).
+    pub fn sync_syntax(&mut self) {
+        let edits = self.doc.take_edits();
+        if let Some(syntax) = &mut self.syntax {
+            if !edits.is_empty() {
+                syntax.update(self.doc.rope(), &edits);
+            }
+        }
+    }
+
+    /// The highlighted language's name, if any.
+    pub fn language(&self) -> Option<&'static str> {
+        self.syntax.as_ref().map(|s| s.name())
     }
 
     /// Cells taken by line numbers: the widest number plus a space each side.
@@ -398,6 +436,20 @@ impl EditorPane {
         let last = motion::last_line(rope);
         let selection = self.doc.selection();
         let head_line = rope.char_to_line(selection.primary().head);
+        // Highlights for the visible lines only.
+        let first_byte = rope.line_to_byte(self.scroll_line.min(last));
+        let end_line = (self.scroll_line + self.rows).min(rope.len_lines());
+        let end_byte = if end_line >= rope.len_lines() {
+            rope.len_bytes()
+        } else {
+            rope.line_to_byte(end_line)
+        };
+        let highlights = self
+            .syntax
+            .as_ref()
+            .map(|s| s.highlights(rope, first_byte..end_byte))
+            .unwrap_or_default();
+        let mut hl = highlights.iter().peekable();
         let mut rows = Vec::with_capacity(self.rows);
         let mut sel_cells = Vec::new();
         let mut carets = Vec::new();
@@ -418,18 +470,30 @@ impl EditorPane {
             let slice = rope.line(line);
             let line_start = rope.line_to_char(line);
             let content = layout::content_len(slice);
+            let mut byte = rope.line_to_byte(line);
             let mut run = String::new();
             let mut run_col = 0usize;
-            let flush = |run: &mut String, run_col: usize, spans: &mut Vec<Span>| {
+            let mut run_color = palette.fg;
+            let flush = |run: &mut String, run_col: usize, color, spans: &mut Vec<Span>| {
                 if !run.is_empty() {
                     spans.push(Span::new(
                         (gutter + run_col) as u16,
                         std::mem::take(run),
-                        palette.fg,
+                        color,
                     ));
                 }
             };
             for g in layout::glyphs(slice, tab, self.scroll_col + self.cols) {
+                let at = byte;
+                byte += g.ch.len_utf8();
+                // The highlight covering this glyph's first byte, if any.
+                while hl.peek().is_some_and(|(r, _)| r.end <= at) {
+                    hl.next();
+                }
+                let color = match hl.peek() {
+                    Some((r, h)) if r.start <= at => palette.highlight(*h),
+                    _ => palette.fg,
+                };
                 if g.col + g.width <= self.scroll_col {
                     continue;
                 }
@@ -438,30 +502,27 @@ impl EditorPane {
                     break;
                 }
                 if g.ch == '\t' || g.ch.is_control() {
-                    flush(&mut run, run_col, &mut spans);
+                    flush(&mut run, run_col, run_color, &mut spans);
                     continue;
                 }
                 if g.width != 1 {
                     // Wide characters get their own span at an exact cell.
-                    flush(&mut run, run_col, &mut spans);
+                    flush(&mut run, run_col, run_color, &mut spans);
                     if g.width == 2 {
-                        spans.push(Span::new(
-                            (gutter + col) as u16,
-                            g.ch.to_string(),
-                            palette.fg,
-                        ));
+                        spans.push(Span::new((gutter + col) as u16, g.ch.to_string(), color));
                     }
                     continue;
                 }
+                if !run.is_empty() && (run_col + run.chars().count() != col || run_color != color) {
+                    flush(&mut run, run_col, run_color, &mut spans);
+                }
                 if run.is_empty() {
                     run_col = col;
-                } else if run_col + run.chars().count() != col {
-                    flush(&mut run, run_col, &mut spans);
-                    run_col = col;
+                    run_color = color;
                 }
                 run.push(g.ch);
             }
-            flush(&mut run, run_col, &mut spans);
+            flush(&mut run, run_col, run_color, &mut spans);
             rows.push(spans);
 
             // Selection cells on this line; a selection running past the
@@ -656,6 +717,49 @@ mod tests {
         assert_eq!(d.current_line, Some(0));
         let wide = d.rows[1].iter().find(|s| s.text == "中").unwrap();
         assert_eq!(wide.col, 11);
+    }
+
+    #[test]
+    fn rust_files_draw_in_syntax_colours() {
+        let mut p = EditorPane::with_doc(
+            "e".into(),
+            "/tmp/x.rs".into(),
+            Document::from_text("fn main() { let s = \"hi\"; } // done\n"),
+        );
+        p.resize(80, 3);
+        assert_eq!(p.language(), Some("Rust"));
+        let d = p.draw(palette(), true, true);
+        let color_of = |text: &str| {
+            d.rows[0]
+                .iter()
+                .find(|s| s.text.contains(text))
+                .map(|s| s.color)
+        };
+        assert_eq!(
+            color_of("fn"),
+            Some(palette().highlight(Highlight::Keyword))
+        );
+        assert_eq!(
+            color_of("\"hi\""),
+            Some(palette().highlight(Highlight::String))
+        );
+        assert_eq!(
+            color_of("// done"),
+            Some(palette().highlight(Highlight::Comment))
+        );
+        // An edit re-highlights through the incremental tree.
+        p.doc.set_selection(Selection::cursor(0));
+        p.type_text("// ");
+        p.sync_syntax();
+        let d = p.draw(palette(), true, true);
+        let comment = palette().highlight(Highlight::Comment);
+        assert!(d.rows[0]
+            .iter()
+            .filter(|s| s.col >= 3)
+            .all(|s| s.color == comment));
+        let txt =
+            EditorPane::with_doc("e".into(), "/tmp/x.txt".into(), Document::from_text("fn x"));
+        assert_eq!(txt.language(), None);
     }
 
     #[test]
