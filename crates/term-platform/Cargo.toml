@@ -1,0 +1,31 @@
+[package]
+name = "miao-term-platform"
+description = "Native system integration shared by the mtty hosts: notifications now, clipboard image access next (ADR 0035)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSBundle", "NSError"] }
+# Typed UserNotifications bindings, but only the pieces notifications use:
+# the default feature set drags in unrelated action/attachment/category types
+# and objc2-core-location, which mtty does not need.
+objc2-user-notifications = { version = "0.3", default-features = false, features = [
+  "std",
+  "NSString_UserNotifications",
+  "UNNotification",
+  "UNNotificationContent",
+  "UNNotificationRequest",
+  "UNNotificationSound",
+  "UNNotificationTrigger",
+  "UNUserNotificationCenter",
+  "block2",
+  "bitflags",
+] }
+block2 = "0.6"
