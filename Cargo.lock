@@ -2347,7 +2347,7 @@ dependencies = [
 
 [[package]]
 name = "miao-term-config"
-version = "0.0.13"
+version = "0.0.14"
 dependencies = [
  "chacha20poly1305",
  "serde",
@@ -2357,7 +2357,7 @@ dependencies = [
 
 [[package]]
 name = "miao-term-core"
-version = "0.0.13"
+version = "0.0.14"
 dependencies = [
  "alacritty_terminal",
  "libc",
@@ -2368,7 +2368,7 @@ dependencies = [
 
 [[package]]
 name = "miao-term-editor"
-version = "0.0.13"
+version = "0.0.14"
 dependencies = [
  "arborium-ada",
  "arborium-asciidoc",
@@ -2460,7 +2460,7 @@ dependencies = [
 
 [[package]]
 name = "miao-term-graphics"
-version = "0.0.13"
+version = "0.0.14"
 dependencies = [
  "base64",
  "flate2",
@@ -2470,7 +2470,7 @@ dependencies = [
 
 [[package]]
 name = "miao-term-mtp"
-version = "0.0.13"
+version = "0.0.14"
 dependencies = [
  "interprocess",
  "serde",
@@ -2479,7 +2479,7 @@ dependencies = [
 
 [[package]]
 name = "miao-term-render"
-version = "0.0.13"
+version = "0.0.14"
 dependencies = [
  "glyphon",
  "miao-term-core",
@@ -2489,7 +2489,7 @@ dependencies = [
 
 [[package]]
 name = "miao-term-ui"
-version = "0.0.13"
+version = "0.0.14"
 dependencies = [
  "ashpd",
  "egui",
@@ -2506,7 +2506,7 @@ dependencies = [
 
 [[package]]
 name = "miao-term-widget"
-version = "0.0.13"
+version = "0.0.14"
 dependencies = [
  "egui",
  "egui-wgpu",
@@ -2606,7 +2606,7 @@ dependencies = [
 
 [[package]]
 name = "mtty-app"
-version = "0.0.13"
+version = "0.0.14"
 dependencies = [
  "miao-term-core",
  "miao-term-ui",
@@ -2617,7 +2617,7 @@ dependencies = [
 
 [[package]]
 name = "mtty-cli"
-version = "0.0.13"
+version = "0.0.14"
 dependencies = [
  "miao-term-mtp",
  "serde_json",
