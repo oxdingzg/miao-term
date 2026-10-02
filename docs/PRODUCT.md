@@ -325,9 +325,9 @@ verified on its own:
   with tombstones. Two app instances converged through a shared folder on the
   Mac mini, with no plaintext in it.)
 
-### M5 Editor pane (design in [ADR 0034](decisions/0034-editor-pane.md), proposed)
+### M5 Editor pane (design in [ADR 0034](decisions/0034-editor-pane.md))
 
-- [ ] **E1** `term-editor` core: rope, transactions, undo, selections, search.
+- [x] **E1** `term-editor` core: rope, transactions, undo, selections, search. (`crates/term-editor`: 37 unit tests covering transactions and position mapping, grouped undo and the saved state, multi-cursor typing/paste/delete, ⌘D, indent, grapheme and word motions, search and regex replace, BOM/CRLF round trips. Perf gate on a 100 MB file, Mac mini release build: open 62 ms, keystroke in the middle 0.4 µs, undo 1000 keystrokes 0.3 ms, find all 120 ms, save 3.6 ms.)
 - [ ] **E2** Editor pane MVP: pane kinds, styled spans and clipping, keys, mouse, IME, clipboard, open/save/close, session restore.
 - [ ] **E3** tree-sitter highlighting (~20 languages), large-file mode, remote files.
 - [ ] **E4** Multi-cursor, find/replace, go to line, Markdown preview pane.

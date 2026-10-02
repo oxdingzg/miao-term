@@ -41,4 +41,4 @@ Docs are English by default; keep a Simplified Chinese version in sync
 | [0031](./0031-native-app-menu.md) | Application menu in the macOS menu bar | accepted |
 | [0032](./0032-rename-mtty.md) | The application is renamed mtty | accepted |
 | [0033](./0033-encrypted-sync.md) | Optional end-to-end encrypted sync | accepted |
-| [0034](./0034-editor-pane.md) | A native editor pane | proposed |
+| [0034](./0034-editor-pane.md) | A native editor pane | accepted |

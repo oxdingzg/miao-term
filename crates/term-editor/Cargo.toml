@@ -1,0 +1,17 @@
+[package]
+name = "miao-term-editor"
+description = "Text editing core for mtty's editor pane: rope, transactions, undo, selections, search"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+regex = "1"
+# LF-only line breaks: the default also splits at CR, form feed and Unicode
+# separators, which disagrees with the line numbers git and compilers use.
+ropey = { version = "1.6", default-features = false, features = ["simd"] }
+unicode-segmentation = "1.12"
+unicode-width = "0.2"
