@@ -97,6 +97,19 @@ pub fn build_rows(screen: &ATerm, theme: &Theme, cursor: Option<(u16, u16)>) -> 
     out
 }
 
+/// The colour behind a cell. Inverse video (SGR 7, zsh's highlight for
+/// pasted text) swaps the colours: the text takes the background (see
+/// [`build_rows`]) and the background the text colour, so a default-coloured
+/// cell shows as light on dark turned dark on light, never as text in the
+/// background colour on the background.
+pub fn cell_background(theme: &Theme, cell: &miao_term_core::aterm::CellView) -> Rgb {
+    if cell.inverse {
+        theme.foreground(cell.fg, cell.bg)
+    } else {
+        theme.color(cell.bg, false)
+    }
+}
+
 pub fn rgb(c: Rgb) -> (u8, u8, u8) {
     (c.0, c.1, c.2)
 }
@@ -133,5 +146,23 @@ mod row_tests {
         let rows = build_rows(&screen, &theme, None);
         assert_eq!(rows[0][0].text, "X");
         assert_eq!(rows[0][0].color, rgb(theme.palette[2]));
+        let cell = screen.cell(0, 0).unwrap();
+        assert_eq!(cell_background(&theme, &cell), theme.palette[1]);
+    }
+
+    #[test]
+    fn inverse_default_colours_paint_a_light_background() {
+        // zsh highlights a pasted (or dropped) path with standout: text in
+        // the background colour must sit on the foreground colour.
+        let mut screen = ATerm::new(20, 3, 100);
+        screen.process(b"cd \x1b[7m/some/path\x1b[27m");
+        let theme = Theme::nord();
+        let plain = screen.cell(0, 0).unwrap();
+        assert_eq!(cell_background(&theme, &plain), theme.bg);
+        let pasted = screen.cell(0, 3).unwrap();
+        assert_eq!(cell_background(&theme, &pasted), theme.fg);
+        let rows = build_rows(&screen, &theme, None);
+        let span = rows[0].iter().find(|s| s.text.starts_with('/')).unwrap();
+        assert_eq!(span.color, rgb(theme.bg));
     }
 }
