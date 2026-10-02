@@ -21,7 +21,7 @@ agents in one fast, native window. It is built on three pillars:
 | Pillar | Today | Next |
 |---|---|---|
 | **Terminal and remote** — absorbs Termius and PuTTY | GPU-rendered terminal, tabs and splits, session restore; host library, keys, SFTP/FTP, port forwarding, jump hosts, snippets, broadcast input (over the system OpenSSH) | Serial, Telnet and raw TCP connections, `.ppk` keys; a Rust-native SSH stack is under consideration (needs an ADR) |
-| **Editor** — a first-class text editor, not a side feature | Editor pane beside terminals: tree-sitter highlighting in 80 languages, files of any size (view mode above 64 MB), multiple cursors, find and replace with regex, go to line, a live Markdown and Mermaid preview pane | LSP, vim mode in the pane, folding and outline ([ADR 0034](docs/decisions/0034-editor-pane.md)) |
+| **Editor** — a first-class text editor, not a side feature | Editor pane beside terminals: tree-sitter highlighting in 80 languages, files of any size (view mode above 64 MB), multiple cursors, find and replace with regex, go to line, a live Markdown and Mermaid preview pane; LSP diagnostics, hover, completion and go to definition | vim mode in the pane, folding and outline ([ADR 0034](docs/decisions/0034-editor-pane.md)) |
 | **Agent workspace** — absorbs Superset, AI-native | State hooks for Claude Code, Codex, OpenCode and miao; attention badges and notifications; prompt queue; a git worktree per task with diff review; the MTP control plane | Agents' edits reviewed inline as undoable diffs; an ACP client; selections, diagnostics and terminal output as one-click agent context |
 
 What ties them together: Rust and GPU rendering held to a performance gate;
@@ -255,6 +255,7 @@ The engine is layered so that dependencies point inward only
 | [`miao-term-render`](crates/term-render) | `wgpu` + `glyphon` glyph-grid renderer, quad and image pipelines. |
 | [`miao-term-ui`](crates/term-ui) | Host-agnostic UI shared by mtty: theme, input encoding, selection, split layout, egui chrome, palette, hints, vim, markdown, ssh, update and agent-integration helpers. |
 | [`miao-term-editor`](crates/term-editor) | Editing core for the editor pane: rope buffer, transactions and undo, multiple selections, motions, search and replace (ADR 0034). No UI code. |
+| [`miao-term-lsp`](crates/term-lsp) | Language Server Protocol client for the editor pane: servers per workspace on background threads, document sync, diagnostics, hover, completion, definitions (ADR 0034). No UI code. |
 | [`miao-term-config`](crates/term-config) | Configuration and themes, ghostty/alacritty import, and the View-rule engine. |
 | [`miao-term-mtp`](crates/term-mtp) | MTP protocol, host/client and transport (Unix socket, Windows named pipe, TCP). |
 | [`miao-term-widget`](crates/term-widget) | The native host library for mtty: `winit` + `wgpu` render loop that draws the grid directly and composites the egui chrome. |
@@ -450,7 +451,10 @@ Pass `--socket PATH` or set `MTTY_SOCKET` to target a non-default socket.
 Plain `Ctrl` chords (`Ctrl+C`, `Ctrl+W`, `Ctrl+D`, …) always reach the shell on
 Linux and Windows, and `Super`/`Win` combinations are left to the desktop.
 
-In an editor pane these take precedence over the app's shortcuts above:
+In an editor pane these take precedence over the app's shortcuts above. The
+language features need a server for the file's language (see `[lsp]` in
+[`docs/config.example.toml`](docs/config.example.toml)); hovering over code
+shows its type, docs and problems.
 
 | macOS | Linux / Windows | Action |
 |---|---|---|
@@ -462,6 +466,9 @@ In an editor pane these take precedence over the app's shortcuts above:
 | `⌥⌘F` | `Ctrl+H` | Find and replace (`Aa` case, `ab` whole word, `.*` regex) |
 | `⌥↩` in Find | `Alt+Enter` in Find | Select all matches |
 | `⌃G` | `Ctrl+G` | Go to line (`line` or `line:column`) |
+| `⌃Space` | `Ctrl+Space` | Completions (they also open as you type; `↩`/`⇥` accept) |
+| `F12` or `⌘`-click | `F12` or `Ctrl`-click | Go to definition |
+| `F8` / `⇧F8` | `F8` / `Shift+F8` | Next / previous problem |
 | `⌘Z` / `⇧⌘Z` | `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
 
 ---

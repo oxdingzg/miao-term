@@ -1,0 +1,13 @@
+[package]
+name = "miao-term-lsp"
+description = "Language Server Protocol client for mtty's editor pane"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+miao-term-editor = { path = "../term-editor" }
+serde_json = "1.0"

@@ -73,7 +73,24 @@ renderer and laid out by the existing split tree.
    an editor pane (new tab, or a split with a modifier). Unsaved state shows on
    the tab; closing asks. Remote files keep the ssh read/write path.
 7. **LSP later**, per workspace root over stdio: diagnostics, hover,
-   completion, go-to-definition, configured per language in `config.toml`.
+   completion, go-to-definition, configured per language in `config.toml`. (Implementation note, E5:
+   a GPU-free crate, `term-lsp`, speaks JSON-RPC over the server's stdio
+   with serde_json alone. One server runs per language group and workspace
+   root (the nearest folder with a project file, else the `.git` folder);
+   it is started, initialized and read on background threads, and found on
+   the login shell's `PATH`, which an app launched from the Dock lacks.
+   Documents are synced whole on every change, as `textDocument/didChange`
+   without ranges, which keeps the client simple and correct; files over
+   2 MB get no server. Positions are negotiated as UTF-8 and fall back to
+   UTF-16. Diagnostics underline their cells and count in the status bar;
+   hover shows after the pointer rests 450 ms; completion opens on a
+   trigger character, as a word is typed, or with Ctrl+Space, filtered on
+   the client, and applies snippets as plain text with the caret on the
+   first placeholder plus any extra edits (imports); F12 or ⌘-click goes to
+   the definition, F8 to the next problem. Defaults cover rust-analyzer,
+   typescript-language-server, pyright, gopls and clangd; `[lsp]` in
+   `config.toml` overrides them. Accepted against rust-analyzer 1.94 and
+   typescript-language-server 5.3 with TypeScript 5.9.)
 8. The floating editor window is retired once the pane covers it; Markdown
    preview becomes a preview pane beside the editor. (Implementation note, E4: a
    tab holds `previews` beside its terminals and editors; the layout names

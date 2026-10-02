@@ -20,7 +20,7 @@
 | 支柱 | 现在 | 接下来 |
 |---|---|---|
 | **终端与远程** —— 吸收 Termius 与 PuTTY | GPU 渲染的终端、标签与分屏、会话恢复;主机库、密钥、SFTP/FTP、端口转发、跳板机、片段、广播输入(经系统 OpenSSH) | 串口、Telnet 与原始 TCP 连接,`.ppk` 密钥;正在评估 Rust 原生的 SSH 实现(需另立 ADR) |
-| **编辑器** —— 一流的文本编辑器,而非附属功能 | 与终端并列的编辑器 pane:80 种语言的 tree-sitter 高亮,任意大小的文件(超过 64 MB 以只读查看模式打开),多光标,支持正则的查找替换,跳转到行,实时 Markdown 与 Mermaid 预览 pane | LSP、pane 中的 vim 模式、折叠与大纲([ADR 0034](docs/decisions/0034-editor-pane.zh-CN.md)) |
+| **编辑器** —— 一流的文本编辑器,而非附属功能 | 与终端并列的编辑器 pane:80 种语言的 tree-sitter 高亮,任意大小的文件(超过 64 MB 以只读查看模式打开),多光标,支持正则的查找替换,跳转到行,实时 Markdown 与 Mermaid 预览 pane;LSP 诊断、悬停、补全与跳转定义 | pane 中的 vim 模式、折叠与大纲([ADR 0034](docs/decisions/0034-editor-pane.zh-CN.md)) |
 | **Agent 工作台** —— 吸收 Superset,AI 原生 | Claude Code、Codex、OpenCode 与 miao 的状态 hook;需要关注时的徽章与通知;提示队列;每个任务一个 git worktree 并审阅 diff;MTP 控制面 | agent 的修改以可撤销的 diff 在行内审阅;ACP 客户端;选区、诊断与终端输出一键作为 agent 上下文 |
 
 把它们连在一起的是:Rust 与 GPU 渲染,并由性能门把关;终端、编辑器、远程主机与 agent 位于同一套标签与分屏;不需要账号,
@@ -180,6 +180,7 @@ mtty 与 miao 是两个独立项目,任意一个都可以单独使用。在 mtty
 | [`miao-term-render`](crates/term-render) | `wgpu` + `glyphon` 字形网格渲染器,含 quad 与图像管线。 |
 | [`miao-term-ui`](crates/term-ui) | 与 host 无关的 UI:主题、输入编码、选区、分屏布局、egui 外壳、命令面板、hint、vim、markdown、ssh、更新与 agent 集成等 helper。 |
 | [`miao-term-editor`](crates/term-editor) | 编辑器 pane 的编辑内核:rope 缓冲区、事务与撤销、多选区、光标移动、查找替换(ADR 0034)。不含界面代码。 |
+| [`miao-term-lsp`](crates/term-lsp) | 编辑器 pane 的语言服务器(LSP)客户端:按工作区在后台线程运行服务器,同步文档,提供诊断、悬停、补全与跳转定义(ADR 0034)。不含界面代码。 |
 | [`miao-term-config`](crates/term-config) | 配置与主题,ghostty/alacritty 导入,以及 View 规则引擎。 |
 | [`miao-term-mtp`](crates/term-mtp) | MTP 协议、host/client 与传输(Unix socket、Windows 命名管道、TCP)。 |
 | [`miao-term-widget`](crates/term-widget) | mtty 原生 host 库:`winit` + `wgpu` 渲染循环,直接绘制网格并合成 egui 外壳。 |
@@ -361,7 +362,8 @@ mtty-cli file write --path /tmp/x --data-b64 "AAECAw=="   # 二进制
 
 在 Linux 与 Windows 上,单独的 `Ctrl` 组合键(`Ctrl+C`、`Ctrl+W`、`Ctrl+D`……)始终交给 shell,`Super`/`Win` 组合留给桌面。
 
-在编辑器 pane 中,下列按键优先于上面的应用快捷键:
+在编辑器 pane 中,下列按键优先于上面的应用快捷键。语言相关功能需要该语言的语言服务器(见
+[`docs/config.example.toml`](docs/config.example.toml) 中的 `[lsp]`);鼠标停在代码上会显示类型、文档与问题。
 
 | macOS | Linux / Windows | 操作 |
 |---|---|---|
@@ -373,6 +375,9 @@ mtty-cli file write --path /tmp/x --data-b64 "AAECAw=="   # 二进制
 | `⌥⌘F` | `Ctrl+H` | 查找替换(`Aa` 区分大小写、`ab` 全字匹配、`.*` 正则) |
 | 查找框中 `⌥↩` | 查找框中 `Alt+Enter` | 选中全部匹配 |
 | `⌃G` | `Ctrl+G` | 跳转到行(`行` 或 `行:列`) |
+| `⌃Space` | `Ctrl+Space` | 补全(输入时也会自动弹出;`↩`/`⇥` 确认) |
+| `F12` 或 `⌘` 单击 | `F12` 或 `Ctrl` 单击 | 跳转到定义 |
+| `F8` / `⇧F8` | `F8` / `Shift+F8` | 下一个 / 上一个问题 |
 | `⌘Z` / `⇧⌘Z` | `Ctrl+Z` / `Ctrl+Y` | 撤销 / 重做 |
 
 ---

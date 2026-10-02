@@ -28,6 +28,19 @@ font-size = 13                   # default
 # awaiting = true
 # error = true
 
+# Language servers for the editor pane: on by default for any that are
+# installed (rust-analyzer, typescript-language-server, pyright-langserver,
+# gopls, clangd), found on the login shell's PATH. Files over 2 MB get none.
+# [lsp]
+# enabled = false                  # all of them off
+# [lsp.rust]                       # rust | typescript | python | go | c
+# command = "rust-analyzer"        # a string split at spaces, or a list
+# root-markers = ["Cargo.toml"]    # the nearest folder with one is the workspace
+# [lsp.python]
+# command = ["pylsp"]
+# [lsp.go]
+# enabled = false
+
 # Built-in named theme: nord | dracula | gruvbox | solarized | tokyo-night.
 # theme = "dracula"   # overridden by explicit [colors] below
 

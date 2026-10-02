@@ -54,6 +54,19 @@ pub struct EditorDraw {
     pub carets: Vec<(usize, usize)>,
     /// Width of the gutter in cells.
     pub gutter: usize,
+    /// Diagnostic underlines and their severity (1 error … 4 hint).
+    pub underlines: Vec<(CellRect, u8)>,
+}
+
+/// A language server's diagnostic in this pane's text (ADR 0034, E5): a
+/// char range, as of when it was reported.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaneDiagnostic {
+    pub from: usize,
+    pub to: usize,
+    /// 1 error, 2 warning, 3 information, 4 hint.
+    pub severity: u8,
+    pub message: String,
 }
 
 /// Colours the pane draws with (taken from the terminal theme).
@@ -105,6 +118,12 @@ pub enum Command {
     GoToLine,
     /// Find with the replace field open (the host's Find bar).
     FindReplace,
+    /// Ask the language server for completions (Ctrl+Space).
+    Complete,
+    /// Go to the definition of the symbol at the caret (F12).
+    GoToDefinition,
+    /// The next (or previous) diagnostic (F8 / ⇧F8).
+    NextProblem(bool),
     Undo,
     Redo,
     Escape,
@@ -154,6 +173,9 @@ pub fn keymap(key: KeyKind, shift: bool, alt: bool, cmd: bool, ctrl: bool) -> Op
         KeyKind::Tab if shift => Command::Outdent,
         KeyKind::Tab if !primary => Command::Indent,
         KeyKind::Escape => Command::Escape,
+        KeyKind::F(12) if !cmd && !ctrl && !alt => Command::GoToDefinition,
+        KeyKind::F(8) if !cmd && !ctrl && !alt => Command::NextProblem(!shift),
+        KeyKind::Char(' ') if ctrl && !cmd && !alt => Command::Complete,
         KeyKind::Char(c) if shift && alt && !cmd && !ctrl && c.eq_ignore_ascii_case(&'i') => {
             Command::CursorsAtLineEnds
         }
@@ -198,6 +220,8 @@ pub struct EditorPane {
     pub syntax: Option<Syntax>,
     /// View mode for a large file (see [`MAX_PANE_BYTES`]).
     pub large: Option<LargeWindow>,
+    /// The language server's diagnostics, sorted by position.
+    pub diagnostics: Vec<PaneDiagnostic>,
     last_click: Option<(Instant, usize, u8)>,
 }
 
@@ -376,6 +400,7 @@ impl EditorPane {
         doc.take_edits();
         EditorPane {
             large: None,
+            diagnostics: Vec::new(),
             syntax,
             id,
             doc,
@@ -534,6 +559,9 @@ impl EditorPane {
                 | Command::AddCursor(_)
                 | Command::GoToLine
                 | Command::FindReplace
+                | Command::Complete
+                | Command::GoToDefinition
+                | Command::NextProblem(_)
                 | Command::Escape
         )
     }
@@ -585,7 +613,14 @@ impl EditorPane {
             Command::CursorsAtLineEnds => self.doc.cursors_at_line_ends(),
             Command::AddCursor(below) => self.doc.add_cursor(below),
             // The host's prompts; nothing to do in the document.
-            Command::GoToLine | Command::FindReplace => return false,
+            Command::NextProblem(forward) => {
+                self.next_problem(forward);
+            }
+            // The language server's requests, made by the host.
+            Command::GoToLine
+            | Command::FindReplace
+            | Command::Complete
+            | Command::GoToDefinition => return false,
             Command::Undo => {
                 self.doc.undo();
             }
@@ -649,6 +684,29 @@ impl EditorPane {
         let offset =
             layout::offset_at_col(rope.line(line), self.scroll_col + col, self.doc.tab_width());
         rope.line_to_char(line) + offset
+    }
+
+    /// The char drawn in a text-area cell, if the cell holds one (not past
+    /// a line's end or the last line).
+    pub fn char_under(&self, row: usize, col: usize) -> Option<usize> {
+        let rope = self.doc.rope();
+        let line = self.scroll_line + row;
+        if line > motion::last_line(rope) {
+            return None;
+        }
+        let slice = rope.line(line);
+        let tab = self.doc.tab_width();
+        let col = self.scroll_col + col;
+        let content = layout::content_len(slice);
+        if col >= layout::visual_col(slice, content, tab) {
+            return None;
+        }
+        // The char whose cells cover `col`.
+        let mut offset = layout::offset_at_col(slice, col, tab).min(content);
+        while offset > 0 && layout::visual_col(slice, offset, tab) > col {
+            offset -= 1;
+        }
+        Some(rope.line_to_char(line) + offset)
     }
 
     /// A press at a text-area cell: a click places the caret (⇧ extends),
@@ -891,6 +949,19 @@ impl EditorPane {
                 carets.push((line - self.scroll_line, gutter + c - self.scroll_col));
             }
         }
+        // Diagnostics on screen, at least a cell wide.
+        let mut underlines = Vec::new();
+        let first = self.diagnostics.partition_point(|d| d.to < top);
+        for d in self.diagnostics[first..]
+            .iter()
+            .take_while(|d| d.from <= bottom)
+        {
+            let to =
+                d.to.max(motion::next_grapheme(rope, d.from).max(d.from + 1));
+            let mut cells = Vec::new();
+            self.span_cells(d.from, to, &mut cells);
+            underlines.extend(cells.into_iter().map(|c| (c, d.severity)));
+        }
         let current_line = (head_line >= self.scroll_line
             && head_line < self.scroll_line + self.rows)
             .then(|| head_line - self.scroll_line);
@@ -900,7 +971,55 @@ impl EditorPane {
             current_line,
             carets,
             gutter,
+            underlines,
         }
+    }
+
+    /// The diagnostics covering char `at` (an empty one at its position),
+    /// most severe first.
+    pub fn diagnostics_at(&self, at: usize) -> Vec<&PaneDiagnostic> {
+        let mut found: Vec<&PaneDiagnostic> = self
+            .diagnostics
+            .iter()
+            .filter(|d| d.from <= at && (at < d.to || at == d.from))
+            .collect();
+        found.sort_by_key(|d| d.severity);
+        found
+    }
+
+    /// Errors and warnings, for the status bar.
+    pub fn problem_counts(&self) -> (usize, usize) {
+        let errors = self.diagnostics.iter().filter(|d| d.severity == 1).count();
+        let warnings = self.diagnostics.iter().filter(|d| d.severity == 2).count();
+        (errors, warnings)
+    }
+
+    /// F8: select the next diagnostic after the caret (or the previous one
+    /// before it), wrapping around. Its index, if there is any.
+    pub fn next_problem(&mut self, forward: bool) -> Option<usize> {
+        if self.diagnostics.is_empty() {
+            return None;
+        }
+        let caret = self.doc.selection().primary().from();
+        let n = self.diagnostics.len();
+        let index = if forward {
+            self.diagnostics
+                .iter()
+                .position(|d| d.from > caret)
+                .unwrap_or(0)
+        } else {
+            self.diagnostics
+                .iter()
+                .rposition(|d| d.from < caret)
+                .unwrap_or(n - 1)
+        };
+        let d = &self.diagnostics[index];
+        let len = self.doc.rope().len_chars();
+        let (from, to) = (d.from.min(len), d.to.min(len));
+        self.doc
+            .set_selection(Selection::single(Range::new(from, to)));
+        self.reveal_cursor();
+        Some(index)
     }
 
     /// The primary caret as 1-based line and column (columns in cells).
@@ -1421,6 +1540,84 @@ mod tests {
                 true
             )
         );
+    }
+
+    #[test]
+    fn diagnostics_underline_and_f8_walks_them() {
+        let mut p = pane("let a = 1;\nlet b = ;\nfoo(\n");
+        p.diagnostics = vec![
+            PaneDiagnostic {
+                from: 4,
+                to: 5,
+                severity: 2,
+                message: "unused variable: `a`".into(),
+            },
+            PaneDiagnostic {
+                from: 19,
+                to: 19,
+                severity: 1,
+                message: "expected expression".into(),
+            },
+        ];
+        let d = p.draw(palette(), true, true);
+        assert_eq!(
+            d.underlines,
+            vec![
+                (
+                    CellRect {
+                        row: 0,
+                        col: 7,
+                        width: 1
+                    },
+                    2
+                ),
+                (
+                    CellRect {
+                        row: 1,
+                        col: 11,
+                        width: 1
+                    },
+                    1
+                ),
+            ],
+            "an empty range still gets a cell"
+        );
+        assert_eq!(p.problem_counts(), (1, 1));
+        assert_eq!(p.diagnostics_at(19)[0].message, "expected expression");
+        assert!(p.diagnostics_at(0).is_empty());
+        let mac = cfg!(target_os = "macos");
+        use KeyKind::*;
+        let ran = replay(&mut p, &[Step::Key(F(8), "")]);
+        assert_eq!(ran, vec![Command::NextProblem(true)]);
+        assert_eq!(p.doc.selection().primary(), Range::new(4, 5));
+        replay(&mut p, &[Step::Key(F(8), "")]);
+        assert_eq!(p.doc.selection().primary().head, 19);
+        replay(&mut p, &[Step::Key(F(8), "")]);
+        assert_eq!(p.doc.selection().primary().from(), 4, "wraps around");
+        replay(&mut p, &[Step::Key(F(8), "S")]);
+        assert_eq!(p.doc.selection().primary().head, 19, "⇧F8 goes back");
+        assert_eq!(
+            keymap(F(12), false, false, false, false),
+            Some(Command::GoToDefinition)
+        );
+        assert_eq!(
+            keymap(Char(' '), false, false, false, true),
+            Some(Command::Complete)
+        );
+        let _ = mac;
+    }
+
+    #[test]
+    fn the_char_under_a_cell() {
+        let mut p = pane("\tab中c\n");
+        p.resize(40, 5);
+        assert_eq!(p.char_under(0, 0), Some(0), "inside the tab");
+        assert_eq!(p.char_under(0, 3), Some(0));
+        assert_eq!(p.char_under(0, 4), Some(1));
+        assert_eq!(p.char_under(0, 7), Some(3), "the right half of 中");
+        assert_eq!(p.char_under(0, 8), Some(4));
+        assert_eq!(p.char_under(0, 9), None, "past the line");
+        assert_eq!(p.char_under(3, 0), None, "past the document");
     }
 
     #[test]

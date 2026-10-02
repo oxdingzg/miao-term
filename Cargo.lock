@@ -2469,6 +2469,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "miao-term-lsp"
+version = "0.0.15"
+dependencies = [
+ "miao-term-editor",
+ "serde_json",
+]
+
+[[package]]
 name = "miao-term-mtp"
 version = "0.0.15"
 dependencies = [
@@ -2516,6 +2524,7 @@ dependencies = [
  "miao-term-config",
  "miao-term-core",
  "miao-term-editor",
+ "miao-term-lsp",
  "miao-term-mtp",
  "miao-term-render",
  "miao-term-ui",

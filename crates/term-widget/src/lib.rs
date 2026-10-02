@@ -1198,6 +1198,14 @@ struct State {
     find_rejump: bool,
     /// The Go to Line prompt's text, while it is open.
     goto_line: Option<String>,
+    /// Language servers for editor panes (ADR 0034, E5).
+    lsp: miao_term_lsp::Lsp,
+    /// `MTTY_QA_COMMAND` has run.
+    qa_done: bool,
+    /// The pointer resting on editor text, until a hover is asked for.
+    hover_rest: Option<HoverRest>,
+    hover: Option<HoverPopup>,
+    completion: Option<CompletionPopup>,
     /// Find running on a thread: in a view-mode file (byte ranges) or a
     /// large document (char ranges).
     bg_search: Option<BgSearch>,
@@ -2588,6 +2596,7 @@ impl State {
             }
         }
         self.refresh_search();
+        self.lsp_frame();
         self.poll_details();
         self.ensure_details();
         // MTP `pane.send` / `pane.run` — inject bytes into the target pane.
@@ -3107,6 +3116,7 @@ impl State {
         // Shared, host-agnostic chrome (menu/tabs/sidebar/details/status).
         chrome::render(ctx, self);
         self.preview_panes(ctx);
+        self.lsp_popups(ctx);
         if self.update_dialog {
             use miao_term_ui::i18n::t;
             let lang = self.lang;
@@ -4059,6 +4069,12 @@ enum Cmd {
     GoToLine,
     /// Open or close a Markdown preview beside the active editor.
     MarkdownPreview,
+    /// The language server, at the active editor's caret (ADR 0034, E5).
+    GoToDefinition,
+    ShowHover,
+    TriggerCompletion,
+    NextProblem,
+    PreviousProblem,
     /// Multiple cursors in the active editor (ADR 0034, E4).
     SelectAllOccurrences,
     CursorsAtLineEnds,
@@ -4178,6 +4194,14 @@ impl State {
                 Cmd::MarkdownPreview,
                 t(l, "Toggle Markdown Preview", "开关 Markdown 预览"),
             ),
+            (Cmd::GoToDefinition, t(l, "Go to Definition", "跳转到定义")),
+            (Cmd::ShowHover, t(l, "Show Hover", "显示悬停信息")),
+            (
+                Cmd::TriggerCompletion,
+                t(l, "Trigger Completion", "触发补全"),
+            ),
+            (Cmd::NextProblem, t(l, "Next Problem", "下一个问题")),
+            (Cmd::PreviousProblem, t(l, "Previous Problem", "上一个问题")),
             (
                 Cmd::SelectAllOccurrences,
                 t(l, "Select All Occurrences", "选中所有相同项"),
@@ -4477,6 +4501,32 @@ impl State {
                 }
             }
             Cmd::MarkdownPreview => self.toggle_markdown_preview(),
+            Cmd::GoToDefinition => {
+                if self.require_editor() {
+                    self.request_definition();
+                }
+            }
+            Cmd::TriggerCompletion => {
+                if self.require_editor() {
+                    self.request_completion(None, true);
+                }
+            }
+            Cmd::ShowHover | Cmd::NextProblem | Cmd::PreviousProblem => {
+                if !self.require_editor() {
+                    return;
+                }
+                if !matches!(cmd, Cmd::ShowHover) {
+                    let forward = matches!(cmd, Cmd::NextProblem);
+                    self.run_editor_command(editor_pane::Command::NextProblem(forward));
+                }
+                let at = self
+                    .active_editor()
+                    .map(|e| e.doc.selection().primary().from());
+                let pane = self.active_pane_id();
+                if let (Some(at), Some(pane), Some(pos)) = (at, pane, self.caret_point()) {
+                    self.show_hover(&pane, at, pos);
+                }
+            }
             Cmd::GoToLine => {
                 if self.require_editor() {
                     self.goto_line = Some(String::new());
@@ -6173,6 +6223,501 @@ impl State {
             tab.previews.push(preview);
         }
         self.publish_panes();
+    }
+
+    /// Language servers, once a frame (ADR 0034, E5): every editor's text
+    /// goes to its server when it changed, closed panes close their
+    /// documents, and answers are handled.
+    fn lsp_frame(&mut self) {
+        let mut open = std::collections::HashSet::new();
+        for tab in &self.tabs {
+            for ed in tab.editors.iter().filter(|e| !e.is_view_only()) {
+                open.insert(ed.path.clone());
+                self.lsp
+                    .sync(&ed.path, ed.language(), ed.doc.rope(), ed.doc.revision());
+            }
+        }
+        self.lsp.retain(&open);
+        for event in self.lsp.poll() {
+            self.lsp_event(event);
+        }
+        self.maybe_request_hover();
+    }
+
+    /// Send the active editor's latest text before asking about it.
+    fn lsp_sync_active(&mut self) {
+        let Some(tab) = self.tabs.get(self.active_tab) else {
+            return;
+        };
+        if let Some(ed) = tab.editors.iter().find(|e| e.id == tab.active) {
+            if !ed.is_view_only() {
+                self.lsp
+                    .sync(&ed.path, ed.language(), ed.doc.rope(), ed.doc.revision());
+            }
+        }
+    }
+
+    fn lsp_event(&mut self, event: miao_term_lsp::Event) {
+        use miao_term_lsp::Event;
+        match event {
+            Event::Diagnostics(path) => {
+                let list = self.lsp.diagnostics(&path).to_vec();
+                let encoding = self.lsp.encoding(&path);
+                for ed in self
+                    .tabs
+                    .iter_mut()
+                    .flat_map(|t| t.editors.iter_mut())
+                    .filter(|e| e.path == path)
+                {
+                    let rope = ed.doc.rope();
+                    let mut diagnostics: Vec<editor_pane::PaneDiagnostic> = list
+                        .iter()
+                        .map(|d| {
+                            let from = miao_term_lsp::pos_to_char(rope, d.range.start, encoding);
+                            let to = miao_term_lsp::pos_to_char(rope, d.range.end, encoding);
+                            editor_pane::PaneDiagnostic {
+                                from,
+                                to: to.max(from),
+                                severity: d.severity.clamp(1, 4),
+                                message: match &d.source {
+                                    Some(source) => format!("{} ({source})", d.message),
+                                    None => d.message.clone(),
+                                },
+                            }
+                        })
+                        .collect();
+                    diagnostics.sort_by_key(|d| (d.from, d.to, d.severity));
+                    ed.diagnostics = diagnostics;
+                }
+            }
+            Event::Hover { path, at, markdown } => {
+                if let Some(popup) = self.hover.as_mut() {
+                    if popup.path == path && popup.at == at {
+                        popup.markdown = Some(markdown);
+                    }
+                }
+            }
+            Event::Completion {
+                ticket,
+                items,
+                incomplete,
+                encoding,
+                ..
+            } => {
+                if let Some(c) = self.completion.as_mut().filter(|c| c.ticket == ticket) {
+                    c.items = items;
+                    c.incomplete = incomplete;
+                    c.encoding = encoding;
+                    c.waiting = false;
+                    c.selected = 0;
+                }
+                self.refilter_completion();
+            }
+            Event::Definition { targets, encoding } => match targets.into_iter().next() {
+                Some((path, range)) => self.go_to_target(&path, range, encoding),
+                None => self.show_notice(
+                    miao_term_ui::i18n::t(self.lang, "No definition found.", "未找到定义。")
+                        .to_string(),
+                ),
+            },
+            Event::Failed {
+                server,
+                message,
+                configured,
+            } => {
+                // A default server that is not installed stays quiet; one
+                // the user configured says why it is not working.
+                eprintln!("mtty: language server {server}: {message}");
+                if configured {
+                    self.show_notice(format!(
+                        "{} {server}: {message}",
+                        miao_term_ui::i18n::t(self.lang, "Language server", "语言服务器")
+                    ));
+                }
+            }
+        }
+        self.window.request_redraw();
+    }
+
+    /// Open `path` (a definition) and put the caret at `range`'s start.
+    fn go_to_target(
+        &mut self,
+        path: &std::path::Path,
+        range: miao_term_lsp::LspRange,
+        encoding: miao_term_lsp::Encoding,
+    ) {
+        if !self.open_editor_pane(path) {
+            return;
+        }
+        if let Some(ed) = self.active_editor_mut() {
+            let at = miao_term_lsp::pos_to_char(ed.doc.rope(), range.start, encoding);
+            let line = ed.doc.rope().char_to_line(at);
+            ed.go_to_line(line);
+            ed.doc
+                .set_selection(miao_term_editor::Selection::cursor(at));
+            ed.reveal_cursor();
+        }
+        self.completion = None;
+        self.hover = None;
+    }
+
+    /// F12 / ⌘-click: the definition of the symbol at the caret.
+    fn request_definition(&mut self) {
+        self.lsp_sync_active();
+        let lang = self.lang;
+        let Some(ed) = active_editor_of(&self.tabs, self.active_tab) else {
+            return;
+        };
+        let (path, at) = (ed.path.clone(), ed.doc.selection().primary().head);
+        let asked = self.lsp.definition(&path, ed.doc.rope(), at);
+        if !asked {
+            self.show_notice(no_server_notice(lang));
+        }
+    }
+
+    /// Completions at the caret; `trigger` is the character typed that
+    /// asked, if any. The list shows once the answer arrives.
+    fn request_completion(&mut self, trigger: Option<String>, invoked: bool) {
+        self.lsp_sync_active();
+        let lang = self.lang;
+        let Some(ed) = active_editor_of(&self.tabs, self.active_tab) else {
+            return;
+        };
+        let rope = ed.doc.rope();
+        let caret = ed.doc.selection().primary().head;
+        let start = word_start(rope, caret);
+        let (pane, path) = (ed.id.clone(), ed.path.clone());
+        match self.lsp.completion(&path, rope, caret, trigger.as_deref()) {
+            Some(ticket) => {
+                // Keep showing the last list while a newer one is asked for.
+                let keep = self
+                    .completion
+                    .take()
+                    .filter(|c| c.pane == pane && c.start == start);
+                self.completion = Some(match keep {
+                    Some(mut c) => {
+                        c.ticket = ticket;
+                        c.waiting = true;
+                        c
+                    }
+                    None => CompletionPopup {
+                        pane,
+                        start,
+                        ticket,
+                        items: Vec::new(),
+                        encoding: Default::default(),
+                        shown: Vec::new(),
+                        selected: 0,
+                        incomplete: false,
+                        waiting: true,
+                    },
+                });
+            }
+            None if invoked => self.show_notice(no_server_notice(lang)),
+            None => {}
+        }
+    }
+
+    /// After typing in an editor: a trigger character asks for completions,
+    /// a word character narrows the open list (or asks for one), anything
+    /// else closes it.
+    fn after_typing(&mut self, text: &str) {
+        let Some(ed) = self.active_editor() else {
+            return;
+        };
+        if ed.is_view_only() || !self.lsp.handles(&ed.path) {
+            return;
+        }
+        let rope = ed.doc.rope();
+        let caret = ed.doc.selection().primary().head;
+        let before: String = rope.slice(caret.saturating_sub(4)..caret).chars().collect();
+        let pane = ed.id.clone();
+        let trigger = self
+            .lsp
+            .trigger_characters(&ed.path)
+            .into_iter()
+            .filter(|t| !t.is_empty() && text.ends_with(t.chars().last().unwrap_or(' ')))
+            .find(|t| before.ends_with(t.as_str()));
+        if let Some(t) = trigger {
+            self.request_completion(Some(t), false);
+            return;
+        }
+        let word = text.chars().last().is_some_and(is_word_char);
+        if !word {
+            self.completion = None;
+            return;
+        }
+        match &self.completion {
+            Some(c) if c.pane == pane && !c.incomplete => self.refilter_completion(),
+            _ => self.request_completion(None, false),
+        }
+    }
+
+    /// Narrow the open completion list to what was typed since it opened;
+    /// closed when the caret left the word.
+    fn refilter_completion(&mut self) {
+        let Some(c) = self.completion.as_ref() else {
+            return;
+        };
+        let Some(ed) = self.tabs.get(self.active_tab).and_then(|t| {
+            t.editors
+                .iter()
+                .find(|e| e.id == c.pane && t.active == e.id)
+        }) else {
+            self.completion = None;
+            return;
+        };
+        let rope = ed.doc.rope();
+        let caret = ed.doc.selection().primary().head;
+        if caret < c.start || ed.doc.selection().len() > 1 {
+            self.completion = None;
+            return;
+        }
+        let typed: String = rope.slice(c.start..caret).chars().collect();
+        if !typed.chars().all(is_word_char) {
+            self.completion = None;
+            return;
+        }
+        let shown = filter_completions(&c.items, &typed);
+        let waiting = c.waiting;
+        if shown.is_empty() && !waiting {
+            self.completion = None;
+            return;
+        }
+        if let Some(c) = self.completion.as_mut() {
+            c.selected = c.selected.min(shown.len().saturating_sub(1));
+            c.shown = shown;
+        }
+    }
+
+    /// Enter / Tab / a click in the list: write the chosen completion (and
+    /// its extra edits, such as an import) as one undo step.
+    fn accept_completion(&mut self, index: Option<usize>) {
+        let Some(c) = self.completion.take() else {
+            return;
+        };
+        let Some(item) = c
+            .shown
+            .get(index.unwrap_or(c.selected))
+            .and_then(|&i| c.items.get(i))
+            .cloned()
+        else {
+            return;
+        };
+        let Some(ed) = self.active_editor_mut().filter(|e| e.id == c.pane) else {
+            return;
+        };
+        let caret = ed.doc.selection().primary().head;
+        let (tx, after) = completion_edit(ed.doc.rope(), caret, c.start, &item, c.encoding);
+        ed.doc.apply(
+            tx,
+            miao_term_editor::Selection::cursor(after),
+            miao_term_editor::history::EditKind::Other,
+        );
+        ed.reveal_cursor();
+    }
+
+    /// Keys for an open completion list: ↑ ↓ choose, ↩ / ⇥ accept, ⎋ close.
+    /// True when the key was the list's.
+    fn completion_key(&mut self, kind: input::KeyKind, mods: bool) -> bool {
+        use input::KeyKind;
+        let active = self.active_pane_id();
+        let Some(c) = self.completion.as_mut() else {
+            return false;
+        };
+        if active.as_deref() != Some(c.pane.as_str()) {
+            self.completion = None;
+            return false;
+        }
+        if c.shown.is_empty() {
+            if kind == KeyKind::Escape {
+                self.completion = None;
+                return true;
+            }
+            return false;
+        }
+        let n = c.shown.len();
+        match kind {
+            KeyKind::Up if !mods => c.selected = (c.selected + n - 1) % n,
+            KeyKind::Down if !mods => c.selected = (c.selected + 1) % n,
+            KeyKind::PageUp if !mods => c.selected = c.selected.saturating_sub(COMPLETION_ROWS),
+            KeyKind::PageDown if !mods => c.selected = (c.selected + COMPLETION_ROWS).min(n - 1),
+            KeyKind::Enter | KeyKind::Tab if !mods => self.accept_completion(None),
+            KeyKind::Escape => self.completion = None,
+            _ => return false,
+        }
+        true
+    }
+
+    /// The pointer rested on editor text: show its diagnostics and ask the
+    /// server about it.
+    fn maybe_request_hover(&mut self) {
+        let Some(rest) = self.hover_rest.as_mut() else {
+            return;
+        };
+        if rest.asked || rest.since.elapsed() < HOVER_DELAY {
+            return;
+        }
+        rest.asked = true;
+        let (pane, at, pos) = (rest.pane.clone(), rest.at, rest.pos);
+        self.show_hover(&pane, at, pos);
+    }
+
+    /// A hover popup at `pos` (points) for char `at` of editor `pane`.
+    fn show_hover(&mut self, pane: &str, at: usize, pos: (f32, f32)) {
+        self.lsp_sync_active();
+        let Some(ed) = self
+            .tabs
+            .get(self.active_tab)
+            .and_then(|t| t.editors.iter().find(|e| e.id == pane))
+        else {
+            return;
+        };
+        let diagnostics: Vec<(u8, String)> = ed
+            .diagnostics_at(at)
+            .into_iter()
+            .map(|d| (d.severity, d.message.clone()))
+            .collect();
+        let path = ed.path.clone();
+        let asked = !ed.is_view_only() && self.lsp.hover(&path, ed.doc.rope(), at);
+        if diagnostics.is_empty() && !asked {
+            return;
+        }
+        self.hover = Some(HoverPopup {
+            pane: pane.to_string(),
+            path,
+            at,
+            pos,
+            markdown: None,
+            diagnostics,
+        });
+        self.window.request_redraw();
+    }
+
+    /// Where an editor caret is on screen (points, below its cell), for
+    /// popups opened from the keyboard.
+    fn caret_point(&self) -> Option<(f32, f32)> {
+        let ed = self.active_editor()?;
+        let (row, col) = ed.caret_cell()?;
+        let inner = self.active_inner()?;
+        Some((
+            inner.x + col as f32 * self.cw,
+            inner.y + (row + 1) as f32 * self.ch,
+        ))
+    }
+
+    /// The hover popup and the completion list.
+    fn lsp_popups(&mut self, ctx: &egui::Context) {
+        let active = self.active_pane_id();
+        if self
+            .hover
+            .as_ref()
+            .is_some_and(|h| Some(&h.pane) != active.as_ref())
+        {
+            self.hover = None;
+        }
+        let ch = self.theme.chrome();
+        let fg = miao_term_ui::chrome::bg_color(ch.text);
+        let panel = miao_term_ui::chrome::bg_color(ch.card);
+        if let Some(h) = &self.hover {
+            if h.markdown.is_some() || !h.diagnostics.is_empty() {
+                let (x, y) = h.pos;
+                let text = h.markdown.clone();
+                let diagnostics = h.diagnostics.clone();
+                let base = h.path.parent().map(std::path::Path::to_path_buf);
+                egui::Area::new(egui::Id::new("mtty-hover"))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(egui::pos2(x, y + 4.0))
+                    .show(ctx, |ui| {
+                        egui::Frame::popup(ui.style()).show(ui, |ui| {
+                            ui.set_max_width(560.0);
+                            egui::ScrollArea::vertical()
+                                .max_height(320.0)
+                                .show(ui, |ui| {
+                                    for (severity, message) in &diagnostics {
+                                        ui.label(
+                                            egui::RichText::new(message)
+                                                .color(severity_color32(*severity)),
+                                        );
+                                    }
+                                    if let Some(text) = &text {
+                                        if !diagnostics.is_empty() {
+                                            ui.separator();
+                                        }
+                                        render_markdown(
+                                            ui,
+                                            text,
+                                            base.as_deref(),
+                                            &mut self.cmark,
+                                            &mut self.mmd,
+                                            fg,
+                                            panel,
+                                        );
+                                    }
+                                });
+                        });
+                    });
+            }
+        }
+        let Some(c) = &self.completion else {
+            return;
+        };
+        if c.shown.is_empty() || Some(&c.pane) != active.as_ref() {
+            return;
+        }
+        let Some((x, y)) = self.caret_point() else {
+            return;
+        };
+        let rows: Vec<(usize, String, Option<String>, u8)> = c
+            .shown
+            .iter()
+            .enumerate()
+            .skip(c.selected.saturating_sub(COMPLETION_ROWS - 1))
+            .take(COMPLETION_ROWS)
+            .map(|(row, &i)| {
+                let item = &c.items[i];
+                (row, item.label.clone(), item.detail.clone(), item.kind)
+            })
+            .collect();
+        let (selected, total) = (c.selected, c.shown.len());
+        let mut clicked = None;
+        let muted = miao_term_ui::chrome::bg_color(ch.muted);
+        egui::Area::new(egui::Id::new("mtty-completion"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(egui::pos2(x, y + 2.0))
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_min_width(260.0);
+                    ui.set_max_width(520.0);
+                    for (row, label, detail, kind) in rows {
+                        let text = egui::RichText::new(format!(
+                            "{}  {label}",
+                            completion_kind_letter(kind)
+                        ))
+                        .monospace();
+                        let r = ui.horizontal(|ui| {
+                            let r = ui.selectable_label(row == selected, text);
+                            if let Some(detail) = detail {
+                                ui.label(egui::RichText::new(detail).small().color(muted));
+                            }
+                            r
+                        });
+                        if r.inner.clicked() {
+                            clicked = Some(row);
+                        }
+                    }
+                    if total > COMPLETION_ROWS {
+                        ui.label(
+                            egui::RichText::new(format!("{} / {total}", selected + 1))
+                                .small()
+                                .color(muted),
+                        );
+                    }
+                });
+            });
+        if let Some(row) = clicked {
+            self.accept_completion(Some(row));
+        }
     }
 
     /// Go to Line (⌃G / Ctrl+G): `line` or `line:column`, 1-based, in the
@@ -8822,6 +9367,81 @@ impl State {
         false
     }
 
+    /// QA: run a palette command by its English label (`MTTY_QA_COMMAND`),
+    /// once, so windows that only open from the palette can be captured.
+    fn run_qa_command(&mut self) {
+        if self.qa_done {
+            return;
+        }
+        self.qa_done = true;
+        let Some(label) = miao_term_config::env("QA_COMMAND") else {
+            return;
+        };
+        let lang = self.lang;
+        self.lang = miao_term_ui::i18n::Lang::En;
+        let cmd = self
+            .commands()
+            .into_iter()
+            .find(|(_, l)| l.eq_ignore_ascii_case(label.trim()))
+            .map(|(c, _)| c);
+        self.lang = lang;
+        if let Some(cmd) = cmd {
+            self.run_command(cmd);
+        }
+    }
+
+    /// The pointer moved: over the active editor's text it starts (or
+    /// keeps) resting on a word, for a hover; elsewhere the hover goes.
+    fn track_hover(&mut self, px: f32, py: f32) {
+        if self.egui_ctx.is_pointer_over_area() && self.hover.is_some() {
+            // Over the popup itself: keep it.
+            return;
+        }
+        let target = (|| {
+            let (row, col) = self.editor_cell(px, py, false)?;
+            let tab = self.tabs.get(self.active_tab)?;
+            let ed = tab.editors.iter().find(|e| e.id == tab.active)?;
+            // Only over the active pane's own text.
+            let scale = self.window.scale_factor() as f32;
+            let (_, r) = self
+                .pane_rects()
+                .into_iter()
+                .find(|(id, _)| *id == tab.active)?;
+            if !r.contains(px / scale, py / scale) || ed.dragging {
+                return None;
+            }
+            let at = ed.char_under(row, col)?;
+            let word = miao_term_editor::motion::word_at(ed.doc.rope(), at);
+            Some((ed.id.clone(), at, word))
+        })();
+        let Some((pane, at, word)) = target else {
+            self.hover_rest = None;
+            self.hover = None;
+            return;
+        };
+        let same = self
+            .hover_rest
+            .as_ref()
+            .is_some_and(|r| r.pane == pane && r.word == word && word.0 < word.1)
+            || self
+                .hover_rest
+                .as_ref()
+                .is_some_and(|r| r.pane == pane && r.at == at);
+        if same {
+            return;
+        }
+        self.hover = None;
+        let scale = self.window.scale_factor() as f32;
+        self.hover_rest = Some(HoverRest {
+            pane,
+            at,
+            word,
+            since: Instant::now(),
+            pos: (px / scale, py / scale + self.ch * 0.5),
+            asked: false,
+        });
+    }
+
     /// A key for the focused editor pane. False when it is the app's (⌘S,
     /// ⌘W, ⌘T…), so the shortcut path gets it.
     fn editor_key(&mut self, event: &KeyEvent) -> bool {
@@ -8834,6 +9454,12 @@ impl State {
         } else {
             winit_key_kind(event)
         };
+        // Any key hides a hover; an open completion list takes its keys.
+        self.hover = None;
+        self.hover_rest = None;
+        if self.completion_key(kind, alt || sup || ctrl) {
+            return true;
+        }
         match editor_pane::keymap(kind, shift, alt, sup, ctrl) {
             Some(editor_pane::Command::GoToLine) => {
                 self.run_command(Cmd::GoToLine);
@@ -8843,10 +9469,33 @@ impl State {
                 self.run_command(Cmd::Replace);
                 return true;
             }
+            Some(editor_pane::Command::Complete) => {
+                self.request_completion(None, true);
+                return true;
+            }
+            Some(editor_pane::Command::GoToDefinition) => {
+                self.request_definition();
+                return true;
+            }
+            Some(command @ editor_pane::Command::NextProblem(_)) => {
+                self.run_editor_command(command);
+                // Show what the problem is, at the caret.
+                let at = self
+                    .active_editor()
+                    .map(|e| e.doc.selection().primary().from());
+                let pane = self.active_pane_id();
+                if let (Some(at), Some(pane), Some(pos)) = (at, pane, self.caret_point()) {
+                    self.show_hover(&pane, at, pos);
+                }
+                return true;
+            }
             _ => {}
         }
         if let Some(command) = editor_pane::keymap(kind, shift, alt, sup, ctrl) {
-            return self.run_editor_command(command);
+            let handled = self.run_editor_command(command);
+            // Moving or deleting narrows the list, or closes it.
+            self.refilter_completion();
+            return handled;
         }
         let read_only = self.read_only;
         let Some(ed) = self.active_editor_mut() else {
@@ -8864,6 +9513,8 @@ impl State {
                         self.large_edit_offer = Some(id);
                     } else if !read_only {
                         ed.type_text(text);
+                        let text = text.to_string();
+                        self.after_typing(&text);
                     }
                     return true;
                 }
@@ -8915,10 +9566,17 @@ impl State {
     /// that already has it.
     fn open_editor_pane(&mut self, path: &std::path::Path) -> bool {
         let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        // The same file by another name (a symlinked /tmp, as a language
+        // server may report it) is the same pane.
+        let real = std::fs::canonicalize(&path).ok();
         let open = self.tabs.iter().enumerate().find_map(|(ti, tab)| {
             tab.editors
                 .iter()
-                .find(|e| e.path == path)
+                .find(|e| {
+                    e.path == path
+                        || real.is_some()
+                            && std::fs::canonicalize(&e.path).ok().as_ref() == real.as_ref()
+                })
                 .map(|e| (ti, e.id.clone()))
         });
         if let Some((ti, id)) = open {
@@ -8975,7 +9633,15 @@ impl State {
         let Some(ed) = self.active_editor_mut() else {
             return;
         };
-        let msg = match ed.save() {
+        let saved = ed.save();
+        if saved.is_ok() {
+            let path = ed.path.clone();
+            self.lsp.saved(&path);
+        }
+        let Some(ed) = self.active_editor() else {
+            return;
+        };
+        let msg = match saved {
             Ok(()) => format!(
                 "{} {}",
                 miao_term_ui::i18n::t(lang, "Saved", "已保存"),
@@ -10389,6 +11055,37 @@ impl ApplicationHandler<HostEvent> for Host {
             find_error: None,
             find_rejump: false,
             goto_line: None,
+            lsp: {
+                let proxy = self.proxy.clone();
+                let settings = miao_term_lsp::Settings {
+                    disabled: cfg.lsp.disabled,
+                    servers: cfg
+                        .lsp
+                        .servers
+                        .iter()
+                        .map(|(k, v)| {
+                            (
+                                k.clone(),
+                                miao_term_lsp::ServerSettings {
+                                    command: v.command.clone(),
+                                    root_markers: v.root_markers.clone(),
+                                    disabled: v.disabled,
+                                },
+                            )
+                        })
+                        .collect(),
+                };
+                miao_term_lsp::Lsp::new(
+                    settings,
+                    Arc::new(move || {
+                        let _ = proxy.send_event(HostEvent::Wake);
+                    }),
+                )
+            },
+            hover_rest: None,
+            hover: None,
+            completion: None,
+            qa_done: false,
             bg_search: None,
             large_edit_offer: None,
             large_loading: None,
@@ -10458,18 +11155,10 @@ impl ApplicationHandler<HostEvent> for Host {
         state.reload_snippets();
         // QA: run a palette command by its English label at startup, so
         // windows that only open from the palette can be captured.
-        if let Some(label) = miao_term_config::env("QA_COMMAND") {
-            let lang = state.lang;
-            state.lang = miao_term_ui::i18n::Lang::En;
-            let cmd = state
-                .commands()
-                .into_iter()
-                .find(|(_, l)| l.eq_ignore_ascii_case(label.trim()))
-                .map(|(c, _)| c);
-            state.lang = lang;
-            if let Some(cmd) = cmd {
-                state.run_command(cmd);
-            }
+        // `MTTY_QA_AFTER=<secs>` runs it that long after startup instead
+        // (once a language server has started, say).
+        if miao_term_config::env("QA_AFTER").is_none() {
+            state.run_qa_command();
         }
         if let Some(problem) = config_problem {
             let msg = format!(
@@ -10672,6 +11361,28 @@ impl ApplicationHandler<HostEvent> for Host {
                             // Ensure we wake even without focus/blink events.
                             wake_at = wake_at.min(at);
                         }
+                    }
+                }
+            }
+            // A hover is due once the pointer has rested.
+            if let Some(rest) = state.hover_rest.as_ref().filter(|r| !r.asked) {
+                let due = rest.since + HOVER_DELAY;
+                if Instant::now() >= due {
+                    state.window.request_redraw();
+                } else {
+                    wake_at = wake_at.min(due);
+                }
+            }
+            if let Some(secs) =
+                miao_term_config::env("QA_AFTER").and_then(|v| v.parse::<f64>().ok())
+            {
+                if !state.qa_done {
+                    let at = state.start + Duration::from_secs_f64(secs);
+                    if Instant::now() >= at {
+                        state.run_qa_command();
+                        state.window.request_redraw();
+                    } else {
+                        wake_at = wake_at.min(at);
                     }
                 }
             }
@@ -10945,8 +11656,22 @@ impl ApplicationHandler<HostEvent> for Host {
                         if !divider {
                             if let Some((row, col)) = state.editor_cell(px, py, false) {
                                 let (shift, add) = (state.mods.shift_key(), state.mods.alt_key());
+                                // ⌘-click (Ctrl-click elsewhere): go to the definition.
+                                let definition = if cfg!(target_os = "macos") {
+                                    state.mods.super_key()
+                                } else {
+                                    state.mods.control_key()
+                                };
+                                state.hover = None;
+                                state.completion = None;
                                 if let Some(ed) = state.active_editor_mut() {
-                                    ed.press(row, col, shift, add, Instant::now());
+                                    ed.press(row, col, shift && !definition, add, Instant::now());
+                                    if definition {
+                                        ed.dragging = false;
+                                    }
+                                }
+                                if definition {
+                                    state.request_definition();
                                 }
                                 state.window.request_redraw();
                                 return;
@@ -11028,6 +11753,7 @@ impl ApplicationHandler<HostEvent> for Host {
                 }
                 let scale = state.window.scale_factor() as f32;
                 let (px, py) = (position.x as f32, position.y as f32);
+                state.track_hover(px, py);
                 if state.active_editor().is_some_and(|e| e.dragging) {
                     if let Some((row, col)) = state.editor_cell(px, py, true) {
                         if let Some(ed) = state.active_editor_mut() {
@@ -11333,6 +12059,174 @@ const BG_SEARCH_BYTES: usize = 8 << 20;
 
 /// Matches kept for one search.
 const MAX_SEARCH_HITS: usize = 100_000;
+
+/// The active tab's editor pane, borrowing only `tabs` (so other fields
+/// stay free to change).
+fn active_editor_of(tabs: &[Tab], active_tab: usize) -> Option<&editor_pane::EditorPane> {
+    let tab = tabs.get(active_tab)?;
+    tab.editors.iter().find(|e| e.id == tab.active)
+}
+
+/// How long the pointer rests on editor text before a hover shows.
+const HOVER_DELAY: Duration = Duration::from_millis(450);
+
+/// Completion rows shown at once.
+const COMPLETION_ROWS: usize = 10;
+
+/// The pointer resting on editor text.
+struct HoverRest {
+    pane: String,
+    at: usize,
+    /// The word under it: moving within it keeps the rest.
+    word: (usize, usize),
+    since: Instant,
+    /// Where the popup goes (points).
+    pos: (f32, f32),
+    asked: bool,
+}
+
+/// A hover: the diagnostics at a spot and, once it arrives, the server's
+/// Markdown.
+struct HoverPopup {
+    pane: String,
+    path: std::path::PathBuf,
+    at: usize,
+    pos: (f32, f32),
+    markdown: Option<String>,
+    diagnostics: Vec<(u8, String)>,
+}
+
+/// The completion list of an editor pane.
+struct CompletionPopup {
+    pane: String,
+    /// Where the word being completed starts.
+    start: usize,
+    /// The newest request; older answers are dropped.
+    ticket: u64,
+    items: Vec<miao_term_lsp::CompletionItem>,
+    encoding: miao_term_lsp::Encoding,
+    /// Indices into `items` matching what was typed, best first.
+    shown: Vec<usize>,
+    selected: usize,
+    /// The server said the list is partial: ask again as typing goes on.
+    incomplete: bool,
+    waiting: bool,
+}
+
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_' || c == '$'
+}
+
+/// Where the word ending at `caret` starts.
+fn word_start(rope: &miao_term_editor::Rope, caret: usize) -> usize {
+    let mut start = caret;
+    while start > 0 && is_word_char(rope.char(start - 1)) {
+        start -= 1;
+    }
+    start
+}
+
+/// The items matching `typed`, best first: those starting with it (case
+/// ignored), then those containing its letters in order; each group in the
+/// server's order (`sortText`).
+fn filter_completions(items: &[miao_term_lsp::CompletionItem], typed: &str) -> Vec<usize> {
+    let typed: Vec<char> = typed.chars().flat_map(char::to_lowercase).collect();
+    let mut ranked: Vec<(u8, &str, usize)> = items
+        .iter()
+        .enumerate()
+        .filter_map(|(i, item)| {
+            let filter: Vec<char> = item.filter.chars().flat_map(char::to_lowercase).collect();
+            let rank = if filter.starts_with(&typed) {
+                0
+            } else {
+                let mut rest = filter.iter();
+                if !typed.iter().all(|c| rest.any(|f| f == c)) {
+                    return None;
+                }
+                1
+            };
+            Some((rank, item.sort.as_str(), i))
+        })
+        .collect();
+    ranked.sort();
+    ranked.into_iter().map(|(_, _, i)| i).collect()
+}
+
+/// What accepting `item` writes, with the caret at `caret` in a word that
+/// starts at `start`: the item's text over its range (or the word) up to
+/// the caret, plus its other edits (an import) that do not touch that; and
+/// where the caret goes after.
+fn completion_edit(
+    rope: &miao_term_editor::Rope,
+    caret: usize,
+    start: usize,
+    item: &miao_term_lsp::CompletionItem,
+    encoding: miao_term_lsp::Encoding,
+) -> (miao_term_editor::Transaction, usize) {
+    use miao_term_editor::{Assoc, Change, Transaction};
+    let to_char = |p| miao_term_lsp::pos_to_char(rope, p, encoding);
+    let start = item
+        .range
+        .map(|r| to_char(r.start))
+        .unwrap_or(start)
+        .min(caret);
+    let mut changes = vec![Change::replace(start, caret, item.insert.clone())];
+    for (range, text) in &item.additional {
+        let (a, b) = (to_char(range.start), to_char(range.end));
+        // Never an edit across the completion itself.
+        if b <= start || a >= caret.max(start + 1) {
+            changes.push(Change::replace(a, b.max(a), text.clone()));
+        }
+    }
+    changes.sort_by_key(|ch| (ch.start, ch.end));
+    changes.dedup_by(|later, earlier| later.start < earlier.end);
+    let tx = Transaction::new(changes);
+    let offset = item.cursor.unwrap_or_else(|| item.insert.chars().count());
+    let after = tx.map(start, Assoc::Before) + offset;
+    (tx, after)
+}
+
+/// A letter for a completion's kind (the protocol's numbering).
+fn completion_kind_letter(kind: u8) -> &'static str {
+    match kind {
+        2..=4 => "ƒ",
+        5 | 10 => "·",
+        6 => "v",
+        7 | 22 => "C",
+        8 => "I",
+        9 => "M",
+        13 => "E",
+        14 => "k",
+        15 => "s",
+        21 => "c",
+        25 => "T",
+        _ => " ",
+    }
+}
+
+/// A diagnostic's colour: error, warning, information, hint.
+fn severity_rgb(severity: u8) -> (u8, u8, u8) {
+    match severity {
+        1 => (0xe0, 0x6c, 0x75),
+        2 => (0xe5, 0xc0, 0x7b),
+        3 => (0x61, 0xaf, 0xef),
+        _ => (0x7f, 0x84, 0x8e),
+    }
+}
+
+fn severity_color32(severity: u8) -> egui::Color32 {
+    let (r, g, b) = severity_rgb(severity);
+    egui::Color32::from_rgb(r, g, b)
+}
+
+fn no_server_notice(lang: miao_term_ui::i18n::Lang) -> String {
+    miao_term_ui::i18n::t(
+        lang,
+        "No language server for this file (see [lsp] in config.toml).",
+        "此文件没有可用的语言服务器(见 config.toml 中的 [lsp])。",
+    )
+    .to_string()
+}
 
 /// How Find matches in an editor pane, and its replace field (shown while
 /// `Some`). A file in view mode is searched as literal text, ignoring case.
@@ -11701,6 +12595,18 @@ fn draw_editor(
             (0x33, 0x3d, 0x4d, 255)
         };
         quads.push(cell(c.row, c.col, c.width, color));
+    }
+    // Diagnostics: a line under the cells, in the severity's colour.
+    for (c, severity) in &d.underlines {
+        let (r, g, b) = severity_rgb(*severity);
+        let x0 = ox + c.col as f32 * cw;
+        let y1 = oy + (c.row + 1) as f32 * ch;
+        let thick = (1.5 * f.scale).max(1.0);
+        quads.push(Quad::new(
+            (x0, y1 - thick),
+            (x0 + c.width as f32 * cw, y1),
+            (r, g, b, if *severity <= 2 { 255 } else { 170 }),
+        ));
     }
     let sel = f.theme.selection;
     for s in &d.selection {
@@ -12486,10 +13392,16 @@ impl chrome::Chrome for State {
                 return s;
             }
             let lang = ed.language().unwrap_or("Plain Text");
-            return format!(
+            let mut s = format!(
                 "{lang} \u{00b7} {line}:{col} \u{00b7} {}",
                 ed.line_ending_name()
             );
+            // Problems from the language server: ✖ errors, ⚠ warnings.
+            let (errors, warnings) = ed.problem_counts();
+            if errors + warnings > 0 {
+                s.push_str(&format!(" \u{00b7} \u{2716} {errors} \u{26a0} {warnings}"));
+            }
+            return s;
         }
         if let Some(p) = self.active_pane() {
             if let Some(a) = self
@@ -13691,6 +14603,100 @@ mod tests {
             editors: Vec::new(),
             previews: Vec::new(),
         }
+    }
+
+    fn item(label: &str, sort: &str) -> miao_term_lsp::CompletionItem {
+        miao_term_lsp::CompletionItem {
+            label: label.into(),
+            kind: 0,
+            detail: None,
+            filter: label.into(),
+            sort: sort.into(),
+            insert: label.into(),
+            cursor: None,
+            range: None,
+            additional: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn completions_rank_prefixes_before_scattered_letters() {
+        let items = vec![
+            item("to_string", "2"),
+            item("trim", "1"),
+            item("to_owned", "1"),
+            item("len", "0"),
+            item("ToString", "3"),
+        ];
+        let label = |v: Vec<usize>| {
+            v.into_iter()
+                .map(|i| items[i].label.as_str())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            label(filter_completions(&items, "to")),
+            vec!["to_owned", "to_string", "ToString"],
+            "prefix (case ignored), then the server's order"
+        );
+        assert_eq!(
+            label(filter_completions(&items, "ts")),
+            vec!["to_string", "ToString"],
+            "letters in order"
+        );
+        assert_eq!(filter_completions(&items, "").len(), 5);
+        assert!(filter_completions(&items, "zz").is_empty());
+    }
+
+    #[test]
+    fn accepting_a_completion_writes_its_range_snippet_and_import() {
+        use miao_term_lsp::{LspRange, Pos};
+        let text = "fn main() {\n    v.pu\n}\n";
+        let mut rope = miao_term_editor::Rope::from_str(text);
+        let caret = text.find("pu").unwrap() + 2;
+        let start = caret - 2;
+        let p = |line, character| Pos { line, character };
+        let mut push = item("push", "");
+        push.insert = "push(value)".into();
+        push.cursor = Some(5);
+        push.range = Some(LspRange {
+            start: p(1, 6),
+            end: p(1, 8),
+        });
+        push.additional = vec![(
+            LspRange {
+                start: p(0, 0),
+                end: p(0, 0),
+            },
+            "use std::vec::Vec;\n".into(),
+        )];
+        let (tx, after) =
+            completion_edit(&rope, caret, start, &push, miao_term_lsp::Encoding::Utf16);
+        tx.apply(&mut rope);
+        let out = rope.to_string();
+        assert_eq!(
+            out,
+            "use std::vec::Vec;\nfn main() {\n    v.push(value)\n}\n"
+        );
+        assert_eq!(&out[after..after + 5], "value", "caret on the placeholder");
+        // No range: the typed word is replaced; the caret ends after it.
+        let mut rope = miao_term_editor::Rope::from_str("let x = le");
+        let (tx, after) = completion_edit(
+            &rope,
+            10,
+            8,
+            &item("len", ""),
+            miao_term_lsp::Encoding::Utf16,
+        );
+        tx.apply(&mut rope);
+        assert_eq!((rope.to_string().as_str(), after), ("let x = len", 11));
+    }
+
+    #[test]
+    fn the_word_before_the_caret() {
+        let rope = miao_term_editor::Rope::from_str("let x = foo_bar.ba");
+        assert_eq!(word_start(&rope, 18), 16);
+        assert_eq!(word_start(&rope, 15), 8);
+        assert_eq!(word_start(&rope, 16), 16, "right after the dot");
     }
 
     #[test]
