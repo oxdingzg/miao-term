@@ -2,7 +2,7 @@
 
 > 中文: [`0034-editor-pane.zh-CN.md`](0034-editor-pane.zh-CN.md)
 
-Status: proposed.
+Status: accepted.
 
 ## Context
 

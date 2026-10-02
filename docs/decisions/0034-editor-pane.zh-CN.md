@@ -2,7 +2,7 @@
 
 > English (default): [`0034-editor-pane.md`](0034-editor-pane.md)
 
-状态:提议。
+状态:已接受。
 
 ## 背景
 
