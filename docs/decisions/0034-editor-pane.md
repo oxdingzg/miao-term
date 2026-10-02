@@ -42,7 +42,13 @@ renderer and laid out by the existing split tree.
    (about 20 to start), highlight queries mapped to the mtty theme, plain text
    for unknown files. The same trees later give folding, outline and
    structural selection. Chosen over syntect, which re-highlights from the top
-   and has no tree.
+   and has no tree. (Implementation note, E3: 80 grammars are compiled in,
+   each with the highlight query its crate ships; the macOS binary grew from
+   39.8 MB with 20 grammars to 87.8 MB. Files no grammar claims fall back to Sublime syntaxes through
+   syntect: its default set plus permissively licensed syntaxes vendored from
+   bat, parsed line by line from checkpoints every 64 lines. Highlighting
+   stops above 1 MB, because a reparse takes time proportional to the file.
+   Licences are listed in `docs/third-party/SYNTAXES.md`.)
 4. **Rendering through the terminal pipeline.** The editor builds the visible
    rows as styled spans on the monospace cell grid (tabs expanded, wide
    characters as two cells) plus quads for the gutter, selections and
@@ -69,7 +75,7 @@ renderer and laid out by the existing split tree.
 |---|---|---|
 | E1 | `term-editor` core: rope, transactions, undo, selections, search | unit tests; edit/search bench on a 100 MB file |
 | E2 | Editor pane MVP: pane kinds, styled spans and clipping, keys, mouse, IME, clipboard, open/save/close, session restore | replay tests; real-window capture; perf gate for the row build |
-| E3 | tree-sitter highlighting (~20 languages), large-file mode, remote files | highlight snapshot tests; keystroke latency on a large file |
+| E3 | tree-sitter highlighting (80 languages, a Sublime-syntax fallback for more), large-file mode, remote files | highlight snapshot tests; keystroke latency on a large file |
 | E4 | Multi-cursor, find/replace, go to line, Markdown preview pane | replay tests |
 | E5 | LSP: diagnostics, hover, completion, definition | against rust-analyzer and a TypeScript server |
 | E6 | vim mode in the pane, folding and outline from the syntax tree, external-change reload | replay tests |
