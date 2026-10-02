@@ -36,3 +36,63 @@ tree-sitter-swift = "0.7"
 tree-sitter-toml-ng = "0.7"
 tree-sitter-typescript = "0.23"
 tree-sitter-yaml = "0.7"
+arborium-ada = { version = "2.18", default-features = false }
+arborium-asciidoc = { version = "2.18", default-features = false }
+arborium-batch = { version = "2.18", default-features = false }
+arborium-commonlisp = { version = "2.18", default-features = false }
+arborium-gitattributes = { version = "2.18", default-features = false }
+arborium-graphql = { version = "2.18", default-features = false }
+arborium-hcl = { version = "2.18", default-features = false }
+arborium-jinja2 = { version = "2.18", default-features = false }
+arborium-jq = { version = "2.18", default-features = false }
+arborium-just = { version = "2.18", default-features = false }
+arborium-matlab = { version = "2.18", default-features = false }
+arborium-meson = { version = "2.18", default-features = false }
+arborium-perl = { version = "2.18", default-features = false }
+arborium-proto = { version = "2.18", default-features = false }
+arborium-scss = { version = "2.18", default-features = false }
+arborium-ssh-config = { version = "2.18", default-features = false }
+arborium-thrift = { version = "2.18", default-features = false }
+arborium-typst = { version = "2.18", default-features = false }
+arborium-vb = { version = "2.18", default-features = false }
+arborium-vue = { version = "2.18", default-features = false }
+arborium-zsh = { version = "2.18", default-features = false }
+dekobon-tree-sitter-groovy = "0.3"
+tree-sitter-asm = "0.24"
+tree-sitter-bicep = "1.1"
+tree-sitter-c-sharp = "0.23"
+tree-sitter-clojure-orchard = "0.2"
+tree-sitter-cmake = "0.7"
+tree-sitter-containerfile = "0.9"
+tree-sitter-dart = "0.2"
+tree-sitter-diff = "0.1"
+tree-sitter-elixir = "0.3"
+tree-sitter-elm = "5.9"
+tree-sitter-embedded-template = "0.25"
+tree-sitter-erlang = "0.20"
+tree-sitter-fish = "3.6"
+tree-sitter-gleam = "1.0"
+tree-sitter-glsl = "0.2"
+tree-sitter-haskell = "0.24"
+tree-sitter-heex = "0.8"
+tree-sitter-ini = "1.4"
+tree-sitter-kotlin-sg = "0.4"
+tree-sitter-less = "1.0"
+tree-sitter-nix = "0.3"
+tree-sitter-objc = "3.0"
+tree-sitter-php = "0.24"
+tree-sitter-powershell = "0.26"
+tree-sitter-properties = "0.3"
+tree-sitter-r = "1.3"
+tree-sitter-racket = "0.25"
+tree-sitter-regex = "0.25"
+tree-sitter-requirements = "0.6"
+tree-sitter-scala = "0.26"
+tree-sitter-scheme = "0.24"
+tree-sitter-sequel = "=0.3.11"
+tree-sitter-solidity = "1.2"
+tree-sitter-starlark = "1.3"
+tree-sitter-svelte-ng = "1.0"
+tree-sitter-vim = "0.4"
+tree-sitter-xml = "0.7"
+tree-sitter-zig = "1.1"

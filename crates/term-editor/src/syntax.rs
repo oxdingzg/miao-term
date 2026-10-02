@@ -188,14 +188,17 @@ static LANGS: &[LangDef] = &[
     },
     LangDef {
         name: "Shell",
-        extensions: &["sh", "bash", "zsh", "ksh"],
+        extensions: &["sh", "bash", "ksh", "env"],
         file_names: &[
             ".bashrc",
             ".bash_profile",
-            ".zshrc",
-            ".zprofile",
             ".profile",
             "PKGBUILD",
+            ".env",
+            ".env.local",
+            ".env.example",
+            ".env.development",
+            ".env.production",
         ],
         language: || tree_sitter_bash::LANGUAGE.into(),
         query: || tree_sitter_bash::HIGHLIGHT_QUERY.into(),
@@ -270,6 +273,445 @@ static LANGS: &[LangDef] = &[
         language: || tree_sitter_make::LANGUAGE.into(),
         query: || tree_sitter_make::HIGHLIGHTS_QUERY.into(),
     },
+    LangDef {
+        name: "C#",
+        extensions: &["cs", "csx"],
+        file_names: &[],
+        language: || tree_sitter_c_sharp::LANGUAGE.into(),
+        query: || tree_sitter_c_sharp::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "PHP",
+        extensions: &["php", "phtml"],
+        file_names: &[],
+        language: || tree_sitter_php::LANGUAGE_PHP.into(),
+        query: || tree_sitter_php::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Kotlin",
+        extensions: &["kt", "kts"],
+        file_names: &[],
+        language: || tree_sitter_kotlin_sg::LANGUAGE.into(),
+        query: || tree_sitter_kotlin_sg::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Scala",
+        extensions: &["scala", "sc", "sbt"],
+        file_names: &[],
+        language: || tree_sitter_scala::LANGUAGE.into(),
+        query: || tree_sitter_scala::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Dart",
+        extensions: &["dart"],
+        file_names: &[],
+        language: || tree_sitter_dart::LANGUAGE.into(),
+        query: || tree_sitter_dart::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Objective-C",
+        extensions: &["m", "mm"],
+        file_names: &[],
+        language: || tree_sitter_objc::LANGUAGE.into(),
+        query: || {
+            q(&[
+                tree_sitter_objc::HIGHLIGHTS_QUERY,
+                tree_sitter_c::HIGHLIGHT_QUERY,
+            ])
+        },
+    },
+    LangDef {
+        name: "Perl",
+        extensions: &["pl", "pm", "t"],
+        file_names: &[],
+        language: || arborium_perl::language().into(),
+        query: || arborium_perl::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "R",
+        extensions: &["r", "R"],
+        file_names: &[],
+        language: || tree_sitter_r::LANGUAGE.into(),
+        query: || tree_sitter_r::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "PowerShell",
+        extensions: &["ps1", "psm1", "psd1"],
+        file_names: &[],
+        language: || tree_sitter_powershell::LANGUAGE.into(),
+        query: || tree_sitter_powershell::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Haskell",
+        extensions: &["hs", "lhs"],
+        file_names: &[],
+        language: || tree_sitter_haskell::LANGUAGE.into(),
+        query: || tree_sitter_haskell::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Elixir",
+        extensions: &["ex", "exs"],
+        file_names: &["mix.lock"],
+        language: || tree_sitter_elixir::LANGUAGE.into(),
+        query: || tree_sitter_elixir::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "HEEx",
+        extensions: &["heex"],
+        file_names: &[],
+        language: || tree_sitter_heex::LANGUAGE.into(),
+        query: || tree_sitter_heex::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Erlang",
+        extensions: &["erl", "hrl"],
+        file_names: &["rebar.config"],
+        language: || tree_sitter_erlang::LANGUAGE.into(),
+        query: || tree_sitter_erlang::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Zig",
+        extensions: &["zig", "zon"],
+        file_names: &[],
+        language: || tree_sitter_zig::LANGUAGE.into(),
+        query: || tree_sitter_zig::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Groovy",
+        extensions: &["groovy", "gradle", "gvy"],
+        file_names: &["Jenkinsfile"],
+        language: || dekobon_tree_sitter_groovy::LANGUAGE.into(),
+        query: || dekobon_tree_sitter_groovy::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Clojure",
+        extensions: &["clj", "cljs", "cljc", "edn"],
+        file_names: &[],
+        language: || tree_sitter_clojure_orchard::LANGUAGE.into(),
+        query: || tree_sitter_clojure_orchard::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Elm",
+        extensions: &["elm"],
+        file_names: &[],
+        language: || tree_sitter_elm::LANGUAGE.into(),
+        query: || tree_sitter_elm::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Gleam",
+        extensions: &["gleam"],
+        file_names: &[],
+        language: || tree_sitter_gleam::LANGUAGE.into(),
+        query: || tree_sitter_gleam::HIGHLIGHT_QUERY.into(),
+    },
+    LangDef {
+        name: "Solidity",
+        extensions: &["sol"],
+        file_names: &[],
+        language: || tree_sitter_solidity::LANGUAGE.into(),
+        query: || tree_sitter_solidity::HIGHLIGHT_QUERY.into(),
+    },
+    LangDef {
+        name: "Visual Basic",
+        extensions: &["vb", "vbs", "bas"],
+        file_names: &[],
+        language: || arborium_vb::language().into(),
+        query: || arborium_vb::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "MATLAB",
+        extensions: &["matlab"],
+        file_names: &[],
+        language: || arborium_matlab::language().into(),
+        query: || arborium_matlab::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Scheme",
+        extensions: &["scm", "ss"],
+        file_names: &[],
+        language: || tree_sitter_scheme::LANGUAGE.into(),
+        query: || tree_sitter_scheme::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Racket",
+        extensions: &["rkt"],
+        file_names: &[],
+        language: || tree_sitter_racket::LANGUAGE.into(),
+        query: || tree_sitter_racket::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Common Lisp",
+        extensions: &["lisp", "lsp", "cl", "asd"],
+        file_names: &[],
+        language: || arborium_commonlisp::language().into(),
+        query: || arborium_commonlisp::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Assembly",
+        extensions: &["asm", "s", "S"],
+        file_names: &[],
+        language: || tree_sitter_asm::LANGUAGE.into(),
+        query: || tree_sitter_asm::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Ada",
+        extensions: &["ada", "adb", "ads"],
+        file_names: &[],
+        language: || arborium_ada::language().into(),
+        query: || arborium_ada::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Vue",
+        extensions: &["vue"],
+        file_names: &[],
+        language: || arborium_vue::language().into(),
+        query: || q(&[&arborium_vue::HIGHLIGHTS_QUERY]),
+    },
+    LangDef {
+        name: "Svelte",
+        extensions: &["svelte"],
+        file_names: &[],
+        language: || tree_sitter_svelte_ng::LANGUAGE.into(),
+        query: || {
+            q(&[
+                tree_sitter_svelte_ng::HIGHLIGHTS_QUERY,
+                tree_sitter_html::HIGHLIGHTS_QUERY,
+            ])
+        },
+    },
+    LangDef {
+        name: "SCSS",
+        extensions: &["scss", "sass"],
+        file_names: &[],
+        language: || arborium_scss::language().into(),
+        query: || q(&[&arborium_scss::HIGHLIGHTS_QUERY]),
+    },
+    LangDef {
+        name: "LESS",
+        extensions: &["less"],
+        file_names: &[],
+        language: || tree_sitter_less::language(),
+        query: || tree_sitter_less::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "GraphQL",
+        extensions: &["graphql", "gql"],
+        file_names: &[],
+        language: || arborium_graphql::language().into(),
+        query: || arborium_graphql::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "XML",
+        extensions: &[
+            "xml", "svg", "xsd", "xsl", "xslt", "plist", "csproj", "fsproj", "vcxproj", "xaml",
+            "rss", "atom",
+        ],
+        file_names: &[],
+        language: || tree_sitter_xml::LANGUAGE_XML.into(),
+        query: || tree_sitter_xml::XML_HIGHLIGHT_QUERY.into(),
+    },
+    LangDef {
+        name: "Embedded Template",
+        extensions: &["erb", "ejs"],
+        file_names: &[],
+        language: || tree_sitter_embedded_template::LANGUAGE.into(),
+        query: || tree_sitter_embedded_template::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Jinja",
+        extensions: &["j2", "jinja", "jinja2"],
+        file_names: &[],
+        language: || arborium_jinja2::language().into(),
+        query: || arborium_jinja2::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Regex",
+        extensions: &["regex"],
+        file_names: &[],
+        language: || tree_sitter_regex::LANGUAGE.into(),
+        query: || tree_sitter_regex::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Dockerfile",
+        extensions: &["dockerfile", "containerfile"],
+        file_names: &["Dockerfile", "Containerfile"],
+        language: || tree_sitter_containerfile::LANGUAGE.into(),
+        query: || tree_sitter_containerfile::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "HCL",
+        extensions: &["hcl", "tf", "tfvars", "nomad"],
+        file_names: &[],
+        language: || arborium_hcl::language().into(),
+        query: || arborium_hcl::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Nix",
+        extensions: &["nix"],
+        file_names: &[],
+        language: || tree_sitter_nix::LANGUAGE.into(),
+        query: || tree_sitter_nix::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "INI",
+        extensions: &["ini", "cfg", "conf", "editorconfig", "desktop", "service"],
+        file_names: &[".editorconfig", ".gitconfig", ".npmrc"],
+        language: || tree_sitter_ini::LANGUAGE.into(),
+        query: || tree_sitter_ini::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "CMake",
+        extensions: &["cmake"],
+        file_names: &["CMakeLists.txt"],
+        language: || tree_sitter_cmake::LANGUAGE.into(),
+        query: || tree_sitter_cmake::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Meson",
+        extensions: &["meson"],
+        file_names: &["meson.build", "meson_options.txt"],
+        language: || arborium_meson::language().into(),
+        query: || arborium_meson::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Protobuf",
+        extensions: &["proto"],
+        file_names: &[],
+        language: || arborium_proto::language().into(),
+        query: || arborium_proto::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Thrift",
+        extensions: &["thrift"],
+        file_names: &[],
+        language: || arborium_thrift::language().into(),
+        query: || arborium_thrift::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "SQL",
+        extensions: &["sql", "psql", "mysql"],
+        file_names: &[],
+        language: || tree_sitter_sequel::LANGUAGE.into(),
+        query: || tree_sitter_sequel::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Diff",
+        extensions: &["diff", "patch"],
+        file_names: &[],
+        language: || tree_sitter_diff::LANGUAGE.into(),
+        query: || tree_sitter_diff::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Git Attributes",
+        extensions: &[],
+        file_names: &[".gitattributes"],
+        language: || arborium_gitattributes::language().into(),
+        query: || arborium_gitattributes::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Properties",
+        extensions: &["properties"],
+        file_names: &[],
+        language: || tree_sitter_properties::LANGUAGE.into(),
+        query: || tree_sitter_properties::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "SSH Config",
+        extensions: &[],
+        file_names: &["ssh_config", "sshd_config"],
+        language: || arborium_ssh_config::language().into(),
+        query: || arborium_ssh_config::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Just",
+        extensions: &["just"],
+        file_names: &["justfile", "Justfile", ".justfile"],
+        language: || arborium_just::language().into(),
+        query: || arborium_just::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Starlark",
+        extensions: &["bzl", "star", "bazel"],
+        file_names: &[
+            "BUILD",
+            "BUILD.bazel",
+            "WORKSPACE",
+            "MODULE.bazel",
+            "Tiltfile",
+        ],
+        language: || tree_sitter_starlark::LANGUAGE.into(),
+        query: || tree_sitter_starlark::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Fish",
+        extensions: &["fish"],
+        file_names: &[],
+        language: || tree_sitter_fish::language(),
+        query: || tree_sitter_fish::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Zsh",
+        extensions: &["zsh"],
+        file_names: &[".zshrc", ".zprofile", ".zshenv", ".zlogin"],
+        language: || arborium_zsh::language().into(),
+        query: || arborium_zsh::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Batch",
+        extensions: &["bat", "cmd"],
+        file_names: &[],
+        language: || arborium_batch::language().into(),
+        query: || arborium_batch::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Vim Script",
+        extensions: &["vim"],
+        file_names: &[".vimrc", "_vimrc"],
+        language: || tree_sitter_vim::language(),
+        query: || tree_sitter_vim::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "jq",
+        extensions: &["jq"],
+        file_names: &[],
+        language: || arborium_jq::language().into(),
+        query: || arborium_jq::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Bicep",
+        extensions: &["bicep"],
+        file_names: &[],
+        language: || tree_sitter_bicep::LANGUAGE.into(),
+        query: || tree_sitter_bicep::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Requirements",
+        extensions: &[],
+        file_names: &["requirements.txt", "constraints.txt"],
+        language: || tree_sitter_requirements::LANGUAGE.into(),
+        query: || tree_sitter_requirements::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "GLSL",
+        extensions: &["glsl", "vert", "frag", "geom", "comp", "tesc", "tese"],
+        file_names: &[],
+        language: || tree_sitter_glsl::LANGUAGE_GLSL.into(),
+        query: || tree_sitter_glsl::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "AsciiDoc",
+        extensions: &["adoc", "asciidoc"],
+        file_names: &[],
+        language: || arborium_asciidoc::language().into(),
+        query: || arborium_asciidoc::HIGHLIGHTS_QUERY.into(),
+    },
+    LangDef {
+        name: "Typst",
+        extensions: &["typ"],
+        file_names: &[],
+        language: || arborium_typst::language().into(),
+        query: || arborium_typst::HIGHLIGHTS_QUERY.into(),
+    },
 ];
 
 /// The built-in language for a file, by name, then extension, then a `#!`
@@ -291,7 +733,11 @@ fn lang_for(path: &Path, first_line: &str) -> Option<&'static LangDef> {
         .flat_map(|w| w.rsplit('/').next())
         .find(|w| *w != "env")?;
     let ext = match interpreter.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.') {
-        "sh" | "bash" | "zsh" | "dash" | "ksh" => "sh",
+        "sh" | "bash" | "dash" | "ksh" => "sh",
+        "zsh" => "zsh",
+        "fish" => "fish",
+        "perl" => "pl",
+        "php" => "php",
         "python" => "py",
         "node" | "deno" | "bun" => "js",
         "ruby" => "rb",
@@ -492,10 +938,81 @@ mod tests {
         assert_eq!(name("src/main.rs", ""), Some("Rust"));
         assert_eq!(name("App.TSX", ""), Some("TSX"));
         assert_eq!(name("Makefile", ""), Some("Makefile"));
-        assert_eq!(name(".zshrc", ""), Some("Shell"));
+        assert_eq!(name(".zshrc", ""), Some("Zsh"));
+        assert_eq!(name(".env", ""), Some("Shell"));
+        assert_eq!(name("Dockerfile", ""), Some("Dockerfile"));
+        assert_eq!(name("CMakeLists.txt", ""), Some("CMake"));
+        assert_eq!(name("main.tf", ""), Some("HCL"));
+        assert_eq!(name("App.vue", ""), Some("Vue"));
+        assert_eq!(name("Program.cs", ""), Some("C#"));
+        assert_eq!(name("run", "#!/usr/bin/env zsh"), Some("Zsh"));
         assert_eq!(name("deploy", "#!/usr/bin/env bash"), Some("Shell"));
         assert_eq!(name("tool", "#!/usr/bin/python3.12"), Some("Python"));
         assert_eq!(name("notes.txt", ""), None);
+    }
+
+    #[test]
+    fn extensions_and_file_names_are_not_claimed_twice() {
+        let mut seen = std::collections::HashMap::new();
+        for def in LANGS {
+            for key in def.extensions.iter().chain(def.file_names) {
+                if let Some(other) = seen.insert(key.to_ascii_lowercase(), def.name) {
+                    assert_eq!(other, def.name, "{key} is claimed by two languages");
+                }
+            }
+        }
+        assert!(LANGS.len() >= 80, "{} built-in languages", LANGS.len());
+    }
+
+    #[test]
+    fn a_few_of_the_added_languages_highlight() {
+        for (path, text, needle, want) in [
+            (
+                "a.cs",
+                "class A { int x = 1; }",
+                "class",
+                Highlight::Keyword,
+            ),
+            (
+                "a.php",
+                "<?php function f() { return 'x'; }",
+                "'x'",
+                Highlight::String,
+            ),
+            (
+                "a.kt",
+                "fun main() { val s = \"x\" }",
+                "\"x\"",
+                Highlight::String,
+            ),
+            (
+                "q.sql",
+                "SELECT id FROM users -- note",
+                "-- note",
+                Highlight::Comment,
+            ),
+            (
+                "Dockerfile",
+                "FROM alpine\nRUN echo hi",
+                "FROM",
+                Highlight::Keyword,
+            ),
+            (
+                "main.tf",
+                "resource \"a\" \"b\" { x = 1 }",
+                "\"a\"",
+                Highlight::String,
+            ),
+        ] {
+            let rope = Rope::from_str(text);
+            let syntax = Syntax::for_file(Path::new(path), &rope)
+                .unwrap_or_else(|| panic!("{path}: no syntax"));
+            let kinds = kinds_at(&syntax, &rope, needle);
+            assert!(
+                kinds.contains(&want),
+                "{path}: {needle} is {kinds:?}, want {want:?}"
+            );
+        }
     }
 
     #[test]
