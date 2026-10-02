@@ -45,11 +45,17 @@ pub const MAX_FALLBACK_BYTES: usize = 1 << 20;
 
 static PARSE_WAKER: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
 
-/// Called from the parse thread when a background parse finishes, so the UI
-/// can draw again (the app wakes its event loop). Set once; later calls are
-/// ignored.
+/// Called from background threads (a finished parse, large-file indexing
+/// progress) so the UI can draw again (the app wakes its event loop). Set
+/// once; later calls are ignored.
 pub fn set_parse_waker(wake: impl Fn() + Send + Sync + 'static) {
     let _ = PARSE_WAKER.set(Box::new(wake));
+}
+
+pub(crate) fn wake_background() {
+    if let Some(wake) = PARSE_WAKER.get() {
+        wake();
+    }
 }
 
 /// What a highlighted span is, mapped to a colour by the editor's palette.

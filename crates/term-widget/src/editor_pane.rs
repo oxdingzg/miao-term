@@ -6,15 +6,32 @@
 //! the cell quads into pixels and feeds the spans to `TermRenderer`.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use miao_term_editor::large::LargeFile;
 use miao_term_editor::{layout, motion, Document, Highlight, Motion, Range, Selection, Syntax};
 use miao_term_render::Span;
 use miao_term_ui::input::KeyKind;
 
-/// Files larger than this open read-only in the floating viewer instead (the
-/// pane would cope, but E2 has no large-file mode yet).
+/// Files larger than this open in view mode: read in place, a window of
+/// lines at a time, so memory stays small whatever the size. Switching such
+/// a file to editing loads all of it (the user is told what that costs).
 pub const MAX_PANE_BYTES: u64 = 64 << 20;
+
+/// Lines (and at most bytes) a view-mode window holds around the screen.
+const WINDOW_LINES: usize = 3000;
+const WINDOW_BYTES: usize = 8 << 20;
+
+/// A file in view mode: `doc` holds lines `base..` of it (a read-only
+/// window that moves as the view scrolls).
+pub struct LargeWindow {
+    pub file: Arc<LargeFile>,
+    pub base: usize,
+    /// A line asked for before indexing reached it (a restored session):
+    /// gone to once it is known.
+    pub pending_line: Option<usize>,
+}
 
 /// A rectangle on the cell grid, in text-area coordinates (the gutter is at
 /// negative columns from the host's point of view, see [`EditorPane::draw`]).
@@ -153,28 +170,166 @@ pub struct EditorPane {
     pub close_armed: bool,
     /// The parse tree for highlighting, for a built-in language.
     pub syntax: Option<Syntax>,
+    /// View mode for a large file (see [`MAX_PANE_BYTES`]).
+    pub large: Option<LargeWindow>,
     last_click: Option<(Instant, usize, u8)>,
 }
 
 impl EditorPane {
-    /// Open `path` (UTF-8 text) in a pane.
+    /// Open `path` (UTF-8 text) in a pane: in view mode above
+    /// [`MAX_PANE_BYTES`].
     pub fn open(id: String, path: &Path) -> Result<Self, String> {
         let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
         if meta.len() > MAX_PANE_BYTES {
-            return Err(format!(
-                "{} MB is too large for the editor pane",
-                meta.len() >> 20
-            ));
+            return Self::open_view(id, path);
         }
+        Self::open_for_editing(id, path)
+    }
+
+    /// Load all of `path` for editing, whatever its size.
+    pub fn open_for_editing(id: String, path: &Path) -> Result<Self, String> {
         let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
         let doc = Document::from_bytes(&bytes).map_err(|e| e.to_string())?;
         Ok(Self::with_doc(id, path.to_path_buf(), doc))
+    }
+
+    /// Open `path` in view mode: read-only, read in place.
+    pub fn open_view(id: String, path: &Path) -> Result<Self, String> {
+        let file = LargeFile::open(path).map_err(|e| e.to_string())?;
+        let (text, _) = file.read_lines(0, WINDOW_LINES, WINDOW_BYTES);
+        let mut pane = Self::with_doc(id, path.to_path_buf(), Document::from_text(&text));
+        pane.syntax = None;
+        pane.large = Some(LargeWindow {
+            file,
+            base: 0,
+            pending_line: None,
+        });
+        Ok(pane)
+    }
+
+    /// Read-only view of a large file.
+    pub fn is_view_only(&self) -> bool {
+        self.large.is_some()
+    }
+
+    /// The file line `doc`'s first line is (0 outside view mode).
+    pub fn base(&self) -> usize {
+        self.large.as_ref().map_or(0, |l| l.base)
+    }
+
+    /// Lines in the file (in view mode, those indexed so far).
+    pub fn total_lines(&self) -> usize {
+        match &self.large {
+            Some(l) => l.file.line_count(),
+            None => self.doc.rope().len_lines(),
+        }
+    }
+
+    /// Show the window starting at file line `base`, keeping the view and
+    /// the caret where they are in the file.
+    fn rewindow(&mut self, base: usize) {
+        let Some(large) = &self.large else {
+            return;
+        };
+        let file = large.file.clone();
+        let old_base = large.base;
+        let rope = self.doc.rope();
+        let head = self.doc.selection().primary().head;
+        let caret_line = old_base + rope.char_to_line(head);
+        let caret_col = head - rope.line_to_char(rope.char_to_line(head));
+        let top = old_base + self.scroll_line;
+        let (text, _) = file.read_lines(base, WINDOW_LINES, WINDOW_BYTES);
+        self.doc = Document::from_text(&text);
+        self.large = Some(LargeWindow {
+            file,
+            base,
+            pending_line: None,
+        });
+        let rope = self.doc.rope();
+        let last = motion::last_line(rope);
+        self.scroll_line = top.saturating_sub(base).min(last);
+        let caret = if caret_line >= base && caret_line - base <= last {
+            let line = caret_line - base;
+            let len = layout::content_len(rope.line(line));
+            rope.line_to_char(line) + caret_col.min(len)
+        } else {
+            rope.line_to_char(self.scroll_line)
+        };
+        self.doc.set_selection(Selection::cursor(caret));
+    }
+
+    /// In view mode, move the window when the screen nears its edge.
+    fn keep_window(&mut self) {
+        let Some(large) = &self.large else {
+            return;
+        };
+        let lines = self.doc.rope().len_lines();
+        let total = large.file.line_count();
+        let margin = self.rows * 2;
+        let near_top = self.scroll_line < margin && large.base > 0;
+        let near_end = self.scroll_line + self.rows + margin > lines && large.base + lines < total;
+        if near_top || near_end {
+            let top = large.base + self.scroll_line;
+            self.rewindow(top.saturating_sub(WINDOW_LINES / 3));
+        }
+    }
+
+    /// Put the caret at the start of file line `line` and scroll it into
+    /// view (a third from the top when the view has to move).
+    pub fn go_to_line(&mut self, line: usize) {
+        if let Some(large) = &mut self.large {
+            // Past what indexing has reached: go there when it gets there.
+            if line != usize::MAX && line >= large.file.line_count() && !large.file.indexed() {
+                large.pending_line = Some(line);
+                return;
+            }
+            large.pending_line = None;
+        }
+        let line = line.min(self.total_lines().saturating_sub(1));
+        if let Some(large) = &self.large {
+            let lines = self.doc.rope().len_lines();
+            if line < large.base || line >= large.base + lines {
+                self.rewindow(line.saturating_sub(WINDOW_LINES / 3));
+            }
+        }
+        let local = (line - self.base()).min(motion::last_line(self.doc.rope()));
+        let at = self.doc.rope().line_to_char(local);
+        self.doc.set_selection(Selection::cursor(at));
+        if local < self.scroll_line || local >= self.scroll_line + self.rows {
+            self.scroll_line = local.saturating_sub(self.rows / 3);
+        }
+        self.keep_window();
+    }
+
+    /// Select file bytes `start..end` (a search hit in view mode), on the
+    /// hit's first line.
+    pub fn select_bytes(&mut self, start: u64, end: u64) {
+        let Some(large) = &self.large else {
+            return;
+        };
+        let file = large.file.clone();
+        let line = file.line_of(start);
+        let line_start = file.line_start(line);
+        self.go_to_line(line);
+        let rope = self.doc.rope();
+        let local = rope.char_to_line(self.doc.selection().primary().head);
+        let slice = rope.line(local);
+        let content = layout::content_len(slice);
+        let to_char = |byte: u64| {
+            let byte = (byte.saturating_sub(line_start) as usize).min(slice.len_bytes());
+            slice.byte_to_char(byte).min(content)
+        };
+        let base = rope.line_to_char(local);
+        let (a, b) = (base + to_char(start), base + to_char(end));
+        self.doc.set_selection(Selection::single(Range::new(a, b)));
+        self.reveal_cursor();
     }
 
     pub fn with_doc(id: String, path: PathBuf, mut doc: Document) -> Self {
         let syntax = Syntax::for_file(&path, doc.rope());
         doc.take_edits();
         EditorPane {
+            large: None,
             syntax,
             id,
             doc,
@@ -193,6 +348,11 @@ impl EditorPane {
     /// directory and a rename, so a failed write never truncates the file;
     /// the file's permissions are kept.
     pub fn save(&mut self) -> Result<(), String> {
+        // View mode holds a window of the file: writing it would truncate
+        // the file to that window. There is nothing to save.
+        if self.large.is_some() {
+            return Ok(());
+        }
         let bytes = self.doc.to_bytes();
         let dir = self
             .path
@@ -238,6 +398,14 @@ impl EditorPane {
     /// Catch the parse tree up with the edits made since the last call (call
     /// before drawing; cheap when nothing changed).
     pub fn sync_syntax(&mut self) {
+        // View mode: a line waiting for indexing to reach it.
+        if let Some(large) = &self.large {
+            if let Some(line) = large.pending_line {
+                if line < large.file.line_count() || large.file.indexed() {
+                    self.go_to_line(line);
+                }
+            }
+        }
         let edits = self.doc.take_edits();
         if let Some(syntax) = &mut self.syntax {
             if !edits.is_empty() {
@@ -255,7 +423,7 @@ impl EditorPane {
 
     /// Cells taken by line numbers: the widest number plus a space each side.
     pub fn gutter(&self) -> usize {
-        let lines = self.doc.rope().len_lines().max(1);
+        let lines = self.total_lines().max(1);
         lines.to_string().len() + 2
     }
 
@@ -285,18 +453,61 @@ impl EditorPane {
         } else if col >= self.scroll_col + self.cols {
             self.scroll_col = col + 1 - self.cols;
         }
+        self.keep_window();
     }
 
     /// Scroll by `lines` (wheel), clamped to the document.
     pub fn scroll_by(&mut self, lines: isize) {
+        if self.large.is_some() {
+            let base = self.base();
+            let last = self.total_lines().saturating_sub(1);
+            let top = ((base + self.scroll_line) as isize + lines).clamp(0, last as isize) as usize;
+            let in_window = top >= base && top <= base + motion::last_line(self.doc.rope());
+            if !in_window {
+                self.rewindow(top.saturating_sub(WINDOW_LINES / 3));
+            }
+            self.scroll_line = top - self.base();
+            self.keep_window();
+            return;
+        }
         let last = motion::last_line(self.doc.rope());
         let next = (self.scroll_line as isize + lines).clamp(0, last as isize);
         self.scroll_line = next as usize;
     }
 
+    /// Whether `command` changes the text (refused in view mode).
+    pub fn edits(command: Command) -> bool {
+        !matches!(
+            command,
+            Command::Move(..)
+                | Command::SelectAll
+                | Command::SelectLine
+                | Command::SelectNextOccurrence
+                | Command::AddCursor(_)
+                | Command::Escape
+        )
+    }
+
     /// Run a command; returns true when the text or selection changed.
     pub fn run(&mut self, command: Command) -> bool {
         let before = (self.doc.revision(), self.doc.selection().clone());
+        if self.large.is_some() {
+            if Self::edits(command) {
+                return false;
+            }
+            // The file's ends, not the window's.
+            match command {
+                Command::Move(Motion::DocStart, false) => {
+                    self.go_to_line(0);
+                    return true;
+                }
+                Command::Move(Motion::DocEnd, false) => {
+                    self.go_to_line(usize::MAX);
+                    return true;
+                }
+                _ => {}
+            }
+        }
         match command {
             Command::Move(m, extend) => {
                 let m = match m {
@@ -339,13 +550,19 @@ impl EditorPane {
         (self.doc.revision(), self.doc.selection().clone()) != before
     }
 
-    /// Typed text (a key's text or an IME commit).
+    /// Typed text (a key's text or an IME commit); ignored in view mode.
     pub fn type_text(&mut self, text: &str) {
+        if self.large.is_some() {
+            return;
+        }
         self.doc.type_text(text);
         self.reveal_cursor();
     }
 
     pub fn paste(&mut self, text: &str) {
+        if self.large.is_some() {
+            return;
+        }
         self.doc.paste(text);
         self.reveal_cursor();
     }
@@ -357,6 +574,9 @@ impl EditorPane {
 
     /// Cut: the selection's text, removed from the document.
     pub fn cut(&mut self) -> String {
+        if self.large.is_some() {
+            return self.copy();
+        }
         let text = self.doc.selected_text();
         if !text.is_empty() {
             self.doc.delete_backward();
@@ -462,7 +682,7 @@ impl EditorPane {
                 continue;
             }
             let mut spans = Vec::new();
-            let number = (line + 1).to_string();
+            let number = (self.base() + line + 1).to_string();
             let color = if line == head_line {
                 palette.gutter_current
             } else {
@@ -587,7 +807,7 @@ impl EditorPane {
             head - rope.line_to_char(line),
             self.doc.tab_width(),
         );
-        (line + 1, col + 1)
+        (self.base() + line + 1, col + 1)
     }
 
     /// `LF` or `CRLF`.
@@ -620,6 +840,106 @@ impl EditorPane {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn view_of(lines: usize) -> (EditorPane, PathBuf, String) {
+        let text: String = (0..lines).map(|i| format!("line {i}\n")).collect();
+        let dir = std::env::temp_dir().join(format!("mtty-view-{}-{lines}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("big.log");
+        std::fs::write(&path, &text).unwrap();
+        let mut p = EditorPane::open_view("v".into(), &path).unwrap();
+        let file = p.large.as_ref().unwrap().file.clone();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !file.indexed() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        p.resize(80, 30);
+        (p, path, text)
+    }
+
+    fn first_number(p: &EditorPane) -> String {
+        let palette = Palette {
+            fg: (1, 1, 1),
+            gutter: (2, 2, 2),
+            gutter_current: (3, 3, 3),
+        };
+        p.draw(palette, true, true).rows[0][0]
+            .text
+            .trim()
+            .to_string()
+    }
+
+    #[test]
+    fn view_mode_scrolls_a_window_through_the_whole_file() {
+        let (mut p, _, _) = view_of(20_000);
+        assert!(p.is_view_only());
+        assert_eq!(p.total_lines(), 20_001);
+        assert!(
+            p.doc.rope().len_lines() <= WINDOW_LINES + 1,
+            "only a window is loaded"
+        );
+        p.scroll_by(12_345);
+        assert_eq!(first_number(&p), "12346");
+        assert_eq!(p.base() + p.scroll_line, 12_345);
+        let top = p.scroll_line;
+        assert_eq!(p.doc.rope().line(top).to_string(), "line 12345\n");
+        // ⌘↓ / ⌘↑ go to the file's ends, not the window's.
+        p.run(Command::Move(Motion::DocEnd, false));
+        assert_eq!(p.caret_line_col().0, 20_001);
+        p.run(Command::Move(Motion::DocStart, false));
+        assert_eq!(p.caret_line_col().0, 1);
+        assert_eq!(first_number(&p), "1");
+        // Line by line past the window's end keeps the text continuous.
+        p.go_to_line(WINDOW_LINES - 5);
+        for _ in 0..20 {
+            p.run(Command::Move(Motion::Down, false));
+        }
+        let (line, _) = p.caret_line_col();
+        assert_eq!(line, WINDOW_LINES - 5 + 20 + 1);
+        let head = p.doc.selection().primary().head;
+        let local = p.doc.rope().char_to_line(head);
+        assert_eq!(
+            p.doc.rope().line(local).to_string(),
+            format!("line {}\n", line - 1)
+        );
+    }
+
+    #[test]
+    fn a_line_past_the_indexed_part_is_reached_when_indexing_gets_there() {
+        let (mut p, _, _) = view_of(3_000);
+        // As a restored session does right after opening: pretend the
+        // index is short of the line by asking before it is known.
+        p.large.as_mut().unwrap().pending_line = Some(2_500);
+        p.sync_syntax();
+        assert_eq!(p.caret_line_col().0, 2_501);
+        assert!(p.large.as_ref().unwrap().pending_line.is_none());
+    }
+
+    #[test]
+    fn view_mode_refuses_edits_and_never_writes_the_file() {
+        let (mut p, path, text) = view_of(5_000);
+        p.go_to_line(4_000);
+        assert!(!p.run(Command::Backspace));
+        p.type_text("x");
+        p.paste("pasted");
+        assert!(!p.doc.is_modified());
+        p.save().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            text,
+            "file untouched"
+        );
+    }
+
+    #[test]
+    fn view_mode_selects_a_search_hit_by_its_bytes() {
+        let (mut p, _, text) = view_of(10_000);
+        let at = text.find("line 7777\n").unwrap() as u64 + 5;
+        p.select_bytes(at, at + 4);
+        assert_eq!(p.copy(), "7777");
+        assert_eq!(p.caret_line_col().0, 7_778);
+    }
 
     fn pane(text: &str) -> EditorPane {
         let mut p =

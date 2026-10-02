@@ -9,6 +9,8 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
+# Line breaks and search in large files read in place.
+memchr = "2"
 regex = "1"
 # LF-only line breaks: the default also splits at CR, form feed and Unicode
 # separators, which disagrees with the line numbers git and compilers use.

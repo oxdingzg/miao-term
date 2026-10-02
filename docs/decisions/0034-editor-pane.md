@@ -50,6 +50,12 @@ renderer and laid out by the existing split tree.
    the parse runs on a background thread, with edits made meanwhile replayed
    on its result; tree-sitter stops at 8 MB, because a tree takes 25-35
    times the file in memory, and the Sublime fallback at 1 MB.
+   (Implementation note, large files: above 64 MB a file opens in view
+   mode. It is read in place: a background thread indexes every 1024th
+   line start, and the pane's document is a window of about 3000 lines that
+   moves as the view scrolls, so selection, copying and drawing are the
+   editor's own. Edits ask first and load the whole file, stating the memory
+   it takes, measured at about 2.2 times the file.)
    Licences are listed in `docs/third-party/SYNTAXES.md`.)
 4. **Rendering through the terminal pipeline.** The editor builds the visible
    rows as styled spans on the monospace cell grid (tabs expanded, wide
