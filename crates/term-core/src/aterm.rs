@@ -73,8 +73,13 @@ impl ATerm {
         (self.rows as u16, self.cols as u16)
     }
 
-    /// The character at a viewport cell (space for empty cells).
+    /// The character at a viewport cell (space for empty cells, and for cells
+    /// outside the screen: a pointer in a pane's padding maps past the last
+    /// row).
     pub fn cell_char(&self, row: u16, col: u16) -> char {
+        if row as usize >= self.rows || col as usize >= self.cols {
+            return ' ';
+        }
         let off = self.term.grid().display_offset() as i32;
         self.term.grid()[Line(row as i32 - off)][Column(col as usize)].c
     }
@@ -504,6 +509,23 @@ mod tests {
         let mut term = ATerm::new(10, 3, 100);
         term.process("中文 ok\r\n".as_bytes());
         assert_eq!(term.snapshot_ansi(10), "中文 ok\r\n");
+    }
+
+    #[test]
+    fn cells_past_the_screen_read_as_blank() {
+        // A pointer below the last row (the pane's bottom padding) used to
+        // index the grid out of bounds and crash the app.
+        let mut term = ATerm::new(10, 3, 100);
+        for i in 0..20 {
+            term.process(format!("line {i}\r\n").as_bytes());
+        }
+        term.set_scrollback(5);
+        for row in [3, 4, 50, u16::MAX] {
+            assert_eq!(term.line_text(row), "", "row {row}");
+            assert_eq!(term.cell_char(row, 0), ' ');
+        }
+        assert_eq!(term.cell_char(0, 10), ' ');
+        assert!(!term.line_text(0).is_empty());
     }
 
     #[test]
