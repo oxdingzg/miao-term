@@ -2790,11 +2790,15 @@ impl State {
                     }
                 }
                 miao_term_mtp::Command::Close(id) => self.close_pane_id(&id),
-                miao_term_mtp::Command::View(path) => {
-                    self.open_editor_ro(std::path::PathBuf::from(path), true);
+                miao_term_mtp::Command::View { path, line } => {
+                    if self.open_editor_ro(std::path::PathBuf::from(path), true) {
+                        self.go_active_editor_to(line, None);
+                    }
                 }
-                miao_term_mtp::Command::Edit(path) => {
-                    self.open_editor_ro(std::path::PathBuf::from(path), false);
+                miao_term_mtp::Command::Edit { path, line, column } => {
+                    if self.open_editor_ro(std::path::PathBuf::from(path), false) {
+                        self.go_active_editor_to(line, column);
+                    }
                 }
             }
         }
@@ -4285,6 +4289,10 @@ enum Cmd {
     /// The active pane's last command output (OSC 133, B2.3).
     CopyLastOutput,
     SendLastOutput,
+    /// One-step context hand-off to the agent pane (ADR 0040, A3).
+    SendSelectionToAgent,
+    SendDiagnosticsToAgent,
+    SendLastOutputToAgent,
     Composer,
     OpenQuickly,
     CheckUpdates,
@@ -4409,6 +4417,22 @@ impl State {
                     l,
                     "Send Last Command Output to Composer",
                     "把上一条命令的输出发到 Composer",
+                ),
+            ),
+            (
+                Cmd::SendSelectionToAgent,
+                t(l, "Send Selection to Agent", "把选区发给 Agent"),
+            ),
+            (
+                Cmd::SendDiagnosticsToAgent,
+                t(l, "Send Diagnostics to Agent", "把诊断发给 Agent"),
+            ),
+            (
+                Cmd::SendLastOutputToAgent,
+                t(
+                    l,
+                    "Send Last Command Output to Agent",
+                    "把上一条命令的输出发给 Agent",
                 ),
             ),
             (Cmd::OpenQuickly, t(l, "Open Quickly", "快速打开")),
@@ -4709,6 +4733,98 @@ impl State {
                             "这里还没有已结束的命令(需要 zsh 集成)。",
                         );
                         self.show_notice(msg.to_string());
+                    }
+                }
+            }
+            Cmd::SendSelectionToAgent => {
+                let text = self.active_editor().map(|e| e.copy()).unwrap_or_default();
+                if text.trim().is_empty() {
+                    let msg = miao_term_ui::i18n::t(
+                        self.lang,
+                        "Select some text in an editor pane first.",
+                        "请先在编辑器 pane 中选中文字。",
+                    )
+                    .to_string();
+                    self.show_notice(msg);
+                } else {
+                    let prompt = format!(
+                        "{}\n```\n{text}\n```",
+                        miao_term_ui::i18n::t(
+                            self.lang,
+                            "Here is the selected code:",
+                            "以下是选中的代码:"
+                        )
+                    );
+                    self.send_to_agent(&prompt);
+                }
+            }
+            Cmd::SendDiagnosticsToAgent => {
+                let text = self
+                    .active_editor()
+                    .map(|ed| {
+                        let rope = ed.doc.rope();
+                        ed.diagnostics
+                            .iter()
+                            .map(|d| {
+                                let line = rope.char_to_line(d.from.min(rope.len_chars())) + 1;
+                                format!("{line}: {}", d.message)
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .unwrap_or_default();
+                if text.is_empty() {
+                    let msg = miao_term_ui::i18n::t(
+                        self.lang,
+                        "No diagnostics in the active editor.",
+                        "当前编辑器没有诊断。",
+                    )
+                    .to_string();
+                    self.show_notice(msg);
+                } else {
+                    let prompt = format!(
+                        "{}\n```\n{text}\n```",
+                        miao_term_ui::i18n::t(
+                            self.lang,
+                            "Here are the diagnostics:",
+                            "以下是诊断:"
+                        )
+                    );
+                    self.send_to_agent(&prompt);
+                }
+            }
+            Cmd::SendLastOutputToAgent => {
+                match self
+                    .tabs
+                    .get(self.active_tab)
+                    .and_then(|t| {
+                        t.panes
+                            .iter()
+                            .find(|p| p.term.last_command_output().is_some())
+                    })
+                    .and_then(|p| p.term.last_command_output())
+                    .cloned()
+                {
+                    Some(out) => {
+                        let prompt = format!(
+                            "{}\n```\n{}\n```",
+                            miao_term_ui::i18n::t(
+                                self.lang,
+                                "Here is the last command's output:",
+                                "以下是上一条命令的输出:"
+                            ),
+                            out.text
+                        );
+                        self.send_to_agent(&prompt);
+                    }
+                    None => {
+                        let msg = miao_term_ui::i18n::t(
+                            self.lang,
+                            "No finished command in this tab (needs the shell integration).",
+                            "本标签中没有已结束的命令(需要 shell 集成)。",
+                        )
+                        .to_string();
+                        self.show_notice(msg);
                     }
                 }
             }
@@ -10765,6 +10881,49 @@ impl State {
                 self.show_notice(msg);
             }
             Ok(()) => {}
+        }
+    }
+
+    /// Move the active editor pane to a 1-based line (and optional 0-based
+    /// column), after MTP opened it (ADR 0040, A3).
+    fn go_active_editor_to(&mut self, line: Option<usize>, column: Option<usize>) {
+        let Some(line) = line else {
+            return;
+        };
+        if let Some(ed) = self.active_editor_mut() {
+            ed.go_to_line_col(line.saturating_sub(1), column.unwrap_or(0));
+        }
+    }
+
+    /// The tab's agent pane, preferring the active pane (ADR 0040, A3).
+    fn agent_pane(&self) -> Option<String> {
+        let tab = self.tabs.get(self.active_tab)?;
+        if self.mtp.agent_for(&tab.active).is_some() {
+            return Some(tab.active.clone());
+        }
+        tab.panes
+            .iter()
+            .find(|p| self.mtp.agent_for(&p.id).is_some())
+            .map(|p| p.id.clone())
+    }
+
+    /// Type a one-step prompt into the agent pane and press Enter (A3).
+    fn send_to_agent(&mut self, text: &str) {
+        let Some(id) = self.agent_pane() else {
+            let msg = miao_term_ui::i18n::t(
+                self.lang,
+                "No agent pane in this tab.",
+                "当前标签没有 agent pane。",
+            )
+            .to_string();
+            self.show_notice(msg);
+            return;
+        };
+        let payload = format!("{text}\r");
+        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+            if let Some(pane) = tab.panes.iter_mut().find(|p| p.id == id) {
+                pane.term.write(payload.as_bytes());
+            }
         }
     }
 
