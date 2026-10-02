@@ -2103,8 +2103,9 @@ impl State {
             self.publish_panes();
             return;
         }
-        // An editor pane closes only without unsaved changes: a client cannot
-        // answer "discard them?".
+        // An editor pane closes only without unsaved changes, unless the UI
+        // already armed the discard (a second click on the pane's close
+        // button): a client cannot answer "discard them?".
         if let Some(ti) = self
             .tabs
             .iter()
@@ -2112,7 +2113,7 @@ impl State {
         {
             let tab = &mut self.tabs[ti];
             if let Some(e) = tab.editors.iter().find(|e| e.id == id) {
-                if e.doc.is_modified() {
+                if e.doc.is_modified() && !e.close_armed {
                     let msg = format!(
                         "{}: {}",
                         e.title(),
@@ -13760,8 +13761,19 @@ impl chrome::Chrome for State {
     }
 
     fn pane_close_rects(&self) -> Vec<(String, egui::Rect)> {
-        self.pane_rects()
+        let Some(tab) = self.tabs.get(self.active_tab) else {
+            return Vec::new();
+        };
+        // A split tab gives every pane its own close button. A lone pane has
+        // none — its tab carries the affordance — except an editor, whose tab
+        // shows no close button while the session list is up.
+        let split = tab.panes.len() + tab.editors.len() > 1;
+        let editors: std::collections::HashSet<&str> =
+            tab.editors.iter().map(|e| e.id.as_str()).collect();
+        tab.layout
+            .rects(self.grid_area())
             .into_iter()
+            .filter(|(id, _)| split || editors.contains(id.as_str()))
             .map(|(id, r)| {
                 (
                     id,
@@ -13772,7 +13784,32 @@ impl chrome::Chrome for State {
     }
 
     fn on_close_pane(&mut self, id: &str) {
-        self.close_pane_id(id);
+        // Closing a modified editor from its pane button arms first and
+        // discards on the second click, like the keyboard close. MTP
+        // `pane.close` keeps refusing (see `close_pane_id`).
+        let mut notice = None;
+        for tab in &mut self.tabs {
+            if let Some(e) = tab.editors.iter_mut().find(|e| e.id == id) {
+                if e.doc.is_modified() && !e.close_armed {
+                    e.close_armed = true;
+                    notice = Some(format!(
+                        "{}: {}",
+                        e.title(),
+                        miao_term_ui::i18n::t(
+                            self.lang,
+                            "unsaved changes. Save, or close again to discard them.",
+                            "有未保存的修改。请保存,或再次关闭以放弃修改。"
+                        )
+                    ));
+                }
+                break;
+            }
+        }
+        if let Some(msg) = notice {
+            self.show_notice(msg);
+        } else {
+            self.close_pane_id(id);
+        }
         self.window.request_redraw();
     }
 

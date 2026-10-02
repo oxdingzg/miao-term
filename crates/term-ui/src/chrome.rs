@@ -850,8 +850,9 @@ pub trait Chrome {
     fn on_queue_clear(&mut self) {}
     fn on_menu(&mut self, id: MenuId) {}
 
-    /// Screen-space rect of every pane in the active tab. Used to place the
-    /// per-pane close button; empty when the host has no split panes.
+    /// Screen-space rect of every pane in the active tab that wants its own
+    /// close button: all panes of a split tab, plus a lone editor pane. Empty
+    /// when the tab's own close affordance covers every pane.
     fn pane_close_rects(&self) -> Vec<(String, egui::Rect)> {
         Vec::new()
     }
@@ -1294,12 +1295,13 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
     if let Some(i) = switch {
         host.on_switch_tab(i);
     }
-    // Per-pane close button, top-right of each pane. Only when the tab is
-    // split — otherwise the tab's own close affordance covers it.
+    // Per-pane close button, top-right of each pane. The host decides which
+    // panes want one: every pane of a split tab, and a lone editor pane, whose
+    // tab has no other close affordance when the sidebar is shown.
     let mut close_pane: Option<String> = None;
     {
         let panes = host.pane_close_rects();
-        if panes.len() > 1 {
+        if !panes.is_empty() {
             for (id, r) in &panes {
                 egui::Area::new(egui::Id::new(("pane-close", id)))
                     .order(egui::Order::Foreground)
