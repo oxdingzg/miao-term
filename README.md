@@ -213,6 +213,9 @@ mtty instead.
   console (device, baud, data bits, parity, stop bits, flow), a Telnet connection
   or a raw TCP socket as a pane. Saved hosts carry a `kind` and open the same way;
   Telnet and raw TCP are marked unencrypted (ADR 0037).
+- **PuTTY keys**: *Hosts… → Import PuTTY Key…* reads a `.ppk` (v2 or v3,
+  Ed25519/RSA/ECDSA) and writes an encrypted OpenSSH key to `~/.ssh`, never
+  storing it unencrypted (ADR 0038).
 - **FTP/FTPS**: *Connect over FTP/FTPS…* opens the same two-pane browser
   through the system `curl` (explicit TLS by default; plain FTP is marked as
   unencrypted). The password stays in memory; leave it empty to use

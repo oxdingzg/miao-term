@@ -23,10 +23,13 @@ OpenSSH private key. The OpenSSH key must **never** be stored unencrypted.
    tests and no windowing code, so it can be fuzzed and audited separately.
 2. **Supported key types**: Ed25519, RSA and ECDSA (NIST P-256/P-384/P-521).
    DSA is rejected with a clear message (obsolete; OpenSSH 9.8 disables it).
-3. **Supported encryption**: v2 `none` and `aes256-cbc`; v3 `none`,
-   `aes256-cbc` and `chacha20-poly1305` (Argon2id, as PuTTY writes it). The
-   MAC is always checked; a wrong passphrase fails one step before the key is
-   exposed. Argon2 parameters come from the file's `Argon2-*` headers.
+3. **Supported encryption**: v2 `none` and `aes256-cbc` (SHA-1 KDF, a zero
+   IV, and the decrypted blob in the MAC preimage); v3 `none` and
+   `aes256-cbc` (Argon2id, 80 bytes out, HMAC-SHA-256 over the decrypted
+   blob). `chacha20-poly1305` is recognised and rejected with a clear message
+   — `puttygen` writes `aes256-cbc` for v3, so there is no vector to test it
+   against yet. The MAC is always checked; a wrong passphrase fails before the
+   key is exposed. Argon2 parameters come from the file's `Argon2-*` headers.
 4. **Output is always encrypted.** The imported key is re-encoded through the
    `ssh-key` crate's OpenSSH writer with bcrypt-pbkdf + `aes256-ctr` under a
    passphrase the user chooses at import time. An empty new passphrase is
@@ -38,9 +41,10 @@ OpenSSH private key. The OpenSSH key must **never** be stored unencrypted.
    passphrases and the decoded key live in `zeroize`-ing buffers and are never
    logged or put on a command line.
 6. **Dependencies** (all MIT or Apache-2.0, per ADR 0006): `aes`, `cbc`,
-   `sha1`, `sha2`, `hmac`, `argon2`, `chacha20poly1305`, `zeroize`, and
-   `ssh-key` with the `encryption`, `alloc`, `ed25519`, `rsa`, `p256`,
-   `p384`, `p521` features. `ssh-key` also supplies the OpenSSH encoder.
+   `sha1`, `sha2`, `hmac`, `argon2`, `base64`, `zeroize`, and `ssh-key` with
+   the `encryption`, `getrandom`, `alloc`, `ed25519`, `rsa`, `p256`, `p384`,
+   `p521` features. `ssh-key` supplies the OpenSSH parser and encoder and the
+   bcrypt-pbkdf + aes256-ctr output encryption.
 
 ## Consequences
 
