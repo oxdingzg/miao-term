@@ -249,7 +249,7 @@
 ### M7 AI 原生工作台(设计见 [ADR 0040](decisions/0040-ai-native-workspace.md))
 
 - [x] **A1** agent 的修改以编辑器事务的形式进入,行内显示为 diff,可接受或拒绝,也可撤销。(ADR 0040。MTP `editor.propose` 接受 `pane_id`/`path` 以及 `edits`(`{start,end,text}` 字符范围)或整文件 `text`;宿主把它们作为**一个事务**应用到编辑器 pane 的 `Document`(`apply_external`),把改动行标成绿色,并在状态栏显示。输入、保存或出现新修改即视为接受;*拒绝 Agent 修改* 是一步撤销回到原样。依据:编辑器 pane 的单事务应用/撤销、输入即接受与接受测试,以及该请求的 MTP 测试。)
-- [ ] **A2** ACP(Agent Client Protocol)客户端,任何 ACP agent 都能与编辑器 pane 协作。(设计:`miao-term-acp` crate 在 agent stdio 上讲 JSON-RPC,包含会话、流式、fs/终端与权限映射。见 [ADR 0040](decisions/0040-ai-native-workspace.md)。)
+- [ ] **A2** ACP(Agent Client Protocol)客户端,任何 ACP agent 都能与编辑器 pane 协作。(ADR 0040。不依赖 GPU 的 `miao-term-acp` crate 已完成:启动 agent,在其 stdio 上讲按行分隔的 JSON-RPC 2.0,发送 `initialize`/`session/new`/`session/prompt`/`session/cancel`,应答 `fs/read_text_file`、`fs/write_text_file` 与 `session/request_permission`,并把 `session/update` 通知与响应交给 `Handler`。已对假 agent 测试(initialize + 流式 update、fs 读取)。剩余:宿主侧会话 UI——从 `config.toml` 的 `[acp]` 启动、带输入框的转写窗口、把 agent diff 映射为 A1 提案、把权限请求映射为对话框。)
 - [x] **A3** 一步把选区、诊断或命令输出交给 agent;agent 经 MTP 打开文件并定位到行。(ADR 0040。MTP `app.edit`/`app.view` 增加可选的 1 基 `line` 与 `column`;宿主打开文件并把编辑器 pane 移到该处。命令面板新增 *把选区发给 Agent*、*把诊断发给 Agent*、*把上一条命令的输出发给 Agent*:各自找到本标签的 agent pane,输入一段带围栏的简短 prompt 并回车。依据:`app.edit` 携带 `line`/`column` 的 MTP 测试,以及工作区构建与测试。)
 
 ## 5. 不做的事
