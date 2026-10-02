@@ -1209,6 +1209,10 @@ struct State {
     find_rejump: bool,
     /// The Go to Line prompt's text, while it is open.
     goto_line: Option<String>,
+    /// The Go to Symbol picker's query and highlighted row, while it is open.
+    goto_symbol: Option<(String, usize)>,
+    /// The vim `:` command line's text, while it is open.
+    vim_command: Option<String>,
     /// Language servers for editor panes (ADR 0034, E5).
     lsp: miao_term_lsp::Lsp,
     /// `MTTY_QA_COMMAND` has run.
@@ -1227,6 +1231,11 @@ struct State {
         String,
         std::sync::mpsc::Receiver<Result<miao_term_editor::Document, String>>,
     )>,
+    /// When the open editor panes were last checked against disk.
+    editor_reload_checked: Instant,
+    /// An editor pane whose file changed on disk while it had unsaved edits:
+    /// the reload/keep dialog's pane and the stamp seen.
+    editor_reload_offer: Option<(String, editor_pane::DiskStamp)>,
     update_url: Option<String>,
     update_rx: Option<std::sync::mpsc::Receiver<UpdateResult>>,
     update_install: UpdateInstall,
@@ -3431,7 +3440,10 @@ impl State {
         self.quick_window(ctx);
         self.search_window(ctx);
         self.goto_line_window(ctx);
+        self.go_to_symbol_window(ctx);
+        self.vim_command_window(ctx);
         self.large_edit_window(ctx);
+        self.reload_dialog_window(ctx);
         if let Some(i) = self.renaming {
             self.rename_window(ctx, i);
         }
@@ -3497,6 +3509,32 @@ impl State {
                 serde_json::to_vec(&self.session_value()).unwrap_or_default(),
             );
         }
+    }
+
+    /// Remember the window's chrome layout (size, panel widths, which panels
+    /// are open, the details tab) so the next launch restores it.
+    fn save_window_state(&self) {
+        let size = self.window.inner_size();
+        let scale = self.window.scale_factor() as f32;
+        WindowState {
+            size: (size.width as f32 / scale, size.height as f32 / scale),
+            sidebar_w: self.sidebar_w,
+            details_w: self.details_w,
+            sidebar_open: self.show_sidebar,
+            details_open: self.show_details,
+            details_tab: self.details_tab.min(6),
+        }
+        .save();
+    }
+
+    fn toggle_sidebar(&mut self) {
+        self.show_sidebar = !self.show_sidebar;
+        self.save_window_state();
+    }
+
+    fn toggle_details(&mut self) {
+        self.show_details = !self.show_details;
+        self.save_window_state();
     }
 
     /// The session as mtty quits: also each terminal's contents (when
@@ -3677,6 +3715,7 @@ impl State {
                     if let Ok(mut ed) =
                         editor_pane::EditorPane::open(id.clone(), std::path::Path::new(path))
                     {
+                        ed.set_vim(self.editor_vim);
                         if ed.is_view_only() {
                             let line = e.get("line").and_then(|x| x.as_u64()).unwrap_or(0);
                             ed.go_to_line(line as usize);
@@ -4088,6 +4127,14 @@ enum Cmd {
     /// Find with the replace field (editor panes).
     Replace,
     GoToLine,
+    /// The outline picker for the active editor (ADR 0034, E6).
+    GoToSymbol,
+    /// Collapse every fold in the active editor.
+    FoldAll,
+    /// Expand every fold in the active editor.
+    UnfoldAll,
+    /// Collapse or expand the fold at the caret.
+    ToggleFold,
     /// Open or close a Markdown preview beside the active editor.
     MarkdownPreview,
     /// The language server, at the active editor's caret (ADR 0034, E5).
@@ -4211,6 +4258,13 @@ impl State {
             (Cmd::Find, t(l, "Find…", "查找…")),
             (Cmd::Replace, t(l, "Replace…", "替换…")),
             (Cmd::GoToLine, t(l, "Go to Line…", "跳转到行…")),
+            (
+                Cmd::GoToSymbol,
+                t(l, "Go to Symbol in File…", "转到文件中的符号…"),
+            ),
+            (Cmd::FoldAll, t(l, "Fold All", "全部折叠")),
+            (Cmd::UnfoldAll, t(l, "Unfold All", "全部展开")),
+            (Cmd::ToggleFold, t(l, "Toggle Fold", "切换折叠")),
             (
                 Cmd::MarkdownPreview,
                 t(l, "Toggle Markdown Preview", "开关 Markdown 预览"),
@@ -4467,8 +4521,8 @@ impl State {
             Cmd::SplitRight => self.split(SplitDir::Right),
             Cmd::SplitDown => self.split(SplitDir::Down),
             Cmd::ClosePane => self.close_pane(),
-            Cmd::ToggleSidebar => self.show_sidebar = !self.show_sidebar,
-            Cmd::ToggleDetails => self.show_details = !self.show_details,
+            Cmd::ToggleSidebar => self.toggle_sidebar(),
+            Cmd::ToggleDetails => self.toggle_details(),
             Cmd::FontUp | Cmd::FontDown => {
                 let d = if matches!(cmd, Cmd::FontUp) {
                     1.0
@@ -4551,6 +4605,26 @@ impl State {
             Cmd::GoToLine => {
                 if self.require_editor() {
                     self.goto_line = Some(String::new());
+                }
+            }
+            Cmd::GoToSymbol => {
+                if self.require_editor() {
+                    self.goto_symbol = Some((String::new(), 0));
+                }
+            }
+            Cmd::FoldAll => {
+                if self.require_editor() {
+                    self.run_editor_command(editor_pane::Command::FoldAll);
+                }
+            }
+            Cmd::UnfoldAll => {
+                if self.require_editor() {
+                    self.run_editor_command(editor_pane::Command::UnfoldAll);
+                }
+            }
+            Cmd::ToggleFold => {
+                if self.require_editor() {
+                    self.run_editor_command(editor_pane::Command::ToggleFold);
                 }
             }
             Cmd::SelectAllOccurrences | Cmd::CursorsAtLineEnds => {
@@ -4769,12 +4843,7 @@ impl State {
                 if !self.confirm_close_tabs(&all) {
                     return;
                 }
-                let s = self.window.inner_size();
-                save_window_size(
-                    s.width as f32 / self.window.scale_factor() as f32,
-                    s.height as f32 / self.window.scale_factor() as f32,
-                    (self.sidebar_w, self.details_w),
-                );
+                self.save_window_state();
                 // process::exit skips destructors: persist the session and
                 // release the sleep inhibitor first, as a window close does.
                 if self.show_settings {
@@ -6088,6 +6157,7 @@ impl State {
                 let fresh = editor_pane::EditorPane::with_doc(ed.id.clone(), ed.path.clone(), doc);
                 let (rows, cols) = (ed.rows, ed.cols);
                 *ed = fresh;
+                ed.set_vim(self.editor_vim);
                 ed.rows = rows;
                 ed.cols = cols;
                 ed.go_to_line(line - 1);
@@ -6109,8 +6179,70 @@ impl State {
         self.window.request_redraw();
     }
 
-    /// The Markdown previews in the active tab: each editor's text as it is
-    /// now, rendered inside its pane's card. A press in one focuses it.
+    /// Ask before an external edit replaces unsaved changes (see
+    /// [`Self::reload_editors_if_changed`]). Escape keeps the local version.
+    fn reload_dialog_window(&mut self, ctx: &egui::Context) {
+        let Some((id, stamp)) = self.editor_reload_offer.clone() else {
+            return;
+        };
+        let Some(name) = self.tabs.iter().find_map(|t| {
+            t.editors.iter().find(|e| e.id == id).map(|e| {
+                e.path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            })
+        }) else {
+            self.editor_reload_offer = None;
+            return;
+        };
+        use miao_term_ui::i18n::t;
+        let l = self.lang;
+        let (mut reload, mut keep) = (false, false);
+        egui::Window::new(t(l, "File Changed on Disk", "文件已在磁盘上更改"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.set_max_width(440.0);
+                ui.label(if l == miao_term_ui::i18n::Lang::En {
+                    format!(
+                        "{name} changed on disk while this pane has unsaved edits.\n\nReloading replaces your text with the file's contents (you can undo it). Keeping your version asks again only if the file changes once more."
+                    )
+                } else {
+                    format!(
+                        "{name} 在磁盘上被修改,而此面板有未保存的编辑。\n\n“从磁盘重新加载”会用文件内容替换你的文本(可撤销);“保留我的版本”保留你的编辑,文件再次变化时才会再问。"
+                    )
+                });
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    keep = ui.button(t(l, "Keep My Version", "保留我的版本")).clicked();
+                    reload = ui.button(t(l, "Reload from Disk", "从磁盘重新加载")).clicked();
+                });
+            });
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            keep = true;
+        }
+        if !reload && !keep {
+            return;
+        }
+        self.editor_reload_offer = None;
+        if let Some(ed) = self
+            .tabs
+            .iter_mut()
+            .flat_map(|t| t.editors.iter_mut())
+            .find(|e| e.id == id)
+        {
+            if reload {
+                ed.reload_from_disk();
+            } else {
+                ed.disk = editor_pane::disk_stamp(&ed.path).or(Some(stamp));
+                ed.missing_warned = false;
+            }
+        }
+        self.window.request_redraw();
+    }
+
     fn preview_panes(&mut self, ctx: &egui::Context) {
         let rects = self.pane_rects();
         let Some(tab) = self.tabs.get_mut(self.active_tab) else {
@@ -6803,6 +6935,171 @@ impl State {
         if close {
             self.goto_line = None;
             self.window.request_redraw();
+        }
+    }
+
+    /// Go to Symbol (⌘R / Ctrl+R): a filterable outline of the active editor.
+    fn go_to_symbol_window(&mut self, ctx: &egui::Context) {
+        if self.goto_symbol.is_none() {
+            return;
+        }
+        use miao_term_ui::i18n::t;
+        let lang = self.lang;
+        let symbols = match self.active_editor() {
+            Some(ed) => ed
+                .syntax
+                .as_ref()
+                .map(|s| s.outline(ed.doc.rope()))
+                .unwrap_or_default(),
+            None => {
+                self.goto_symbol = None;
+                return;
+            }
+        };
+        let (query, selected) = self.goto_symbol.clone().unwrap_or_default();
+        let needle = query.trim().to_lowercase();
+        let shown: Vec<usize> = symbols
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| needle.is_empty() || s.name.to_lowercase().contains(&needle))
+            .map(|(i, _)| i)
+            .collect();
+        let selected = selected.min(shown.len().saturating_sub(1));
+        let mut new_text = query.clone();
+        let mut chosen: Option<usize> = None;
+        let mut move_up = false;
+        let mut move_down = false;
+        let mut cancel = false;
+        egui::Window::new(t(lang, "Go to Symbol", "转到符号"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_TOP, [0.0, 40.0])
+            .show(ctx, |ui| {
+                let r = ui.add(
+                    egui::TextEdit::singleline(&mut new_text)
+                        .hint_text(t(lang, "Type to filter symbols…", "输入以过滤符号…"))
+                        .desired_width(380.0),
+                );
+                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if enter {
+                    chosen = shown.get(selected).copied();
+                } else {
+                    r.request_focus();
+                }
+                move_up = ui.input(|i| i.key_pressed(egui::Key::ArrowUp));
+                move_down = ui.input(|i| i.key_pressed(egui::Key::ArrowDown));
+                cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                ui.separator();
+                if symbols.is_empty() {
+                    ui.label(t(
+                        lang,
+                        "No outline for this file (no syntax tree).",
+                        "此文件没有大纲(无语法树)。",
+                    ));
+                }
+                egui::ScrollArea::vertical()
+                    .max_height(320.0)
+                    .show(ui, |ui| {
+                        for (row, &i) in shown.iter().enumerate() {
+                            let s = &symbols[i];
+                            let label = format!("{}{}", "  ".repeat(s.depth), s.name);
+                            let r = ui.selectable_label(row == selected, label);
+                            if r.clicked() {
+                                chosen = Some(i);
+                            }
+                        }
+                    });
+            });
+        if let Some(i) = chosen {
+            if let Some(ed) = self.active_editor_mut() {
+                ed.go_to_line(symbols[i].line);
+            }
+            self.goto_symbol = None;
+            self.window.request_redraw();
+            return;
+        }
+        if cancel {
+            self.goto_symbol = None;
+            self.window.request_redraw();
+            return;
+        }
+        let selected = if new_text != query {
+            0
+        } else if move_down {
+            (selected + 1).min(shown.len().saturating_sub(1))
+        } else if move_up {
+            selected.saturating_sub(1)
+        } else {
+            selected
+        };
+        self.goto_symbol = Some((new_text, selected));
+    }
+
+    /// The vim `:` command line (see [`Self::run_vim_command`]).
+    fn vim_command_window(&mut self, ctx: &egui::Context) {
+        let Some(text) = self.vim_command.as_mut() else {
+            return;
+        };
+        use miao_term_ui::i18n::t;
+        let lang = self.lang;
+        let (mut go, mut close) = (false, false);
+        egui::Window::new(t(lang, "Vim Command", "Vim 命令"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_TOP, [0.0, 40.0])
+            .show(ctx, |ui| {
+                let r = ui.add(
+                    egui::TextEdit::singleline(text)
+                        .hint_text(t(lang, "w, q, wq, or a line number", "w、q、wq 或行号"))
+                        .desired_width(280.0),
+                );
+                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if !enter {
+                    r.request_focus();
+                }
+                go = enter;
+                close = ui.input(|i| i.key_pressed(egui::Key::Escape));
+            });
+        let command = text.trim().to_string();
+        if close {
+            self.vim_command = None;
+            self.window.request_redraw();
+            return;
+        }
+        if !go {
+            return;
+        }
+        self.vim_command = None;
+        self.run_vim_command(&command);
+        self.window.request_redraw();
+    }
+
+    /// Run a `:` command: `w` writes, `q`/`q!` close the pane, `wq` both, a
+    /// number goes to that line.
+    fn run_vim_command(&mut self, command: &str) {
+        let command = command.trim();
+        if command.is_empty() {
+            return;
+        }
+        if let Ok(line) = command.parse::<usize>() {
+            if line > 0 {
+                if let Some(ed) = self.active_editor_mut() {
+                    ed.go_to_line(line - 1);
+                }
+            }
+            return;
+        }
+        let (save, quit) = match command {
+            "w" => (true, false),
+            "q" | "q!" => (false, true),
+            "wq" | "x" => (true, true),
+            _ => (false, false),
+        };
+        if save {
+            self.save_active_editor();
+        }
+        if quit {
+            self.run_command(Cmd::ClosePane);
         }
     }
 
@@ -9481,9 +9778,39 @@ impl State {
         if self.completion_key(kind, alt || sup || ctrl) {
             return true;
         }
+        // Vim mode owns the keyboard while it is on.
+        if self.active_editor().and_then(|e| e.vim.as_ref()).is_some() {
+            let action = match vim_key_from(kind, ctrl) {
+                Some(key) => self.active_editor_mut().and_then(|ed| ed.vim_key(key)),
+                None => None,
+            };
+            match action {
+                Some(miao_term_editor::vim::Action::Find) => self.run_command(Cmd::Find),
+                Some(miao_term_editor::vim::Action::CommandLine) => {
+                    self.vim_command = Some(String::new());
+                }
+                Some(miao_term_editor::vim::Action::Fold(fold)) => {
+                    let command = match fold {
+                        miao_term_editor::vim::Fold::Toggle => editor_pane::Command::ToggleFold,
+                        miao_term_editor::vim::Fold::Close => editor_pane::Command::Fold,
+                        miao_term_editor::vim::Fold::Open => editor_pane::Command::Unfold,
+                        miao_term_editor::vim::Fold::CloseAll => editor_pane::Command::FoldAll,
+                        miao_term_editor::vim::Fold::OpenAll => editor_pane::Command::UnfoldAll,
+                    };
+                    self.run_editor_command(command);
+                }
+                _ => {}
+            }
+            self.refilter_completion();
+            return true;
+        }
         match editor_pane::keymap(kind, shift, alt, sup, ctrl) {
             Some(editor_pane::Command::GoToLine) => {
                 self.run_command(Cmd::GoToLine);
+                return true;
+            }
+            Some(editor_pane::Command::GoToSymbol) => {
+                self.run_command(Cmd::GoToSymbol);
                 return true;
             }
             Some(editor_pane::Command::FindReplace) => {
@@ -9608,7 +9935,8 @@ impl State {
         }
         let id = gen_id();
         match editor_pane::EditorPane::open(id.clone(), &path) {
-            Ok(ed) => {
+            Ok(mut ed) => {
+                ed.set_vim(self.editor_vim);
                 let title = ed.title();
                 self.tabs.push(Tab {
                     layout: Layout::leaf(id.clone()),
@@ -10112,6 +10440,67 @@ impl State {
             self.rules_mtime = mtime;
             self.rules = miao_term_config::view::RuleSet::load();
             self.publish_panes();
+            self.window.request_redraw();
+        }
+    }
+
+    /// Notice files edited outside mtty (checked at most once a second). A
+    /// pane with no unsaved edits reloads silently; one with edits asks
+    /// before replacing them.
+    fn reload_editors_if_changed(&mut self) {
+        if self.editor_reload_checked.elapsed() < Duration::from_secs(1) {
+            return;
+        }
+        self.editor_reload_checked = Instant::now();
+        let mut redraw = false;
+        let mut offer: Option<(String, editor_pane::DiskStamp)> = None;
+        let mut deleted: Option<String> = None;
+        for tab in &mut self.tabs {
+            for ed in &mut tab.editors {
+                if ed.is_view_only() {
+                    continue;
+                }
+                let Some(stamp) = editor_pane::disk_stamp(&ed.path) else {
+                    if ed.disk.is_some() && !ed.missing_warned {
+                        ed.missing_warned = true;
+                        deleted = Some(ed.path.display().to_string());
+                    }
+                    continue;
+                };
+                if ed.disk == Some(stamp) {
+                    continue;
+                }
+                ed.missing_warned = false;
+                if ed.doc.is_modified() {
+                    // One prompt at a time; the pane keeps its edits until
+                    // the user answers.
+                    if offer.is_none() && self.editor_reload_offer.is_none() {
+                        offer = Some((ed.id.clone(), stamp));
+                    }
+                    continue;
+                }
+                if ed.reload_from_disk() {
+                    redraw = true;
+                }
+            }
+        }
+        if let Some(offer) = offer {
+            self.editor_reload_offer = Some(offer);
+            redraw = true;
+        }
+        if let Some(path) = deleted {
+            let name = std::path::Path::new(&path)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or(path);
+            let msg = if self.lang == miao_term_ui::i18n::Lang::En {
+                format!("{name} was deleted on disk.")
+            } else {
+                format!("{name} 已在磁盘上删除。")
+            };
+            self.show_notice(msg);
+        }
+        if redraw {
             self.window.request_redraw();
         }
     }
@@ -10805,7 +11194,8 @@ impl ApplicationHandler<HostEvent> for Host {
         // Launch has finished: AppKit's quit handler is in place to replace.
         #[cfg(target_os = "macos")]
         macos_url::install_quit();
-        let (init_w, init_h) = load_window_size().unwrap_or((1100.0, 720.0));
+        let window_state = WindowState::load();
+        let (init_w, init_h) = window_state.size;
         let opacity = miao_term_config::Config::load()
             .background_opacity
             .clamp(0.1, 1.0);
@@ -10980,8 +11370,8 @@ impl ApplicationHandler<HostEvent> for Host {
             // `MTTY_PREEDIT` seeds the IME overlay for captures/QA.
             preedit: miao_term_config::env("PREEDIT").unwrap_or_default(),
             ime_area: None,
-            show_sidebar: true,
-            show_details: true,
+            show_sidebar: window_state.sidebar_open,
+            show_details: window_state.details_open,
             renaming: None,
             rename_buf: String::new(),
             theme_name,
@@ -11076,6 +11466,8 @@ impl ApplicationHandler<HostEvent> for Host {
             find_error: None,
             find_rejump: false,
             goto_line: None,
+            goto_symbol: None,
+            vim_command: None,
             lsp: {
                 let proxy = self.proxy.clone();
                 let settings = miao_term_lsp::Settings {
@@ -11110,6 +11502,8 @@ impl ApplicationHandler<HostEvent> for Host {
             bg_search: None,
             large_edit_offer: None,
             large_loading: None,
+            editor_reload_checked: Instant::now(),
+            editor_reload_offer: None,
             update_url: cfg.update_check_url.clone(),
             update_rx: None,
             update_install: UpdateInstall::Idle,
@@ -11128,15 +11522,15 @@ impl ApplicationHandler<HostEvent> for Host {
             wheel_accum: 0.0,
             title_drag_hover: false,
             title_pressed_at: None,
-            sidebar_w: load_panel_widths().0,
-            details_w: load_panel_widths().1,
+            sidebar_w: window_state.sidebar_w,
+            details_w: window_state.details_w,
             alert_target: None,
             saved_settings: Vec::new(),
             config_imported_from: cfg.imported_from,
             update_dialog: false,
             details_tab: miao_term_config::env("DETAILS_TAB")
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(0),
+                .unwrap_or(window_state.details_tab),
             details_cwd: None,
             details_data: None,
             details_rx: None,
@@ -11318,6 +11712,7 @@ impl ApplicationHandler<HostEvent> for Host {
             // occluded window may not be redrawn at all).
             state.agent_loop();
             state.reload_rules_if_changed();
+            state.reload_editors_if_changed();
             state.sync_tick();
             if let Some(rx) = state.update_rx.take() {
                 match rx.try_recv() {
@@ -11566,12 +11961,7 @@ impl ApplicationHandler<HostEvent> for Host {
                 if !state.confirm_close_tabs(&all) {
                     return;
                 }
-                let s = state.window.inner_size();
-                save_window_size(
-                    s.width as f32 / state.window.scale_factor() as f32,
-                    s.height as f32 / state.window.scale_factor() as f32,
-                    (state.sidebar_w, state.details_w),
-                );
+                state.save_window_state();
                 if state.show_settings {
                     state.persist_settings();
                 }
@@ -11616,7 +12006,8 @@ impl ApplicationHandler<HostEvent> for Host {
                     } else if let Some(ed) = state.active_editor_mut() {
                         if ed.is_view_only() {
                             state.large_edit_offer = Some(ed.id.clone());
-                        } else {
+                        } else if ed.vim.is_none() || ed.vim.as_ref().is_some_and(|v| v.is_insert())
+                        {
                             ed.type_text(&text);
                         }
                         state.window.request_redraw();
@@ -11981,10 +12372,10 @@ impl ApplicationHandler<HostEvent> for Host {
                         }
                     }
                     if s.toggle_sidebar {
-                        state.show_sidebar = !state.show_sidebar;
+                        state.toggle_sidebar();
                     }
                     if s.toggle_details {
-                        state.show_details = !state.show_details;
+                        state.toggle_details();
                     }
                     if s.palette {
                         state.show_palette = true;
@@ -12352,6 +12743,29 @@ fn editor_command_for_menu_key(id: chrome::MenuId) -> Option<editor_pane::Comman
         MenuId::SplitRight => editor_pane::Command::SelectNextOccurrence,
         MenuId::ReopenClosed => editor_pane::Command::Redo,
         MenuId::ToggleSidebar => editor_pane::Command::SelectAllOccurrences,
+        _ => return None,
+    })
+}
+
+/// Translate a key chord into a vim key (the pane owns the vim state).
+fn vim_key_from(
+    kind: miao_term_ui::input::KeyKind,
+    ctrl: bool,
+) -> Option<miao_term_editor::vim::Key> {
+    use miao_term_editor::vim::Key;
+    Some(match kind {
+        miao_term_ui::input::KeyKind::Char(c) if ctrl => Key::Ctrl(c),
+        miao_term_ui::input::KeyKind::Char(c) => Key::Char(c),
+        miao_term_ui::input::KeyKind::Left => Key::Left,
+        miao_term_ui::input::KeyKind::Right => Key::Right,
+        miao_term_ui::input::KeyKind::Up => Key::Up,
+        miao_term_ui::input::KeyKind::Down => Key::Down,
+        miao_term_ui::input::KeyKind::Home => Key::Home,
+        miao_term_ui::input::KeyKind::End => Key::End,
+        miao_term_ui::input::KeyKind::Backspace => Key::Backspace,
+        miao_term_ui::input::KeyKind::Delete => Key::Delete,
+        miao_term_ui::input::KeyKind::Enter => Key::Enter,
+        miao_term_ui::input::KeyKind::Escape => Key::Esc,
         _ => return None,
     })
 }
@@ -13232,49 +13646,99 @@ fn legacy_state_path(path: &std::path::Path, legacy: &str) -> std::path::PathBuf
     }
 }
 
-fn load_window_size() -> Option<(f32, f32)> {
-    let text = std::fs::read_to_string(legacy_state_path(&window_file()?, "native-window")).ok()?;
-    let mut it = text.split_whitespace();
-    let w: f32 = it.next()?.parse().ok()?;
-    let h: f32 = it.next()?.parse().ok()?;
-    Some((w, h))
+/// The window's saved chrome layout: its size, the side panels' widths, which
+/// panels are open, and the selected details tab. Written on quit and whenever
+/// a panel is toggled, so a restart comes back the way it was left.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct WindowState {
+    size: (f32, f32),
+    sidebar_w: f32,
+    details_w: f32,
+    sidebar_open: bool,
+    details_open: bool,
+    details_tab: usize,
 }
 
-/// `width height [sidebar details]`; files from older versions have only
-/// the first two.
-fn save_window_size(w: f32, h: f32, panels: (f32, f32)) {
-    if let Some(path) = window_file() {
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
+impl Default for WindowState {
+    fn default() -> Self {
+        Self {
+            size: (1100.0, 720.0),
+            sidebar_w: SIDEBAR_W,
+            details_w: DETAILS_W,
+            sidebar_open: true,
+            details_open: true,
+            details_tab: 0,
         }
-        let _ = std::fs::write(
-            path,
-            format!("{w:.0} {h:.0} {:.0} {:.0}\n", panels.0, panels.1),
-        );
     }
 }
 
-/// The side panels' saved widths, clamped to their drag ranges.
-fn load_panel_widths() -> (f32, f32) {
-    let text = window_file()
-        .and_then(|p| std::fs::read_to_string(legacy_state_path(&p, "native-window")).ok())
-        .unwrap_or_default();
-    parse_panel_widths(&text)
-}
+impl WindowState {
+    fn load() -> Self {
+        let Some(path) = window_file() else {
+            return Self::default();
+        };
+        let text =
+            std::fs::read_to_string(legacy_state_path(&path, "native-window")).unwrap_or_default();
+        Self::parse(&text)
+    }
 
-fn parse_panel_widths(text: &str) -> (f32, f32) {
-    let mut it = text
-        .split_whitespace()
-        .skip(2)
-        .map(|v| v.parse::<f32>().ok());
-    let clamp = |v: Option<f32>, range: std::ops::RangeInclusive<f32>, default: f32| {
-        v.filter(|v| v.is_finite())
-            .map(|v| v.clamp(*range.start(), *range.end()))
-            .unwrap_or(default)
-    };
-    let left = clamp(it.next().flatten(), chrome::SIDEBAR_RANGE, SIDEBAR_W);
-    let right = clamp(it.next().flatten(), chrome::DETAILS_RANGE, DETAILS_W);
-    (left, right)
+    /// `width height [sidebar details [sidebar_open details_open details_tab]]`.
+    /// Files from older versions stop after the size or the widths; the missing
+    /// fields fall back to the defaults (both panels open, the first tab).
+    fn parse(text: &str) -> Self {
+        let default = Self::default();
+        let mut it = text.split_whitespace();
+        let number = |raw: Option<&str>| raw.and_then(|v| v.parse::<f32>().ok());
+        let size = match (number(it.next()), number(it.next())) {
+            (Some(w), Some(h)) => (w, h),
+            _ => default.size,
+        };
+        let clamp = |v: Option<f32>, range: std::ops::RangeInclusive<f32>, fallback: f32| {
+            v.filter(|v| v.is_finite())
+                .map(|v| v.clamp(*range.start(), *range.end()))
+                .unwrap_or(fallback)
+        };
+        let flag = |raw: Option<&str>, fallback: bool| match raw {
+            Some("0") => false,
+            Some("1") => true,
+            _ => fallback,
+        };
+        Self {
+            size,
+            sidebar_w: clamp(number(it.next()), chrome::SIDEBAR_RANGE, default.sidebar_w),
+            details_w: clamp(number(it.next()), chrome::DETAILS_RANGE, default.details_w),
+            sidebar_open: flag(it.next(), default.sidebar_open),
+            details_open: flag(it.next(), default.details_open),
+            details_tab: it
+                .next()
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(default.details_tab)
+                .min(6),
+        }
+    }
+
+    fn format(&self) -> String {
+        format!(
+            "{:.0} {:.0} {:.0} {:.0} {} {} {}\n",
+            self.size.0,
+            self.size.1,
+            self.sidebar_w,
+            self.details_w,
+            self.sidebar_open as u8,
+            self.details_open as u8,
+            self.details_tab,
+        )
+    }
+
+    fn save(&self) {
+        let Some(path) = window_file() else {
+            return;
+        };
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(path, self.format());
+    }
 }
 
 impl chrome::Chrome for State {
@@ -13413,8 +13877,15 @@ impl chrome::Chrome for State {
                 return s;
             }
             let lang = ed.language().unwrap_or("Plain Text");
+            let mode = match ed.vim_mode() {
+                Some(miao_term_editor::vim::Mode::Normal) => "-- NORMAL -- ",
+                Some(miao_term_editor::vim::Mode::Insert) => "-- INSERT -- ",
+                Some(miao_term_editor::vim::Mode::Visual) => "-- VISUAL -- ",
+                Some(miao_term_editor::vim::Mode::VisualLine) => "-- V-LINE -- ",
+                None => "",
+            };
             let mut s = format!(
-                "{lang} \u{00b7} {line}:{col} \u{00b7} {}",
+                "{mode}{lang} \u{00b7} {line}:{col} \u{00b7} {}",
                 ed.line_ending_name()
             );
             // Problems from the language server: ✖ errors, ⚠ warnings.
@@ -13701,13 +14172,14 @@ impl chrome::Chrome for State {
         self.resize();
     }
     fn on_toggle_sidebar(&mut self) {
-        self.show_sidebar = !self.show_sidebar;
+        self.toggle_sidebar();
     }
     fn on_toggle_details(&mut self) {
-        self.show_details = !self.show_details;
+        self.toggle_details();
     }
     fn on_details_tab(&mut self, i: usize) {
         self.details_tab = i;
+        self.save_window_state();
     }
     fn on_queue_add(&mut self) {
         if !self.prompt_input.is_empty() {
@@ -13770,6 +14242,7 @@ impl chrome::Chrome for State {
             Find => Cmd::Find,
             Replace => Cmd::Replace,
             GoToLine => Cmd::GoToLine,
+            GoToSymbol => Cmd::GoToSymbol,
             MarkdownPreview => Cmd::MarkdownPreview,
             FindNext => Cmd::FindNext,
             FindPrev => Cmd::FindPrev,
@@ -14805,15 +15278,54 @@ mod tests {
     }
 
     #[test]
-    fn panel_widths_load_from_old_and_new_window_files() {
-        assert_eq!(parse_panel_widths("1100 720"), (SIDEBAR_W, DETAILS_W));
-        assert_eq!(parse_panel_widths("1100 720 260 340\n"), (260.0, 340.0));
+    fn window_state_reads_old_and_new_files() {
+        let default = WindowState::default();
+        // Files from before panel widths existed: size only, panels open.
+        assert_eq!(WindowState::parse("1100 720"), default);
+        // Widths only; the panels stay open and the details tab is the first.
         assert_eq!(
-            parse_panel_widths("1100 720 9999 1"),
-            (480.0, 200.0),
-            "clamped"
+            WindowState::parse("1100 720 260 340\n"),
+            WindowState {
+                sidebar_w: 260.0,
+                details_w: 340.0,
+                ..default
+            }
         );
-        assert_eq!(parse_panel_widths("1100 720 x NaN"), (SIDEBAR_W, DETAILS_W));
+        assert_eq!(
+            WindowState::parse("1100 720 9999 1"),
+            WindowState {
+                sidebar_w: 480.0,
+                details_w: 200.0,
+                ..default
+            },
+            "widths are clamped"
+        );
+        assert_eq!(WindowState::parse("1100 720 x NaN"), default);
+        // A full line from this version.
+        assert_eq!(
+            WindowState::parse("1400 900 240 360 0 1 4"),
+            WindowState {
+                size: (1400.0, 900.0),
+                sidebar_w: 240.0,
+                details_w: 360.0,
+                sidebar_open: false,
+                details_open: true,
+                details_tab: 4,
+            }
+        );
+    }
+
+    #[test]
+    fn window_state_round_trips_through_save_format() {
+        let state = WindowState {
+            size: (1400.0, 900.0),
+            sidebar_w: 240.0,
+            details_w: 360.0,
+            sidebar_open: false,
+            details_open: false,
+            details_tab: 6,
+        };
+        assert_eq!(WindowState::parse(&state.format()), state);
     }
 
     #[test]

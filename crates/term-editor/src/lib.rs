@@ -17,12 +17,13 @@ pub mod search;
 pub mod selection;
 pub mod syntax;
 pub mod text;
+pub mod vim;
 
 pub use change::{Assoc, ByteEdit, Change, Transaction};
 pub use document::{Document, Motion};
 pub use search::{SearchError, SearchQuery};
 pub use selection::{Range, Selection};
-pub use syntax::{set_parse_waker, Highlight, Syntax};
+pub use syntax::{set_parse_waker, Highlight, OutlineSymbol, Syntax};
 pub use text::{DecodeError, LineEnding};
 
 pub use ropey::Rope;
