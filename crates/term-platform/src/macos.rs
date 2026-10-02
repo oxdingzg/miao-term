@@ -147,10 +147,12 @@ unsafe fn data_bytes(data: &AnyObject) -> Option<Vec<u8>> {
         if length == 0 {
             return None;
         }
-        let bytes: *const u8 = msg_send![data, bytes];
+        // `bytes` returns `const void *`; the concrete pointer type must match
+        // the encoding or objc2's debug signature check rejects the send.
+        let bytes: *const core::ffi::c_void = msg_send![data, bytes];
         if bytes.is_null() {
             return None;
         }
-        Some(core::slice::from_raw_parts(bytes, length).to_vec())
+        Some(core::slice::from_raw_parts(bytes.cast::<u8>(), length).to_vec())
     }
 }
