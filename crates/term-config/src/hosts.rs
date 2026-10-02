@@ -25,6 +25,69 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+/// What a host is: an SSH target (the default), a serial port, Telnet or raw
+/// TCP (ADR 0037).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HostKind {
+    #[default]
+    Ssh,
+    Serial,
+    Telnet,
+    Tcp,
+}
+
+impl HostKind {
+    fn is_ssh(&self) -> bool {
+        matches!(self, HostKind::Ssh)
+    }
+}
+
+/// A serial console's settings (ADR 0037).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SerialProfile {
+    pub device: String,
+    #[serde(default = "default_baud")]
+    pub baud: u32,
+    #[serde(default = "default_data_bits")]
+    pub data_bits: u8,
+    #[serde(default = "default_parity")]
+    pub parity: String,
+    #[serde(default = "default_stop_bits")]
+    pub stop_bits: u8,
+    #[serde(default = "default_flow")]
+    pub flow: String,
+}
+
+impl Default for SerialProfile {
+    fn default() -> Self {
+        SerialProfile {
+            device: String::new(),
+            baud: default_baud(),
+            data_bits: default_data_bits(),
+            parity: default_parity(),
+            stop_bits: default_stop_bits(),
+            flow: default_flow(),
+        }
+    }
+}
+
+fn default_baud() -> u32 {
+    115_200
+}
+fn default_data_bits() -> u8 {
+    8
+}
+fn default_parity() -> String {
+    "none".into()
+}
+fn default_stop_bits() -> u8 {
+    1
+}
+fn default_flow() -> String {
+    "none".into()
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Host {
     pub name: String,
@@ -54,6 +117,12 @@ pub struct Host {
     /// Saved port forwards (B3.3).
     #[serde(default, skip_serializing_if = "Vec::is_empty", rename = "forward")]
     pub forwards: Vec<Forward>,
+    /// What this host is (ADR 0037). Old files have none and mean `ssh`.
+    #[serde(default, skip_serializing_if = "HostKind::is_ssh")]
+    pub kind: HostKind,
+    /// Serial settings when `kind = "serial"`; Telnet/TCP use `address`/`port`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serial: Option<SerialProfile>,
 }
 
 /// One port forward, in ssh's own notation.
@@ -395,5 +464,51 @@ Match host foo
             "{text}"
         );
         assert_eq!(toml::from_str::<HostBook>(&text).unwrap().hosts[0], host);
+    }
+
+    #[test]
+    fn hosts_gain_serial_telnet_and_tcp_kinds() {
+        // A file saved before kinds existed means SSH.
+        let old: HostBook = toml::from_str("[[host]]\nname = \"web\"\naddress = \"h\"\n").unwrap();
+        assert_eq!(old.hosts[0].kind, HostKind::Ssh);
+        assert!(old.hosts[0].serial.is_none());
+
+        let console = Host {
+            name: "console".into(),
+            kind: HostKind::Serial,
+            serial: Some(SerialProfile {
+                device: "/dev/ttyUSB0".into(),
+                baud: 9600,
+                parity: "even".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let switch = Host {
+            name: "switch".into(),
+            kind: HostKind::Telnet,
+            address: Some("203.0.113.2".into()),
+            port: Some(23),
+            ..Default::default()
+        };
+        let text = toml::to_string_pretty(&HostBook {
+            hosts: vec![console.clone(), switch.clone()],
+        })
+        .unwrap();
+        assert!(text.contains("kind = \"serial\""), "{text}");
+        assert!(text.contains("kind = \"telnet\""), "{text}");
+        let back: HostBook = toml::from_str(&text).unwrap();
+        assert_eq!(back.hosts[0], console);
+        assert_eq!(back.hosts[1], switch);
+
+        // An SSH host writes no kind key.
+        let ssh = toml::to_string_pretty(&HostBook {
+            hosts: vec![Host {
+                name: "web".into(),
+                ..Default::default()
+            }],
+        })
+        .unwrap();
+        assert!(!ssh.contains("kind ="), "{ssh}");
     }
 }
