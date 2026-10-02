@@ -936,6 +936,9 @@ enum JobDone {
         title: Option<String>,
         result: Result<miao_term_ui::transport::Connection, String>,
     },
+    /// A PuTTY key was imported and written, or why it was not (ADR 0038).
+    /// The `Ok` value is the path written.
+    KeyImported(Result<String, String>),
 }
 
 /// The Agent Tasks window: the repository, its tasks and a pending
@@ -967,6 +970,21 @@ struct SyncView {
     dir: String,
     pairing: String,
     show_code: bool,
+    error: Option<String>,
+}
+
+/// The Import PuTTY Key form (ADR 0038).
+#[derive(Default)]
+struct KeyImportDialog {
+    /// The `.ppk` to read.
+    path: String,
+    /// The output name under `~/.ssh` (the `.ppk` stem when empty).
+    name: String,
+    /// The PPK's own passphrase, if it is encrypted.
+    old: String,
+    new: String,
+    confirm: String,
+    overwrite: bool,
     error: Option<String>,
 }
 
@@ -1228,6 +1246,8 @@ struct State {
     ssh_dialog: Option<String>,
     /// New Serial/Telnet/TCP session form (ADR 0037); `None` when closed.
     transport_dialog: Option<TransportDialog>,
+    /// Import PuTTY Key form (ADR 0038); `None` when closed.
+    key_import: Option<KeyImportDialog>,
     /// Connections being dialled: an all-transport restore is not "empty".
     pending_transport_connects: usize,
     /// New Agent Task dialog: name and the chosen agent (B2.4).
@@ -3538,6 +3558,7 @@ impl State {
         self.recipe_dialog_window(ctx);
         self.ssh_dialog_window(ctx);
         self.transport_dialog_window(ctx);
+        self.key_import_window(ctx);
         self.task_dialog_window(ctx);
         self.tasks_window(ctx);
         self.hosts_window(ctx);
@@ -9035,6 +9056,130 @@ impl State {
         }
     }
 
+    /// Read a PuTTY `.ppk` and write an encrypted OpenSSH key (ADR 0038).
+    fn import_putty_key(&mut self) {
+        use miao_term_ui::i18n::t;
+        let lang = self.lang;
+        let Some(dlg) = self.key_import.take() else {
+            return;
+        };
+        if dlg.path.trim().is_empty() {
+            let msg = t(lang, "Choose a .ppk file.", "请选择 .ppk 文件。").to_string();
+            return self.keep_key_import(dlg, msg);
+        }
+        if dlg.new.is_empty() || dlg.new != dlg.confirm {
+            let msg = t(
+                lang,
+                "The new passphrases do not match (and must not be empty).",
+                "新口令不一致(且不能为空)。",
+            )
+            .to_string();
+            return self.keep_key_import(dlg, msg);
+        }
+        let Some(home) = miao_term_config::home_dir() else {
+            return self.keep_key_import(dlg, "no home directory".into());
+        };
+        let name = if dlg.name.trim().is_empty() {
+            std::path::Path::new(&dlg.path)
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "id_imported".into())
+        } else {
+            dlg.name.trim().to_string()
+        };
+        let dest = home.join(".ssh").join(name);
+        let (path, old, new, overwrite) = (
+            dlg.path.trim().to_string(),
+            dlg.old.clone(),
+            dlg.new.clone(),
+            dlg.overwrite,
+        );
+        self.spawn_job(move || {
+            let result = import_key_file(&path, &old, &new, &dest, overwrite);
+            JobDone::KeyImported(result)
+        });
+    }
+
+    fn keep_key_import(&mut self, mut dlg: KeyImportDialog, msg: String) {
+        dlg.error = Some(msg);
+        self.key_import = Some(dlg);
+    }
+
+    /// The Import PuTTY Key form (ADR 0038).
+    fn key_import_window(&mut self, ctx: &egui::Context) {
+        use miao_term_ui::i18n::t;
+        let lang = self.lang;
+        let Some(dlg) = self.key_import.as_mut() else {
+            return;
+        };
+        let mut open = true;
+        let mut go = false;
+        egui::Window::new(t(lang, "Import PuTTY Key", "导入 PuTTY 密钥"))
+            .collapsible(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(t(lang, "File", "文件"));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut dlg.path)
+                            .hint_text("key.ppk")
+                            .desired_width(240.0),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.label(t(lang, "Save as", "保存为"));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut dlg.name)
+                            .hint_text("~/.ssh/<name>")
+                            .desired_width(200.0),
+                    );
+                });
+                for (label, field, hint) in [
+                    (
+                        t(lang, "Key passphrase", "密钥口令"),
+                        &mut dlg.old,
+                        t(lang, "(empty if unencrypted)", "(未加密则留空)"),
+                    ),
+                    (t(lang, "New passphrase", "新口令"), &mut dlg.new, ""),
+                    (t(lang, "Confirm", "确认新口令"), &mut dlg.confirm, ""),
+                ] {
+                    ui.horizontal(|ui| {
+                        ui.label(label);
+                        ui.add(
+                            egui::TextEdit::singleline(field)
+                                .password(true)
+                                .hint_text(hint)
+                                .desired_width(200.0),
+                        );
+                    });
+                }
+                ui.checkbox(
+                    &mut dlg.overwrite,
+                    t(lang, "Overwrite if it exists", "若已存在则覆盖"),
+                );
+                ui.label(
+                    egui::RichText::new(t(
+                        lang,
+                        "The key is written encrypted; an empty new passphrase is refused.",
+                        "密钥以加密形式写入;新口令为空会被拒绝。",
+                    ))
+                    .size(11.0)
+                    .color(egui::Color32::from_gray(150)),
+                );
+                if let Some(err) = &dlg.error {
+                    ui.colored_label(egui::Color32::from_rgb(0xbf, 0x61, 0x6a), err);
+                }
+                if ui.button(t(lang, "Import", "导入")).clicked() {
+                    go = true;
+                }
+            });
+        if go {
+            self.import_putty_key();
+        } else if !open {
+            self.key_import = None;
+        }
+    }
+
     fn hosts_window(&mut self, ctx: &egui::Context) {
         use miao_term_ui::i18n::t;
         let lang = self.lang;
@@ -9050,6 +9195,7 @@ impl State {
         let mut trust_key: Option<usize> = None;
         let mut copy_key: Option<usize> = None;
         let mut new_key = false;
+        let mut import_key = false;
         let mut open_files: Option<usize> = None;
         let mut persist: Option<(usize, Option<String>, bool)> = None;
         // (host index, rule index, start?) / (host index, rule index) / host index
@@ -9115,6 +9261,17 @@ impl State {
                         .clicked()
                     {
                         new_key = true;
+                    }
+                    if ui
+                        .small_button(t(lang, "Import PuTTY Key…", "导入 PuTTY 密钥…"))
+                        .on_hover_text(t(
+                            lang,
+                            "Read a PuTTY .ppk and write an encrypted OpenSSH key.",
+                            "读取 PuTTY .ppk,写出加密的 OpenSSH 密钥。",
+                        ))
+                        .clicked()
+                    {
+                        import_key = true;
                     }
                 });
                 let q = view.filter.to_lowercase();
@@ -9514,6 +9671,9 @@ impl State {
                 t(lang, "New SSH key", "生成 SSH 密钥"),
                 "ssh-keygen -t ed25519 -C mtty",
             );
+        }
+        if import_key {
+            self.key_import = Some(KeyImportDialog::default());
         }
         if let Some(i) = delete {
             if i < self.host_book.hosts.len() {
@@ -11431,6 +11591,13 @@ impl State {
                     }
                 }
             }
+            JobDone::KeyImported(result) => match result {
+                Ok(path) => {
+                    let msg = format!("{} {path}", t(self.lang, "Key written to", "密钥已写入"));
+                    self.show_notice(msg);
+                }
+                Err(e) => self.show_notice(e),
+            },
         }
     }
 
@@ -12082,6 +12249,7 @@ impl ApplicationHandler<HostEvent> for Host {
             recipe_list: Vec::new(),
             ssh_dialog: None,
             transport_dialog: None,
+            key_import: None,
             pending_transport_connects: 0,
             task_dialog: None,
             tasks_view: None,
@@ -13437,6 +13605,35 @@ fn home_relative(path: &str, home: Option<&str>) -> String {
         },
         None => path.to_string(),
     }
+}
+
+/// Read a `.ppk`, convert it and write the encrypted OpenSSH key and its
+/// `.pub` beside it (ADR 0038). Runs on a background thread.
+fn import_key_file(
+    path: &str,
+    old: &str,
+    new: &str,
+    dest: &std::path::Path,
+    overwrite: bool,
+) -> Result<String, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+    let imported = miao_term_keys::import_ppk(&text, old, new)?;
+    let dir = dest.parent().ok_or("the destination has no folder")?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    if dest.exists() && !overwrite {
+        return Err(format!("{} already exists", dest.display()));
+    }
+    std::fs::write(dest, imported.private_openssh.as_bytes())
+        .map_err(|e| format!("{}: {e}", dest.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o600));
+    }
+    let pub_path = std::path::PathBuf::from(format!("{}.pub", dest.display()));
+    std::fs::write(&pub_path, imported.public_openssh.as_bytes())
+        .map_err(|e| format!("{}: {e}", pub_path.display()))?;
+    Ok(dest.display().to_string())
 }
 
 /// The editor command a menu shortcut means while an editor pane has the

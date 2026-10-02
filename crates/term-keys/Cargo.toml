@@ -1,0 +1,31 @@
+[package]
+name = "miao-term-keys"
+description = "Import PuTTY .ppk private keys and re-encode them as encrypted OpenSSH keys (ADR 0038)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+# OpenSSH private-key encoding, and the bcrypt-pbkdf + aes256-ctr encryption
+# used for the output (Apache-2.0 OR MIT, ADR 0006).
+ssh-key = { version = "0.6", features = [
+    "alloc",
+    "encryption",
+    "getrandom",
+    "ed25519",
+    "rsa",
+    "p256",
+    "p384",
+    "p521",
+] }
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc", "block-padding"] }
+sha1 = "0.10"
+sha2 = "0.10"
+hmac = "0.12"
+argon2 = "0.5"
+base64 = "0.22"
+zeroize = "1"

@@ -21,9 +21,11 @@ HMAC-SHA-256。密钥通常是 RSA 或 Ed25519,也有 ECDSA。
    返回。它有单元测试,不含窗口代码,便于单独审计与模糊测试。
 2. **支持的密钥类型**:Ed25519、RSA 与 ECDSA(NIST P-256/P-384/P-521)。DSA 直接
    拒绝并说明原因(已过时;OpenSSH 9.8 起禁用)。
-3. **支持的加密**:v2 的 `none` 与 `aes256-cbc`;v3 的 `none`、`aes256-cbc` 与
-   `chacha20-poly1305`(Argon2id,与 PuTTY 写出的格式一致)。MAC 始终校验,口令错误
-   会在密钥暴露前的一步失败。Argon2 参数取自文件中的 `Argon2-*` 头。
+3. **支持的加密**:v2 的 `none` 与 `aes256-cbc`(SHA-1 派生、IV 全零,MAC 的
+   preimage 使用解密后的数据);v3 的 `none` 与 `aes256-cbc`(Argon2id,输出 80 字节,
+   HMAC-SHA-256 作用于解密后的数据)。`chacha20-poly1305` 会被识别并以明确错误拒绝
+   —— `puttygen` 的 v3 写出的是 `aes256-cbc`,暂时没有可用的测试向量。MAC 始终校验,
+   口令错误会在密钥暴露前失败。Argon2 参数取自文件中的 `Argon2-*` 头。
 4. **输出始终加密。** 导入的密钥经 `ssh-key` 的 OpenSSH 写出器,以 bcrypt-pbkdf +
    `aes256-ctr` 和用户在导入时设置的口令重新加密。新口令为空即拒绝;不存在“保存为
    未加密”的路径。
@@ -32,9 +34,10 @@ HMAC-SHA-256。密钥通常是 RSA 或 Ed25519,也有 ECDSA。
    (0644);已存在时拒绝覆盖,除非用户确认。口令与解码后的密钥保存在会 `zeroize`
    的缓冲区中,绝不记日志或出现在命令行上。
 6. **依赖**(均为 MIT 或 Apache-2.0,遵循 ADR 0006):`aes`、`cbc`、`sha1`、
-   `sha2`、`hmac`、`argon2`、`chacha20poly1305`、`zeroize`,以及启用
-   `encryption`、`alloc`、`ed25519`、`rsa`、`p256`、`p384`、`p521` 特性的
-   `ssh-key`。OpenSSH 编码器同样由 `ssh-key` 提供。
+   `sha2`、`hmac`、`argon2`、`base64`、`zeroize`,以及启用 `encryption`、
+   `getrandom`、`alloc`、`ed25519`、`rsa`、`p256`、`p384`、`p521` 特性的
+   `ssh-key`。OpenSSH 的解析器与编码器、以及输出的 bcrypt-pbkdf + aes256-ctr 加密
+   均由 `ssh-key` 提供。
 
 ## 影响
 

@@ -243,7 +243,7 @@
 ### M6 远程(PuTTY 式,R1 见 [ADR 0037](decisions/0037-serial-telnet-tcp.md),R2 见 [ADR 0038](decisions/0038-ppk-import.md),R3 见 [ADR 0039](decisions/0039-ssh-stack.md))
 
 - [x] **R1** 串口(波特率、校验、流控)与 Telnet 会话、原始 TCP;保存在主机库中。(ADR 0037。会话以字节管道(`Terminal::from_pipe`)在 pane 中打开,在后台线程拨号:裸 TCP 与内置 Telnet 编解码不新增依赖,串口使用 MIT 的 `serialport`(`default-features = false`,不含 libudev)。Shell 菜单与命令面板中有“新建串口/Telnet/TCP 会话…”,带配置表单;`hosts.toml` 增加 `kind`(默认 `ssh`,另有 `serial`/`telnet`/`tcp`)与 `[host.serial]`,侧栏、`mtty://host/<name>` 与命令面板都能打开这些类型。Telnet 与裸 TCP 标注为未加密,串口不标。恢复会话时重连,复制标签会重新拨号,连接断开即结束 pane;不适用 shell shim、OSC 7 工作目录与命令捕获。依据:管道终端与 Telnet 编解码单元测试、主机类型往返、transport target 的 JSON 测试,以及 macOS 与 Linux 上的工作区构建。)
-- [ ] **R2** 导入 `.ppk` 密钥(转为 OpenSSH 格式,不以明文保存)。(设计见 [ADR 0038](decisions/0038-ppk-import.md)。)
+- [x] **R2** 导入 `.ppk` 密钥(转为 OpenSSH 格式,不以明文保存)。(ADR 0038。不依赖 GPU 的 `miao-term-keys` 解析 PPK v2(SHA-1 派生、HMAC-SHA-1)与 v3(Argon2id、HMAC-SHA-256),支持 Ed25519、RSA、ECDSA,先校验 MAC 再接触密钥,可解密 `none`/`aes256-cbc`,并经 `ssh-key` 以 bcrypt-pbkdf + aes256-ctr 和用户设置的口令重新加密。*主机… → 导入 PuTTY 密钥…* 读取文件后写出 `~/.ssh/<name>`(0600)与 `<name>.pub`,已存在时除非勾选“覆盖”否则拒绝;新口令为空会被拒绝,不存在未加密输出的路径。`chacha20-poly1305` 以明确错误拒绝(暂无向量)。依据:`puttygen` 0.81 生成的 12 个真实夹具——Ed25519/RSA/ECDSA × v2/v3 × 明文/加密——导入后与各自 `.pub` 比对,并有口令错误、文件被篡改与空口令的测试。)
 - [x] **R3** 以 ADR 决定 SSH 是否从系统 OpenSSH 改为 Rust 原生实现(收益:Windows 无需 OpenSSH、进程内 SFTP 与转发;代价:重新实现 `~/.ssh/config`、ProxyJump 与 agent 转发)。(决定见 [ADR 0039](decisions/0039-ssh-stack.md):目前继续使用系统 OpenSSH;macOS、Linux 与 Windows 都已自带,若情况变化,ADR 0037 的传输层就是原生后端的接入点。无 OpenSSH 的平台、进程内 SFTP/转发或安全理由会触发重新评估。)
 
 ### M7 AI 原生工作台(待设计)
