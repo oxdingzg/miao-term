@@ -12,6 +12,12 @@ use std::process::Command;
 #[cfg(target_os = "macos")]
 mod macos;
 
+#[cfg(target_os = "linux")]
+mod linux;
+
+#[cfg(target_os = "windows")]
+mod winrt;
+
 /// Post a system notification. Best-effort: failures are ignored.
 pub fn notify(title: &str, body: &str) {
     #[cfg(target_os = "macos")]
@@ -30,10 +36,21 @@ pub fn notify(title: &str, body: &str) {
     }
     #[cfg(target_os = "linux")]
     {
-        let _ = Command::new("notify-send").arg(title).arg(body).spawn();
+        if linux::notify(title, body) {
+            return;
+        }
+        let _ = Command::new("notify-send")
+            .arg("-a")
+            .arg("mtty")
+            .arg(title)
+            .arg(body)
+            .spawn();
     }
     #[cfg(target_os = "windows")]
     {
+        if winrt::notify(title, body) {
+            return;
+        }
         // Best-effort; requires the BurntToast module, which may be absent.
         let script = format!(
             "New-BurntToastNotification -Text '{}','{}'",

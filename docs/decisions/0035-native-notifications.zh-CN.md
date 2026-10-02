@@ -27,9 +27,10 @@ BurntToast(Windows),都写在 `crates/term-ui/src/agentloop.rs`。
 授权框不会把它吞掉)。没有 bundle identifier 时(直接跑裸二进制、`cargo run`,或 headless
 host),`notify` 返回失败,调用方保留 `osascript` 回退,所以 bundle 之外的行为不变。
 
-Linux 和 Windows 暂时保留命令行后端;AUMID/WinRT toast 与 Linux D-Bus 后端是后续工作。
-`alert`(启动失败时的阻塞对话框)也继续用 `osascript`/zenity/PowerShell:它在窗口出现前
-运行,而 `display alert` 不会产生脚本编辑器的打开面板。
+Linux 通过 freedesktop D-Bus 服务(`zbus`)发送,Windows 通过 mtty 的 AppUserModelID 下的
+WinRT toast 发送,两者都保留命令行回退。`alert`(启动失败时的阻塞对话框)仍用
+`osascript`/zenity/PowerShell:它在窗口出现前运行,而 `display alert` 不会产生脚本编辑器
+的打开面板。
 
 ## 后果
 

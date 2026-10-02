@@ -32,11 +32,11 @@ raw binary, `cargo run`, or a headless host — `notify` reports failure and the
 caller keeps the `osascript` fallback, so behaviour is unchanged outside a
 bundle.
 
-Linux and Windows keep their command-line backends for now; AUMID/WinRT toasts
-and a D-Bus Linux backend are follow-ups. `alert` (the blocking
-startup-failure dialog) also stays on `osascript`/zenity/PowerShell: it runs
-before a window exists, and `display alert` does not produce the Script Editor
-open panel.
+Linux posts through the freedesktop D-Bus service (`zbus`) and Windows through
+WinRT toasts under mtty's AppUserModelID; both keep their command-line fallback.
+`alert` (the blocking startup-failure dialog) still stays on
+`osascript`/zenity/PowerShell: it runs before a window exists, and
+`display alert` does not produce the Script Editor open panel.
 
 ## Consequences
 
