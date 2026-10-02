@@ -117,7 +117,69 @@ pub fn take_quit() -> bool {
     QUIT_ASKED.swap(false, std::sync::atomic::Ordering::SeqCst)
 }
 
+/// `CGPoint` / `CGSize` / `CGRect`, declared here so the calls below need no
+/// CoreGraphics bindings.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Point {
+    x: f64,
+    y: f64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Rect {
+    origin: Point,
+    size: Point,
+}
+
+// SAFETY: the layouts match CGPoint, CGSize and CGRect on 64-bit macOS.
+unsafe impl objc2::Encode for Point {
+    const ENCODING: objc2::Encoding =
+        objc2::Encoding::Struct("CGPoint", &[f64::ENCODING, f64::ENCODING]);
+}
+unsafe impl objc2::Encode for Rect {
+    const ENCODING: objc2::Encoding = objc2::Encoding::Struct(
+        "CGRect",
+        &[
+            Point::ENCODING,
+            objc2::Encoding::Struct("CGSize", &[f64::ENCODING, f64::ENCODING]),
+        ],
+    );
+}
+
+/// The pointer in points from the main screen's top-left corner, the
+/// coordinates winit's window positions use (before scaling). A file drag
+/// sends the window no pointer motion, so this is where a drop landed.
+pub fn pointer_on_screen() -> Option<(f64, f64)> {
+    let event = AnyClass::get(c"NSEvent")?;
+    let screen = AnyClass::get(c"NSScreen")?;
+    // SAFETY: class methods with these signatures; `screens` is never empty
+    // on a running desktop and `firstObject` is nil-safe.
+    unsafe {
+        let at: Point = msg_send![event, mouseLocation];
+        let screens: Option<Retained<AnyObject>> = msg_send![screen, screens];
+        let main: Option<Retained<AnyObject>> = msg_send![&*screens?, firstObject];
+        let frame: Rect = msg_send![&*main?, frame];
+        Some((at.x, frame.size.y - at.y))
+    }
+}
+
 /// URLs received since the last call.
 pub fn take() -> Vec<String> {
     std::mem::take(&mut *PENDING.lock().unwrap_or_else(|e| e.into_inner()))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_pointer_is_read_on_the_main_screen() {
+        // objc2 checks the declared struct encodings against the runtime's
+        // in debug builds, so a wrong layout fails here, not on a drop.
+        let Some((x, y)) = super::pointer_on_screen() else {
+            return; // no window server (a headless runner)
+        };
+        assert!(x.is_finite() && y.is_finite());
+        assert!(y > -10_000.0 && y < 10_000.0, "{y}");
+    }
 }
