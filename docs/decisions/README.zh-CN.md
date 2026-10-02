@@ -41,3 +41,4 @@
 | [0030](./0030-native-render-loop.zh-CN.md) | 原生渲染循环（自绘网格） | 已接受 |
 | [0031](./0031-native-app-menu.zh-CN.md) | 把应用菜单放进 macOS 菜单栏 | 已接受 |
 | [0032](./0032-rename-mtty.zh-CN.md) | 应用正式更名为 mtty | 已接受 |
+| [0033](./0033-encrypted-sync.zh-CN.md) | 可选的端到端加密同步 | 已接受 |

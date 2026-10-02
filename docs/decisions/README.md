@@ -40,3 +40,4 @@ Docs are English by default; keep a Simplified Chinese version in sync
 | [0030](./0030-native-render-loop.md) | Native render loop (self-drawn grid) | accepted |
 | [0031](./0031-native-app-menu.md) | Application menu in the macOS menu bar | accepted |
 | [0032](./0032-rename-mtty.md) | The application is renamed mtty | accepted |
+| [0033](./0033-encrypted-sync.md) | Optional end-to-end encrypted sync | accepted |
