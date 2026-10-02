@@ -2786,6 +2786,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "miao-term-acp"
+version = "0.0.16"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "miao-term-config"
 version = "0.0.16"
 dependencies = [
