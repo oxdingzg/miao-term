@@ -240,9 +240,9 @@
 - [x] **E5** LSP:诊断、悬停、补全、跳转定义。(`crates/term-lsp`:JSON-RPC 分帧;在后台线程启动、初始化并读取服务器的客户端;UTF-8/UTF-16 位置与文件 URI;根目录探测;片段转文本。每个语言组与工作区根目录一个服务器,在登录 shell 的 PATH 中查找;全文同步,最大 2 MB。编辑器中:诊断下划线与状态栏中的 ✖/⚠ 计数,指针停留后显示悬停信息,补全在触发字符、输入单词与 Ctrl+Space 时打开、在客户端过滤、支持片段与 import 附加编辑,F12 或 ⌘ 单击跳转到定义,F8 跳到下一个问题;`config.toml` 中的 `[lsp]`。证据:`term-lsp` 中 15 项单元测试,以及对 rust-analyzer 1.94 与 typescript-language-server 5.3 的验收测试(诊断、悬停、跳转定义、补全、编辑后重新检查;rust-analyzer 冷启动后 10.4 s 给出首批诊断,TypeScript 0.4 s),补全排序与写入的单元测试,以及 Mac mini 上诊断下划线、悬停、补全与跳转定义的真实窗口截图。注意:rust-analyzer 需要 `rust-src` 组件才能补全标准库成员。)
 - [x] **E6** pane 中的 vim 模式、折叠与大纲、外部修改重新加载。(已完成。外部修改重新加载:打开的 pane 记住文件长度与修改时间,约每秒重新检查一次;没有未保存修改时原地重载为一个可撤销事务,只替换有差异的片段并把光标映射过去,面板恢复为“未修改”;有未保存修改时询问是从磁盘重载还是保留本地版本;文件在面板下被删除时提示一次;超过 64 MB 的只读查看 pane 跳过。折叠:依据语法树(任何跨行的命名节点,按起始行取最外层),没有语法树时退回按缩进;行号栏显示 ▸/▾,折叠后的首行末尾显示 ⋯,上下移动跳过被隐藏的行,⌥⌘[ / ⌥⌘] 折叠/展开,命令面板提供“全部折叠/全部展开/切换折叠”。大纲:列出定义型节点(函数、类、结构体、枚举、trait/接口、impl、模块、常量、类型、变量、宏),取节点的 `name` 字段并按层级缩进;⌘R 打开可过滤的选择器。vim:作用于 `term-editor` 文档的状态机——NORMAL/INSERT/VISUAL/VISUAL LINE,计数,`h j k l w b e 0 ^ $ gg G`,`i a I A o O`,`x`,`d`/`c`/`y` 配合动作(`dd`/`cc`/`yy`、`dw`、`d$`),`p`/`P` 配内部寄存器,`u` 与 Ctrl-r,`J`;`/` 打开查找,`:` 运行 `w`/`q`/`wq`/行号;`za` 系列操作折叠;状态栏显示模式;由 `editor-vim` 开启。证据:内核中语法树/缩进折叠、大纲提取与 vim 命令的测试;编辑器 pane 的折叠、vim 普通/插入模式与外部重载测试;Mac mini 上的 `cargo test`/clippy。待完成:vim 与折叠标记的真实窗口人工核对。)
 
-### M6 远程(PuTTY 式,待设计)
+### M6 远程(PuTTY 式,R1 设计见 [ADR 0037](decisions/0037-serial-telnet-tcp.md))
 
-- [ ] **R1** 串口(波特率、校验、流控)与 Telnet 会话、原始 TCP;保存在主机库中。
+- [ ] **R1** 串口(波特率、校验、流控)与 Telnet 会话、原始 TCP;保存在主机库中。(设计见 [ADR 0037](decisions/0037-serial-telnet-tcp.md):终端核心接受字节管道,TCP/Telnet/串口三个后端,`hosts.toml` 增加 `kind`。)
 - [ ] **R2** 导入 `.ppk` 密钥(转为 OpenSSH 格式,不以明文保存)。
 - [ ] **R3** 以 ADR 决定 SSH 是否从系统 OpenSSH 改为 Rust 原生实现(收益:Windows 无需 OpenSSH、进程内 SFTP 与转发;代价:重新实现 `~/.ssh/config`、ProxyJump 与 agent 转发)。
 
