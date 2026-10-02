@@ -17,7 +17,7 @@ use miao_term_render::{ImageInstance, ImageRenderer, Quad, QuadRenderer, Span, T
 use miao_term_ui::layout::{Layout, Rect, SplitDir};
 use miao_term_ui::{build_rows, chrome, input, theme::Theme, Selection};
 use winit::application::ApplicationHandler;
-use winit::dpi::{LogicalPosition, LogicalSize};
+use winit::dpi::LogicalSize;
 use winit::event::{ElementState, KeyEvent, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 
@@ -1030,7 +1030,9 @@ struct State {
     /// Inline IME composition text (not yet committed to the shell).
     preedit: String,
     /// Where the IME candidate window was last anchored (logical points).
-    ime_area: Option<(i32, i32)>,
+    /// The candidate window's anchor in points while no egui text field has
+    /// focus (the terminal cursor or editor caret).
+    ime_area: Option<egui::Rect>,
     show_sidebar: bool,
     show_details: bool,
     renaming: Option<usize>,
@@ -2829,8 +2831,10 @@ impl State {
             .unwrap_or(false);
         // A press on a panel edge belongs to the UI (see `resize_cursor`).
         self.ui_resize_hover = chrome::resize_cursor(output.platform_output.cursor_icon);
+        let mut platform_output = output.platform_output;
+        keep_ime_on(&mut platform_output, self.ime_area);
         self.egui_state
-            .handle_platform_output(&self.window, output.platform_output);
+            .handle_platform_output(&self.window, platform_output);
         let ppp = self.egui_ctx.pixels_per_point();
         let paint_jobs = self.egui_ctx.tessellate(output.shapes, ppp);
         let screen = egui_wgpu::ScreenDescriptor {
@@ -3126,25 +3130,21 @@ impl State {
                 }
             }
         }
-        // Anchor the OS candidate window at the terminal cursor. A focused text
-        // field (editor, Composer, dialogs) reports its own caret through egui.
-        if !ctx.wants_keyboard_input() {
-            if let Some((inner, (row, col))) = self.active_cursor() {
-                let area = (
-                    (inner.x + col as f32 * self.cw).round() as i32,
-                    (inner.y + row as f32 * self.ch).round() as i32,
-                );
-                if self.ime_area != Some(area) {
-                    self.ime_area = Some(area);
-                    self.window.set_ime_cursor_area(
-                        LogicalPosition::new(area.0, area.1),
-                        LogicalSize::new(self.cw, self.ch),
-                    );
-                }
-            }
+        // Where the OS candidate window goes while no text field has focus:
+        // the terminal cursor or the editor caret (see `keep_ime_on`).
+        self.ime_area = if ctx.wants_keyboard_input() {
+            None
         } else {
-            self.ime_area = None;
-        }
+            self.active_cursor().map(|(inner, (row, col))| {
+                egui::Rect::from_min_size(
+                    egui::pos2(
+                        (inner.x + col as f32 * self.cw).round(),
+                        (inner.y + row as f32 * self.ch).round(),
+                    ),
+                    egui::vec2(self.cw, self.ch),
+                )
+            })
+        };
         if !self.preedit.is_empty() {
             if let Some((inner, (row, col))) = self.active_cursor() {
                 let painter = ctx.layer_painter(egui::LayerId::new(
@@ -10634,6 +10634,24 @@ fn human_bytes(bytes: u64) -> String {
     }
 }
 
+/// Keep IME input on for the terminals and editors. egui-winit allows IME
+/// only while an egui text field has focus: once a field (Find, the palette,
+/// a rename) lost focus it turned IME off for the whole window, and mtty never
+/// turned it back on, so typing gave plain letters until a restart while the
+/// input method still showed Chinese. With no field focused, report the
+/// caret as egui's IME area, which keeps IME on and places the candidate
+/// window there.
+fn keep_ime_on(output: &mut egui::PlatformOutput, caret: Option<egui::Rect>) {
+    if output.ime.is_none() {
+        let rect = caret
+            .unwrap_or_else(|| egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1.0, 1.0)));
+        output.ime = Some(egui::output::IMEOutput {
+            rect,
+            cursor_rect: rect,
+        });
+    }
+}
+
 /// Where a tab is, for its sidebar row's hover: the ssh target, the active
 /// editor's file, or the active terminal's folder (`~` for home).
 fn tab_location(tab: &Tab) -> String {
@@ -12970,6 +12988,31 @@ mod tests {
         ] {
             assert!(!is_default_title(chosen), "{chosen}");
         }
+    }
+
+    #[test]
+    fn ime_stays_on_after_a_text_field_loses_focus() {
+        // Without a focused egui field, egui-winit would turn IME off for
+        // the window; the terminal's caret keeps it on.
+        let caret = egui::Rect::from_min_size(egui::pos2(40.0, 60.0), egui::vec2(8.0, 16.0));
+        let mut output = egui::PlatformOutput::default();
+        keep_ime_on(&mut output, Some(caret));
+        assert_eq!(output.ime.map(|i| i.rect), Some(caret));
+        // No caret known (scrolled back): IME still stays on.
+        let mut output = egui::PlatformOutput::default();
+        keep_ime_on(&mut output, None);
+        assert!(output.ime.is_some());
+        // A focused field's own IME area is left alone.
+        let field = egui::Rect::from_min_size(egui::pos2(300.0, 20.0), egui::vec2(2.0, 18.0));
+        let mut output = egui::PlatformOutput {
+            ime: Some(egui::output::IMEOutput {
+                rect: field,
+                cursor_rect: field,
+            }),
+            ..Default::default()
+        };
+        keep_ime_on(&mut output, Some(caret));
+        assert_eq!(output.ime.map(|i| i.rect), Some(field));
     }
 
     #[test]
