@@ -305,6 +305,13 @@ pub fn run(title: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
             let _ = proxy.send_event(HostEvent::Wake);
         });
     }
+    // A large file's background parse wakes the loop to draw its colours.
+    {
+        let proxy = proxy.clone();
+        miao_term_editor::set_parse_waker(move || {
+            let _ = proxy.send_event(HostEvent::Wake);
+        });
+    }
     // Let the control plane wake the loop, so `mtty-cli` commands apply
     // immediately even while the window is idle or unfocused.
     {
