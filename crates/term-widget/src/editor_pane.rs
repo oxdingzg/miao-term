@@ -241,10 +241,26 @@ pub fn keymap(key: KeyKind, shift: bool, alt: bool, cmd: bool, ctrl: bool) -> Op
 }
 
 /// A file open in an editor pane.
+/// A file edited over ssh: `path` on `dest` (ADR 0034, E3). The pane's
+/// [`EditorPane::path`] holds the remote path, so syntax detection and the
+/// title work unchanged; reads and writes go through `miao_term_ui::ssh` on
+/// the host, never the local filesystem.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct RemoteRef {
+    pub dest: String,
+    pub path: String,
+}
+
 pub struct EditorPane {
     pub id: String,
     pub doc: Document,
     pub path: PathBuf,
+    /// `Some` when this pane edits a file over ssh.
+    pub remote: Option<RemoteRef>,
+    /// A background remote save is running.
+    pub saving: bool,
+    /// Close once the running remote save succeeds (vim `:wq`).
+    pub quit_after_save: bool,
     /// First visible line and cell column of the text area.
     pub scroll_line: usize,
     pub scroll_col: usize,
@@ -447,6 +463,50 @@ impl EditorPane {
         self.reveal_cursor();
     }
 
+    /// Open a remote file's bytes in an editable pane (ADR 0034, E3). No
+    /// local stamp is kept: external-change polling is for local files.
+    pub fn open_remote(
+        id: String,
+        dest: String,
+        path: String,
+        bytes: &[u8],
+    ) -> Result<Self, String> {
+        let doc = Document::from_bytes(bytes).map_err(|e| e.to_string())?;
+        let mut pane = Self::with_doc(id, PathBuf::from(&path), doc);
+        pane.remote = Some(RemoteRef { dest, path });
+        pane.disk = None;
+        Ok(pane)
+    }
+
+    /// A remote pane whose bytes have not arrived yet (session restore). The
+    /// host fills it with [`EditorPane::remote_loaded`].
+    pub fn open_remote_pending(id: String, dest: String, path: String) -> Self {
+        let mut pane = Self::with_doc(id, PathBuf::from(&path), Document::from_text(""));
+        pane.remote = Some(RemoteRef { dest, path });
+        pane.disk = None;
+        pane
+    }
+
+    /// Replace a pending remote pane's document with the bytes read from
+    /// `dest`, keeping the parse tree in step.
+    pub fn remote_loaded(&mut self, bytes: &[u8]) {
+        if let Ok(doc) = Document::from_bytes(bytes) {
+            self.doc = doc;
+            self.syntax = Syntax::for_file(&self.path, self.doc.rope());
+            self.disk = None;
+        }
+    }
+
+    /// After a background remote write of `sent`: mark the document saved
+    /// when nothing changed while the write ran.
+    pub fn remote_saved(&mut self, sent: &[u8]) {
+        self.saving = false;
+        if self.doc.to_bytes().as_slice() == sent {
+            self.doc.mark_saved();
+            self.close_armed = false;
+        }
+    }
+
     pub fn with_doc(id: String, path: PathBuf, mut doc: Document) -> Self {
         let syntax = Syntax::for_file(&path, doc.rope());
         let disk = disk_stamp(&path);
@@ -464,6 +524,9 @@ impl EditorPane {
             id,
             doc,
             path,
+            remote: None,
+            saving: false,
+            quit_after_save: false,
             scroll_line: 0,
             scroll_col: 0,
             rows: 1,
@@ -478,6 +541,11 @@ impl EditorPane {
     /// directory and a rename, so a failed write never truncates the file;
     /// the file's permissions are kept.
     pub fn save(&mut self) -> Result<(), String> {
+        // A remote file is written by the host over ssh on a background
+        // thread; `save_local` must not touch the local filesystem.
+        if self.remote.is_some() {
+            return Err("remote file: the host writes it over ssh".into());
+        }
         // View mode holds a window of the file: writing it would truncate
         // the file to that window. There is nothing to save.
         if self.large.is_some() {
@@ -518,7 +586,8 @@ impl EditorPane {
     /// whether the text changed. View-mode panes are left alone: they hold a
     /// window of the file, not the file.
     pub fn reload_from_disk(&mut self) -> bool {
-        if self.large.is_some() {
+        // A remote pane has no local file to poll or reload from.
+        if self.large.is_some() || self.remote.is_some() {
             return false;
         }
         let Ok(bytes) = std::fs::read(&self.path) else {
@@ -558,13 +627,18 @@ impl EditorPane {
         Some(action)
     }
 
-    /// The file name, with `●` while there are unsaved changes.
+    /// The file name, prefixed with its host when remote and with `●` while
+    /// there are unsaved changes.
     pub fn title(&self) -> String {
         let name = self
             .path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| self.path.display().to_string());
+        let name = match &self.remote {
+            Some(r) => format!("{}:{name}", r.dest),
+            None => name,
+        };
         if self.doc.is_modified() {
             format!("{name} \u{25cf}")
         } else {
@@ -2177,5 +2251,57 @@ mod tests {
         // Unfolding brings the body back.
         p.run(Command::UnfoldAll);
         assert_eq!(p.line_at_row(1), Some(1));
+    }
+
+    #[test]
+    fn remote_panes_load_bytes_and_report_their_host() {
+        let mut p = EditorPane::open_remote(
+            "e1".into(),
+            "build-host".into(),
+            "/etc/hosts".into(),
+            b"127.0.0.1 localhost\n",
+        )
+        .unwrap();
+        assert_eq!(
+            p.remote.as_ref().map(|r| r.dest.as_str()),
+            Some("build-host")
+        );
+        assert_eq!(p.title(), "build-host:hosts");
+        assert!(!p.doc.is_modified());
+        // A remote save goes through the host, not the local filesystem.
+        assert!(p.save().is_err());
+        // External-change polling never fires for a remote pane.
+        assert!(!p.reload_from_disk());
+    }
+
+    #[test]
+    fn a_remote_write_marks_the_document_saved_unless_it_raced_an_edit() {
+        let mut p =
+            EditorPane::open_remote("e1".into(), "host".into(), "/tmp/x.rs".into(), b"one\n")
+                .unwrap();
+        p.type_text("two");
+        assert!(p.doc.is_modified());
+        let sent = p.doc.to_bytes();
+        p.saving = true;
+        p.remote_saved(&sent);
+        assert!(!p.doc.is_modified());
+        assert!(!p.saving);
+
+        // An edit made while the write ran keeps the pane modified.
+        let stale = p.doc.to_bytes();
+        p.type_text("!");
+        p.saving = true;
+        p.remote_saved(&stale);
+        assert!(p.doc.is_modified());
+        assert!(!p.saving);
+    }
+
+    #[test]
+    fn a_pending_remote_pane_fills_in_from_bytes() {
+        let mut p = EditorPane::open_remote_pending("e1".into(), "host".into(), "/tmp/x.rs".into());
+        assert_eq!(p.total_lines(), 1);
+        p.remote_loaded(b"a\nb\nc\n");
+        assert_eq!(p.total_lines(), 4);
+        assert!(p.syntax.is_some(), "the parse tree follows the bytes");
     }
 }

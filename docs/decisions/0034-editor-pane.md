@@ -87,7 +87,16 @@ renderer and laid out by the existing split tree.
    `editor-vim` config key.)
 6. **Files.** Files panel, Open Quickly, `app.edit`, drops and hint mode open
    an editor pane (new tab, or a split with a modifier). Unsaved state shows on
-   the tab; closing asks. Remote files keep the ssh read/write path. (Implementation note, E6: an open pane remembers the file's length and
+   the tab; closing asks. Remote files keep the ssh read/write path.
+   (Implementation note, E3 remote files: the remote-file dialog reads the
+   bytes over ssh on a background job and opens them in an editor pane; `⌘S`
+   and vim `:w` write them back the same way, and the pane stays modified if
+   it changed while the write ran (`:wq` closes once the write lands). A
+   remote pane keeps no local disk stamp, so external-change polling is
+   skipped; it gets no language server (its path is on the host, not the local
+   disk) and no view mode; its title is `host:name`. The session stores the
+   destination and path and re-reads the host on restore.)
+   (Implementation note, E6: an open pane remembers the file's length and
    modification time and re-checks it about once a second. A change with no
    unsaved edits reloads in place as one undoable transaction that replaces
    only the span that differs, with the cursor mapped through it, and leaves
@@ -121,7 +130,7 @@ renderer and laid out by the existing split tree.
    so dialogs stay above it; closing the editor closes its previews, and
    sessions keep them. Local Markdown files open in an editor pane with a
    preview to the right; the floating window remains for read-only views
-   (`app.view`) and remote files until those move to panes. Find in an
+   (`app.view`) until those move to panes. Find in an
    editor gained case, whole-word and regex options with replace; in the
    macOS app, menu shortcuts that are also editor chords (⌘D, ⇧⌘Z, ⇧⌘L)
    go to a focused editor when pressed, told apart from clicks by the event
