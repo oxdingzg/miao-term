@@ -75,7 +75,18 @@ renderer and laid out by the existing split tree.
 7. **LSP later**, per workspace root over stdio: diagnostics, hover,
    completion, go-to-definition, configured per language in `config.toml`.
 8. The floating editor window is retired once the pane covers it; Markdown
-   preview becomes a preview pane beside the editor.
+   preview becomes a preview pane beside the editor. (Implementation note, E4: a
+   tab holds `previews` beside its terminals and editors; the layout names
+   them by id like the others. A preview shows its editor's text as it is
+   typed, rendered by egui inside the pane's card in the background layer,
+   so dialogs stay above it; closing the editor closes its previews, and
+   sessions keep them. Local Markdown files open in an editor pane with a
+   preview to the right; the floating window remains for read-only views
+   (`app.view`) and remote files until those move to panes. Find in an
+   editor gained case, whole-word and regex options with replace; in the
+   macOS app, menu shortcuts that are also editor chords (⌘D, ⇧⌘Z, ⇧⌘L)
+   go to a focused editor when pressed, told apart from clicks by the event
+   AppKit is handling.)
 
 ## Phases
 

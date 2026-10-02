@@ -114,6 +114,11 @@ pub fn menus(lang: Lang) -> Vec<(&'static str, Vec<Entry>)> {
                 ),
                 // ⌃G stays the terminal's (BEL); the editor maps it itself.
                 item(t(lang, "Go to Line…", "跳转到行…"), MenuId::GoToLine, None),
+                item(
+                    t(lang, "Toggle Markdown Preview", "开关 Markdown 预览"),
+                    MenuId::MarkdownPreview,
+                    None,
+                ),
             ],
         ),
         (
@@ -273,6 +278,7 @@ pub const IDS: &[(&str, MenuId)] = &[
     ("find", MenuId::Find),
     ("replace", MenuId::Replace),
     ("go-to-line", MenuId::GoToLine),
+    ("markdown-preview", MenuId::MarkdownPreview),
     ("find-next", MenuId::FindNext),
     ("find-prev", MenuId::FindPrev),
     ("find-all-tabs", MenuId::FindInAllTabs),
