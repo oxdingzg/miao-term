@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use miao_term_editor::large::LargeFile;
 use miao_term_editor::{layout, motion, Document, Highlight, Motion, Range, Selection, Syntax};
@@ -22,6 +22,24 @@ pub const MAX_PANE_BYTES: u64 = 64 << 20;
 /// Lines (and at most bytes) a view-mode window holds around the screen.
 const WINDOW_LINES: usize = 3000;
 const WINDOW_BYTES: usize = 8 << 20;
+
+/// A file's identity on disk, for noticing edits made outside mtty. Length
+/// and modification time together: either changing means the file changed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DiskStamp {
+    pub len: u64,
+    pub modified: Option<SystemTime>,
+}
+
+/// The current stamp of `path`, or `None` when it cannot be read (missing,
+/// permission denied).
+pub fn disk_stamp(path: &Path) -> Option<DiskStamp> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some(DiskStamp {
+        len: meta.len(),
+        modified: meta.modified().ok(),
+    })
+}
 
 /// A file in view mode: `doc` holds lines `base..` of it (a read-only
 /// window that moves as the view scrolls).
@@ -116,6 +134,18 @@ pub enum Command {
     AddCursor(bool),
     /// Ask for a line to go to (the host shows the prompt).
     GoToLine,
+    /// Ask for a symbol in the file (the host shows the outline picker).
+    GoToSymbol,
+    /// Collapse the fold at the caret.
+    Fold,
+    /// Expand the fold at the caret.
+    Unfold,
+    /// Collapse or expand the fold at the caret.
+    ToggleFold,
+    /// Collapse every fold.
+    FoldAll,
+    /// Expand every fold.
+    UnfoldAll,
     /// Find with the replace field open (the host's Find bar).
     FindReplace,
     /// Ask the language server for completions (Ctrl+Space).
@@ -185,6 +215,14 @@ pub fn keymap(key: KeyKind, shift: bool, alt: bool, cmd: bool, ctrl: bool) -> Op
         KeyKind::Char(c) if mac && cmd && alt && !ctrl && c.eq_ignore_ascii_case(&'f') => {
             Command::FindReplace
         }
+        KeyKind::Char(c) if mac && cmd && alt && !ctrl && c == '[' => Command::Fold,
+        KeyKind::Char(c) if mac && cmd && alt && !ctrl && c == ']' => Command::Unfold,
+        KeyKind::Char(c) if !mac && ctrl && shift && !alt && (c == '[' || c == '{') => {
+            Command::Fold
+        }
+        KeyKind::Char(c) if !mac && ctrl && shift && !alt && (c == ']' || c == '}') => {
+            Command::Unfold
+        }
         KeyKind::Char(c) if primary && !alt => match c.to_ascii_lowercase() {
             'a' => Command::SelectAll,
             'l' if shift => Command::SelectAllOccurrences,
@@ -192,6 +230,7 @@ pub fn keymap(key: KeyKind, shift: bool, alt: bool, cmd: bool, ctrl: bool) -> Op
             'd' => Command::SelectNextOccurrence,
             'g' if !mac && !shift => Command::GoToLine,
             'h' if !mac && !shift => Command::FindReplace,
+            'r' if !shift => Command::GoToSymbol,
             'z' if shift => Command::Redo,
             'z' => Command::Undo,
             'y' if !mac => Command::Redo,
@@ -222,6 +261,19 @@ pub struct EditorPane {
     pub large: Option<LargeWindow>,
     /// The language server's diagnostics, sorted by position.
     pub diagnostics: Vec<PaneDiagnostic>,
+    /// The file's stamp when it was last read or written; a mismatch on a
+    /// later poll means something else changed it.
+    pub disk: Option<DiskStamp>,
+    /// The file vanished on disk and the user has been told once.
+    pub missing_warned: bool,
+    /// Foldable ranges, recomputed when the text or syntax changes.
+    folds: Vec<(usize, usize)>,
+    /// The document revision `folds` was computed at.
+    folds_revision: u64,
+    /// Start lines the user collapsed; folding one hides the lines after it.
+    folded: std::collections::HashSet<usize>,
+    /// Vim state when `editor-vim` is on (ADR 0034, E6); `None` is off.
+    pub vim: Option<miao_term_editor::vim::Vim>,
     last_click: Option<(Instant, usize, u8)>,
 }
 
@@ -397,10 +449,17 @@ impl EditorPane {
 
     pub fn with_doc(id: String, path: PathBuf, mut doc: Document) -> Self {
         let syntax = Syntax::for_file(&path, doc.rope());
+        let disk = disk_stamp(&path);
         doc.take_edits();
         EditorPane {
             large: None,
             diagnostics: Vec::new(),
+            disk,
+            missing_warned: false,
+            folds: Vec::new(),
+            folds_revision: u64::MAX,
+            folded: std::collections::HashSet::new(),
+            vim: None,
             syntax,
             id,
             doc,
@@ -449,7 +508,54 @@ impl EditorPane {
         }
         self.doc.mark_saved();
         self.close_armed = false;
+        self.disk = disk_stamp(&self.path);
+        self.missing_warned = false;
         Ok(())
+    }
+
+    /// Re-read the file from disk and replace the document's text with it, as
+    /// one undoable step (the cursor rides through the change). Returns
+    /// whether the text changed. View-mode panes are left alone: they hold a
+    /// window of the file, not the file.
+    pub fn reload_from_disk(&mut self) -> bool {
+        if self.large.is_some() {
+            return false;
+        }
+        let Ok(bytes) = std::fs::read(&self.path) else {
+            self.disk = None;
+            return false;
+        };
+        self.missing_warned = false;
+        let Ok(changed) = self.doc.reload(&bytes) else {
+            return false;
+        };
+        if changed {
+            self.doc.mark_saved();
+            self.close_armed = false;
+        }
+        self.disk = disk_stamp(&self.path);
+        changed
+    }
+
+    /// Turn vim mode on (fresh Normal mode) or off.
+    pub fn set_vim(&mut self, on: bool) {
+        self.vim = on.then(miao_term_editor::vim::Vim::default);
+    }
+
+    /// The vim mode in effect, if vim is on.
+    pub fn vim_mode(&self) -> Option<miao_term_editor::vim::Mode> {
+        self.vim.as_ref().map(|v| v.mode())
+    }
+
+    /// Feed one key to vim, revealing the caret afterwards. `None` when vim
+    /// is off (the caller uses the normal keymap then).
+    pub fn vim_key(
+        &mut self,
+        key: miao_term_editor::vim::Key,
+    ) -> Option<miao_term_editor::vim::Action> {
+        let action = self.vim.as_mut()?.handle(key, &mut self.doc);
+        self.reveal_cursor();
+        Some(action)
     }
 
     /// The file name, with `●` while there are unsaved changes.
@@ -478,13 +584,191 @@ impl EditorPane {
             }
         }
         let edits = self.doc.take_edits();
+        let mut tree_changed = false;
         if let Some(syntax) = &mut self.syntax {
             if !edits.is_empty() {
                 syntax.update(self.doc.rope(), &edits);
             }
             // A large file's parse finishes on a background thread.
-            syntax.poll();
+            tree_changed = syntax.poll();
         }
+        if self.folds_revision != self.doc.revision() || tree_changed {
+            self.refresh_folds();
+        }
+    }
+
+    /// Recompute the foldable ranges for the current text and drop folds that
+    /// no longer start a range (the text moved under them). Call after any
+    /// edit or a finished parse.
+    fn refresh_folds(&mut self) {
+        self.folds = self
+            .syntax
+            .as_ref()
+            .map(|s| s.folds(self.doc.rope()))
+            .unwrap_or_default();
+        self.folds_revision = self.doc.revision();
+        self.folded
+            .retain(|start| self.folds.iter().any(|(s, _)| s == start));
+        self.normalize_scroll();
+    }
+
+    /// If `line` starts a collapsed fold, the hidden line after it and the
+    /// last line it hides. `(hidden_end)`.
+    fn collapsed_end(&self, line: usize) -> Option<usize> {
+        if !self.folded.contains(&line) {
+            return None;
+        }
+        self.folds
+            .iter()
+            .find(|(start, _)| *start == line)
+            .map(|(_, end)| *end)
+    }
+
+    /// Whether `line` can start a fold (folded or not).
+    pub fn is_fold_start(&self, line: usize) -> bool {
+        self.folds.iter().any(|(start, _)| *start == line)
+    }
+
+    /// If `line` is hidden inside a collapsed fold, that fold's start line.
+    fn hidden_by(&self, line: usize) -> Option<usize> {
+        self.folds
+            .iter()
+            .find(|(start, end)| *start < line && line <= *end && self.folded.contains(start))
+            .map(|(start, _)| *start)
+    }
+
+    /// The logical line shown at text-area `row`, skipping collapsed folds.
+    fn line_at_row(&self, row: usize) -> Option<usize> {
+        let last = motion::last_line(self.doc.rope());
+        let mut line = self.scroll_line;
+        let mut r = 0;
+        loop {
+            if line > last {
+                return None;
+            }
+            if r == row {
+                return Some(line);
+            }
+            r += 1;
+            line = self.next_visible(line);
+        }
+    }
+
+    /// The screen row of `line`, or `None` when it is off-screen or hidden.
+    fn row_of_line(&self, line: usize) -> Option<usize> {
+        let mut l = self.scroll_line;
+        let mut r = 0;
+        while r < self.rows {
+            if l > line {
+                return None;
+            }
+            if l == line {
+                return Some(r);
+            }
+            l = self.next_visible(l);
+            r += 1;
+        }
+        None
+    }
+
+    /// The next visible line after `line`.
+    fn next_visible(&self, line: usize) -> usize {
+        match self.collapsed_end(line) {
+            Some(end) => end + 1,
+            None => line + 1,
+        }
+    }
+
+    /// The visible line before `line` (a line just inside a fold jumps to its
+    /// header).
+    fn prev_visible(&self, line: usize) -> usize {
+        let cand = line.saturating_sub(1);
+        if cand < line {
+            if let Some(start) = self.hidden_by(cand) {
+                return start;
+            }
+        }
+        cand
+    }
+
+    /// Keep the top line visible (never inside a collapsed fold).
+    fn normalize_scroll(&mut self) {
+        let last = motion::last_line(self.doc.rope());
+        if self.scroll_line > last {
+            self.scroll_line = last;
+        }
+        if let Some(start) = self.hidden_by(self.scroll_line) {
+            self.scroll_line = start;
+        }
+    }
+
+    /// The line the primary caret is on.
+    pub fn caret_line(&self) -> usize {
+        let rope = self.doc.rope();
+        rope.char_to_line(self.doc.selection().primary().head)
+    }
+
+    /// Collapse the innermost fold containing the caret line.
+    fn fold_at_cursor(&mut self) {
+        let line = self.caret_line();
+        let fold = self
+            .folds
+            .iter()
+            .filter(|(s, e)| *s <= line && line <= *e)
+            .max_by_key(|(s, _)| *s)
+            .copied();
+        if let Some((start, _)) = fold {
+            self.folded.insert(start);
+            self.normalize_scroll();
+        }
+    }
+
+    /// Expand the fold at the caret line (its header or a line it hides).
+    fn unfold_at_cursor(&mut self) {
+        let line = self.caret_line();
+        if self.folded.remove(&line) {
+            return;
+        }
+        if let Some(start) = self.hidden_by(line) {
+            self.folded.remove(&start);
+        }
+    }
+
+    /// Collapse the fold at the caret, or expand it when already collapsed.
+    fn toggle_fold_at_cursor(&mut self) {
+        let line = self.caret_line();
+        if self.folded.contains(&line) {
+            self.folded.remove(&line);
+            return;
+        }
+        self.fold_at_cursor();
+    }
+
+    /// Move the caret a visible line up or down, keeping its cell column.
+    fn move_vertical(&mut self, up: bool, extend: bool) {
+        let rope = self.doc.rope();
+        let tab = self.doc.tab_width();
+        let head = self.doc.selection().primary().head;
+        let line = rope.char_to_line(head);
+        let col = layout::visual_col(rope.line(line), head - rope.line_to_char(line), tab);
+        let target = if up {
+            self.prev_visible(line)
+        } else {
+            self.next_visible(line).min(motion::last_line(rope))
+        };
+        if target == line {
+            return;
+        }
+        let offset = layout::offset_at_col(rope.line(target), col, tab);
+        let at = rope.line_to_char(target) + offset;
+        let selection = if extend {
+            let p = self.doc.selection().primary();
+            Selection::single(Range::new(p.anchor, at))
+        } else {
+            Selection::cursor(at)
+        };
+        self.doc.set_selection(selection);
+        self.reveal_cursor();
     }
 
     /// The highlighted language's name, if any.
@@ -506,19 +790,38 @@ impl EditorPane {
 
     /// Scroll so the primary caret is on screen.
     pub fn reveal_cursor(&mut self) {
-        let rope = self.doc.rope();
-        let head = self.doc.selection().primary().head;
-        let line = rope.char_to_line(head);
-        if line < self.scroll_line {
-            self.scroll_line = line;
-        } else if line >= self.scroll_line + self.rows {
-            self.scroll_line = line + 1 - self.rows;
+        let line = self.caret_line();
+        // A cursor inside a collapsed fold opens it.
+        if let Some(start) = self.hidden_by(line) {
+            self.folded.remove(&start);
         }
-        let col = layout::visual_col(
-            rope.line(line),
-            head - rope.line_to_char(line),
-            self.doc.tab_width(),
-        );
+        if self.row_of_line(line).is_none() {
+            if line < self.scroll_line {
+                self.scroll_line = line;
+            } else {
+                // Put `line` on the last row: walk back a screen of visible
+                // lines from it.
+                let mut top = line;
+                for _ in 0..self.rows.saturating_sub(1) {
+                    let prev = self.prev_visible(top);
+                    if prev == top {
+                        break;
+                    }
+                    top = prev;
+                }
+                self.scroll_line = top;
+            }
+        }
+        self.normalize_scroll();
+        let col = {
+            let rope = self.doc.rope();
+            let head = self.doc.selection().primary().head;
+            layout::visual_col(
+                rope.line(line),
+                head - rope.line_to_char(line),
+                self.doc.tab_width(),
+            )
+        };
         if col < self.scroll_col {
             self.scroll_col = col;
         } else if col >= self.scroll_col + self.cols {
@@ -542,8 +845,24 @@ impl EditorPane {
             return;
         }
         let last = motion::last_line(self.doc.rope());
-        let next = (self.scroll_line as isize + lines).clamp(0, last as isize);
-        self.scroll_line = next as usize;
+        if lines > 0 {
+            for _ in 0..lines {
+                let next = self.next_visible(self.scroll_line).min(last);
+                if next == self.scroll_line {
+                    break;
+                }
+                self.scroll_line = next;
+            }
+        } else {
+            for _ in 0..(-lines) {
+                let prev = self.prev_visible(self.scroll_line);
+                if prev == self.scroll_line {
+                    break;
+                }
+                self.scroll_line = prev;
+            }
+        }
+        self.normalize_scroll();
     }
 
     /// Whether `command` changes the text (refused in view mode).
@@ -558,6 +877,12 @@ impl EditorPane {
                 | Command::CursorsAtLineEnds
                 | Command::AddCursor(_)
                 | Command::GoToLine
+                | Command::GoToSymbol
+                | Command::Fold
+                | Command::Unfold
+                | Command::ToggleFold
+                | Command::FoldAll
+                | Command::UnfoldAll
                 | Command::FindReplace
                 | Command::Complete
                 | Command::GoToDefinition
@@ -593,6 +918,20 @@ impl EditorPane {
                     Motion::PageDown(_) => Motion::PageDown(self.rows.max(2) - 1),
                     other => other,
                 };
+                // Up/down follow visible lines, skipping collapsed folds.
+                if !self.folded.is_empty() {
+                    match m {
+                        Motion::Up => {
+                            self.move_vertical(true, extend);
+                            return true;
+                        }
+                        Motion::Down => {
+                            self.move_vertical(false, extend);
+                            return true;
+                        }
+                        _ => {}
+                    }
+                }
                 self.doc.move_cursor(m, extend);
             }
             Command::Backspace => self.doc.delete_backward(),
@@ -616,8 +955,30 @@ impl EditorPane {
             Command::NextProblem(forward) => {
                 self.next_problem(forward);
             }
+            Command::Fold => {
+                self.fold_at_cursor();
+                return true;
+            }
+            Command::Unfold => {
+                self.unfold_at_cursor();
+                return true;
+            }
+            Command::ToggleFold => {
+                self.toggle_fold_at_cursor();
+                return true;
+            }
+            Command::FoldAll => {
+                self.folded = self.folds.iter().map(|(start, _)| *start).collect();
+                self.normalize_scroll();
+                return true;
+            }
+            Command::UnfoldAll => {
+                self.folded.clear();
+                return true;
+            }
             // The language server's requests, made by the host.
             Command::GoToLine
+            | Command::GoToSymbol
             | Command::FindReplace
             | Command::Complete
             | Command::GoToDefinition => return false,
@@ -680,7 +1041,9 @@ impl EditorPane {
     /// top-left, gutter excluded); past a line's end lands on its end.
     pub fn hit(&self, row: usize, col: usize) -> usize {
         let rope = self.doc.rope();
-        let line = (self.scroll_line + row).min(motion::last_line(rope));
+        let line = self
+            .line_at_row(row)
+            .unwrap_or_else(|| motion::last_line(rope));
         let offset =
             layout::offset_at_col(rope.line(line), self.scroll_col + col, self.doc.tab_width());
         rope.line_to_char(line) + offset
@@ -690,10 +1053,7 @@ impl EditorPane {
     /// a line's end or the last line).
     pub fn char_under(&self, row: usize, col: usize) -> Option<usize> {
         let rope = self.doc.rope();
-        let line = self.scroll_line + row;
-        if line > motion::last_line(rope) {
-            return None;
-        }
+        let line = self.line_at_row(row)?;
         let slice = rope.line(line);
         let tab = self.doc.tab_width();
         let col = self.scroll_col + col;
@@ -770,10 +1130,15 @@ impl EditorPane {
         let rope = self.doc.rope();
         let tab = self.doc.tab_width();
         let gutter = self.gutter();
-        let last = motion::last_line(rope).min(self.scroll_line + self.rows.saturating_sub(1));
         let first = rope.char_to_line(from).max(self.scroll_line);
-        let end_line = rope.char_to_line(to).min(last);
+        let end_line = rope.char_to_line(to).min(motion::last_line(rope));
         for line in first..=end_line {
+            if self.hidden_by(line).is_some() {
+                continue;
+            }
+            let Some(row) = self.row_of_line(line) else {
+                continue;
+            };
             let slice = rope.line(line);
             let line_start = rope.line_to_char(line);
             let content = layout::content_len(slice);
@@ -791,7 +1156,7 @@ impl EditorPane {
             let c1 = c1.saturating_sub(self.scroll_col).min(self.cols);
             if c1 > c0 {
                 out.push(CellRect {
-                    row: line - self.scroll_line,
+                    row,
                     col: gutter + c0,
                     width: c1 - c0,
                 });
@@ -804,11 +1169,12 @@ impl EditorPane {
     fn visible_chars(&self) -> (usize, usize) {
         let rope = self.doc.rope();
         let last = motion::last_line(rope);
-        let top = rope.line_to_char(self.scroll_line.min(last));
-        let bottom = motion::line_end(
-            rope,
-            (self.scroll_line + self.rows.saturating_sub(1)).min(last),
-        );
+        let top_line = self.scroll_line.min(last);
+        let bottom_line = self
+            .line_at_row(self.rows.saturating_sub(1))
+            .unwrap_or(last);
+        let top = rope.line_to_char(top_line);
+        let bottom = motion::line_end(rope, bottom_line);
         (top, bottom)
     }
 
@@ -842,7 +1208,10 @@ impl EditorPane {
         let head_line = rope.char_to_line(selection.primary().head);
         // Highlights for the visible lines only.
         let first_byte = rope.line_to_byte(self.scroll_line.min(last));
-        let end_line = (self.scroll_line + self.rows).min(rope.len_lines());
+        let end_line = self
+            .line_at_row(self.rows.saturating_sub(1))
+            .map_or(rope.len_lines(), |l| l + 1)
+            .min(rope.len_lines());
         let end_byte = if end_line >= rope.len_lines() {
             rope.len_bytes()
         } else {
@@ -858,13 +1227,21 @@ impl EditorPane {
         let mut sel_cells = Vec::new();
         let mut carets = Vec::new();
         for row in 0..self.rows {
-            let line = self.scroll_line + row;
-            if line > last {
+            let Some(line) = self.line_at_row(row) else {
                 rows.push(Vec::new());
                 continue;
-            }
+            };
             let mut spans = Vec::new();
-            let number = (self.base() + line + 1).to_string();
+            let marker = if self.is_fold_start(line) {
+                if self.folded.contains(&line) {
+                    "\u{25b8}"
+                } else {
+                    "\u{25be}"
+                }
+            } else {
+                ""
+            };
+            let number = format!("{marker}{}", self.base() + line + 1);
             let color = if line == head_line {
                 palette.gutter_current
             } else {
@@ -925,6 +1302,14 @@ impl EditorPane {
                 run.push(g.ch);
             }
             flush(&mut run, run_col, run_color, &mut spans);
+            // A collapsed fold shows an ellipsis where its hidden text would be.
+            if self.collapsed_end(line).is_some() {
+                let content = layout::content_len(slice);
+                let endcol =
+                    layout::visual_col(slice, content, tab).saturating_sub(self.scroll_col);
+                let col = gutter + endcol.min(self.cols.saturating_sub(1));
+                spans.push(Span::new(col as u16, "\u{22ef}", palette.gutter));
+            }
             rows.push(spans);
         }
         // Only the ranges on screen: there may be thousands (every
@@ -940,13 +1325,13 @@ impl EditorPane {
                 continue;
             }
             let line = rope.char_to_line(r.head);
-            if line < self.scroll_line || line >= self.scroll_line + self.rows {
+            let Some(row) = self.row_of_line(line) else {
                 continue;
-            }
+            };
             let slice = rope.line(line);
             let c = layout::visual_col(slice, r.head - rope.line_to_char(line), tab);
             if c >= self.scroll_col && c - self.scroll_col <= self.cols {
-                carets.push((line - self.scroll_line, gutter + c - self.scroll_col));
+                carets.push((row, gutter + c - self.scroll_col));
             }
         }
         // Diagnostics on screen, at least a cell wide.
@@ -1727,5 +2112,70 @@ mod tests {
         std::fs::write(dir.join("bin"), b"\0\x01\x02").unwrap();
         assert!(EditorPane::open("e".into(), &dir.join("bin")).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reload_from_disk_picks_up_an_external_edit_and_clears_the_dirty_mark() {
+        let dir = std::env::temp_dir().join(format!("mtty-reload-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a.txt");
+        std::fs::write(&file, "one\ntwo\n").unwrap();
+        let mut p = EditorPane::open("e".into(), &file).unwrap();
+        // An edit of our own leaves the pane dirty.
+        p.doc.set_selection(Selection::cursor(7));
+        p.type_text("X");
+        assert!(p.doc.is_modified());
+        assert!(p.title().ends_with('\u{25cf}'));
+        // Something else rewrites the file.
+        std::fs::write(&file, "one\nTWO\n").unwrap();
+        assert!(p.reload_from_disk());
+        assert_eq!(p.doc.rope().to_string(), "one\nTWO\n");
+        assert!(!p.doc.is_modified(), "the text now matches disk");
+        assert_eq!(p.title(), "a.txt");
+        assert!(p.disk.is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn view_mode_panes_ignore_external_edits() {
+        let (mut p, _path, _text) = view_of(10);
+        assert!(!p.reload_from_disk());
+    }
+
+    #[test]
+    fn vim_mode_drives_normal_and_insert() {
+        let mut p = pane("abc\n");
+        p.set_vim(true);
+        assert_eq!(p.vim_mode(), Some(miao_term_editor::vim::Mode::Normal));
+        // `x` deletes the char under the caret.
+        p.vim_key(miao_term_editor::vim::Key::Char('x'));
+        assert_eq!(p.doc.rope().to_string(), "bc\n");
+        // `i` enters insert; a char is typed.
+        p.vim_key(miao_term_editor::vim::Key::Char('i'));
+        assert_eq!(p.vim_mode(), Some(miao_term_editor::vim::Mode::Insert));
+        p.vim_key(miao_term_editor::vim::Key::Char('Z'));
+        assert_eq!(p.doc.rope().to_string(), "Zbc\n");
+    }
+
+    #[test]
+    fn folding_hides_lines_and_navigation_skips_them() {
+        let mut p = pane("fn a() {\n    one();\n    two();\n}\nfn b() {}\n");
+        p.resize(40, 10);
+        p.sync_syntax();
+        p.doc.set_selection(Selection::cursor(0));
+        assert!(p.run(Command::Fold));
+        // The hidden body (lines 1-3) is gone: row 1 is the next function.
+        assert_eq!(p.line_at_row(0), Some(0));
+        assert_eq!(p.line_at_row(1), Some(4));
+        for row in 0..8 {
+            assert!(!matches!(p.line_at_row(row), Some(1..=3)));
+        }
+        // Down from the folded header skips the hidden body.
+        p.doc.set_selection(Selection::cursor(0));
+        p.run(Command::Move(Motion::Down, false));
+        assert_eq!(p.caret_line(), 4);
+        // Unfolding brings the body back.
+        p.run(Command::UnfoldAll);
+        assert_eq!(p.line_at_row(1), Some(1));
     }
 }

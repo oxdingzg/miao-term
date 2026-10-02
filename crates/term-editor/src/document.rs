@@ -205,6 +205,27 @@ impl Document {
         self.apply(tx, after, EditKind::Other);
     }
 
+    /// Replace the text with a freshly decoded file, as one undoable step; the
+    /// selection rides through the change. Only the bytes that differ from the
+    /// current text are replaced, so a small external edit is a small
+    /// transaction. Returns whether the text changed; the caller marks the
+    /// document saved afterwards to treat the result as matching disk.
+    pub fn reload(&mut self, bytes: &[u8]) -> Result<bool, DecodeError> {
+        let (rope, bom, line_ending) = text::decode(bytes)?;
+        let old = self.rope.to_string();
+        let new = rope.to_string();
+        if old == new {
+            self.bom = bom;
+            self.line_ending = line_ending;
+            return Ok(false);
+        }
+        self.apply_external(replace_difference(&old, &new));
+        self.bom = bom;
+        self.line_ending = line_ending;
+        self.indent = Indent::detect(&self.rope);
+        Ok(true)
+    }
+
     /// Replace every selection with `text` and put each cursor after it.
     fn replace_selections(&mut self, text: &str, kind: EditKind) {
         let tx = Transaction::new(
@@ -788,6 +809,38 @@ impl Document {
     }
 }
 
+/// A transaction replacing only the part of `old` that differs from `new`,
+/// skipping their common prefix and suffix. Bytes are compared, then trimmed
+/// back to character boundaries on both sides, so multibyte text is safe.
+fn replace_difference(old: &str, new: &str) -> Transaction {
+    let (old_b, new_b) = (old.as_bytes(), new.as_bytes());
+    let max = old_b.len().min(new_b.len());
+    let mut prefix = 0;
+    while prefix < max && old_b[prefix] == new_b[prefix] {
+        prefix += 1;
+    }
+    while prefix > 0 && !old.is_char_boundary(prefix) {
+        prefix -= 1;
+    }
+    let mut suffix = 0;
+    while suffix < max - prefix
+        && old_b[old_b.len() - 1 - suffix] == new_b[new_b.len() - 1 - suffix]
+    {
+        suffix += 1;
+    }
+    // The byte before the suffix is matched in both, so trimming to a
+    // character boundary in either text trims both; check both for safety.
+    while suffix > 0
+        && !(old.is_char_boundary(old.len() - suffix) && new.is_char_boundary(new.len() - suffix))
+    {
+        suffix -= 1;
+    }
+    let start = old[..prefix].chars().count();
+    let end = old[..old.len() - suffix].chars().count();
+    let text = &new[prefix..new.len() - suffix];
+    Transaction::new(vec![Change::replace(start, end, text)])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -804,6 +857,35 @@ mod tests {
 
     fn heads(d: &Document) -> Vec<usize> {
         d.selection().ranges().iter().map(|r| r.head).collect()
+    }
+
+    #[test]
+    fn reload_replaces_the_difference_and_is_one_undo_step() {
+        let mut d = doc("one\ntwo\nthree\n", 10);
+        assert!(d.reload("one\nTWOOO\nthree\n".as_bytes()).unwrap());
+        assert_eq!(text(&d), "one\nTWOOO\nthree\n");
+        // The cursor after the edit shifts by the inserted length.
+        assert_eq!(heads(&d), vec![12]);
+        assert!(d.undo());
+        assert_eq!(text(&d), "one\ntwo\nthree\n");
+        assert_eq!(heads(&d), vec![10]);
+    }
+
+    #[test]
+    fn reload_handles_multibyte_boundaries() {
+        let mut d = doc("中a文", 2);
+        assert!(d.reload("中b文".as_bytes()).unwrap());
+        assert_eq!(text(&d), "中b文");
+        assert!(d.undo());
+        assert_eq!(text(&d), "中a文");
+    }
+
+    #[test]
+    fn reload_with_identical_bytes_is_not_an_edit() {
+        let mut d = doc("same\n", 0);
+        assert!(!d.reload("same\n".as_bytes()).unwrap());
+        assert!(!d.can_undo());
+        assert!(!d.is_modified());
     }
 
     #[test]

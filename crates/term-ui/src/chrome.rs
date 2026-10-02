@@ -718,6 +718,8 @@ pub enum MenuId {
     Replace,
     /// Go to a line in an editor pane.
     GoToLine,
+    /// Go to a symbol in the active editor (ADR 0034, E6).
+    GoToSymbol,
     /// Open or close the Markdown preview beside an editor pane.
     MarkdownPreview,
     DuplicateTab,

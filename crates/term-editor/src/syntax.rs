@@ -1052,6 +1052,199 @@ impl TreeSyntax {
         }
         out
     }
+
+    /// Symbols for the outline, in source order: definition-like named nodes,
+    /// each labelled by its `name` field (or first line when it has none).
+    /// Best effort when a background parse is still running.
+    pub fn outline(&self, rope: &Rope) -> Vec<OutlineSymbol> {
+        let Some(tree) = &self.tree else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        let mut stack = vec![(tree.root_node(), 0usize)];
+        while let Some((node, depth)) = stack.pop() {
+            let kind = outline_kind(node.kind());
+            let child_depth = if kind.is_some() { depth + 1 } else { depth };
+            let mut children = Vec::new();
+            let mut child = node.child(0);
+            while let Some(c) = child {
+                children.push(c);
+                child = c.next_sibling();
+            }
+            for c in children.into_iter().rev() {
+                stack.push((c, child_depth));
+            }
+            let Some(kind) = kind else { continue };
+            out.push(OutlineSymbol {
+                name: outline_name(node, rope),
+                kind,
+                line: rope.byte_to_line(node.start_byte()),
+                depth,
+            });
+        }
+        out
+    }
+
+    /// Foldable line ranges `(first, last)`, `last > first` (0-based): from
+    /// the syntax tree when there is one (named nodes spanning more than one
+    /// line, outermost per start line), else from indentation. `(first, last)`
+    /// means folding `first` hides `first+1..=last`.
+    pub fn folds(&self, rope: &Rope) -> Vec<(usize, usize)> {
+        let Some(tree) = &self.tree else {
+            return indent_folds(rope);
+        };
+        let last_line = crate::motion::last_line(rope);
+        let mut out: Vec<(usize, usize)> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        // Start at the root's children: the root spans the whole file.
+        let root = tree.root_node();
+        let mut stack: Vec<Node> = Vec::new();
+        let mut child = root.child(0);
+        while let Some(c) = child {
+            stack.push(c);
+            child = c.next_sibling();
+        }
+        while let Some(node) = stack.pop() {
+            // Push children first, in reverse, so the walk stays pre-order.
+            let mut children = Vec::new();
+            let mut c = node.child(0);
+            while let Some(x) = c {
+                children.push(x);
+                c = x.next_sibling();
+            }
+            for x in children.into_iter().rev() {
+                stack.push(x);
+            }
+            if !node.is_named() || node.is_error() {
+                continue;
+            }
+            let (start_byte, end_byte) = (node.start_byte(), node.end_byte());
+            if end_byte <= start_byte {
+                continue;
+            }
+            let start = rope.byte_to_line(start_byte);
+            let end = rope.byte_to_line(end_byte - 1).min(last_line);
+            if end <= start || !seen.insert(start) {
+                continue;
+            }
+            out.push((start, end));
+        }
+        out.sort_by_key(|(s, _)| *s);
+        out
+    }
+}
+
+/// Foldable ranges from indentation alone, for files without a tree: a line
+/// is a fold start when the lines after it are more indented, up to the last
+/// one that is. Blank lines inside a block do not end it.
+fn indent_folds(rope: &Rope) -> Vec<(usize, usize)> {
+    let last = crate::motion::last_line(rope);
+    let indent_of = |line: usize| -> Option<usize> {
+        let text: String = rope
+            .line(line)
+            .chars()
+            .take_while(|c| *c != '\n' && *c != '\r')
+            .collect();
+        if text.trim().is_empty() {
+            return None;
+        }
+        Some(text.chars().take_while(|c| *c == ' ' || *c == '\t').count())
+    };
+    let mut out = Vec::new();
+    let mut line = 0;
+    while line < last {
+        let Some(indent) = indent_of(line) else {
+            line += 1;
+            continue;
+        };
+        let mut end = line;
+        let mut j = line + 1;
+        while j <= last {
+            match indent_of(j) {
+                Some(i) if i > indent => {
+                    end = j;
+                    j += 1;
+                }
+                None => j += 1,
+                Some(_) => break,
+            }
+        }
+        if end > line {
+            out.push((line, end));
+            line = end + 1;
+        } else {
+            line += 1;
+        }
+    }
+    out
+}
+
+/// One entry in a file's outline (⌘R), taken from the syntax tree.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OutlineSymbol {
+    /// The node's `name` field, or its first line when it has none (`impl`).
+    pub name: String,
+    /// A coarse kind: `function`, `class`, `struct`, `enum`, `interface`,
+    /// `impl`, `module`, `const`, `static`, `type`, `var`, `macro`.
+    pub kind: &'static str,
+    /// 0-based line the symbol starts on.
+    pub line: usize,
+    /// How many outline entries enclose it (for indentation in the picker).
+    pub depth: usize,
+}
+
+/// The outline kind of a tree-sitter node, or `None` when the node is not an
+/// outline entry. Definition-like nodes only, so a file's whole contents are
+/// not listed.
+fn outline_kind(kind: &str) -> Option<&'static str> {
+    Some(match kind {
+        "function_item"
+        | "function_definition"
+        | "function_declaration"
+        | "generator_function_declaration"
+        | "method_definition"
+        | "method_declaration" => "function",
+        "class_definition" | "class_declaration" | "abstract_class_declaration" => "class",
+        "struct_item" | "struct_specifier" => "struct",
+        "enum_item" | "enum_declaration" | "enum_specifier" => "enum",
+        "trait_item" | "interface_declaration" => "interface",
+        "impl_item" => "impl",
+        "mod_item" | "namespace_declaration" | "internal_module" | "module" => "module",
+        "const_item" | "const_spec" => "const",
+        "static_item" => "static",
+        "type_item"
+        | "type_alias_declaration"
+        | "type_spec"
+        | "type_definition"
+        | "union_item"
+        | "union_specifier" => "type",
+        "var_spec" => "var",
+        "macro_definition" => "macro",
+        _ => return None,
+    })
+}
+
+/// A symbol's label: its `name` field, else its first line with a trailing
+/// `{` trimmed (an `impl` block or another unnamed declaration).
+fn outline_name(node: Node, rope: &Rope) -> String {
+    if let Some(name) = node.child_by_field_name("name") {
+        let text = rope.byte_slice(name.byte_range()).to_string();
+        let text = text.trim();
+        if !text.is_empty() {
+            return text.to_string();
+        }
+    }
+    let first: String = rope
+        .byte_slice(node.byte_range())
+        .chars()
+        .take_while(|c| *c != '\n')
+        .collect();
+    let first = first.trim().trim_end_matches('{').trim();
+    let mut label: String = first.chars().take(80).collect();
+    if first.chars().count() > 80 {
+        label.push('…');
+    }
+    label
 }
 
 enum Engine {
@@ -1130,6 +1323,31 @@ impl Syntax {
                 f.highlights(rope, range)
             }
             _ => Vec::new(),
+        }
+    }
+
+    /// Symbols for the outline (⌘R). Tree-sitter only: the Sublime fallback
+    /// has no tree, so it offers nothing.
+    pub fn outline(&self, rope: &Rope) -> Vec<OutlineSymbol> {
+        match &self.engine {
+            Engine::Tree(t) if rope.len_bytes() <= MAX_HIGHLIGHT_BYTES => t.outline(rope),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Foldable line ranges `(first, last)`: the syntax tree's when there is
+    /// one, else indentation (the Sublime fallback has no tree).
+    pub fn folds(&self, rope: &Rope) -> Vec<(usize, usize)> {
+        match &self.engine {
+            Engine::Tree(t) if rope.len_bytes() <= MAX_HIGHLIGHT_BYTES => {
+                let folds = t.folds(rope);
+                if folds.is_empty() {
+                    indent_folds(rope)
+                } else {
+                    folds
+                }
+            }
+            _ => indent_folds(rope),
         }
     }
 }
@@ -1374,5 +1592,43 @@ mod tests {
         let hl = syntax.highlights(&rope, 500..520);
         assert!(!hl.is_empty());
         assert!(hl.iter().all(|(r, _)| r.start >= 500 && r.end <= 520));
+    }
+
+    #[test]
+    fn outline_lists_definitions_with_kind_line_and_depth() {
+        let text = "fn top() {\n    let x = 1;\n}\n\nstruct S {\n    field: u8,\n}\n\nimpl S {\n    fn method(&self) {}\n}\n";
+        let rope = Rope::from_str(text);
+        let syntax = Syntax::for_file(Path::new("a.rs"), &rope).unwrap();
+        let out = syntax.outline(&rope);
+        let listed: Vec<(&str, &str, usize, usize)> = out
+            .iter()
+            .map(|s| (s.name.as_str(), s.kind, s.line, s.depth))
+            .collect();
+        assert_eq!(
+            listed,
+            vec![
+                ("top", "function", 0, 0),
+                ("S", "struct", 4, 0),
+                ("impl S", "impl", 8, 0),
+                ("method", "function", 9, 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn folds_come_from_the_tree_and_from_indentation() {
+        let text = "fn a() {\n    one();\n    two();\n}\nstruct S {\n    x: u8,\n}\n";
+        let rope = Rope::from_str(text);
+        let syntax = Syntax::for_file(Path::new("a.rs"), &rope).unwrap();
+        let folds = syntax.folds(&rope);
+        assert!(folds.contains(&(0, 3)), "{folds:?}");
+        assert!(folds.contains(&(4, 6)), "{folds:?}");
+
+        // OCaml has no tree-sitter grammar here: indentation decides.
+        let text = "let f x =\n  match x with\n  | 0 -> 1\n  | _ -> 2\n";
+        let rope = Rope::from_str(text);
+        let syntax = Syntax::for_file(Path::new("a.ml"), &rope).unwrap();
+        assert!(!syntax.is_tree_sitter());
+        assert_eq!(syntax.folds(&rope), vec![(0, 3)]);
     }
 }

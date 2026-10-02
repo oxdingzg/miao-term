@@ -57,6 +57,15 @@ renderer and laid out by the existing split tree.
    editor's own. Edits ask first and load the whole file, stating the memory
    it takes, measured at about 2.2 times the file.)
    Licences are listed in `docs/third-party/SYNTAXES.md`.)
+   (Implementation note, E6: folding follows the tree — any named node
+   spanning more than one line, outermost per start line, with indentation as
+   the fallback when there is no tree or it has no such node; the gutter shows
+   ▸/▾, a collapsed header ends in ⋯, up/down skip hidden lines, ⌥⌘[ / ⌥⌘]
+   fold/unfold, and the palette has Fold All / Unfold All / Toggle Fold. The
+   outline lists definition nodes (functions, classes, structs, enums,
+   traits/interfaces, impls, modules, constants, types, variables, macros)
+   labelled by the node's `name` field and nested by depth; ⌘R opens a
+   filterable picker.)
 4. **Rendering through the terminal pipeline.** The editor builds the visible
    rows as styled spans on the monospace cell grid (tabs expanded, wide
    characters as two cells) plus quads for the gutter, selections and
@@ -68,10 +77,23 @@ renderer and laid out by the existing split tree.
    text conventions (arrows, ⌥ word, ⌘ line, ⇧ select, ⌘Z/⇧⌘Z, ⌘F, ⌘D next
    occurrence, ⌥-click add cursor) with Ctrl equivalents elsewhere; IME
    preedit draws inline at the caret, as in terminals; the vim mode moves over
-   in a later phase.
+   in a later phase. (Implementation note, E6: vim mode is a `term-editor`
+   state machine over the document — NORMAL/INSERT/VISUAL/VISUAL LINE, counts,
+   `h j k l w b e 0 ^ $ gg G`, `i a I A o O`, `x`, `d`/`c`/`y` with motions
+   (`dd`/`cc`/`yy`, `dw`, `d$`), `p`/`P` with an internal register, `u` and
+   Ctrl-r, `J`; `/` and `:` go to the host's Find bar and a small `:` command
+   line (`:w`, `:q`, `:wq`, `:<line>`), and `za`/`zo`/`zc`/`zR`/`zM` drive
+   folds. The pane shows its mode in the status bar. It is on with the
+   `editor-vim` config key.)
 6. **Files.** Files panel, Open Quickly, `app.edit`, drops and hint mode open
    an editor pane (new tab, or a split with a modifier). Unsaved state shows on
-   the tab; closing asks. Remote files keep the ssh read/write path.
+   the tab; closing asks. Remote files keep the ssh read/write path. (Implementation note, E6: an open pane remembers the file's length and
+   modification time and re-checks it about once a second. A change with no
+   unsaved edits reloads in place as one undoable transaction that replaces
+   only the span that differs, with the cursor mapped through it, and leaves
+   the pane clean; with unsaved edits mtty asks whether to reload from disk or
+   keep the local version. A file deleted underneath the pane is reported once.
+   View-mode panes, over 64 MB, are left alone.)
 7. **LSP later**, per workspace root over stdio: diagnostics, hover,
    completion, go-to-definition, configured per language in `config.toml`. (Implementation note, E5:
    a GPU-free crate, `term-lsp`, speaks JSON-RPC over the server's stdio
