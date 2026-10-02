@@ -39,9 +39,34 @@ pub fn image_uri(url: &str, base: Option<&Path>) -> Option<String> {
     Some(format!("file://{path}"))
 }
 
+/// The implicit URI scheme for a Markdown preview of a file in `dir`: a
+/// relative image path appended to it becomes that file's `file://` URL.
+pub fn dir_uri_scheme(dir: &Path) -> String {
+    let mut path = dir.display().to_string().replace('\\', "/");
+    if !path.starts_with('/') {
+        path.insert(0, '/');
+    }
+    if !path.ends_with('/') {
+        path.push('/');
+    }
+    format!("file://{path}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relative_images_resolve_against_the_document_directory() {
+        let scheme = dir_uri_scheme(Path::new("/srv/docs"));
+        assert_eq!(scheme, "file:///srv/docs/");
+        assert_eq!(
+            format!("{scheme}img/a.png"),
+            "file:///srv/docs/img/a.png"
+        );
+        assert_eq!(dir_uri_scheme(Path::new("/")), "file:///");
+        assert_eq!(dir_uri_scheme(Path::new("C:\\d\\e")), "file:///C:/d/e/");
+    }
 
     #[test]
     fn parses_image_syntax() {
