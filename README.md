@@ -53,7 +53,7 @@ mode and per-pane close buttons.
 The engine and application remain deliberately decoupled for embedding.
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 
-> **Project status — pre-release.** The version is `0.0.15` and the API is not yet
+> **Project status — pre-release.** The version is `0.0.16` and the API is not yet
 > stable. macOS is the primary platform. Windows is built, tested and driven over
 > MTP on real hardware (see [`docs/WINDOWS-DEV.md`](docs/WINDOWS-DEV.md)); Linux
 > builds and passes tests in CI and has been checked on a real GNOME/Wayland
@@ -523,7 +523,7 @@ report-only, with absolute budgets enforced.
 Still open:
 
 - **Release acceptance**: releases are built on four runners, signed with
-  minisign and published with an update manifest (latest: v0.0.15). Updating an
+  minisign and published with an update manifest (latest: v0.0.16). Updating an
   installed app through Software Update still needs an end-to-end check on each
   desktop; **Apple notarization** and **Windows MSI signing** require
   credentials. See [`docs/RELEASE.md`](docs/RELEASE.md).
