@@ -81,7 +81,7 @@ impl ATerm {
             return ' ';
         }
         let off = self.term.grid().display_offset() as i32;
-        self.term.grid()[Line(row as i32 - off)][Column(col as usize)].c
+        shown(self.term.grid()[Line(row as i32 - off)][Column(col as usize)].c)
     }
 
     /// A row's text, right-trimmed.
@@ -129,7 +129,7 @@ impl ATerm {
                 } else {
                     1
                 };
-                Some((c as u16, cell.c, width))
+                Some((c as u16, shown(cell.c), width))
             })
             .collect()
     }
@@ -155,7 +155,7 @@ impl ATerm {
         let off = self.term.grid().display_offset() as i32;
         let cell = &self.term.grid()[Line(row as i32 - off)][Column(col as usize)];
         Some(CellView {
-            ch: cell.c,
+            ch: shown(cell.c),
             fg: cell.fg,
             bg: cell.bg,
             inverse: cell.flags.contains(Flags::INVERSE),
@@ -254,7 +254,7 @@ impl ATerm {
         let grid = self.term.grid();
         let history = grid.history_size() as i32;
         let blank = |c: &alacritty_terminal::term::cell::Cell| {
-            c.c == ' '
+            shown(c.c) == ' '
                 && c.bg == Color::Named(NamedColor::Background)
                 && !c.flags.intersects(Flags::INVERSE | Flags::UNDERLINE)
                 && c.zerowidth().is_none()
@@ -296,7 +296,7 @@ impl ATerm {
                     out.push('m');
                     attrs = want;
                 }
-                out.push(cell.c);
+                out.push(shown(cell.c));
                 if let Some(marks) = cell.zerowidth() {
                     out.extend(marks);
                 }
@@ -389,6 +389,17 @@ impl ATerm {
             mode.contains(TermMode::MOUSE_DRAG),
             mode.contains(TermMode::SGR_MOUSE),
         ))
+    }
+}
+
+/// A cell's character as drawn. alacritty writes `\t` into the first cell a
+/// tab skips (so its own copy keeps the tab); it is blank on screen, and
+/// drawn or replayed as a tab it would shift the rest of the row.
+fn shown(c: char) -> char {
+    if c == '\t' {
+        ' '
+    } else {
+        c
     }
 }
 
@@ -509,6 +520,26 @@ mod tests {
         let mut term = ATerm::new(10, 3, 100);
         term.process("中文 ok\r\n".as_bytes());
         assert_eq!(term.snapshot_ansi(10), "中文 ok\r\n");
+    }
+
+    #[test]
+    fn tab_cells_read_as_blank() {
+        // `ls` aligns columns with tabs; the tab character in the skipped
+        // cell was drawn as a wide glyph and pushed the row out of line.
+        let mut term = ATerm::new(40, 3, 100);
+        term.process(b"ab\tX\tY\r\n");
+        assert_eq!(term.cell(0, 2).unwrap().ch, ' ');
+        assert_eq!(term.cell_char(0, 2), ' ');
+        assert_eq!(term.line_text(0), "ab      X       Y");
+        assert_eq!(term.line_text_abs(term.history_size()), "ab      X       Y");
+        assert_eq!(term.contents_between(0, 0, 0, 39), "ab      X       Y");
+        let snap = term.snapshot_ansi(10);
+        assert!(!snap.contains('\t'), "{snap:?}");
+        // Replayed after a tab stop change, the columns stay where they were.
+        let mut replay = ATerm::new(40, 3, 100);
+        replay.process(b"\x1b[3g"); // clear all tab stops
+        replay.process(snap.as_bytes());
+        assert_eq!(replay.line_text(0), "ab      X       Y");
     }
 
     #[test]
