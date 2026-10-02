@@ -2695,6 +2695,7 @@ dependencies = [
  "objc2 0.6.4",
  "objc2-foundation 0.3.2",
  "pollster",
+ "serde",
  "serde_json",
  "wayland-backend",
  "wayland-client",
