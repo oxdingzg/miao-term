@@ -63,6 +63,15 @@ pub fn menus(lang: Lang) -> Vec<(&'static str, Vec<Entry>)> {
                     None,
                 ),
                 item(
+                    t(
+                        lang,
+                        "New Serial/Telnet/TCP Session…",
+                        "新建串口/Telnet/TCP 会话…",
+                    ),
+                    MenuId::NewTransport,
+                    None,
+                ),
+                item(
                     t(lang, "Open Remote File…", "打开远端文件…"),
                     MenuId::OpenRemote,
                     None,
@@ -262,6 +271,7 @@ pub const IDS: &[(&str, MenuId)] = &[
     ("reopen-closed", MenuId::ReopenClosed),
     ("close-pane", MenuId::ClosePane),
     ("new-ssh", MenuId::NewSsh),
+    ("new-transport", MenuId::NewTransport),
     ("open-remote", MenuId::OpenRemote),
     ("save-recipe", MenuId::SaveRecipe),
     ("open-recipe", MenuId::OpenRecipe),

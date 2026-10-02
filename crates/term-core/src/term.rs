@@ -205,6 +205,8 @@ impl Terminal {
     /// Build a terminal over a byte stream: a reader thread forwards chunks
     /// into `rx` and wakes the UI, exactly as for a PTY. `master`/`child` are
     /// `None` for serial, Telnet and raw TCP sessions (ADR 0037).
+    // A private constructor: the arguments are the terminal's own fields.
+    #[allow(clippy::too_many_arguments)]
     fn pipe(
         cols: u16,
         rows: u16,

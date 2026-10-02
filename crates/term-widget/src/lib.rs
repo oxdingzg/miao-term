@@ -403,6 +403,47 @@ fn typed_ssh(cmd: &str) -> String {
     miao_term_ui::ssh::Syntax::local().typed(cmd)
 }
 
+/// How a non-SSH pane reaches its byte stream (ADR 0037). Saved in the session
+/// so the tab reconnects on restore.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum TransportTarget {
+    Telnet {
+        host: String,
+        port: u16,
+    },
+    Tcp {
+        host: String,
+        port: u16,
+    },
+    Serial {
+        device: String,
+        baud: u32,
+        data_bits: u8,
+        parity: String,
+        stop_bits: u8,
+        flow: String,
+    },
+}
+
+impl TransportTarget {
+    fn label(&self) -> String {
+        match self {
+            TransportTarget::Telnet { host, port } => format!("telnet {host}:{port}"),
+            TransportTarget::Tcp { host, port } => format!("tcp {host}:{port}"),
+            TransportTarget::Serial { device, baud, .. } => format!("{device} @{baud}"),
+        }
+    }
+
+    /// Telnet and raw TCP are unencrypted; serial is a cable.
+    fn plaintext(&self) -> bool {
+        matches!(
+            self,
+            TransportTarget::Telnet { .. } | TransportTarget::Tcp { .. }
+        )
+    }
+}
+
 struct Tab {
     layout: Layout,
     panes: Vec<Pane>,
@@ -418,6 +459,8 @@ struct Tab {
     /// The full ssh command the tab ran (saved hosts carry -p / -J), used to
     /// reconnect or duplicate it.
     ssh_cmd: Option<String>,
+    /// A serial, Telnet or raw TCP session (ADR 0037); `None` for a shell.
+    transport: Option<TransportTarget>,
     /// Optional short prefix shown before the tab title.
     prefix: Option<String>,
     /// A short user marker appended to the tab title (ADR 0011).
@@ -535,6 +578,7 @@ impl Tab {
             "prefix": self.prefix, "mark": self.mark, "group": self.group,
             "title_set": self.title_set,
             "ssh": self.ssh, "ssh_target": self.ssh_target, "ssh_cmd": self.ssh_cmd,
+            "transport": self.transport,
         })
     }
 
@@ -885,6 +929,13 @@ enum JobDone {
         text: Vec<u8>,
         result: std::io::Result<()>,
     },
+    /// A serial/Telnet/TCP connection finished dialling (ADR 0037).
+    TransportConnected {
+        target: TransportTarget,
+        /// A restored tab's title, else the connection's own label.
+        title: Option<String>,
+        result: Result<miao_term_ui::transport::Connection, String>,
+    },
 }
 
 /// The Agent Tasks window: the repository, its tasks and a pending
@@ -917,6 +968,42 @@ struct SyncView {
     pairing: String,
     show_code: bool,
     error: Option<String>,
+}
+
+/// The New Serial/Telnet/TCP Session form (ADR 0037).
+struct TransportDialog {
+    /// 0 serial, 1 Telnet, 2 TCP.
+    kind: usize,
+    host: String,
+    port: String,
+    device: String,
+    baud: String,
+    /// Index into 5/6/7/8.
+    data_bits: usize,
+    /// 0 none, 1 odd, 2 even.
+    parity: usize,
+    /// 0 one, 1 two.
+    stop_bits: usize,
+    /// 0 none, 1 software, 2 hardware.
+    flow: usize,
+    error: Option<String>,
+}
+
+impl Default for TransportDialog {
+    fn default() -> Self {
+        TransportDialog {
+            kind: 0,
+            host: String::new(),
+            port: String::new(),
+            device: String::new(),
+            baud: "115200".into(),
+            data_bits: 3,
+            parity: 0,
+            stop_bits: 0,
+            flow: 0,
+            error: None,
+        }
+    }
 }
 
 /// Connect to an FTP/FTPS server. The password stays in memory only.
@@ -1139,6 +1226,10 @@ struct State {
     recipe_name: String,
     recipe_list: Vec<String>,
     ssh_dialog: Option<String>,
+    /// New Serial/Telnet/TCP session form (ADR 0037); `None` when closed.
+    transport_dialog: Option<TransportDialog>,
+    /// Connections being dialled: an all-transport restore is not "empty".
+    pending_transport_connects: usize,
     /// New Agent Task dialog: name and the chosen agent (B2.4).
     task_dialog: Option<(String, Option<usize>)>,
     /// The Agent Tasks window.
@@ -1687,6 +1778,7 @@ impl State {
             ssh: false,
             ssh_target: None,
             ssh_cmd: None,
+            transport: None,
             prefix: None,
             mark: None,
             group: None,
@@ -1755,6 +1847,7 @@ impl State {
             ssh: false,
             ssh_target: None,
             ssh_cmd: None,
+            transport: None,
             prefix: None,
             mark: None,
             group: None,
@@ -2206,7 +2299,7 @@ impl State {
 
     fn duplicate_tab(&mut self) {
         let cwd = self.cwd();
-        let (title_set, title, ssh, (target, ssh_cmd), prefix, mark, group) = self
+        let (title_set, title, ssh, transport, (target, ssh_cmd), prefix, mark, group) = self
             .tabs
             .get(self.active_tab)
             .map(|t| {
@@ -2214,6 +2307,7 @@ impl State {
                     t.title_set,
                     t.title.clone(),
                     t.ssh,
+                    t.transport.clone(),
                     (t.ssh_target.clone(), t.ssh_cmd.clone()),
                     t.prefix.clone(),
                     t.mark.clone(),
@@ -2221,14 +2315,18 @@ impl State {
                 )
             })
             .unwrap_or_default();
-        // An ssh tab is duplicated by connecting again, not as a local shell
-        // that merely looks remote.
-        match (ssh, ssh_cmd, target) {
-            (true, Some(cmd), target) => {
-                self.open_ssh_command(title.clone(), cmd, target.unwrap_or_default())
+        // An ssh or transport tab is duplicated by connecting again, not as a
+        // local shell that merely looks remote.
+        if let Some(target) = transport {
+            self.connect_transport(target, Some(title.clone()));
+        } else {
+            match (ssh, ssh_cmd, target) {
+                (true, Some(cmd), target) => {
+                    self.open_ssh_command(title.clone(), cmd, target.unwrap_or_default())
+                }
+                (true, None, Some(target)) => self.open_ssh(&target),
+                _ => self.new_tab_in(inherited_cwd(ssh, cwd)),
             }
-            (true, None, Some(target)) => self.open_ssh(&target),
-            _ => self.new_tab_in(inherited_cwd(ssh, cwd)),
         }
         if let Some(t) = self.tabs.last_mut() {
             if title_set {
@@ -3439,6 +3537,7 @@ impl State {
         self.editor_window(ctx);
         self.recipe_dialog_window(ctx);
         self.ssh_dialog_window(ctx);
+        self.transport_dialog_window(ctx);
         self.task_dialog_window(ctx);
         self.tasks_window(ctx);
         self.hosts_window(ctx);
@@ -3681,6 +3780,8 @@ impl State {
         };
         // Remote editors are re-fetched after the tabs are in place.
         let mut pending_remote: Vec<(String, String, String, usize, usize)> = Vec::new();
+        // Serial/Telnet/TCP tabs reconnect after the rest of the session.
+        let mut pending_transport: Vec<(TransportTarget, String)> = Vec::new();
         for t in tabs {
             let title = t
                 .get("title")
@@ -3699,6 +3800,15 @@ impl State {
                 .map(str::to_string);
             let ssh = t.get("ssh").and_then(|x| x.as_bool()).unwrap_or(false)
                 && (ssh_target.is_some() || ssh_cmd.is_some());
+            // A serial/Telnet/TCP tab has no shell: reconnect it once the rest
+            // of the session is in place.
+            if let Some(target) = t
+                .get("transport")
+                .and_then(|x| serde_json::from_value::<TransportTarget>(x.clone()).ok())
+            {
+                pending_transport.push((target, title));
+                continue;
+            }
             let mut panes = Vec::new();
             let mut map = std::collections::HashMap::new();
             if let Some(arr) = t.get("panes").and_then(|p| p.as_array()) {
@@ -3838,6 +3948,7 @@ impl State {
                 ssh,
                 ssh_target: ssh_target.filter(|_| ssh),
                 ssh_cmd: ssh_cmd.filter(|_| ssh),
+                transport: None,
                 prefix: None,
                 mark: None,
                 group: None,
@@ -3865,7 +3976,11 @@ impl State {
                 }
             });
         }
-        if self.tabs.is_empty() {
+        // Reconnect the restored serial/Telnet/TCP sessions.
+        for (target, title) in pending_transport {
+            self.connect_transport(target, Some(title));
+        }
+        if self.tabs.is_empty() && self.pending_transport_connects == 0 {
             return false;
         }
         self.recent_files = v
@@ -4155,6 +4270,8 @@ enum Cmd {
     /// Check, download, verify and install in one go (B4.3).
     UpdateAndRelaunch,
     NewSsh,
+    /// New serial, Telnet or raw TCP session (ADR 0037).
+    NewTransport,
     OpenRemote,
     SaveRecipe,
     OpenRecipe,
@@ -4281,6 +4398,14 @@ impl State {
                 t(l, "Update and Relaunch", "更新并重启"),
             ),
             (Cmd::NewSsh, t(l, "New SSH Session…", "新建 SSH 会话…")),
+            (
+                Cmd::NewTransport,
+                t(
+                    l,
+                    "New Serial/Telnet/TCP Session…",
+                    "新建串口/Telnet/TCP 会话…",
+                ),
+            ),
             (Cmd::OpenRemote, t(l, "Open Remote File…", "打开远端文件…")),
             (Cmd::SaveRecipe, t(l, "Save Recipe…", "保存配方…")),
             (Cmd::OpenRecipe, t(l, "Open Recipe…", "打开配方…")),
@@ -4849,6 +4974,7 @@ impl State {
                 }
             }
             Cmd::NewSsh => self.ssh_dialog = Some(String::new()),
+            Cmd::NewTransport => self.transport_dialog = Some(TransportDialog::default()),
             Cmd::OpenRemote => {
                 // From an ssh tab the host is already known.
                 let dest = self
@@ -8686,6 +8812,157 @@ impl State {
 
     /// Connect to a saved host (B3.1).
     fn open_host(&mut self, host: &miao_term_config::hosts::Host) {
+        use miao_term_config::hosts::HostKind;
+        match host.kind {
+            HostKind::Ssh => self.open_ssh_host(host),
+            HostKind::Serial => {
+                let p = host.serial.clone().unwrap_or_default();
+                self.connect_transport(
+                    TransportTarget::Serial {
+                        device: p.device,
+                        baud: p.baud,
+                        data_bits: p.data_bits,
+                        parity: p.parity,
+                        stop_bits: p.stop_bits,
+                        flow: p.flow,
+                    },
+                    Some(host.name.clone()),
+                );
+            }
+            HostKind::Telnet => {
+                let target = TransportTarget::Telnet {
+                    host: host.address.clone().unwrap_or_default(),
+                    port: host.port.unwrap_or(23),
+                };
+                self.connect_transport(target, Some(host.name.clone()));
+            }
+            HostKind::Tcp => {
+                let target = TransportTarget::Tcp {
+                    host: host.address.clone().unwrap_or_default(),
+                    port: host.port.unwrap_or(0),
+                };
+                self.connect_transport(target, Some(host.name.clone()));
+            }
+        }
+    }
+
+    /// Dial a serial, Telnet or raw TCP session on a background thread; the
+    /// pane opens when the connection lands (ADR 0037).
+    fn connect_transport(&mut self, target: TransportTarget, title: Option<String>) {
+        use miao_term_ui::transport as tp;
+        self.pending_transport_connects += 1;
+        let label = target.label();
+        let msg = format!(
+            "{} {label}…",
+            miao_term_ui::i18n::t(self.lang, "Connecting", "正在连接")
+        );
+        self.show_notice(msg);
+        self.spawn_job(move || {
+            let result = match &target {
+                TransportTarget::Telnet { host, port } => {
+                    tp::connect_telnet(host, *port, Duration::from_secs(10))
+                }
+                TransportTarget::Tcp { host, port } => {
+                    tp::connect_tcp(host, *port, Duration::from_secs(10))
+                }
+                TransportTarget::Serial {
+                    device,
+                    baud,
+                    data_bits,
+                    parity,
+                    stop_bits,
+                    flow,
+                } => tp::connect_serial(&tp::SerialConfig {
+                    device: device.clone(),
+                    baud: *baud,
+                    data_bits: *data_bits,
+                    parity: parity.clone(),
+                    stop_bits: *stop_bits,
+                    flow: flow.clone(),
+                }),
+            };
+            JobDone::TransportConnected {
+                target,
+                title,
+                result,
+            }
+        });
+    }
+
+    /// Open a pane over a live connection and make it the active tab.
+    fn open_transport_pane(
+        &mut self,
+        target: TransportTarget,
+        title: Option<String>,
+        conn: miao_term_ui::transport::Connection,
+    ) {
+        let Some(pane) = self.spawn_transport_pane(conn) else {
+            let msg =
+                miao_term_ui::i18n::t(self.lang, "Could not start the session", "无法启动会话")
+                    .to_string();
+            self.show_notice(msg);
+            return;
+        };
+        let id = pane.id.clone();
+        let title = title.unwrap_or_else(|| target.label());
+        let plaintext = target.plaintext();
+        self.tabs.push(Tab {
+            layout: Layout::leaf(id.clone()),
+            panes: vec![pane],
+            active: id,
+            title,
+            title_set: true,
+            ssh: false,
+            ssh_target: None,
+            ssh_cmd: None,
+            transport: Some(target),
+            prefix: None,
+            mark: None,
+            group: None,
+            attention: None,
+            editors: Vec::new(),
+            previews: Vec::new(),
+        });
+        self.active_tab = self.tabs.len() - 1;
+        self.selection = None;
+        self.publish_panes();
+        if plaintext {
+            let msg = miao_term_ui::i18n::t(
+                self.lang,
+                "This connection is unencrypted.",
+                "此连接未加密。",
+            )
+            .to_string();
+            self.show_notice(msg);
+        }
+    }
+
+    /// A pane whose terminal runs over a byte pipe instead of a PTY.
+    fn spawn_transport_pane(&self, conn: miao_term_ui::transport::Connection) -> Option<Pane> {
+        let scale = self.window.scale_factor() as f32;
+        let (cw, ch) = (self.cw * scale, self.ch * scale);
+        let area = card_inner(self.grid_area());
+        let cols = ((area.w * scale) / cw).floor().max(1.0) as u16;
+        let rows = ((area.h * scale) / ch).floor().max(1.0) as u16;
+        let id = gen_id();
+        let proxy = self.proxy.clone();
+        let waker: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = proxy.send_event(HostEvent::Wake);
+        });
+        let mut term = Terminal::from_pipe(cols, rows, 10_000, conn.reader, conn.writer, waker);
+        term.set_graphics_enabled(self.graphics_enabled);
+        term.set_cell_size((self.cw * scale) as u16, (self.ch * scale) as u16);
+        Some(Pane {
+            id,
+            term,
+            scroll: 0,
+            on_enter: None,
+            published_output: None,
+        })
+    }
+
+    /// The ssh branch of [`State::open_host`]: an alias or a full command.
+    fn open_ssh_host(&mut self, host: &miao_term_config::hosts::Host) {
         let destination = host.destination();
         let mosh = host.mosh && miao_term_ui::ssh::on_path("mosh");
         if host.mosh && !mosh {
@@ -9553,6 +9830,155 @@ impl State {
         }
     }
 
+    /// The New Serial/Telnet/TCP Session form (ADR 0037).
+    fn transport_dialog_window(&mut self, ctx: &egui::Context) {
+        use miao_term_ui::i18n::t;
+        let lang = self.lang;
+        let Some(dlg) = self.transport_dialog.as_mut() else {
+            return;
+        };
+        const BAUD: &str = "115200";
+        let mut open = true;
+        let mut connect = false;
+        egui::Window::new(t(
+            lang,
+            "New Serial/Telnet/TCP Session",
+            "新建串口/Telnet/TCP 会话",
+        ))
+        .collapsible(false)
+        .open(&mut open)
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut dlg.kind, 0, t(lang, "Serial", "串口"));
+                ui.selectable_value(&mut dlg.kind, 1, "Telnet");
+                ui.selectable_value(&mut dlg.kind, 2, t(lang, "Raw TCP", "裸 TCP"));
+            });
+            if dlg.kind == 0 {
+                ui.horizontal(|ui| {
+                    ui.label(t(lang, "Device", "设备"));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut dlg.device)
+                            .hint_text("/dev/ttyUSB0")
+                            .desired_width(170.0),
+                    );
+                    if ui.button(t(lang, "List", "列出")).clicked() {
+                        dlg.error = Some(miao_term_ui::transport::serial_ports().join("  "));
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label(t(lang, "Baud", "波特率"));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut dlg.baud)
+                            .hint_text(BAUD)
+                            .desired_width(74.0),
+                    );
+                    ui.label(t(lang, "Data bits", "数据位"));
+                    egui::ComboBox::from_id_salt(("transport-data",))
+                        .selected_text(["5", "6", "7", "8"][dlg.data_bits.min(3)])
+                        .width(44.0)
+                        .show_ui(ui, |ui| {
+                            for (i, n) in ["5", "6", "7", "8"].iter().enumerate() {
+                                ui.selectable_value(&mut dlg.data_bits, i, *n);
+                            }
+                        });
+                    ui.label(t(lang, "Parity", "校验"));
+                    egui::ComboBox::from_id_salt(("transport-parity",))
+                        .selected_text(["none", "odd", "even"][dlg.parity.min(2)])
+                        .width(74.0)
+                        .show_ui(ui, |ui| {
+                            for (i, n) in ["none", "odd", "even"].iter().enumerate() {
+                                ui.selectable_value(&mut dlg.parity, i, *n);
+                            }
+                        });
+                });
+                ui.horizontal(|ui| {
+                    ui.label(t(lang, "Stop bits", "停止位"));
+                    egui::ComboBox::from_id_salt(("transport-stop",))
+                        .selected_text(["1", "2"][dlg.stop_bits.min(1)])
+                        .width(44.0)
+                        .show_ui(ui, |ui| {
+                            for (i, n) in ["1", "2"].iter().enumerate() {
+                                ui.selectable_value(&mut dlg.stop_bits, i, *n);
+                            }
+                        });
+                    ui.label(t(lang, "Flow", "流控"));
+                    egui::ComboBox::from_id_salt(("transport-flow",))
+                        .selected_text(["none", "software", "hardware"][dlg.flow.min(2)])
+                        .width(88.0)
+                        .show_ui(ui, |ui| {
+                            for (i, n) in ["none", "software", "hardware"].iter().enumerate() {
+                                ui.selectable_value(&mut dlg.flow, i, *n);
+                            }
+                        });
+                });
+            } else {
+                ui.horizontal(|ui| {
+                    ui.label(t(lang, "Host", "主机"));
+                    ui.add(egui::TextEdit::singleline(&mut dlg.host).desired_width(180.0));
+                    ui.label(t(lang, "Port", "端口"));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut dlg.port)
+                            .hint_text(if dlg.kind == 1 { "23" } else { "0" })
+                            .desired_width(64.0),
+                    );
+                });
+            }
+            if let Some(err) = &dlg.error {
+                ui.colored_label(egui::Color32::from_rgb(0xbf, 0x61, 0x6a), err);
+            }
+            if ui.button(t(lang, "Connect", "连接")).clicked() {
+                connect = true;
+            }
+        });
+        let mut submit: Option<TransportTarget> = None;
+        if connect {
+            submit = match dlg.kind {
+                0 => match dlg.baud.trim().parse::<u32>() {
+                    Ok(baud) if !dlg.device.trim().is_empty() => Some(TransportTarget::Serial {
+                        device: dlg.device.trim().to_string(),
+                        baud,
+                        data_bits: [5u8, 6, 7, 8][dlg.data_bits.min(3)],
+                        parity: ["none", "odd", "even"][dlg.parity.min(2)].to_string(),
+                        stop_bits: (dlg.stop_bits.min(1) + 1) as u8,
+                        flow: ["none", "software", "hardware"][dlg.flow.min(2)].to_string(),
+                    }),
+                    _ => {
+                        dlg.error = Some(
+                            t(
+                                lang,
+                                "Enter a device and a baud rate.",
+                                "请输入设备与波特率。",
+                            )
+                            .into(),
+                        );
+                        None
+                    }
+                },
+                kind => match dlg.port.trim().parse::<u16>() {
+                    Ok(port) if !dlg.host.trim().is_empty() => {
+                        let host = dlg.host.trim().to_string();
+                        Some(if kind == 1 {
+                            TransportTarget::Telnet { host, port }
+                        } else {
+                            TransportTarget::Tcp { host, port }
+                        })
+                    }
+                    _ => {
+                        dlg.error =
+                            Some(t(lang, "Enter a host and a port.", "请输入主机与端口。").into());
+                        None
+                    }
+                },
+            };
+        }
+        if let Some(target) = submit {
+            self.transport_dialog = None;
+            self.connect_transport(target, None);
+        } else if !open {
+            self.transport_dialog = None;
+        }
+    }
+
     fn remote_dialog_window(&mut self, ctx: &egui::Context) {
         let Some((dest, path)) = self.remote_dialog.as_mut() else {
             return;
@@ -10028,6 +10454,7 @@ impl State {
                     ssh: false,
                     ssh_target: None,
                     ssh_cmd: None,
+                    transport: None,
                     prefix: None,
                     mark: None,
                     group: None,
@@ -10089,6 +10516,7 @@ impl State {
                     ssh: false,
                     ssh_target: None,
                     ssh_cmd: None,
+                    transport: None,
                     prefix: None,
                     mark: None,
                     group: None,
@@ -10985,6 +11413,24 @@ impl State {
                     }
                 }
             }
+            JobDone::TransportConnected {
+                target,
+                title,
+                result,
+            } => {
+                self.pending_transport_connects = self.pending_transport_connects.saturating_sub(1);
+                match result {
+                    Ok(conn) => self.open_transport_pane(target, title, conn),
+                    Err(e) => {
+                        let msg = format!(
+                            "{} {}: {e}",
+                            t(self.lang, "Connection failed", "连接失败"),
+                            target.label()
+                        );
+                        self.show_notice(msg);
+                    }
+                }
+            }
         }
     }
 
@@ -11635,6 +12081,8 @@ impl ApplicationHandler<HostEvent> for Host {
             recipe_name: String::new(),
             recipe_list: Vec::new(),
             ssh_dialog: None,
+            transport_dialog: None,
+            pending_transport_connects: 0,
             task_dialog: None,
             tasks_view: None,
             host_book: Default::default(),
@@ -12960,6 +13408,14 @@ fn tab_location(tab: &Tab) -> String {
         if let Some(target) = tab.ssh_target.as_deref().or(tab.ssh_cmd.as_deref()) {
             return format!("ssh {target}");
         }
+    }
+    if let Some(target) = &tab.transport {
+        let tag = if target.plaintext() {
+            " (unencrypted)"
+        } else {
+            ""
+        };
+        return format!("{}{tag}", target.label());
     }
     let path = match tab.editors.iter().find(|e| e.id == tab.active) {
         Some(ed) => ed.path.display().to_string(),
@@ -14509,6 +14965,7 @@ impl chrome::Chrome for State {
             SaveRecipe => Cmd::SaveRecipe,
             OpenRecipe => Cmd::OpenRecipe,
             NewSsh => Cmd::NewSsh,
+            NewTransport => Cmd::NewTransport,
             OpenRemote => Cmd::OpenRemote,
             Composer => Cmd::Composer,
             CheckUpdates => Cmd::CheckUpdates,
@@ -14555,6 +15012,44 @@ impl chrome::Chrome for State {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn transport_targets_round_trip_through_json() {
+        let serial = super::TransportTarget::Serial {
+            device: "/dev/ttyUSB0".into(),
+            baud: 115_200,
+            data_bits: 8,
+            parity: "none".into(),
+            stop_bits: 1,
+            flow: "none".into(),
+        };
+        for target in [
+            super::TransportTarget::Telnet {
+                host: "203.0.113.2".into(),
+                port: 23,
+            },
+            super::TransportTarget::Tcp {
+                host: "203.0.113.2".into(),
+                port: 9000,
+            },
+            serial.clone(),
+        ] {
+            let value = serde_json::to_value(&target).unwrap();
+            assert_eq!(
+                serde_json::from_value::<super::TransportTarget>(value).unwrap(),
+                target
+            );
+        }
+        assert!(super::TransportTarget::Telnet {
+            host: "h".into(),
+            port: 23
+        }
+        .plaintext());
+        assert!(
+            !serial.plaintext(),
+            "a serial cable is not a plaintext network connection"
+        );
+    }
+
     #[test]
     fn image_redraw_deadlines_follow_frame_boundaries() {
         let start = Instant::now();
@@ -15375,6 +15870,7 @@ mod tests {
             ssh: false,
             ssh_target: None,
             ssh_cmd: None,
+            transport: None,
             prefix: None,
             mark: None,
             group: None,

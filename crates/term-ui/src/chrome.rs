@@ -698,6 +698,7 @@ pub enum MenuId {
     SaveRecipe,
     OpenRecipe,
     NewSsh,
+    NewTransport,
     OpenRemote,
     Composer,
     QuickTerminal,

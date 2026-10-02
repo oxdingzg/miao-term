@@ -209,6 +209,10 @@ mtty instead.
   `~/.ssh/config`, reuses a ControlMaster connection and bootstraps terminfo with
   nothing installed remotely; *View/Edit Remote File…* reads and writes over that
   connection (the host of the active ssh tab is filled in).
+- **Serial, Telnet and raw TCP**: *New Serial/Telnet/TCP Session…* opens a serial
+  console (device, baud, data bits, parity, stop bits, flow), a Telnet connection
+  or a raw TCP socket as a pane. Saved hosts carry a `kind` and open the same way;
+  Telnet and raw TCP are marked unencrypted (ADR 0037).
 - **FTP/FTPS**: *Connect over FTP/FTPS…* opens the same two-pane browser
   through the system `curl` (explicit TLS by default; plain FTP is marked as
   unencrypted). The password stays in memory; leave it empty to use

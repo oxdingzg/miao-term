@@ -146,6 +146,8 @@ mtty 与 miao 是两个独立项目,任意一个都可以单独使用。在 mtty
   在窗口中启停,显示运行状态或 ssh 放弃的原因;状态栏显示数量。
 - **SSH 会话与远端 view/edit**:*新建 SSH 会话…* 遵循 `~/.ssh/config`,复用 ControlMaster 连接,
   远端零安装引导 terminfo;*查看/编辑远端文件…* 经该连接读写(自动带入当前 SSH 标签的主机)。
+- **串口、Telnet 与裸 TCP**:*新建串口/Telnet/TCP 会话…* 把串口控制台(设备、波特率、数据位、校验、停止位、流控)、
+  Telnet 连接或裸 TCP socket 作为 pane 打开。已保存主机带 `kind`,也按同样方式打开;Telnet 与裸 TCP 标注为未加密(ADR 0037)。
 - **FTP/FTPS**:*连接 FTP/FTPS…* 经系统 `curl` 打开同一个双栏文件浏览器(默认显式 TLS;明文 FTP 会标注未加密)。
   口令只保存在内存中;留空则使用 `~/.netrc` 或匿名登录。
 - **持久会话**:在已保存主机上勾选 *在 tmux 中保持 shell*,重连后回到原会话;*使用 mosh 连接* 可跨休眠和网络切换
