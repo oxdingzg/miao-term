@@ -9,7 +9,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use objc2::rc::Retained;
-use objc2::runtime::{Bool, NSObject, ProtocolObject};
+use objc2::runtime::{AnyClass, AnyObject, Bool, NSObject, ProtocolObject};
 use objc2::{define_class, msg_send, AllocAnyThread};
 use objc2_foundation::{NSBundle, NSError, NSObjectProtocol, NSString};
 use objc2_user_notifications::{
@@ -99,4 +99,58 @@ fn deliver(title: &str, body: &str) {
     let request =
         UNNotificationRequest::requestWithIdentifier_content_trigger(&identifier, &content, None);
     center.addNotificationRequest_withCompletionHandler(&request, None);
+}
+
+// NSPasteboard lives in AppKit; linking it guarantees the class is registered
+// before `AnyClass::get` asks for it, even when nothing else in the process has
+// loaded AppKit yet.
+#[link(name = "AppKit", kind = "framework")]
+extern "C" {}
+
+/// The general pasteboard's image as PNG bytes, when it holds one. Reads
+/// `public.png` directly and only transcodes the `public.tiff` representation a
+/// screenshot leaves behind (ADR 0036).
+pub fn clipboard_image() -> Option<Vec<u8>> {
+    // SAFETY: standard NSPasteboard/NSData calls. Returned objects are retained
+    // and every pointer is checked before use.
+    unsafe {
+        let pasteboard_class = AnyClass::get(c"NSPasteboard")?;
+        let pasteboard: Retained<AnyObject> = msg_send![pasteboard_class, generalPasteboard];
+        if let Some(png) = pasteboard_data(&pasteboard, "public.png") {
+            return data_bytes(&png);
+        }
+        let tiff = pasteboard_data(&pasteboard, "public.tiff")?;
+        let rep_class = AnyClass::get(c"NSBitmapImageRep")?;
+        let rep: Retained<AnyObject> = msg_send![rep_class, imageRepWithData: &*tiff];
+        // NSBitmapImageFileTypePNG = 4. `properties` is documented nullable.
+        let png: Option<Retained<AnyObject>> = msg_send![
+            &*rep,
+            representationUsingType: 4isize,
+            properties: core::ptr::null::<AnyObject>()
+        ];
+        let png = png?;
+        data_bytes(&png)
+    }
+}
+
+unsafe fn pasteboard_data(pasteboard: &AnyObject, kind: &str) -> Option<Retained<AnyObject>> {
+    let kind = NSString::from_str(kind);
+    // SAFETY: `dataForType:` takes an NSString and returns an autoreleased NSData.
+    unsafe { msg_send![pasteboard, dataForType: &*kind] }
+}
+
+unsafe fn data_bytes(data: &AnyObject) -> Option<Vec<u8>> {
+    // SAFETY: `bytes`/`length` are the documented NSData accessors; the buffer
+    // is valid for `length` bytes for the lifetime of `data`.
+    unsafe {
+        let length: usize = msg_send![data, length];
+        if length == 0 {
+            return None;
+        }
+        let bytes: *const u8 = msg_send![data, bytes];
+        if bytes.is_null() {
+            return None;
+        }
+        Some(core::slice::from_raw_parts(bytes, length).to_vec())
+    }
 }

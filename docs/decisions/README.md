@@ -43,3 +43,4 @@ Docs are English by default; keep a Simplified Chinese version in sync
 | [0033](./0033-encrypted-sync.md) | Optional end-to-end encrypted sync | accepted |
 | [0034](./0034-editor-pane.md) | A native editor pane | accepted |
 | [0035](./0035-native-notifications.md) | Native system notifications | accepted |
+| [0036](./0036-clipboard-forwarding.md) | Host-forwarded clipboard images | accepted |

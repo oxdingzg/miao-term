@@ -13,6 +13,7 @@ miao-term-core = { path = "../term-core" }
 miao-term-render = { path = "../term-render" }
 miao-term-ui = { path = "../term-ui" }
 miao-term-mtp = { path = "../term-mtp" }
+miao-term-platform = { path = "../term-platform" }
 miao-term-config = { path = "../term-config" }
 miao-term-editor = { path = "../term-editor" }
 miao-term-lsp = { path = "../term-lsp" }
