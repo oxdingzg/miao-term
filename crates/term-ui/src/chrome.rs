@@ -293,6 +293,9 @@ pub fn tab_bar(
         if ev.close.is_none() && resp.clicked() {
             ev.switch = Some(i);
         }
+        if closable && resp.clicked_by(egui::PointerButton::Middle) {
+            ev.close = Some(i);
+        }
         if resp.double_clicked() {
             ev.rename = Some(i);
         }
@@ -405,18 +408,37 @@ pub fn sidebar(
                 bg_color(c),
             );
         }
-        let meta = metas.get(i).filter(|m| !m.is_empty()).map(|m| {
-            ui.painter()
-                .layout_no_wrap(m.clone(), meta_font.clone(), egui::Color32::from_gray(120))
-        });
-        let meta_w = meta.as_ref().map_or(0.0, |g| g.size().x + 8.0);
+        // Under the pointer the row's shortcut gives way to a close button,
+        // as in Otty (closing the last session is left to the menu).
+        let show_close = titles.len() > 1 && ui.rect_contains_pointer(rect);
+        let meta = metas
+            .get(i)
+            .filter(|m| !m.is_empty() && !show_close)
+            .map(|m| {
+                ui.painter().layout_no_wrap(
+                    m.clone(),
+                    meta_font.clone(),
+                    egui::Color32::from_gray(120),
+                )
+            });
+        let meta_w = if show_close {
+            24.0
+        } else {
+            meta.as_ref().map_or(0.0, |g| g.size().x + 8.0)
+        };
         let text_left = rect.left() + 34.0;
+        let title_room = (rect.right() - 6.0 - meta_w - text_left).max(8.0);
         let mut job =
             egui::text::LayoutJob::simple_singleline(title.clone(), font.clone(), text_color);
-        job.wrap = egui::text::TextWrapping::truncate_at_width(
-            (rect.right() - 6.0 - meta_w - text_left).max(8.0),
-        );
+        job.wrap = egui::text::TextWrapping::truncate_at_width(title_room);
         let galley = ui.painter().layout_job(job);
+        let truncated = galley.rows.first().is_some_and(|r| r.ends_with_newline)
+            || ui
+                .painter()
+                .layout_no_wrap(title.clone(), font.clone(), text_color)
+                .size()
+                .x
+                > title_room;
         ui.painter().galley(
             egui::pos2(text_left, rect.center().y - galley.size().y * 0.5),
             galley,
@@ -432,7 +454,39 @@ pub fn sidebar(
                 text_color,
             );
         }
-        if resp.clicked() {
+        if show_close {
+            let xr = egui::Rect::from_center_size(
+                egui::pos2(rect.right() - 14.0, rect.center().y),
+                egui::Vec2::splat(18.0),
+            );
+            let x_resp = ui
+                .interact(xr, ui.id().with(("session_close", i)), egui::Sense::click())
+                .on_hover_text(t(lang, "Close Tab", "关闭标签"));
+            if x_resp.hovered() {
+                ui.painter().rect_filled(xr, 4.0, bg_color(ch.hover));
+            }
+            let color = if x_resp.hovered() {
+                text_color
+            } else {
+                text_color.gamma_multiply(0.6)
+            };
+            let x = xr.shrink(5.0);
+            let stroke = egui::Stroke::new(1.4_f32, color);
+            ui.painter()
+                .line_segment([x.left_top(), x.right_bottom()], stroke);
+            ui.painter()
+                .line_segment([x.right_top(), x.left_bottom()], stroke);
+            if x_resp.clicked() {
+                ev.close = Some(i);
+            }
+        }
+        // A cut-off title shows in full on hover.
+        let resp = if truncated {
+            resp.on_hover_text(title)
+        } else {
+            resp
+        };
+        if ev.close != Some(i) && resp.clicked() {
             ev.switch = Some(i);
         }
         if resp.double_clicked() {
@@ -1473,6 +1527,99 @@ mod tab_menu_tests {
                 }
             }
         }
+    }
+
+    /// Run sidebar frames with the pointer events given, returning the
+    /// events of the last frame.
+    fn sidebar_frames(titles: &[String], frames: &[Vec<egui::Event>]) -> TabBarEvents {
+        let ctx = egui::Context::default();
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.font_data.insert(
+            "tabler".into(),
+            egui::FontData::from_static(include_bytes!(
+                "../../../assets/fonts/tabler-icons-subset.ttf"
+            ))
+            .into(),
+        );
+        fonts.families.insert(
+            egui::FontFamily::Name("tabler".into()),
+            vec!["tabler".into()],
+        );
+        ctx.set_fonts(fonts);
+        let icons = vec![crate::icons::TabIcon::from(crate::icons::Icon::Terminal); titles.len()];
+        let metas: Vec<String> = (1..=titles.len()).map(|i| format!("\u{2318}{i}")).collect();
+        let groups = vec![None; titles.len()];
+        let badges = vec![None; titles.len()];
+        let mut last = TabBarEvents::default();
+        for events in frames {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(240.0, 400.0),
+                )),
+                events: events.clone(),
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    last = sidebar(
+                        ui,
+                        &ChromeColors::dark(),
+                        titles,
+                        &icons,
+                        &badges,
+                        &metas,
+                        &groups,
+                        0,
+                        "SESSIONS",
+                        Lang::En,
+                    );
+                });
+            });
+        }
+        last
+    }
+
+    fn click_at(p: egui::Pos2) -> Vec<Vec<egui::Event>> {
+        let button = |pressed| egui::Event::PointerButton {
+            pos: p,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        vec![
+            vec![egui::Event::PointerMoved(p)],
+            vec![egui::Event::PointerMoved(p)],
+            vec![button(true)],
+            vec![button(false)],
+        ]
+    }
+
+    #[test]
+    fn hovering_a_session_row_shows_a_close_button() {
+        let titles: Vec<String> = vec!["one".into(), "two".into(), "three".into()];
+        // Sweep down the right edge, where the close button sits: each row
+        // closes itself there, and nothing switches along the way.
+        let mut first_y = [None; 3];
+        for y in (0..200).step_by(3) {
+            let ev = sidebar_frames(&titles, &click_at(egui::pos2(212.0, y as f32)));
+            if let Some(i) = ev.close {
+                assert!(ev.switch.is_none(), "closing does not also switch");
+                first_y[i].get_or_insert(y);
+            }
+        }
+        let rows: Vec<i32> = first_y
+            .iter()
+            .map(|y| y.expect("each row closes"))
+            .collect();
+        assert!(rows[0] < rows[1] && rows[1] < rows[2]);
+        // The row's middle switches instead.
+        let ev = sidebar_frames(&titles, &click_at(egui::pos2(80.0, rows[1] as f32 + 4.0)));
+        assert_eq!((ev.switch, ev.close), (Some(1), None));
+        let y0 = rows[0];
+        // A lone session has no close button.
+        let ev = sidebar_frames(&titles[..1], &click_at(egui::pos2(212.0, y0 as f32)));
+        assert_eq!(ev.close, None);
     }
 
     #[test]
