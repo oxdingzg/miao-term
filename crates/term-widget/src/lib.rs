@@ -2234,7 +2234,7 @@ impl State {
             command: pane.term.foreground_command(),
             agent,
             host: tab.ssh_target.as_deref().map(ssh_host),
-            file: None,
+            file: pane.term.foreground_file(),
             user: std::env::var("USER").ok(),
             shell: std::env::var("SHELL").ok(),
             branch,

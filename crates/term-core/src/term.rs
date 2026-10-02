@@ -490,6 +490,27 @@ impl Terminal {
         }
     }
 
+    /// The file the foreground program was started on: its first argument that
+    /// is not an option and names an existing file, resolved against the
+    /// program's working directory (`src/main.rs` for `vim src/main.rs`).
+    /// `None` while the shell itself waits for input.
+    pub fn foreground_file(&self) -> Option<String> {
+        #[cfg(unix)]
+        {
+            let leader = self.master.as_ref()?.process_group_leader()?;
+            let leader = u32::try_from(leader).ok()?;
+            if Some(leader) == self.pid() {
+                return None;
+            }
+            let args = process_args(leader)?;
+            file_argument(args.get(1..)?, process_cwd(leader).as_deref())
+        }
+        #[cfg(not(unix))]
+        {
+            None
+        }
+    }
+
     /// The last finished command's output, when the shell marks commands
     /// with OSC 133 (the mtty zsh integration does).
     pub fn last_command_output(&self) -> Option<&CommandOutput> {
@@ -639,6 +660,97 @@ fn process_name(pid: u32) -> Option<String> {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
     }
+}
+
+/// The first of `args` that is not an option and is an existing file, as an
+/// absolute path (relative ones resolved against `cwd`).
+#[cfg(unix)]
+fn file_argument(args: &[String], cwd: Option<&str>) -> Option<String> {
+    args.iter()
+        .filter(|a| !a.is_empty() && !a.starts_with('-') && !a.starts_with('+'))
+        .find_map(|a| {
+            let path = std::path::Path::new(a);
+            let path = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                std::path::Path::new(cwd?).join(path)
+            };
+            path.is_file().then(|| path.to_string_lossy().into_owned())
+        })
+}
+
+/// A process's command line (`argv`), program name first.
+#[cfg(unix)]
+fn process_args(pid: u32) -> Option<Vec<String>> {
+    #[cfg(target_os = "macos")]
+    {
+        // KERN_PROCARGS2: argc (a C int), the executable path, NUL padding,
+        // then argc NUL-terminated arguments, then the environment.
+        let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as libc::c_int];
+        let mut size: libc::size_t = 0;
+        // First call sizes the buffer; the second fills it.
+        let ok = unsafe {
+            libc::sysctl(
+                mib.as_mut_ptr(),
+                3,
+                std::ptr::null_mut(),
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if ok != 0 || size < 4 {
+            return None;
+        }
+        let mut buf = vec![0u8; size];
+        let ok = unsafe {
+            libc::sysctl(
+                mib.as_mut_ptr(),
+                3,
+                buf.as_mut_ptr().cast(),
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if ok != 0 {
+            return None;
+        }
+        buf.truncate(size);
+        parse_procargs2(&buf)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let raw = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+        let args: Vec<String> = raw
+            .split(|&b| b == 0)
+            .filter(|a| !a.is_empty())
+            .map(|a| String::from_utf8_lossy(a).into_owned())
+            .collect();
+        (!args.is_empty()).then_some(args)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+/// Split a `KERN_PROCARGS2` buffer into its arguments.
+#[cfg(any(target_os = "macos", test))]
+fn parse_procargs2(buf: &[u8]) -> Option<Vec<String>> {
+    let argc = i32::from_ne_bytes(buf.get(..4)?.try_into().ok()?);
+    let argc = usize::try_from(argc).ok()?;
+    let rest = &buf[4..];
+    // Skip the executable path and the NULs that pad it.
+    let exec_end = rest.iter().position(|&b| b == 0)?;
+    let start = exec_end + rest[exec_end..].iter().position(|&b| b != 0)?;
+    let args: Vec<String> = rest[start..]
+        .split(|&b| b == 0)
+        .take(argc)
+        .map(|a| String::from_utf8_lossy(a).into_owned())
+        .collect();
+    (args.len() == argc).then_some(args)
 }
 
 fn process_cwd(pid: u32) -> Option<String> {
@@ -909,6 +1021,75 @@ mod tests {
         );
         term.write(b"sleep 3\r");
         assert_eq!(wait_for(&mut term, Some("sleep")).as_deref(), Some("sleep"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_argument_skips_options_and_missing_paths() {
+        let dir = std::env::temp_dir().join(format!("mtty-fg-file-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/main.rs"), "fn main() {}").unwrap();
+        let cwd = dir.to_string_lossy().to_string();
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let want = dir.join("src/main.rs").to_string_lossy().to_string();
+        assert_eq!(
+            file_argument(
+                &args(&["-R", "+12", "missing.rs", "src/main.rs"]),
+                Some(&cwd)
+            ),
+            Some(want.clone())
+        );
+        assert_eq!(file_argument(&args(&[&want]), None), Some(want));
+        assert_eq!(
+            file_argument(&args(&["src"]), Some(&cwd)),
+            None,
+            "a directory"
+        );
+        assert_eq!(file_argument(&args(&["src/main.rs"]), None), None, "no cwd");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn procargs2_buffers_split_into_arguments() {
+        let mut buf = 2i32.to_ne_bytes().to_vec();
+        buf.extend_from_slice(b"/usr/bin/vim\0\0\0\0vim\0notes.md\0HOME=/x\0");
+        assert_eq!(
+            parse_procargs2(&buf),
+            Some(vec!["vim".to_string(), "notes.md".to_string()])
+        );
+        assert_eq!(parse_procargs2(&buf[..3]), None);
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn foreground_file_names_the_file_the_program_opened() {
+        let dir = std::env::temp_dir().join(format!("mtty-fg-tail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("notes.md");
+        std::fs::write(&file, "x\n").unwrap();
+        let mut term = Terminal::new(
+            Some("/bin/sh".into()),
+            80,
+            24,
+            100,
+            Some(dir.clone()),
+            &[],
+            std::sync::Arc::new(|| {}),
+        )
+        .unwrap();
+        assert_eq!(term.foreground_file(), None, "an idle shell has no file");
+        term.write(b"tail -f notes.md\r");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut got = None;
+        while got.is_none() && std::time::Instant::now() < deadline {
+            term.process_pending();
+            got = term.foreground_file();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let want = std::fs::canonicalize(&file).unwrap();
+        let got = got.map(|g| std::fs::canonicalize(g).unwrap());
+        assert_eq!(got, Some(want));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Run `shell` through its integration in an empty HOME (the user's own
