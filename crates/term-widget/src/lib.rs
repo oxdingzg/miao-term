@@ -1107,6 +1107,10 @@ struct State {
     /// Find matches as (buffer line, start column, width in cells).
     search_hits: Vec<(usize, u16, u16)>,
     search_key: String,
+    /// Find in an editor pane: the matches as char ranges, and the query
+    /// they were found for (a new query jumps to the match after the caret).
+    editor_hits: Vec<(usize, usize)>,
+    editor_hits_query: String,
     update_url: Option<String>,
     update_rx: Option<std::sync::mpsc::Receiver<UpdateResult>>,
     update_install: UpdateInstall,
@@ -4167,6 +4171,14 @@ impl State {
                 self.search_key.clear();
             }
             Cmd::CopyAnsi => {
+                // An editor's text has no terminal colours: copy it as is.
+                if let Some(ed) = self.active_editor() {
+                    let text = ed.copy();
+                    if !text.is_empty() {
+                        self.egui_ctx.copy_text(text);
+                    }
+                    return;
+                }
                 if let Some(t) = self.selection_ansi() {
                     if !t.is_empty() {
                         self.egui_ctx.copy_text(t);
@@ -4182,7 +4194,7 @@ impl State {
             }
             Cmd::FindNext | Cmd::FindPrev => {
                 let step = if matches!(cmd, Cmd::FindNext) { 1 } else { -1 };
-                let n = self.search_hits.len();
+                let n = self.search_count();
                 if self.search.is_some() && n > 0 {
                     self.search_idx =
                         ((self.search_idx as i32 + step).rem_euclid(n as i32)) as usize;
@@ -4190,7 +4202,11 @@ impl State {
                 }
             }
             Cmd::UseSelForFind => {
-                if let Some(s) = self.selection_text() {
+                let selected = match self.active_editor() {
+                    Some(ed) => Some(ed.copy()),
+                    None => self.selection_text(),
+                };
+                if let Some(s) = selected {
                     let s = s.trim().to_string();
                     if !s.is_empty() {
                         self.search = Some(s);
@@ -4275,6 +4291,11 @@ impl State {
                 }
             }
             Cmd::CopyPath => {
+                // An editor's path is its file's, not the folder's.
+                if let Some(ed) = self.active_editor() {
+                    self.egui_ctx.copy_text(ed.path.display().to_string());
+                    return;
+                }
                 if let Some(cwd) = self.cwd() {
                     self.egui_ctx.copy_text(cwd.display().to_string());
                 }
@@ -5307,6 +5328,12 @@ impl State {
         if self.search.is_none() {
             self.search_hits.clear();
             self.search_key.clear();
+            self.editor_hits.clear();
+            self.editor_hits_query.clear();
+            return;
+        }
+        if self.active_editor().is_some() {
+            self.refresh_editor_search();
             return;
         }
         let key = format!(
@@ -5323,7 +5350,62 @@ impl State {
         }
     }
 
+    /// Find in the active editor pane: matches are found again when the
+    /// query, the pane or the text changes; a new query selects the first
+    /// match at or after the caret.
+    fn refresh_editor_search(&mut self) {
+        let query = self.search.clone().unwrap_or_default();
+        let Some(ed) = self.active_editor() else {
+            return;
+        };
+        let key = format!("{query}\u{0}{}\u{0}{}", ed.id, ed.doc.revision());
+        if key == self.search_key {
+            return;
+        }
+        let caret = ed.doc.selection().primary().from();
+        let found = miao_term_editor::search::find_all(
+            ed.doc.rope(),
+            &miao_term_editor::SearchQuery {
+                pattern: query.clone(),
+                ..Default::default()
+            },
+        )
+        .unwrap_or_default();
+        self.search_key = key;
+        self.editor_hits = found;
+        if query != self.editor_hits_query {
+            self.editor_hits_query = query;
+            self.search_idx = first_hit_from(&self.editor_hits, caret);
+            self.scroll_to_search_hit();
+        } else {
+            self.search_idx = self
+                .search_idx
+                .min(self.editor_hits.len().saturating_sub(1));
+        }
+    }
+
+    /// Matches for the open Find bar, in the editor or the terminal.
+    fn search_count(&self) -> usize {
+        if self.active_editor().is_some() {
+            self.editor_hits.len()
+        } else {
+            self.search_hits.len()
+        }
+    }
+
     fn scroll_to_search_hit(&mut self) {
+        if self.active_editor().is_some() {
+            let Some((start, end)) = self.editor_hits.get(self.search_idx).copied() else {
+                return;
+            };
+            if let Some(ed) = self.active_editor_mut() {
+                ed.doc.set_selection(miao_term_editor::Selection::single(
+                    miao_term_editor::Range::new(start, end),
+                ));
+                ed.reveal_cursor();
+            }
+            return;
+        }
         let Some((b, _, _)) = self.search_hits.get(self.search_idx).copied() else {
             return;
         };
@@ -5342,7 +5424,7 @@ impl State {
             return;
         }
         let lang = self.lang;
-        let n = self.search_hits.len();
+        let n = self.search_count();
         let idx = self.search_idx;
         let Some(query) = self.search.as_mut() else {
             return;
@@ -5380,6 +5462,8 @@ impl State {
             self.search = None;
             self.search_hits.clear();
             self.search_key.clear();
+            self.editor_hits.clear();
+            self.editor_hits_query.clear();
             self.window.request_redraw();
             return;
         }
@@ -9227,6 +9311,8 @@ impl ApplicationHandler<HostEvent> for Host {
             search_idx: 0,
             search_hits: Vec::new(),
             search_key: String::new(),
+            editor_hits: Vec::new(),
+            editor_hits_query: String::new(),
             update_url: cfg.update_check_url.clone(),
             update_rx: None,
             update_install: UpdateInstall::Idle,
@@ -9947,7 +10033,13 @@ impl ApplicationHandler<HostEvent> for Host {
             WindowEvent::KeyboardInput { event, .. } => {
                 // An editor pane takes its keys first: its chords (⌘D next
                 // occurrence, ⇧⌘Z redo) win over the app's while it has focus.
-                if state.active_editor().is_some() && !state.hint_mode {
+                // A focused text field (Find, the palette, a rename) has the
+                // keyboard instead: typing there must not edit the file.
+                if editor_takes_keys(
+                    state.active_editor().is_some(),
+                    state.hint_mode,
+                    state.egui_ctx.wants_keyboard_input(),
+                ) {
                     if event.state == ElementState::Pressed && state.editor_key(&event) {
                         state.window.request_redraw();
                         return;
@@ -10034,7 +10126,7 @@ impl ApplicationHandler<HostEvent> for Host {
                         state.build_hints();
                     }
                     if s.find != 0 {
-                        let n = state.search_hits.len();
+                        let n = state.search_count();
                         if state.search.is_some() && n > 0 {
                             state.search_idx =
                                 ((state.search_idx as i32 + s.find).rem_euclid(n as i32)) as usize;
@@ -10135,6 +10227,22 @@ impl ApplicationHandler<HostEvent> for Host {
 /// Case-insensitive matches of `query` in a line's cells (see
 /// `ATerm::line_chars_abs`), as (start column, width in cells). Columns come
 /// from the cells, so wide characters before or inside a match line up.
+/// Whether a key goes to the active editor pane before the app's shortcuts:
+/// not while hint mode reads labels, and not while an egui text field (Find,
+/// the palette, a rename) has the keyboard, so typing there never edits the
+/// file.
+fn editor_takes_keys(editor_active: bool, hint_mode: bool, text_field_focused: bool) -> bool {
+    editor_active && !hint_mode && !text_field_focused
+}
+
+/// The match a new search starts at: the first at or after the caret,
+/// wrapping to the first.
+fn first_hit_from(hits: &[(usize, usize)], caret: usize) -> usize {
+    hits.iter()
+        .position(|&(start, _)| start >= caret)
+        .unwrap_or(0)
+}
+
 fn find_in_cells(cells: &[(u16, char, u16)], query: &str) -> Vec<(u16, u16)> {
     let fold = |c: char| c.to_lowercase().next().unwrap_or(c);
     let q: Vec<char> = query.chars().map(fold).collect();
@@ -12403,6 +12511,54 @@ mod tests {
         ] {
             assert!(!is_default_title(chosen), "{chosen}");
         }
+    }
+
+    #[test]
+    fn a_focused_text_field_keeps_keys_from_the_editor() {
+        // Typing in Find over an editor replaced the file's selection, and
+        // ⌘A then Delete in the field emptied the file.
+        assert!(editor_takes_keys(true, false, false));
+        assert!(
+            !editor_takes_keys(true, false, true),
+            "Find/palette has the keyboard"
+        );
+        assert!(
+            !editor_takes_keys(true, true, false),
+            "hint mode reads labels"
+        );
+        assert!(!editor_takes_keys(false, false, false));
+    }
+
+    #[test]
+    fn the_find_field_holds_the_keyboard_while_open() {
+        // The editor's key routing relies on this: with Find open,
+        // `wants_keyboard_input` is true, so keys stay out of the file.
+        let ctx = egui::Context::default();
+        let mut query = String::new();
+        for _ in 0..3 {
+            replay(&ctx, vec![egui::Event::Text("lev".into())], |ctx| {
+                egui::Window::new("Find").show(ctx, |ui| {
+                    ui.add(egui::TextEdit::singleline(&mut query))
+                        .request_focus();
+                });
+            });
+        }
+        assert!(ctx.wants_keyboard_input());
+        assert!(query.starts_with("lev"), "{query}");
+        assert!(
+            editor_takes_keys(true, false, false)
+                && !editor_takes_keys(true, false, ctx.wants_keyboard_input())
+        );
+    }
+
+    #[test]
+    fn editor_search_starts_at_the_match_after_the_caret() {
+        let hits = [(3, 6), (10, 13), (20, 23)];
+        assert_eq!(first_hit_from(&hits, 0), 0);
+        assert_eq!(first_hit_from(&hits, 10), 1, "a match at the caret counts");
+        assert_eq!(first_hit_from(&hits, 11), 2);
+        assert_eq!(first_hit_from(&hits, 30), 0, "wraps to the first");
+        assert_eq!(first_hit_from(&[], 5), 0);
     }
 
     #[test]
