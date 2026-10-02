@@ -53,6 +53,26 @@ mode and per-pane close buttons.
 The engine and application remain deliberately decoupled for embedding.
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 
+## Screenshots
+
+Terminals, files, remote hosts and agents in one window. Three tabs, each
+badged with its agent's state, with the repository's own git log in the active
+pane and the details panel beside it:
+
+![Three session tabs with agent-state badges, a git log in the active pane, and the details panel](docs/images/mtty-workspace.png)
+
+| Agent state, live | Editor and live preview |
+|---|---|
+| ![A tab badge and the Agent panel following the pane through the four agent states](docs/images/mtty-states.gif) | ![A Markdown file in the editor with its rendered preview beside it](docs/images/mtty-editor.png) |
+
+| Command palette to a split | Details panels |
+|---|---|
+| ![The command palette fuzzy-finding Split Right and laying out a second pane](docs/images/mtty-palette.gif) | ![Switching the details panel between agent, tasks, git, files and ports](docs/images/mtty-panels.gif) |
+
+Recursive splits keep a git log and a running server side by side:
+
+![A tab split into two panes, a git log on the left and an HTTP server on the right](docs/images/mtty-splits.png)
+
 > **Project status — pre-release.** The version is `0.0.17` and the API is not yet
 > stable. macOS is the primary platform. Windows is built, tested and driven over
 > MTP on real hardware (see [`docs/WINDOWS-DEV.md`](docs/WINDOWS-DEV.md)); Linux

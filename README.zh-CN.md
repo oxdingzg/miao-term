@@ -44,6 +44,25 @@
 引擎与应用保持解耦，供第三方嵌入。
 完整设计见 [`docs/ARCHITECTURE.zh-CN.md`](docs/ARCHITECTURE.zh-CN.md)。
 
+## 截图
+
+终端、文件、远程主机与代理，同在一个窗口。三个标签各自标注代理状态，活动窗格里是仓库自己的
+git 日志，右侧是详情面板：
+
+![三个会话标签带代理状态徽章，活动窗格是 git 日志，右侧为详情面板](docs/images/mtty-workspace.png)
+
+| 代理状态，实时变化 | 编辑器与实时预览 |
+|---|---|
+| ![标签徽章与 Agent 面板实时跟随窗格在四种状态间切换](docs/images/mtty-states.gif) | ![Markdown 文件在编辑器中打开，右侧是渲染后的预览](docs/images/mtty-editor.png) |
+
+| 命令面板到分屏 | 详情面板 |
+|---|---|
+| ![命令面板模糊查找“向右分屏”并分出第二个窗格](docs/images/mtty-palette.gif) | ![在代理、任务、git、文件与端口之间切换详情面板](docs/images/mtty-panels.gif) |
+
+递归分屏把 git 日志与运行中的服务并排放在同一个标签里：
+
+![一个标签分成两个窗格，左侧 git 日志，右侧 HTTP 服务](docs/images/mtty-splits.png)
+
 > **项目状态 —— 预发布。** 当前版本为 `0.0.17`,API 尚未稳定。macOS 是主要平台;
 > Windows 已在真实硬件上构建、测试并经 MTP 驱动(见 [`docs/WINDOWS-DEV.zh-CN.md`](docs/WINDOWS-DEV.zh-CN.md));
 > Linux 在 CI 中构建并通过测试,并已在真实的 GNOME/Wayland 桌面上验收(输入法、菜单、文件拖放、剪贴板、快捷键)。
