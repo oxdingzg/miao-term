@@ -9,19 +9,25 @@
 
 ## 1. Positioning
 
-**mtty** is a cross-platform (macOS / Linux / Windows) **terminal front door**:
-everyday development, AI coding agents and remote operations all start from one
-window.
+**mtty** is a cross-platform (macOS / Linux / Windows) **AI-native terminal and
+editor for local and remote work**: terminals, files, remote hosts and AI coding
+agents share one fast, native window and the same tabs and splits. It stands on
+three pillars — terminal and remote, editor, agent workspace — tied together by
+Rust and GPU rendering under a performance gate, and by no account or forced
+cloud: mtty hosts the agents you choose and never calls a model itself.
 
 | Source | What we take | What we leave |
 |---|---|---|
 | [Otty](https://otty.sh/) | A modern local terminal: tabs/splits, command palette, file reader, agent badges, Composer, session recovery | — |
 | [Termius](https://termius.com/) | Remote operations: host library and groups, SSH keys/identities, SFTP, port forwarding and jump hosts, snippets | Accounts, mandatory cloud sync, paywalled basics |
+| [PuTTY](https://www.chiark.greenend.org.uk/~sgtatham/putty/) | Serial, Telnet and raw TCP sessions; `.ppk` keys (M6) | Its dated UI and per-session registry settings |
 | [mtty](https://mtty.dev/) | Parallel agents: one git worktree per task, one place to watch them, diff review before merge | An agent-only IDE shape |
+| [Zed](https://zed.dev/) / VS Code | An editor core: rope buffer, multi-cursor, tree-sitter, LSP, large-file speed (M5); agents' edits reviewed inline (M7) | Extension marketplaces, a built-in AI account |
 | miao | Native integration: state reporting without hooks, session resume, two-way control over MTP | — |
 
-In one line: **the local terminal must be fast and dependable, agents must be
-visible and steerable, and remote hosts should feel as easy as local folders.**
+In one line: **the terminal must be fast and dependable, the editor good enough
+to stay in, agents visible, steerable and reviewable, and remote hosts as easy
+as local folders.**
 
 ### 1.1 Naming
 
@@ -40,7 +46,10 @@ visible and steerable, and remote hosts should feel as easy as local folders.**
    see who is busy, who is waiting for me, who failed, and queue prompts for them.
 3. **Ops / full-stack**: manage dozens of hosts — log in over SSH, move files,
    forward ports, run common commands in bulk — with credentials kept on this
-   machine.
+   machine; reach devices over serial and Telnet too (M6).
+4. **Editing code and text**: open any file next to its terminal, fast even when
+   it is huge, highlighted, and with language-server help (M5); review what an
+   agent changed before keeping it (M7).
 
 ## 2. Interaction design principles
 
@@ -333,6 +342,18 @@ verified on its own:
 - [ ] **E4** Multi-cursor, find/replace, go to line, Markdown preview pane.
 - [ ] **E5** LSP: diagnostics, hover, completion, go-to-definition.
 - [ ] **E6** vim mode in the pane, folding and outline, external-change reload.
+
+### M6 Remote, PuTTY-style (needs design)
+
+- [ ] **R1** Serial (baud, parity, flow control) and Telnet sessions, raw TCP; saved in the host library.
+- [ ] **R2** `.ppk` key import (to OpenSSH format, never stored unencrypted).
+- [ ] **R3** Decide in an ADR whether SSH moves from the system OpenSSH to a Rust-native stack (gains: Windows without OpenSSH, in-process SFTP and forwarding; costs: re-implementing `~/.ssh/config`, ProxyJump and agent forwarding).
+
+### M7 AI-native workspace (needs design)
+
+- [ ] **A1** Agents' edits arrive as editor transactions, shown inline as diffs to accept or reject, undoable.
+- [ ] **A2** An ACP (Agent Client Protocol) client, so any ACP agent works with the editor pane.
+- [ ] **A3** Send a selection, diagnostics or a command's output to an agent in one step; agents open files at a line through MTP.
 
 ## 5. Non-goals
 

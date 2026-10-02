@@ -7,17 +7,21 @@
 
 ## 1. 定位
 
-**mtty** 是一个跨平台(macOS / Linux / Windows)的**终端入口**:日常开发、AI 编码 agent 与远程运维
-都从同一个窗口开始。
+**mtty** 是一个跨平台(macOS / Linux / Windows)的 **AI 原生终端与编辑器,本地与远程同样顺手**:终端、文件、
+远程主机与 AI 编程 agent 共用一个快速的原生窗口,以及同一套标签与分屏。它立在三根支柱上——终端与远程、编辑器、Agent
+工作台——把它们连在一起的是受性能门约束的 Rust 与 GPU 渲染,以及不需要账号、不强制上云:mtty 托管你选择的 agent,自己从不
+调用模型。
 
 | 来源 | 吸收什么 | 不吸收什么 |
 |---|---|---|
 | [Otty](https://otty.sh/) | 现代本地终端体验:标签/分屏、命令面板、文件查看、Agent 徽章、Composer、会话恢复 | — |
 | [Termius](https://termius.com/) | 远程运维:主机库与分组、SSH 密钥/身份、SFTP、端口转发与跳板机、Snippets | 账号体系、强制云同步、订阅墙 |
+| [PuTTY](https://www.chiark.greenend.org.uk/~sgtatham/putty/) | 串口、Telnet 与原始 TCP 会话;`.ppk` 密钥(M6) | 过时的界面、保存在注册表里的逐会话设置 |
 | [mtty](https://mtty.dev/) | 多 agent 并行:每个任务一个 git worktree、统一看状态、diff 审阅后合并 | 只服务 agent 的 IDE 形态 |
+| [Zed](https://zed.dev/) / VS Code | 编辑器内核:rope 缓冲区、多光标、tree-sitter、LSP、大文件也快(M5);agent 的修改在行内审阅(M7) | 扩展市场、内置的 AI 账号 |
 | miao | 原生集成:无需 hook 的状态上报、会话恢复、经 MTP 双向控制 | — |
 
-一句话:**本地终端要快而稳,agent 要看得见、管得住,远程主机要像本地目录一样好用。**
+一句话:**终端要快而稳,编辑器要好用到不想离开,agent 要看得见、管得住、改动可审阅,远程主机要像本地目录一样好用。**
 
 ### 1.1 命名
 
@@ -32,7 +36,8 @@
 2. **AI 编码 agent 用户**:同时跑 codex / claude / opencode / miao,知道谁在忙、谁在等我、
    谁出错了,能把提示排队交给它们。
 3. **运维/全栈**:管理几十台主机,SSH 登录、传文件、转发端口、批量执行常用命令,
-   凭证不离开本机。
+   凭证不离开本机;也能经串口与 Telnet 连接设备(M6)。
+4. **编辑代码与文本**:在终端旁打开任何文件,大文件也快,有高亮和语言服务器的帮助(M5);保留 agent 的改动之前先审阅(M7)。
 
 ## 2. 交互设计原则
 
@@ -234,6 +239,18 @@
 - [ ] **E4** 多光标、查找替换、跳转到行、Markdown 预览 pane。
 - [ ] **E5** LSP:诊断、悬停、补全、跳转定义。
 - [ ] **E6** pane 中的 vim 模式、折叠与大纲、外部修改重新加载。
+
+### M6 远程(PuTTY 式,待设计)
+
+- [ ] **R1** 串口(波特率、校验、流控)与 Telnet 会话、原始 TCP;保存在主机库中。
+- [ ] **R2** 导入 `.ppk` 密钥(转为 OpenSSH 格式,不以明文保存)。
+- [ ] **R3** 以 ADR 决定 SSH 是否从系统 OpenSSH 改为 Rust 原生实现(收益:Windows 无需 OpenSSH、进程内 SFTP 与转发;代价:重新实现 `~/.ssh/config`、ProxyJump 与 agent 转发)。
+
+### M7 AI 原生工作台(待设计)
+
+- [ ] **A1** agent 的修改以编辑器事务的形式进入,行内显示为 diff,可接受或拒绝,也可撤销。
+- [ ] **A2** ACP(Agent Client Protocol)客户端,任何 ACP agent 都能与编辑器 pane 协作。
+- [ ] **A3** 一步把选区、诊断或命令输出交给 agent;agent 经 MTP 打开文件并定位到行。
 
 ## 5. 不做的事
 

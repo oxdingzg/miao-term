@@ -1,6 +1,6 @@
 # miao-term
 
-**一个用 Rust 编写的、快速且可嵌入的跨平台终端模拟器与引擎。**
+**mtty —— 用 Rust 编写的 AI 原生终端与编辑器,本地与远程同样顺手。**
 
 [![CI](https://github.com/oxdingzg/miao-term/actions/workflows/ci.yml/badge.svg)](https://github.com/oxdingzg/miao-term/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
@@ -15,11 +15,22 @@
 
 ## 概述
 
-`miao-term` 在一个仓库里包含两件事:
+**mtty** 把终端、文件、远程主机与 AI 编程 agent 放进同一个快速的原生窗口。它有三根支柱:
+
+| 支柱 | 现在 | 接下来 |
+|---|---|---|
+| **终端与远程** —— 吸收 Termius 与 PuTTY | GPU 渲染的终端、标签与分屏、会话恢复;主机库、密钥、SFTP/FTP、端口转发、跳板机、片段、广播输入(经系统 OpenSSH) | 串口、Telnet 与原始 TCP 连接,`.ppk` 密钥;正在评估 Rust 原生的 SSH 实现(需另立 ADR) |
+| **编辑器** —— 一流的文本编辑器,而非附属功能 | 内置查看/编辑,带 Markdown 与 Mermaid 预览;`term-editor` 内核(rope、多光标、撤销、搜索)已完成 | 与终端并列的编辑器 pane:tree-sitter 高亮、LSP、大文件也快([ADR 0034](docs/decisions/0034-editor-pane.zh-CN.md)) |
+| **Agent 工作台** —— 吸收 mtty,AI 原生 | Claude Code、Codex、OpenCode 与 miao 的状态 hook;需要关注时的徽章与通知;提示队列;每个任务一个 git worktree 并审阅 diff;MTP 控制面 | agent 的修改以可撤销的 diff 在行内审阅;ACP 客户端;选区、诊断与终端输出一键作为 agent 上下文 |
+
+把它们连在一起的是:Rust 与 GPU 渲染,并由性能门把关;终端、编辑器、远程主机与 agent 位于同一套标签与分屏;不需要账号,
+不强制上云——mtty 托管你选择的 agent,自己从不调用模型。
+
+本仓库包含:
 
 - **终端引擎** —— `miao-term-core` 负责从 PTY 到屏幕的热路径,不依赖任何窗口或 GPU 代码;
-- **`mtty`** —— 构建在该引擎之上的、开箱即用的终端应用,具备标签、分屏、侧边面板、
-  设置窗口、shell 集成以及可脚本化的控制面。
+- **编辑器内核** —— `miao-term-editor`,同样不含任何界面代码;
+- **`mtty`** —— 构建在它们之上的应用,具备标签、分屏、侧边面板、设置窗口、shell 集成以及可脚本化的控制面。
 
 **应用统一为一个 `mtty`**，使用 `miao-term-widget` 中的原生 `winit` + `wgpu`
 窗口与渲染循环，在同一帧合成 egui 界面。`mtty-app` 提供主程序及安装包元数据。
@@ -44,7 +55,7 @@
 
 | 项目 | 是什么 | 链接 |
 |---|---|---|
-| **mtty**(本仓库) | 终端应用,以及其背后可嵌入的终端引擎 | [mtty.dev/mtty](https://mtty.dev/zh/mtty) · [oxdingzg/miao-term](https://github.com/oxdingzg/miao-term) |
+| **mtty**(本仓库) | AI 原生的终端与编辑器,以及其背后可嵌入的引擎 | [mtty.dev/mtty](https://mtty.dev/zh/mtty) · [oxdingzg/miao-term](https://github.com/oxdingzg/miao-term) |
 | **miao** | 在终端里运行的开源 AI 编程代理 | [mtty.dev/miao](https://mtty.dev/zh/miao) · [oxdingzg/miao](https://github.com/oxdingzg/miao) |
 | **mtty.dev** | 两者的官网与文档站 | [mtty.dev](https://mtty.dev/zh/) |
 
@@ -168,6 +179,7 @@ mtty 与 miao 是两个独立项目,任意一个都可以单独使用。在 mtty
 | [`miao-term-graphics`](crates/term-graphics) | 内联图片流扫描器与解码器(Sixel、Kitty、iTerm2)。 |
 | [`miao-term-render`](crates/term-render) | `wgpu` + `glyphon` 字形网格渲染器,含 quad 与图像管线。 |
 | [`miao-term-ui`](crates/term-ui) | 与 host 无关的 UI:主题、输入编码、选区、分屏布局、egui 外壳、命令面板、hint、vim、markdown、ssh、更新与 agent 集成等 helper。 |
+| [`miao-term-editor`](crates/term-editor) | 编辑器 pane 的编辑内核:rope 缓冲区、事务与撤销、多选区、光标移动、查找替换(ADR 0034)。不含界面代码。 |
 | [`miao-term-config`](crates/term-config) | 配置与主题,ghostty/alacritty 导入,以及 View 规则引擎。 |
 | [`miao-term-mtp`](crates/term-mtp) | MTP 协议、host/client 与传输(Unix socket、Windows 命名管道、TCP)。 |
 | [`miao-term-widget`](crates/term-widget) | mtty 原生 host 库:`winit` + `wgpu` 渲染循环,直接绘制网格并合成 egui 外壳。 |
@@ -374,6 +386,14 @@ mtty-cli file write --path /tmp/x --data-b64 "AAECAw=="   # 二进制
 
 **mtty** 的产品方向、
 已验证的功能基线与里程碑计划见 [`docs/PRODUCT.zh-CN.md`](docs/PRODUCT.zh-CN.md)。
+
+接下来的里程碑:
+
+- **M5 编辑器 pane**([ADR 0034](docs/decisions/0034-editor-pane.zh-CN.md)):E1 `term-editor` 内核已完成;接下来是
+  pane 本身,然后是 tree-sitter 高亮、多光标与查找替换、LSP 和 vim 模式。
+- **M6 远程(PuTTY 式)**:串口、Telnet 与原始 TCP 会话,导入 `.ppk` 密钥;是否把 SSH 换成 Rust 原生实现,是一个待定的
+  设计问题。
+- **M7 AI 原生工作台**:agent 的修改以可撤销的 diff 在行内审阅,ACP 客户端,一步把选区、诊断与终端输出交给 agent。
 
 近期已完成:Windows 命名管道传输与 ConPTY 路径(真实硬件验证)、会话恢复、View 规则、
 Open Quickly、details 面板、agent 闭环(通知、防休眠、提示队列)、Recipes、经 ssh 的远端

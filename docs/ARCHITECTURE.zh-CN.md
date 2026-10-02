@@ -87,6 +87,7 @@
 | `term-render` | 字形加载/shaping/图集、网格实例化、绘制 pass、damage 增量 | 不管事件循环/输入 |
 | `term-ui` | 无宿主 UI:主题、输入编码、选区、分屏布局、egui chrome、调色板、hints、vim、markdown、ssh、update、agent 集成 | 不含窗口/事件循环 |
 | `term-widget` | 原生 host 库（主程序由 mtty-app 提供）:winit 事件循环、wgpu surface、输入/IME/剪贴板/拖放、直接自绘网格(ADR 0030) | 不重复实现 PTY/parser |
+| `term-editor` | 编辑器 pane 的编辑内核:rope、事务与撤销、多选区、光标移动、查找替换(ADR 0034) | 不依赖 UI 与 GPU |
 | `term-config` | 配置模型、主题、ghostty/alacritty 导入 | 不依赖 UI |
 | `term-mtp` | 协议信封、传输、server/client、agent/history 注册表、revision + `core.wait` 长轮询 | 不依赖引擎 |
 | `mtty-app` | 原生 `mtty` 入口、命令 help/version 与平台安装包元数据 | 不重复实现终端内核 |

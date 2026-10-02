@@ -94,6 +94,7 @@ Not every edge is drawn: `term-widget` also depends on `term-core`/`term-render`
 | `term-render` | Font load/shaping/atlas, grid instancing, draw passes, damage increments | No event loop/input |
 | `term-ui` | Host-agnostic UI: theme, input encoding, selection, split layout, egui chrome, palette, hints, vim, markdown, ssh, update, agent integration | No window/event loop |
 | `term-widget` | Native host library (`mtty-app` supplies the executable): winit event loop, wgpu surface, input/IME/clipboard/drag-drop, direct grid draw (ADR 0030) | No PTY/parser duplication |
+| `term-editor` | Editing core for the editor pane: rope, transactions and undo, multiple selections, motions, find/replace (ADR 0034) | No UI, no GPU |
 | `term-config` | Config model, themes, ghostty/alacritty import | No UI |
 | `term-mtp` | Protocol envelope, transport, server/client, agent/history registries, revision + `core.wait` long-poll | No engine dependency |
 | `mtty-app` | Native `mtty` entry point, command help/version and platform packaging metadata | No terminal core duplication |
