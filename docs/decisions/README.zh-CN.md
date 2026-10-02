@@ -42,3 +42,4 @@
 | [0031](./0031-native-app-menu.zh-CN.md) | 把应用菜单放进 macOS 菜单栏 | 已接受 |
 | [0032](./0032-rename-mtty.zh-CN.md) | 应用正式更名为 mtty | 已接受 |
 | [0033](./0033-encrypted-sync.zh-CN.md) | 可选的端到端加密同步 | 已接受 |
+| [0034](./0034-editor-pane.zh-CN.md) | 原生编辑器 pane | 提议 |

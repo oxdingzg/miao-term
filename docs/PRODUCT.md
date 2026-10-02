@@ -325,6 +325,15 @@ verified on its own:
   with tombstones. Two app instances converged through a shared folder on the
   Mac mini, with no plaintext in it.)
 
+### M5 Editor pane (design in [ADR 0034](decisions/0034-editor-pane.md), proposed)
+
+- [ ] **E1** `term-editor` core: rope, transactions, undo, selections, search.
+- [ ] **E2** Editor pane MVP: pane kinds, styled spans and clipping, keys, mouse, IME, clipboard, open/save/close, session restore.
+- [ ] **E3** tree-sitter highlighting (~20 languages), large-file mode, remote files.
+- [ ] **E4** Multi-cursor, find/replace, go to line, Markdown preview pane.
+- [ ] **E5** LSP: diagnostics, hover, completion, go-to-definition.
+- [ ] **E6** vim mode in the pane, folding and outline, external-change reload.
+
 ## 5. Non-goals
 
 - No accounts or mandatory sign-in; every cloud feature is optional.
