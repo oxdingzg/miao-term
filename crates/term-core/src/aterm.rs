@@ -353,6 +353,11 @@ impl ATerm {
     /// A full-screen program (vim, less, man) is on the alternate screen and
     /// alternate scroll (DECSET 1007, on by default) is set: the wheel should
     /// send it arrow keys rather than scroll a scrollback it does not have.
+    /// A full-screen program (vim, less) has switched to the alternate screen.
+    pub fn alternate_screen(&self) -> bool {
+        self.term.mode().contains(TermMode::ALT_SCREEN)
+    }
+
     pub fn alternate_scroll(&self) -> bool {
         self.term
             .mode()

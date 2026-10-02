@@ -1100,6 +1100,7 @@ struct State {
     notifications: bool,
     prevent_sleep: bool,
     restore_scrollback: bool,
+    scrollback_saved_at: Instant,
     sleep: miao_term_ui::agentloop::SleepGuard,
     agent_states: HashMap<String, String>,
     composer: Option<String>,
@@ -1417,6 +1418,25 @@ impl State {
         }
     }
 
+    /// Size every tab's terminals to their layout, not just the active tab's
+    /// (a background tab is otherwise sized when it is first shown).
+    fn fit_all_panes(&mut self) {
+        let scale = self.window.scale_factor() as f32;
+        let (cw, ch) = (self.cw * scale, self.ch * scale);
+        let area = self.grid_area();
+        for tab in &mut self.tabs {
+            for (id, r) in tab.layout.rects(area) {
+                if let Some(pane) = tab.panes.iter_mut().find(|p| p.id == id) {
+                    let inner = card_inner(r);
+                    let cols = ((inner.w * scale) / cw).floor().max(1.0) as u16;
+                    let rows = ((inner.h * scale) / ch).floor().max(1.0) as u16;
+                    pane.term.set_cell_size(cw as u16, ch as u16);
+                    pane.term.resize(rows, cols);
+                }
+            }
+        }
+    }
+
     fn pane_rects(&self) -> Vec<(String, Rect)> {
         match self.tabs.get(self.active_tab) {
             Some(tab) => tab.layout.rects(self.grid_area()),
@@ -1433,7 +1453,9 @@ impl State {
             self.cw * self.window.scale_factor() as f32,
             self.ch * self.window.scale_factor() as f32,
         );
-        let area = self.grid_area();
+        // A whole-area pane's text area: the shell must start at the size it
+        // is drawn at, or zsh's end-of-line mark wraps onto a line of its own.
+        let area = card_inner(self.grid_area());
         let cols = ((area.w * self.window.scale_factor() as f32) / cw)
             .floor()
             .max(1.0) as u16;
@@ -2448,6 +2470,7 @@ impl State {
     }
 
     fn render(&mut self) {
+        self.save_scrollback_periodically();
         if self.focused {
             if let Some(tab) = self.tabs.get_mut(self.active_tab) {
                 tab.attention = None;
@@ -3360,12 +3383,17 @@ impl State {
     /// that was running (never run it unasked).
     fn restore_pane_contents(&self, pane: &mut Pane, saved: &serde_json::Value) {
         let t = |en, zh| miao_term_ui::i18n::t(self.lang, en, zh);
+        // Named by a clean quit; after a crash, the periodic save's file for
+        // the pane's id.
         let file = saved["scrollback"]
             .as_str()
+            .map(str::to_string)
+            .or_else(|| saved["id"].as_str().map(|id| format!("{id}.ansi")))
             .filter(|f| is_plain_file_name(f));
         if let Some(path) = file.and_then(|f| scrollback_dir().map(|d| d.join(f))) {
             if let Ok(text) = std::fs::read(&path) {
-                pane.term.screen_mut().process(&text);
+                let text = without_mtty_notes(&String::from_utf8_lossy(&text));
+                pane.term.screen_mut().process(text.as_bytes());
                 let note = format!(
                     "\x1b[0;2m[mtty] {}\x1b[0m\r\n",
                     t("Restored from the last session.", "以上为上次会话的内容。")
@@ -3383,6 +3411,29 @@ impl State {
             );
             pane.term.screen_mut().process(note.as_bytes());
             pane.on_enter = Some(format!("{command}\r"));
+        }
+    }
+
+    /// Save each terminal's contents every minute, so a crash loses at most
+    /// that much (a clean quit saves everything in `save_session_on_exit`).
+    /// Panes under a full-screen program are left as they were: reading the
+    /// shell output beneath would mean switching screens.
+    fn save_scrollback_periodically(&mut self) {
+        if !self.restore_scrollback || self.scrollback_saved_at.elapsed() < SCROLLBACK_SAVE_EVERY {
+            return;
+        }
+        self.scrollback_saved_at = Instant::now();
+        let Some(dir) = scrollback_dir() else {
+            return;
+        };
+        for pane in self.tabs.iter_mut().flat_map(|t| t.panes.iter_mut()) {
+            if pane.term.screen().alternate_screen() {
+                continue;
+            }
+            let text = pane.term.screen_mut().snapshot_ansi(SCROLLBACK_LINES);
+            if !text.is_empty() {
+                let _ = write_private(&dir, &format!("{}.ansi", pane.id), text.as_bytes());
+            }
         }
     }
 
@@ -3570,7 +3621,17 @@ impl State {
         let Some(v) = session::load(config, data.as_deref()) else {
             return false;
         };
-        self.restore_from_value(&v)
+        let restored = self.restore_from_value(&v);
+        // Contents of panes that are gone (closed before a crash) are not
+        // kept around; the running panes save afresh on the first frame, so
+        // a crash right after a restore loses nothing.
+        if let Some(dir) = scrollback_dir() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        if let Some(due) = Instant::now().checked_sub(SCROLLBACK_SAVE_EVERY) {
+            self.scrollback_saved_at = due;
+        }
+        restored
     }
 
     fn active_pane(&self) -> Option<&Pane> {
@@ -9644,6 +9705,7 @@ impl ApplicationHandler<HostEvent> for Host {
             notifications: cfg.notifications,
             prevent_sleep: cfg.prevent_sleep,
             restore_scrollback: cfg.restore_scrollback,
+            scrollback_saved_at: Instant::now(),
             sleep: miao_term_ui::agentloop::SleepGuard::new(),
             agent_states: HashMap::new(),
             composer: None,
@@ -9708,6 +9770,9 @@ impl ApplicationHandler<HostEvent> for Host {
         if !state.restore_session() {
             state.new_tab();
         }
+        // Restored splits start their shells at their own size, in every tab,
+        // before the shells print a prompt.
+        state.fit_all_panes();
         #[cfg(target_os = "macos")]
         if menu_in_os() {
             let proxy = self.proxy.clone();
@@ -11435,6 +11500,33 @@ fn scrollback_dir() -> Option<std::path::PathBuf> {
 /// Rows of each terminal kept for the next launch.
 const SCROLLBACK_LINES: usize = 5000;
 
+/// How often terminal contents are saved while mtty runs.
+const SCROLLBACK_SAVE_EVERY: Duration = Duration::from_secs(60);
+
+/// Saved contents without the notes mtty wrote when restoring them before,
+/// so restarts do not stack "Restored from the last session" lines.
+fn without_mtty_notes(text: &str) -> String {
+    let plain = |line: &str| {
+        let mut out = String::new();
+        let mut chars = line.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' && chars.peek() == Some(&'[') {
+                for d in chars.by_ref() {
+                    if d.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    };
+    text.split_inclusive("\r\n")
+        .filter(|line| !plain(line).starts_with("[mtty] "))
+        .collect()
+}
+
 /// A bare file name (no directories), as the session names saved contents.
 fn is_plain_file_name(name: &str) -> bool {
     !name.is_empty() && std::path::Path::new(name).file_name() == Some(std::ffi::OsStr::new(name))
@@ -12988,6 +13080,16 @@ mod tests {
         ] {
             assert!(!is_default_title(chosen), "{chosen}");
         }
+    }
+
+    #[test]
+    fn restored_contents_drop_earlier_mtty_notes() {
+        let saved = "$ ls\r\nsrc\r\n\x1b[0;2m[mtty] Restored from the last session.\x1b[0m\r\n\x1b[0;2m[mtty] Was running: vim a  Press Enter to run it again.\x1b[0m\r\n$ echo [mtty] stays\r\n";
+        assert_eq!(
+            without_mtty_notes(saved),
+            "$ ls\r\nsrc\r\n$ echo [mtty] stays\r\n",
+            "only lines starting with the note go"
+        );
     }
 
     #[test]
