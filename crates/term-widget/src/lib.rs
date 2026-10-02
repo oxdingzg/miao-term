@@ -2589,7 +2589,7 @@ impl State {
                         let Some(cell) = pane.term.screen().cell(row, col) else {
                             continue;
                         };
-                        let bg = theme.color(cell.bg, false);
+                        let bg = miao_term_ui::cell_background(&theme, &cell);
                         if bg != theme.bg && bg != panel_bg {
                             quads.push(quad(ox, oy, row, col, cw, ch, (bg.0, bg.1, bg.2)));
                         }
