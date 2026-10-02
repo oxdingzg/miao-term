@@ -281,6 +281,8 @@ struct RawConfig {
     colors: Option<RawColors>,
     /// `[lsp]`: `enabled`, and a table per server (`[lsp.rust]`).
     lsp: Option<toml::Table>,
+    /// `[acp]`: `[[acp.agent]]` entries (ADR 0040, A2).
+    acp: Option<toml::Table>,
 }
 
 fn theme_from(bg: &str, fg: &str, palette: &[&str; 16]) -> Theme {
@@ -385,6 +387,8 @@ pub struct Config {
     pub sync_dir: Option<PathBuf>,
     /// Language servers for the editor pane (ADR 0034, E5).
     pub lsp: LspConfig,
+    /// ACP agents (ADR 0040, A2).
+    pub acp: AcpConfig,
     pub theme: Theme,
     /// The named theme the colours started from (`theme = "…"`), if any.
     pub theme_name: Option<String>,
@@ -439,6 +443,52 @@ impl LspConfig {
                     );
                 }
                 _ => {}
+            }
+        }
+        cfg
+    }
+}
+
+/// `[acp]` in `config.toml`: one or more ACP agents to launch (ADR 0040, A2).
+/// Each `[[acp.agent]]` has a `name` and a `command` (a string split at
+/// spaces, or a list).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AcpConfig {
+    pub agents: Vec<AcpAgent>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AcpAgent {
+    pub name: String,
+    /// The program and its arguments (`["codex", "acp"]`).
+    pub command: Vec<String>,
+}
+
+impl AcpConfig {
+    fn from_table(table: &toml::Table) -> Self {
+        let strings = |v: &toml::Value| -> Option<Vec<String>> {
+            let list: Vec<String> = match v {
+                toml::Value::String(s) => s.split_whitespace().map(str::to_string).collect(),
+                toml::Value::Array(a) => a
+                    .iter()
+                    .filter_map(|x| x.as_str().map(str::to_string))
+                    .collect(),
+                _ => return None,
+            };
+            (!list.is_empty()).then_some(list)
+        };
+        let mut cfg = AcpConfig::default();
+        if let Some(arr) = table.get("agent").and_then(|v| v.as_array()) {
+            for a in arr {
+                let name = a
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("agent")
+                    .to_string();
+                let Some(command) = a.get("command").and_then(strings) else {
+                    continue;
+                };
+                cfg.agents.push(AcpAgent { name, command });
             }
         }
         cfg
@@ -502,6 +552,7 @@ impl Default for Config {
             update_pubkey: None,
             sync_dir: None,
             lsp: LspConfig::default(),
+            acp: AcpConfig::default(),
             theme_name: None,
             imported_from: None,
             theme: Theme::default(),
@@ -914,6 +965,9 @@ impl Config {
         if let Some(table) = raw.lsp {
             cfg.lsp = LspConfig::from_table(&table);
         }
+        if let Some(table) = raw.acp {
+            cfg.acp = AcpConfig::from_table(&table);
+        }
         if let Some(key) = raw.update_pubkey {
             let key = key.trim();
             if !key.is_empty() {
@@ -984,6 +1038,26 @@ mod tests {
         let off = Config::from_toml("[lsp]\nenabled = false\n").unwrap();
         assert!(off.lsp.disabled);
         assert_eq!(Config::from_toml("").unwrap().lsp, LspConfig::default());
+    }
+
+    #[test]
+    fn acp_agents_are_configured() {
+        let cfg = Config::from_toml(
+            "[acp]\n\n[[acp.agent]]\nname = \"codex\"\ncommand = \"codex acp\"\n\n\
+             [[acp.agent]]\nname = \"gemini\"\ncommand = [\"gemini\", \"--experimental-acp\"]\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.acp.agents.len(), 2);
+        assert_eq!(cfg.acp.agents[0].name, "codex");
+        assert_eq!(
+            cfg.acp.agents[0].command,
+            vec!["codex".to_string(), "acp".to_string()]
+        );
+        assert_eq!(
+            cfg.acp.agents[1].command,
+            vec!["gemini".to_string(), "--experimental-acp".to_string()]
+        );
+        assert!(Config::from_toml("").unwrap().acp.agents.is_empty());
     }
 
     #[test]

@@ -2998,6 +2998,7 @@ dependencies = [
  "egui-winit",
  "egui_commonmark",
  "egui_extras",
+ "miao-term-acp",
  "miao-term-config",
  "miao-term-core",
  "miao-term-editor",
