@@ -45,3 +45,4 @@ Docs are English by default; keep a Simplified Chinese version in sync
 | [0035](./0035-native-notifications.md) | Native system notifications | accepted |
 | [0036](./0036-clipboard-forwarding.md) | Host-forwarded clipboard images | accepted |
 | [0037](./0037-serial-telnet-tcp.md) | Serial, Telnet and raw TCP sessions | accepted |
+| [0038](./0038-ppk-import.md) | Importing PuTTY `.ppk` private keys | accepted |

@@ -243,7 +243,7 @@
 ### M6 远程(PuTTY 式,设计见 [ADR 0037](decisions/0037-serial-telnet-tcp.md))
 
 - [x] **R1** 串口(波特率、校验、流控)与 Telnet 会话、原始 TCP;保存在主机库中。(ADR 0037。会话以字节管道(`Terminal::from_pipe`)在 pane 中打开,在后台线程拨号:裸 TCP 与内置 Telnet 编解码不新增依赖,串口使用 MIT 的 `serialport`(`default-features = false`,不含 libudev)。Shell 菜单与命令面板中有“新建串口/Telnet/TCP 会话…”,带配置表单;`hosts.toml` 增加 `kind`(默认 `ssh`,另有 `serial`/`telnet`/`tcp`)与 `[host.serial]`,侧栏、`mtty://host/<name>` 与命令面板都能打开这些类型。Telnet 与裸 TCP 标注为未加密,串口不标。恢复会话时重连,复制标签会重新拨号,连接断开即结束 pane;不适用 shell shim、OSC 7 工作目录与命令捕获。依据:管道终端与 Telnet 编解码单元测试、主机类型往返、transport target 的 JSON 测试,以及 macOS 与 Linux 上的工作区构建。)
-- [ ] **R2** 导入 `.ppk` 密钥(转为 OpenSSH 格式,不以明文保存)。
+- [ ] **R2** 导入 `.ppk` 密钥(转为 OpenSSH 格式,不以明文保存)。(设计见 [ADR 0038](decisions/0038-ppk-import.md)。)
 - [ ] **R3** 以 ADR 决定 SSH 是否从系统 OpenSSH 改为 Rust 原生实现(收益:Windows 无需 OpenSSH、进程内 SFTP 与转发;代价:重新实现 `~/.ssh/config`、ProxyJump 与 agent 转发)。
 
 ### M7 AI 原生工作台(待设计)
