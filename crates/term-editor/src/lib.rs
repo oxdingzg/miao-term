@@ -13,12 +13,14 @@ pub mod layout;
 pub mod motion;
 pub mod search;
 pub mod selection;
+pub mod syntax;
 pub mod text;
 
-pub use change::{Assoc, Change, Transaction};
+pub use change::{Assoc, ByteEdit, Change, Transaction};
 pub use document::{Document, Motion};
 pub use search::{SearchError, SearchQuery};
 pub use selection::{Range, Selection};
+pub use syntax::{Highlight, Syntax};
 pub use text::{DecodeError, LineEnding};
 
 pub use ropey::Rope;

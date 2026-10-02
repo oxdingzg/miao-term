@@ -87,3 +87,59 @@ fn editing_a_100_mb_file_stays_interactive() {
     check("save 100 MB", t.elapsed().as_secs_f64() * 1e3, 1000.0);
     assert_eq!(out.len(), bytes.len());
 }
+
+#[test]
+#[ignore = "perf gate; run `cargo test --release -- --ignored`"]
+fn highlighting_a_1_mb_source_file_stays_interactive() {
+    use miao_term_editor::Syntax;
+    let unit = "/// Doc comment with 中文.\npub fn compute(index: usize, table: &[u8]) -> Option<u8> {\n    let value = table.get(index)?; // a comment\n    Some(value.wrapping_add(1))\n}\n\n";
+    let text = unit.repeat((1 << 20) / unit.len() - 1);
+    let mut doc = Document::from_text(&text);
+
+    let t = Instant::now();
+    let mut syntax = Syntax::for_file(std::path::Path::new("big.rs"), doc.rope()).unwrap();
+    check(
+        "first parse of 1 MB",
+        t.elapsed().as_secs_f64() * 1e3,
+        1000.0,
+    );
+
+    // One screen in the middle, as the editor pane asks every frame.
+    let rope = doc.rope();
+    let line = rope.len_lines() / 2;
+    let range = rope.line_to_byte(line)..rope.line_to_byte(line + 60);
+    let t = Instant::now();
+    let mut spans = 0;
+    for _ in 0..50 {
+        spans += syntax.highlights(doc.rope(), range.clone()).len();
+    }
+    check(
+        "highlight one screen",
+        t.elapsed().as_secs_f64() * 1e3 / 50.0,
+        4.0,
+    );
+    assert!(spans > 0);
+
+    // A keystroke in the middle, inside a function body (in `value`):
+    // incremental reparse.
+    let at = {
+        let rope = doc.rope();
+        let mut l = line;
+        while !rope.line(l).to_string().contains("let value") {
+            l += 1;
+        }
+        rope.line_to_char(l) + rope.line(l).to_string().find("value").unwrap() + 2
+    };
+    doc.set_selection(Selection::cursor(at));
+    let t = Instant::now();
+    for _ in 0..20 {
+        doc.type_text("x");
+        let edits = doc.take_edits();
+        syntax.update(doc.rope(), &edits);
+    }
+    check(
+        "keystroke reparse",
+        t.elapsed().as_secs_f64() * 1e3 / 20.0,
+        16.0,
+    );
+}

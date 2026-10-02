@@ -42,6 +42,24 @@ impl Change {
     }
 }
 
+/// One change in byte terms, in the order a syntax tree must take them
+/// (tree-sitter's `InputEdit`): rows and columns are bytes within a line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ByteEdit {
+    pub start_byte: usize,
+    pub old_end_byte: usize,
+    pub new_end_byte: usize,
+    pub start: (usize, usize),
+    pub old_end: (usize, usize),
+    pub new_end: (usize, usize),
+}
+
+/// The (row, byte column) of a byte offset.
+fn point(rope: &Rope, byte: usize) -> (usize, usize) {
+    let line = rope.byte_to_line(byte);
+    (line, byte - rope.line_to_byte(line))
+}
+
 /// Which side a position sticks to when text is inserted exactly there.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Assoc {
@@ -81,6 +99,36 @@ impl Transaction {
 
     pub fn is_empty(&self) -> bool {
         self.changes.is_empty()
+    }
+
+    /// The byte edits this transaction makes to `rope` (before it is
+    /// applied), last change first: each one is then valid against the text
+    /// as the edits before it left it, which is how a syntax tree takes them.
+    pub fn byte_edits(&self, rope: &Rope) -> Vec<ByteEdit> {
+        self.changes
+            .iter()
+            .rev()
+            .map(|c| {
+                let start_byte = rope.char_to_byte(c.start);
+                let old_end_byte = rope.char_to_byte(c.end);
+                let start = point(rope, start_byte);
+                let new_end = match c.text.rfind('\n') {
+                    None => (start.0, start.1 + c.text.len()),
+                    Some(last) => (
+                        start.0 + c.text.matches('\n').count(),
+                        c.text.len() - last - 1,
+                    ),
+                };
+                ByteEdit {
+                    start_byte,
+                    old_end_byte,
+                    new_end_byte: start_byte + c.text.len(),
+                    start,
+                    old_end: point(rope, old_end_byte),
+                    new_end,
+                }
+            })
+            .collect()
     }
 
     /// Apply to `rope` and return the transaction that undoes it.
@@ -168,6 +216,32 @@ mod tests {
         tx.apply(&mut rope);
         assert_eq!(rope.to_string(), "aB_cd");
         assert_eq!(tx.map(2, Assoc::After), 3);
+    }
+
+    #[test]
+    fn byte_edits_come_last_first_with_points() {
+        let rope = Rope::from_str("ab\n中x\n");
+        let tx = Transaction::new(vec![Change::insert(0, "1\n2"), Change::replace(3, 4, "yy")]);
+        let edits = tx.byte_edits(&rope);
+        assert_eq!(edits.len(), 2);
+        // "中" is 3 bytes at byte 3, row 1 column 0.
+        assert_eq!(
+            edits[0],
+            ByteEdit {
+                start_byte: 3,
+                old_end_byte: 6,
+                new_end_byte: 5,
+                start: (1, 0),
+                old_end: (1, 3),
+                new_end: (1, 2),
+            }
+        );
+        assert_eq!(edits[1].start, (0, 0));
+        assert_eq!(
+            edits[1].new_end,
+            (1, 1),
+            "a line break moves the end down a row"
+        );
     }
 
     #[test]
