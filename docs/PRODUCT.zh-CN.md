@@ -246,11 +246,11 @@
 - [x] **R2** 导入 `.ppk` 密钥(转为 OpenSSH 格式,不以明文保存)。(ADR 0038。不依赖 GPU 的 `miao-term-keys` 解析 PPK v2(SHA-1 派生、HMAC-SHA-1)与 v3(Argon2id、HMAC-SHA-256),支持 Ed25519、RSA、ECDSA,先校验 MAC 再接触密钥,可解密 `none`/`aes256-cbc`,并经 `ssh-key` 以 bcrypt-pbkdf + aes256-ctr 和用户设置的口令重新加密。*主机… → 导入 PuTTY 密钥…* 读取文件后写出 `~/.ssh/<name>`(0600)与 `<name>.pub`,已存在时除非勾选“覆盖”否则拒绝;新口令为空会被拒绝,不存在未加密输出的路径。`chacha20-poly1305` 以明确错误拒绝(暂无向量)。依据:`puttygen` 0.81 生成的 12 个真实夹具——Ed25519/RSA/ECDSA × v2/v3 × 明文/加密——导入后与各自 `.pub` 比对,并有口令错误、文件被篡改与空口令的测试。)
 - [x] **R3** 以 ADR 决定 SSH 是否从系统 OpenSSH 改为 Rust 原生实现(收益:Windows 无需 OpenSSH、进程内 SFTP 与转发;代价:重新实现 `~/.ssh/config`、ProxyJump 与 agent 转发)。(决定见 [ADR 0039](decisions/0039-ssh-stack.md):目前继续使用系统 OpenSSH;macOS、Linux 与 Windows 都已自带,若情况变化,ADR 0037 的传输层就是原生后端的接入点。无 OpenSSH 的平台、进程内 SFTP/转发或安全理由会触发重新评估。)
 
-### M7 AI 原生工作台(待设计)
+### M7 AI 原生工作台(设计见 [ADR 0040](decisions/0040-ai-native-workspace.md))
 
-- [ ] **A1** agent 的修改以编辑器事务的形式进入,行内显示为 diff,可接受或拒绝,也可撤销。
-- [ ] **A2** ACP(Agent Client Protocol)客户端,任何 ACP agent 都能与编辑器 pane 协作。
-- [ ] **A3** 一步把选区、诊断或命令输出交给 agent;agent 经 MTP 打开文件并定位到行。
+- [ ] **A1** agent 的修改以编辑器事务的形式进入,行内显示为 diff,可接受或拒绝,也可撤销。(设计:MTP `editor.propose` 把修改作为单事务应用并标记改动行;状态栏接受/拒绝,拒绝即撤销。见 [ADR 0040](decisions/0040-ai-native-workspace.md)。)
+- [ ] **A2** ACP(Agent Client Protocol)客户端,任何 ACP agent 都能与编辑器 pane 协作。(设计:`miao-term-acp` crate 在 agent stdio 上讲 JSON-RPC,包含会话、流式、fs/终端与权限映射。见 [ADR 0040](decisions/0040-ai-native-workspace.md)。)
+- [x] **A3** 一步把选区、诊断或命令输出交给 agent;agent 经 MTP 打开文件并定位到行。(ADR 0040。MTP `app.edit`/`app.view` 增加可选的 1 基 `line` 与 `column`;宿主打开文件并把编辑器 pane 移到该处。命令面板新增 *把选区发给 Agent*、*把诊断发给 Agent*、*把上一条命令的输出发给 Agent*:各自找到本标签的 agent pane,输入一段带围栏的简短 prompt 并回车。依据:`app.edit` 携带 `line`/`column` 的 MTP 测试,以及工作区构建与测试。)
 
 ## 5. 不做的事
 

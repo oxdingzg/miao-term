@@ -221,10 +221,17 @@ const MAX_TRANSITIONS: usize = 1024;
 pub enum Command {
     Focus(String),
     Close(String),
-    /// Open a file in the reader.
-    View(String),
-    /// Open a file in the editor.
-    Edit(String),
+    /// Open a file in the reader, optionally at a 1-based line.
+    View {
+        path: String,
+        line: Option<usize>,
+    },
+    /// Open a file in the editor, optionally at a 1-based line/column.
+    Edit {
+        path: String,
+        line: Option<usize>,
+        column: Option<usize>,
+    },
 }
 
 impl ServerState {
@@ -590,10 +597,19 @@ fn dispatch(state: &ServerState, req: Request) -> Response {
             if path.is_empty() {
                 return Response::err(id, rev, "no_path", "path is required");
             }
+            let line = params
+                .get("line")
+                .and_then(Value::as_u64)
+                .filter(|n| *n > 0)
+                .map(|n| n as usize);
+            let column = params
+                .get("column")
+                .and_then(Value::as_u64)
+                .map(|n| n as usize);
             let command = if req.method == "view" {
-                Command::View(path)
+                Command::View { path, line }
             } else {
-                Command::Edit(path)
+                Command::Edit { path, line, column }
             };
             state.queue_command(command);
             Response::ok(id, rev, json!({ "ok": true }))
@@ -1364,11 +1380,28 @@ mod tests {
     fn app_view_and_edit_queue_commands() {
         let state = ServerState::new();
         assert!(dispatch(&state, request("app", "view", json!({ "path": "/tmp/a" }))).ok);
-        assert!(dispatch(&state, request("app", "edit", json!({ "path": "/tmp/b" }))).ok);
+        assert!(
+            dispatch(
+                &state,
+                request(
+                    "app",
+                    "edit",
+                    json!({ "path": "/tmp/b", "line": 3, "column": 5 })
+                ),
+            )
+            .ok
+        );
         let commands = state.take_commands();
         assert!(matches!(
             commands.as_slice(),
-            [Command::View(a), Command::Edit(b)] if a == "/tmp/a" && b == "/tmp/b"
+            [
+                Command::View { path: a, line: None },
+                Command::Edit {
+                    path: b,
+                    line: Some(3),
+                    column: Some(5)
+                }
+            ] if a == "/tmp/a" && b == "/tmp/b"
         ));
         let bad = dispatch(&state, request("app", "view", json!({})));
         assert!(!bad.ok);

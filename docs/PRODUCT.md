@@ -349,11 +349,11 @@ verified on its own:
 - [x] **R2** `.ppk` key import (to OpenSSH format, never stored unencrypted). (ADR 0038. A GPU-free `miao-term-keys` crate parses PPK v2 (SHA-1 KDF, HMAC-SHA-1) and v3 (Argon2id, HMAC-SHA-256) for Ed25519, RSA and ECDSA, checks the MAC before touching the key, decrypts `none`/`aes256-cbc`, and re-encodes through `ssh-key` with bcrypt-pbkdf + aes256-ctr under a passphrase the user chooses. *Hosts… → Import PuTTY Key…* reads the file, writes `~/.ssh/<name>` (0600) and `<name>.pub`, refusing an existing file unless Overwrite is ticked; an empty new passphrase is refused and there is no unencrypted output path. `chacha20-poly1305` is rejected with a clear message (no vector). Evidence: 12 real fixtures from `puttygen` 0.81 — Ed25519/RSA/ECDSA × v2/v3 × plain/encrypted — imported and checked against their `.pub`, with wrong-passphrase, tampered-file and empty-passphrase tests.)
 - [x] **R3** Decide in an ADR whether SSH moves from the system OpenSSH to a Rust-native stack (gains: Windows without OpenSSH, in-process SFTP and forwarding; costs: re-implementing `~/.ssh/config`, ProxyJump and agent forwarding). (Decided in [ADR 0039](decisions/0039-ssh-stack.md): keep the system OpenSSH client for now; macOS, Linux and Windows all ship it, and the ADR 0037 transport is where a native backend would slot in if that changes. `sshd`-free platforms, in-process SFTP/forwarding, or a security reason would trigger a revisit.)
 
-### M7 AI-native workspace (needs design)
+### M7 AI-native workspace (design in [ADR 0040](decisions/0040-ai-native-workspace.md))
 
-- [ ] **A1** Agents' edits arrive as editor transactions, shown inline as diffs to accept or reject, undoable.
-- [ ] **A2** An ACP (Agent Client Protocol) client, so any ACP agent works with the editor pane.
-- [ ] **A3** Send a selection, diagnostics or a command's output to an agent in one step; agents open files at a line through MTP.
+- [ ] **A1** Agents' edits arrive as editor transactions, shown inline as diffs to accept or reject, undoable. (Design: MTP `editor.propose` applies the edits as one transaction and marks the changed lines; Accept/Reject in the status bar, Undo rejects. See [ADR 0040](decisions/0040-ai-native-workspace.md).)
+- [ ] **A2** An ACP (Agent Client Protocol) client, so any ACP agent works with the editor pane. (Design: a `miao-term-acp` crate speaking JSON-RPC over the agent's stdio, with sessions, streaming, fs/terminal and permission mapping. See [ADR 0040](decisions/0040-ai-native-workspace.md).)
+- [x] **A3** Send a selection, diagnostics or a command's output to an agent in one step; agents open files at a line through MTP. (ADR 0040. MTP `app.edit`/`app.view` take an optional 1-based `line` and `column`; the host opens the file and moves the editor pane there. *Send Selection to Agent*, *Send Diagnostics to Agent* and *Send Last Command Output to Agent* are in the palette: each finds the tab's agent pane and types a short, fenced prompt into it, pressing Enter. Evidence: an MTP test that `app.edit` carries `line`/`column`, and the workspace build/tests.)
 
 ## 5. Non-goals
 
