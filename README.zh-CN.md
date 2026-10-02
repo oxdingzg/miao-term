@@ -150,6 +150,9 @@ mtty 与 miao 是两个独立项目,任意一个都可以单独使用。在 mtty
   Telnet 连接或裸 TCP socket 作为 pane 打开。已保存主机带 `kind`,也按同样方式打开;Telnet 与裸 TCP 标注为未加密(ADR 0037)。
 - **PuTTY 密钥**:*主机… → 导入 PuTTY 密钥…* 读取 `.ppk`(v2 或 v3,Ed25519/RSA/ECDSA),
   写出加密的 OpenSSH 密钥到 `~/.ssh`,绝不明文保存(ADR 0038)。
+- **ACP agent**:任何支持 Agent Client Protocol 的 agent(Codex、Gemini CLI 等)都可从
+  *ACP Agent…* 运行:转写窗口流式显示回复、发送 prompt、把其 diff 变成可审阅的编辑器
+  提案,并以“允许/拒绝”询问权限。agent 在 `config.toml` 的 `[acp]` 中配置(ADR 0040)。
 - **FTP/FTPS**:*连接 FTP/FTPS…* 经系统 `curl` 打开同一个双栏文件浏览器(默认显式 TLS;明文 FTP 会标注未加密)。
   口令只保存在内存中;留空则使用 `~/.netrc` 或匿名登录。
 - **持久会话**:在已保存主机上勾选 *在 tmux 中保持 shell*,重连后回到原会话;*使用 mosh 连接* 可跨休眠和网络切换

@@ -216,6 +216,11 @@ mtty instead.
 - **PuTTY keys**: *Hosts… → Import PuTTY Key…* reads a `.ppk` (v2 or v3,
   Ed25519/RSA/ECDSA) and writes an encrypted OpenSSH key to `~/.ssh`, never
   storing it unencrypted (ADR 0038).
+- **ACP agents**: any agent that speaks the Agent Client Protocol (Codex,
+  Gemini CLI, …) runs from *ACP Agent…*: a transcript window streams its
+  replies, sends prompts, turns its diffs into reviewable editor proposals and
+  asks for permission with Allow/Deny. Agents are listed under `[acp]` in
+  `config.toml` (ADR 0040).
 - **FTP/FTPS**: *Connect over FTP/FTPS…* opens the same two-pane browser
   through the system `curl` (explicit TLS by default; plain FTP is marked as
   unencrypted). The password stays in memory; leave it empty to use

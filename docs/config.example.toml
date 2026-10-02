@@ -41,6 +41,17 @@ font-size = 13                   # default
 # [lsp.go]
 # enabled = false
 
+# ACP (Agent Client Protocol) agents: every entry can be started from the
+# command palette's "ACP Agent…" and drives a transcript window (ADR 0040).
+# command is a string split at spaces, or a list.
+# [acp]
+# [[acp.agent]]
+# name = "codex"
+# command = "codex acp"
+# [[acp.agent]]
+# name = "gemini"
+# command = ["gemini", "--experimental-acp"]
+
 # Built-in named theme: nord | dracula | gruvbox | solarized | tokyo-night.
 # theme = "dracula"   # overridden by explicit [colors] below
 

@@ -18,6 +18,7 @@ miao-term-config = { path = "../term-config" }
 miao-term-editor = { path = "../term-editor" }
 miao-term-lsp = { path = "../term-lsp" }
 miao-term-keys = { path = "../term-keys" }
+miao-term-acp = { path = "../term-acp" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 winit = "0.30"

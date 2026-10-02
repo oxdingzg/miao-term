@@ -939,6 +939,25 @@ enum JobDone {
     /// A PuTTY key was imported and written, or why it was not (ADR 0038).
     /// The `Ok` value is the path written.
     KeyImported(Result<String, String>),
+    /// Streamed text from an ACP agent (ADR 0040, A2).
+    AcpUpdate(String),
+    /// An ACP agent's diff: replace `path` with the agent's new text, as an
+    /// A1 proposal.
+    AcpDiff {
+        path: String,
+        text: String,
+    },
+    /// A response to one of our ACP requests.
+    AcpResponse {
+        id: u64,
+        result: serde_json::Value,
+        error: Option<serde_json::Value>,
+    },
+    /// An ACP agent asks to do something: answer `reply` (the agent waits).
+    AcpPermission {
+        question: String,
+        reply: std::sync::mpsc::Sender<bool>,
+    },
 }
 
 /// The Agent Tasks window: the repository, its tasks and a pending
@@ -986,6 +1005,158 @@ struct KeyImportDialog {
     confirm: String,
     overwrite: bool,
     error: Option<String>,
+}
+
+/// A running ACP session (ADR 0040, A2): the client, its session id and the
+/// transcript shown in the window.
+struct AcpSession {
+    client: miao_term_acp::Client,
+    cwd: String,
+    session: Option<String>,
+    transcript: String,
+    prompt: String,
+    status: String,
+}
+
+/// The ACP start form: a configured agent, or a typed command.
+#[derive(Default)]
+struct AcpStart {
+    index: usize,
+    command: String,
+    error: Option<String>,
+}
+
+/// Bridges an ACP agent's callbacks to the UI thread (ADR 0040, A2).
+struct AcpBridge {
+    /// `Mutex` because the handler must be `Sync`; sends are cheap.
+    tx: std::sync::Mutex<std::sync::mpsc::Sender<JobDone>>,
+    proxy: EventLoopProxy<HostEvent>,
+}
+
+impl AcpBridge {
+    fn new(tx: std::sync::mpsc::Sender<JobDone>, proxy: EventLoopProxy<HostEvent>) -> Self {
+        AcpBridge {
+            tx: std::sync::Mutex::new(tx),
+            proxy,
+        }
+    }
+
+    fn send(&self, done: JobDone) {
+        if let Ok(tx) = self.tx.lock() {
+            let _ = tx.send(done);
+        }
+        let _ = self.proxy.send_event(HostEvent::Wake);
+    }
+}
+
+impl miao_term_acp::Handler for AcpBridge {
+    fn on_update(&self, _session: &str, update: &serde_json::Value) {
+        if let Some((path, text)) = acp_diff(update) {
+            self.send(JobDone::AcpDiff { path, text });
+        }
+        if let Some(text) = acp_update_text(update) {
+            self.send(JobDone::AcpUpdate(text));
+        }
+    }
+    fn on_response(&self, id: u64, result: &serde_json::Value, error: Option<&serde_json::Value>) {
+        self.send(JobDone::AcpResponse {
+            id,
+            result: result.clone(),
+            error: error.cloned(),
+        });
+    }
+    fn on_error(&self, message: &str) {
+        self.send(JobDone::AcpUpdate(format!("\n[error] {message}\n")));
+    }
+    fn read_text_file(&self, path: &str) -> Option<String> {
+        std::fs::read_to_string(path).ok()
+    }
+    fn write_text_file(&self, path: &str, content: &str) -> bool {
+        std::fs::write(path, content).is_ok()
+    }
+    fn request_permission(&self, request: &serde_json::Value) -> bool {
+        let question = acp_permission_text(request);
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.send(JobDone::AcpPermission {
+            question,
+            reply: tx,
+        });
+        // The agent waits for the answer; this runs on its reader thread.
+        rx.recv().unwrap_or(false)
+    }
+}
+
+/// A `session/update`'s text, for the transcript.
+fn acp_update_text(update: &serde_json::Value) -> Option<String> {
+    let text = |content: &serde_json::Value| -> Option<String> {
+        match content.get("type").and_then(|v| v.as_str()) {
+            Some("text") => content
+                .get("text")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            _ => None,
+        }
+    };
+    match update.get("sessionUpdate").and_then(|v| v.as_str())? {
+        "agent_message_chunk" => update.get("content").and_then(text),
+        "agent_thought_chunk" => update
+            .get("content")
+            .and_then(text)
+            .map(|t| format!("[thinking] {t}")),
+        "tool_call" => {
+            let title = update
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("tool");
+            let status = update.get("status").and_then(|v| v.as_str()).unwrap_or("");
+            Some(format!("\n[tool] {title} {status}\n"))
+        }
+        "tool_call_update" => {
+            let title = update.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            let status = update.get("status").and_then(|v| v.as_str()).unwrap_or("");
+            (!title.is_empty() || !status.is_empty())
+                .then(|| format!("\n[tool] {title} {status}\n"))
+        }
+        _ => None,
+    }
+}
+
+/// A diff in a `session/update`: the file and the agent's new text.
+fn acp_diff(update: &serde_json::Value) -> Option<(String, String)> {
+    let contents = update.get("content")?;
+    let items: Vec<&serde_json::Value> = match contents {
+        serde_json::Value::Array(a) => a.iter().collect(),
+        other => vec![other],
+    };
+    for item in items {
+        if item.get("type").and_then(|v| v.as_str()) != Some("diff") {
+            continue;
+        }
+        if let (Some(path), Some(text)) = (
+            item.get("path").and_then(|v| v.as_str()),
+            item.get("newText").and_then(|v| v.as_str()),
+        ) {
+            return Some((path.to_string(), text.to_string()));
+        }
+    }
+    None
+}
+
+/// A one-line description of a permission request, for the dialog.
+fn acp_permission_text(request: &serde_json::Value) -> String {
+    if let Some(title) = request.pointer("/toolCall/title").and_then(|v| v.as_str()) {
+        return format!("Allow: {title}?");
+    }
+    if let Some(options) = request.get("options").and_then(|v| v.as_array()) {
+        let names: Vec<&str> = options
+            .iter()
+            .filter_map(|o| o.get("name").and_then(|v| v.as_str()))
+            .collect();
+        if !names.is_empty() {
+            return format!("Allow: {}?", names.join(" / "));
+        }
+    }
+    "Allow this action?".to_string()
 }
 
 /// The New Serial/Telnet/TCP Session form (ADR 0037).
@@ -1248,6 +1419,14 @@ struct State {
     transport_dialog: Option<TransportDialog>,
     /// Import PuTTY Key form (ADR 0038); `None` when closed.
     key_import: Option<KeyImportDialog>,
+    /// A running ACP agent session (ADR 0040, A2).
+    acp: Option<AcpSession>,
+    /// The ACP start form, if open.
+    acp_start: Option<AcpStart>,
+    /// A permission request the agent is waiting on.
+    acp_permission: Option<(String, std::sync::mpsc::Sender<bool>)>,
+    /// ACP agents from `config.toml`'s `[acp]` (ADR 0040, A2).
+    acp_agents: Vec<miao_term_config::AcpAgent>,
     /// Connections being dialled: an all-transport restore is not "empty".
     pending_transport_connects: usize,
     /// New Agent Task dialog: name and the chosen agent (B2.4).
@@ -3572,6 +3751,8 @@ impl State {
         self.ssh_dialog_window(ctx);
         self.transport_dialog_window(ctx);
         self.key_import_window(ctx);
+        self.acp_start_window(ctx);
+        self.acp_window(ctx);
         self.task_dialog_window(ctx);
         self.tasks_window(ctx);
         self.hosts_window(ctx);
@@ -4305,6 +4486,8 @@ enum Cmd {
     /// Accept / reject the active editor's pending agent edit (ADR 0040, A1).
     AcceptAgentEdit,
     RejectAgentEdit,
+    /// Start an ACP agent session (ADR 0040, A2).
+    AcpAgent,
     Composer,
     OpenQuickly,
     CheckUpdates,
@@ -4455,6 +4638,7 @@ impl State {
                 Cmd::RejectAgentEdit,
                 t(l, "Reject Agent Edit", "拒绝 Agent 修改"),
             ),
+            (Cmd::AcpAgent, t(l, "ACP Agent…", "ACP Agent…")),
             (Cmd::OpenQuickly, t(l, "Open Quickly", "快速打开")),
             (Cmd::QuickTerminal, t(l, "Quick Terminal", "快速终端")),
             (Cmd::CheckUpdates, t(l, "Check for Updates", "检查更新")),
@@ -4847,6 +5031,9 @@ impl State {
                         self.show_notice(msg);
                     }
                 }
+            }
+            Cmd::AcpAgent => {
+                self.acp_start = Some(AcpStart::default());
             }
             Cmd::AcceptAgentEdit => {
                 if let Some(ed) = self.active_editor_mut() {
@@ -11028,6 +11215,242 @@ impl State {
         }
     }
 
+    /// Handle an ACP response: start a session after `initialize`, remember
+    /// the session id, and note a finished turn (ADR 0040, A2).
+    fn acp_response(
+        &mut self,
+        _id: u64,
+        result: serde_json::Value,
+        error: Option<serde_json::Value>,
+    ) {
+        let Some(acp) = self.acp.as_mut() else {
+            return;
+        };
+        if let Some(error) = error {
+            let msg = error
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("error");
+            acp.transcript.push_str(&format!("\n[error] {msg}\n"));
+            self.window.request_redraw();
+            return;
+        }
+        if result.get("protocolVersion").is_some() {
+            let cwd = acp.cwd.clone();
+            acp.client.new_session(&cwd);
+            acp.status = "starting session".into();
+            self.window.request_redraw();
+            return;
+        }
+        if let Some(session) = result.get("sessionId").and_then(|v| v.as_str()) {
+            acp.session = Some(session.to_string());
+            acp.status = "ready".into();
+            self.window.request_redraw();
+            return;
+        }
+        if let Some(reason) = result.get("stopReason").and_then(|v| v.as_str()) {
+            acp.transcript.push('\n');
+            acp.status = format!("idle ({reason})");
+            self.window.request_redraw();
+        }
+    }
+
+    /// Launch a configured ACP agent and open its transcript (ADR 0040, A2).
+    fn start_acp(&mut self, agent: miao_term_config::AcpAgent) {
+        let cwd = self
+            .cwd()
+            .or_else(miao_term_config::home_dir)
+            .unwrap_or_default();
+        let Some((program, args)) = agent.command.split_first() else {
+            return;
+        };
+        let program = program.clone();
+        let args = args.to_vec();
+        let bridge = Arc::new(AcpBridge::new(self.jobs_tx.clone(), self.proxy.clone()));
+        match miao_term_acp::Client::spawn(&program, &args, Some(cwd.as_path()), &[], bridge) {
+            Ok(client) => {
+                client.initialize("mtty", env!("CARGO_PKG_VERSION"));
+                self.acp = Some(AcpSession {
+                    client,
+                    cwd: cwd.to_string_lossy().into_owned(),
+                    session: None,
+                    transcript: format!("[starting {}…]\n", agent.name),
+                    prompt: String::new(),
+                    status: "initializing".into(),
+                });
+                self.acp_start = None;
+                self.window.set_visible(true);
+                self.window.focus_window();
+            }
+            Err(e) => {
+                if let Some(start) = self.acp_start.as_mut() {
+                    start.error = Some(format!("{}: {e}", agent.name));
+                }
+            }
+        }
+    }
+
+    /// The ACP start form (ADR 0040, A2).
+    fn acp_start_window(&mut self, ctx: &egui::Context) {
+        use miao_term_ui::i18n::t;
+        let lang = self.lang;
+        let agents = self.acp_agents.clone();
+        let Some(start) = self.acp_start.as_mut() else {
+            return;
+        };
+        let mut open = true;
+        let mut go = false;
+        egui::Window::new(t(lang, "ACP Agent", "ACP Agent"))
+            .collapsible(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                if agents.is_empty() {
+                    ui.label(t(
+                        lang,
+                        "No [acp] agents configured; type a command.",
+                        "未配置 [acp] agent;请输入命令。",
+                    ));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut start.command)
+                            .hint_text("codex acp")
+                            .desired_width(260.0),
+                    );
+                } else {
+                    egui::ComboBox::from_id_salt(("acp-agent",))
+                        .selected_text(
+                            agents
+                                .get(start.index)
+                                .map(|a| a.name.as_str())
+                                .unwrap_or(""),
+                        )
+                        .width(260.0)
+                        .show_ui(ui, |ui| {
+                            for (i, a) in agents.iter().enumerate() {
+                                ui.selectable_value(
+                                    &mut start.index,
+                                    i,
+                                    format!("{} ({})", a.name, a.command.join(" ")),
+                                );
+                            }
+                        });
+                }
+                if let Some(err) = &start.error {
+                    ui.colored_label(egui::Color32::from_rgb(0xbf, 0x61, 0x6a), err);
+                }
+                if ui.button(t(lang, "Start", "启动")).clicked() {
+                    go = true;
+                }
+            });
+        if go {
+            let agent = if agents.is_empty() {
+                let command: Vec<String> = start
+                    .command
+                    .split_whitespace()
+                    .map(str::to_string)
+                    .collect();
+                if command.is_empty() {
+                    start.error = Some(t(lang, "Enter a command.", "请输入命令。").into());
+                    return;
+                }
+                miao_term_config::AcpAgent {
+                    name: command[0].clone(),
+                    command,
+                }
+            } else {
+                agents[start.index.min(agents.len() - 1)].clone()
+            };
+            self.start_acp(agent);
+        } else if !open {
+            self.acp_start = None;
+        }
+    }
+
+    /// The ACP transcript window and its prompt (ADR 0040, A2).
+    fn acp_window(&mut self, ctx: &egui::Context) {
+        use miao_term_ui::i18n::t;
+        let lang = self.lang;
+        // A permission request is answered first; the agent is waiting.
+        if let Some((question, _)) = self.acp_permission.as_ref() {
+            let question = question.clone();
+            let mut answer = None;
+            egui::Window::new(t(lang, "Agent Permission", "Agent 权限"))
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label(question);
+                    ui.horizontal(|ui| {
+                        if ui.button(t(lang, "Allow", "允许")).clicked() {
+                            answer = Some(true);
+                        }
+                        if ui.button(t(lang, "Deny", "拒绝")).clicked() {
+                            answer = Some(false);
+                        }
+                    });
+                });
+            if let Some(allow) = answer {
+                if let Some((_, reply)) = self.acp_permission.take() {
+                    let _ = reply.send(allow);
+                }
+            }
+            return;
+        }
+        let Some(acp) = self.acp.as_mut() else {
+            return;
+        };
+        let mut open = true;
+        let (mut send, mut stop, mut close) = (false, false, false);
+        egui::Window::new(t(lang, "ACP Agent", "ACP Agent"))
+            .collapsible(false)
+            .open(&mut open)
+            .default_size([600.0, 420.0])
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(&acp.status).size(11.0));
+                    if ui.small_button(t(lang, "Stop", "停止")).clicked() {
+                        stop = true;
+                    }
+                    if ui.small_button(t(lang, "Close", "关闭")).clicked() {
+                        close = true;
+                    }
+                });
+                egui::ScrollArea::vertical()
+                    .max_height(320.0)
+                    .stick_to_bottom(true)
+                    .show(ui, |ui| {
+                        ui.add(egui::Label::new(
+                            egui::RichText::new(&acp.transcript).monospace(),
+                        ));
+                    });
+                let r = ui.add(
+                    egui::TextEdit::singleline(&mut acp.prompt)
+                        .hint_text(t(lang, "Message the agent…", "给 agent 发消息…"))
+                        .desired_width(f32::INFINITY),
+                );
+                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if enter || ui.button(t(lang, "Send", "发送")).clicked() {
+                    send = true;
+                }
+            });
+        if send && !acp.prompt.trim().is_empty() {
+            if let Some(session) = acp.session.clone() {
+                let text = std::mem::take(&mut acp.prompt);
+                acp.client.prompt(&session, &text);
+                acp.transcript.push_str(&format!("\n\u{203a} {text}\n\n"));
+                acp.status = "working".into();
+                self.window.request_redraw();
+            }
+        }
+        if stop {
+            if let Some(session) = acp.session.clone() {
+                acp.client.cancel(&session);
+            }
+        }
+        if close || !open {
+            self.acp = None;
+        }
+    }
+
     /// ⌘S in an editor pane. A failure stays visible and the pane modified.
     fn save_active_editor(&mut self) {
         let lang = self.lang;
@@ -11858,6 +12281,20 @@ impl State {
                 }
                 Err(e) => self.show_notice(e),
             },
+            JobDone::AcpUpdate(text) => {
+                if let Some(acp) = self.acp.as_mut() {
+                    acp.transcript.push_str(&text);
+                }
+                self.window.request_redraw();
+            }
+            JobDone::AcpDiff { path, text } => {
+                self.apply_proposal(None, Some(path), Vec::new(), Some(text), Some("acp".into()));
+            }
+            JobDone::AcpResponse { id, result, error } => self.acp_response(id, result, error),
+            JobDone::AcpPermission { question, reply } => {
+                self.acp_permission = Some((question, reply));
+                self.window.request_redraw();
+            }
         }
     }
 
@@ -12510,6 +12947,10 @@ impl ApplicationHandler<HostEvent> for Host {
             ssh_dialog: None,
             transport_dialog: None,
             key_import: None,
+            acp: None,
+            acp_start: None,
+            acp_permission: None,
+            acp_agents: cfg.acp.agents.clone(),
             pending_transport_connects: 0,
             task_dialog: None,
             tasks_view: None,
