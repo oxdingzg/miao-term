@@ -31,10 +31,13 @@ const PTY_DRAIN_BUDGET: std::time::Duration = std::time::Duration::from_millis(4
 /// A running terminal: a child shell on a PTY plus the parsed screen state.
 pub struct Terminal {
     screen: ATerm,
+    /// The PTY master, for a shell session; `None` for a plain byte pipe
+    /// (serial, Telnet, raw TCP — ADR 0037).
     master: Option<Box<dyn MasterPty + Send>>,
     writer: Box<dyn Write + Send>,
+    /// The child shell, for a PTY session; `None` for a byte pipe.
     #[allow(dead_code)]
-    child: Box<dyn Child + Send + Sync>,
+    child: Option<Box<dyn Child + Send + Sync>>,
     rx: Receiver<Vec<u8>>,
     waker: std::sync::Arc<dyn Fn() + Send + Sync>,
     rows: u16,
@@ -78,7 +81,7 @@ impl Drop for Terminal {
         // when a shell was running — and closing a tab or quitting the app must
         // never hang. Kill the tree, reap, drain, then close off-thread.
         #[cfg(windows)]
-        if let Some(pid) = self.child.process_id() {
+        if let Some(pid) = self.child.as_ref().and_then(|c| c.process_id()) {
             use std::os::windows::process::CommandExt;
             const CREATE_NO_WINDOW: u32 = 0x0800_0000;
             let _ = std::process::Command::new("taskkill")
@@ -88,8 +91,10 @@ impl Drop for Terminal {
                 .creation_flags(CREATE_NO_WINDOW)
                 .status();
         }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if let Some(child) = self.child.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
         // Drain output the shell already produced (bounded).
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
         while std::time::Instant::now() < deadline && self.rx.try_recv().is_ok() {}
@@ -181,9 +186,36 @@ impl Terminal {
         let child = pair.slave.spawn_command(cmd)?;
         drop(pair.slave);
 
-        let mut reader = pair.master.try_clone_reader()?;
+        let reader = pair.master.try_clone_reader()?;
         let writer = pair.master.take_writer()?;
 
+        Ok(Self::pipe(
+            cols,
+            rows,
+            scrollback,
+            reader,
+            writer,
+            waker,
+            Some(pair.master),
+            Some(child),
+            cwd.map(|p| p.to_string_lossy().into_owned()),
+        ))
+    }
+
+    /// Build a terminal over a byte stream: a reader thread forwards chunks
+    /// into `rx` and wakes the UI, exactly as for a PTY. `master`/`child` are
+    /// `None` for serial, Telnet and raw TCP sessions (ADR 0037).
+    fn pipe(
+        cols: u16,
+        rows: u16,
+        scrollback: usize,
+        mut reader: Box<dyn Read + Send>,
+        writer: Box<dyn Write + Send>,
+        waker: std::sync::Arc<dyn Fn() + Send + Sync>,
+        master: Option<Box<dyn MasterPty + Send>>,
+        child: Option<Box<dyn Child + Send + Sync>>,
+        cwd: Option<String>,
+    ) -> Self {
         let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(PTY_QUEUE_CHUNKS);
         let waker_thread = waker.clone();
         thread::spawn(move || {
@@ -203,10 +235,9 @@ impl Terminal {
                 }
             }
         });
-
-        Ok(Self {
+        Self {
             screen: ATerm::new(cols, rows, scrollback),
-            master: Some(pair.master),
+            master,
             writer,
             child,
             rx,
@@ -214,7 +245,7 @@ impl Terminal {
             rows,
             cols,
             exited: false,
-            cwd: cwd.map(|p| p.to_string_lossy().into_owned()),
+            cwd,
             cwd_checked: std::time::Instant::now(),
             cwd_reported: false,
             title: None,
@@ -225,7 +256,31 @@ impl Terminal {
             capture: None,
             last_output: None,
             cell_px: (0, 0),
-        })
+        }
+    }
+
+    /// Run a terminal over a plain byte pipe with no child process behind it:
+    /// a serial port, a Telnet connection or a raw TCP socket (ADR 0037).
+    /// `exited()` becomes true when the pipe closes.
+    pub fn from_pipe(
+        cols: u16,
+        rows: u16,
+        scrollback: usize,
+        reader: impl Read + Send + 'static,
+        writer: Box<dyn Write + Send>,
+        waker: std::sync::Arc<dyn Fn() + Send + Sync>,
+    ) -> Self {
+        Self::pipe(
+            cols,
+            rows,
+            scrollback,
+            Box::new(reader),
+            writer,
+            waker,
+            None,
+            None,
+            None,
+        )
     }
 
     /// Drain pending PTY output into the screen. Returns true if anything changed.
@@ -472,7 +527,7 @@ impl Terminal {
 
     /// The child process id, if the platform exposes one.
     pub fn pid(&self) -> Option<u32> {
-        self.child.process_id()
+        self.child.as_ref().and_then(|c| c.process_id())
     }
 
     /// The program running in the foreground of this pane (`vim`, `cargo`),
@@ -881,6 +936,44 @@ mod tests {
     fn make() -> Terminal {
         let waker: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(|| {});
         Terminal::new(None, 20, 5, 100, None, &[], waker).expect("spawn shell")
+    }
+
+    /// A writer that records what the terminal sends over the pipe.
+    #[derive(Clone, Default)]
+    struct SharedBuf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for SharedBuf {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A terminal over a plain byte pipe has no child, consumes what the pipe
+    /// sends and reports EOF as exit (ADR 0037).
+    #[test]
+    fn a_pipe_terminal_reads_and_writes_without_a_child() {
+        let waker: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(|| {});
+        let out = SharedBuf::default();
+        let writer: Box<dyn Write + Send> = Box::new(out.clone());
+        let reader = std::io::Cursor::new(b"\x1b[31mhi\x1b[0m\r\n".to_vec());
+        let mut term = Terminal::from_pipe(20, 5, 100, reader, writer, waker);
+        assert_eq!(term.pid(), None);
+        assert_eq!(term.foreground_command(), None);
+        for _ in 0..200 {
+            term.process_pending();
+            if term.exited() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(term.exited(), "a closed pipe ends the session");
+        assert_eq!(term.screen().line_text(0).trim_end(), "hi");
+        term.write(b"ping");
+        assert_eq!(&*out.0.lock().unwrap(), b"ping");
+        term.resize(6, 30);
     }
 
     #[test]

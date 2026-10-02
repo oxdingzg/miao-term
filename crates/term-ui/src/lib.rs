@@ -29,6 +29,7 @@ pub mod ssh;
 pub mod syntax;
 pub mod tasks;
 pub mod theme;
+pub mod transport;
 pub mod update;
 pub mod vim;
 
