@@ -352,6 +352,7 @@ pub fn sidebar(
     icons: &[crate::icons::TabIcon],
     badges: &[Option<Rgb>],
     metas: &[String],
+    locations: &[String],
     groups: &[Option<String>],
     active: usize,
     heading: &str,
@@ -480,11 +481,14 @@ pub fn sidebar(
                 ev.close = Some(i);
             }
         }
-        // A cut-off title shows in full on hover.
-        let resp = if truncated {
-            resp.on_hover_text(title)
-        } else {
-            resp
+        // Hover shows where the session is (its folder, file or host),
+        // and the title in full when the row cuts it off.
+        let location = locations.get(i).filter(|l| !l.is_empty());
+        let resp = match (location, truncated) {
+            (Some(l), true) => resp.on_hover_text(format!("{title}\n{l}")),
+            (Some(l), false) => resp.on_hover_text(l.as_str()),
+            (None, true) => resp.on_hover_text(title),
+            (None, false) => resp,
         };
         if ev.close != Some(i) && resp.clicked() {
             ev.switch = Some(i);
@@ -736,6 +740,9 @@ pub struct ChromeTab {
     pub title: String,
     pub badge: Option<Rgb>,
     pub icon: crate::icons::TabIcon,
+    /// Where the tab is (a folder, a file, an ssh host), shown when its
+    /// sidebar row is hovered; empty for none.
+    pub location: String,
 }
 
 /// The host implements this; [`render`] draws the surrounding UI from it and
@@ -943,6 +950,7 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
     let tab_groups = host.tab_groups();
     let badges: Vec<Option<Rgb>> = tabs.iter().map(|t| t.badge).collect();
     let icons: Vec<crate::icons::TabIcon> = tabs.iter().map(|t| t.icon.clone()).collect();
+    let locations: Vec<String> = tabs.iter().map(|t| t.location.clone()).collect();
     let metas: Vec<String> = (0..titles.len())
         .map(|i| {
             if i < 9 {
@@ -1096,6 +1104,7 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
                     &icons,
                     &badges,
                     &metas,
+                    &locations,
                     &tab_groups,
                     active,
                     heading,
@@ -1569,6 +1578,7 @@ mod tab_menu_tests {
                         &icons,
                         &badges,
                         &metas,
+                        &[],
                         &groups,
                         0,
                         "SESSIONS",
@@ -1902,6 +1912,7 @@ mod tab_menu_tests {
                     &icons,
                     &badges,
                     &metas,
+                    &[],
                     groups,
                     0,
                     "Sessions",
@@ -1986,6 +1997,7 @@ mod tab_menu_tests {
                     title: t.into(),
                     badge: None,
                     icon: crate::icons::Icon::Terminal.into(),
+                    location: String::new(),
                 })
                 .collect()
         }

@@ -6217,6 +6217,17 @@ impl State {
         }
         let scale = self.window.scale_factor() as f32;
         let (px, py) = (self.cursor.0 as f32, self.cursor.1 as f32);
+        // Onto the session list: a folder opens a new terminal there, a file
+        // opens in its own tab (the editor, or view mode when large).
+        if self.show_sidebar && px / scale < self.sidebar_w {
+            if path.is_dir() {
+                self.new_tab_in(Some(path));
+            } else {
+                self.open_editor(path);
+            }
+            self.window.request_redraw();
+            return;
+        }
         let over_pane = self
             .pane_rects()
             .into_iter()
@@ -10146,7 +10157,19 @@ impl ApplicationHandler<HostEvent> for Host {
                     }
                 }
             }
-            WindowEvent::DroppedFile(path) => state.drop_file(path),
+            WindowEvent::DroppedFile(path) => {
+                // The drop point: a drag sends no pointer motion, so the
+                // last known position is wherever the pointer left before.
+                #[cfg(target_os = "macos")]
+                if let (Some((x, y)), Ok(inner)) = (
+                    macos_url::pointer_on_screen(),
+                    state.window.inner_position(),
+                ) {
+                    let scale = state.window.scale_factor();
+                    state.cursor = (x * scale - inner.x as f64, y * scale - inner.y as f64);
+                }
+                state.drop_file(path);
+            }
             WindowEvent::HoveredFile(_) => {
                 state.dropping = true;
                 state.window.request_redraw();
@@ -10608,6 +10631,36 @@ fn human_bytes(bytes: u64) -> String {
         format!("{:.1} GB", b / GB)
     } else {
         format!("{:.0} MB", (b / MB).max(1.0))
+    }
+}
+
+/// Where a tab is, for its sidebar row's hover: the ssh target, the active
+/// editor's file, or the active terminal's folder (`~` for home).
+fn tab_location(tab: &Tab) -> String {
+    if tab.ssh {
+        if let Some(target) = tab.ssh_target.as_deref().or(tab.ssh_cmd.as_deref()) {
+            return format!("ssh {target}");
+        }
+    }
+    let path = match tab.editors.iter().find(|e| e.id == tab.active) {
+        Some(ed) => ed.path.display().to_string(),
+        None => match tab.panes.iter().find(|p| p.id == tab.active) {
+            Some(pane) => pane.term.cwd().unwrap_or("").to_string(),
+            None => String::new(),
+        },
+    };
+    home_relative(&path, std::env::var("HOME").ok().as_deref())
+}
+
+/// `path` with the home folder shown as `~`.
+fn home_relative(path: &str, home: Option<&str>) -> String {
+    match home.filter(|h| !h.is_empty() && *h != "/") {
+        Some(home) if path == home => "~".to_string(),
+        Some(home) => match path.strip_prefix(home) {
+            Some(rest) if rest.starts_with('/') => format!("~{rest}"),
+            _ => path.to_string(),
+        },
+        None => path.to_string(),
     }
 }
 
@@ -11536,7 +11589,12 @@ impl chrome::Chrome for State {
                 if let Some(a) = t.attention {
                     title.push_str(a.marker());
                 }
-                chrome::ChromeTab { title, badge, icon }
+                chrome::ChromeTab {
+                    title,
+                    badge,
+                    icon,
+                    location: tab_location(t),
+                }
             })
             .collect()
     }
@@ -12912,6 +12970,20 @@ mod tests {
         ] {
             assert!(!is_default_title(chosen), "{chosen}");
         }
+    }
+
+    #[test]
+    fn locations_show_home_as_a_tilde() {
+        let home = Some("/h/me");
+        assert_eq!(home_relative("/h/me", home), "~");
+        assert_eq!(home_relative("/h/me/src/app", home), "~/src/app");
+        assert_eq!(
+            home_relative("/h/me2/x", home),
+            "/h/me2/x",
+            "not a prefix match"
+        );
+        assert_eq!(home_relative("/srv/x", home), "/srv/x");
+        assert_eq!(home_relative("/srv/x", None), "/srv/x");
     }
 
     #[test]
