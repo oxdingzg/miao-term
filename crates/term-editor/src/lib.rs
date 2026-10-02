@@ -10,6 +10,7 @@ pub mod change;
 pub mod document;
 pub mod fallback;
 pub mod history;
+pub mod large;
 pub mod layout;
 pub mod motion;
 pub mod search;

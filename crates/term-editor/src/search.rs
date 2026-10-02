@@ -65,15 +65,51 @@ impl SearchQuery {
     }
 }
 
-/// Every non-empty match, in order, as char ranges.
+/// Above this size a document is searched in windows of whole lines rather
+/// than as one string, so a search never copies all of a large text.
+const WHOLE_TEXT_BYTES: usize = 64 << 20;
+
+/// Lines per search window, by size.
+const WINDOW_BYTES: usize = 4 << 20;
+
+/// Every non-empty match, in order, as char ranges. In a document over
+/// 64 MB a match that spans more than a 4 MB window of lines is not found.
 pub fn find_all(rope: &Rope, query: &SearchQuery) -> Result<Vec<(usize, usize)>, SearchError> {
     let re = query.compile()?;
-    let haystack = rope.to_string();
-    Ok(re
-        .find_iter(&haystack)
-        .filter(|m| m.start() < m.end())
-        .map(|m| (rope.byte_to_char(m.start()), rope.byte_to_char(m.end())))
-        .collect())
+    if rope.len_bytes() <= WHOLE_TEXT_BYTES {
+        let haystack = rope.to_string();
+        return Ok(re
+            .find_iter(&haystack)
+            .filter(|m| m.start() < m.end())
+            .map(|m| (rope.byte_to_char(m.start()), rope.byte_to_char(m.end())))
+            .collect());
+    }
+    let (len, lines) = (rope.len_bytes(), rope.len_lines());
+    let mut out = Vec::new();
+    let mut line = 0;
+    while line < lines {
+        let start = rope.line_to_byte(line);
+        // Whole lines, so a match within a line is never split.
+        let end_line = (rope.byte_to_line((start + WINDOW_BYTES).min(len)) + 1).min(lines);
+        let end = if end_line >= lines {
+            len
+        } else {
+            rope.line_to_byte(end_line)
+        };
+        let window = rope.byte_slice(start..end).to_string();
+        out.extend(
+            re.find_iter(&window)
+                .filter(|m| m.start() < m.end())
+                .map(|m| {
+                    (
+                        rope.byte_to_char(start + m.start()),
+                        rope.byte_to_char(start + m.end()),
+                    )
+                }),
+        );
+        line = end_line;
+    }
+    Ok(out)
 }
 
 /// The next match after `from` (or the previous one before it), wrapping
@@ -127,6 +163,22 @@ pub fn replace_all(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn large_documents_are_searched_in_windows_without_missing_matches() {
+        let line = "a line of filler text for the window test, needle here\n";
+        let text = line.repeat(WHOLE_TEXT_BYTES / line.len() + 1000);
+        let rope = Rope::from_str(&text);
+        assert!(rope.len_bytes() > WHOLE_TEXT_BYTES);
+        let hits = find_all(&rope, &SearchQuery::literal("needle")).unwrap();
+        assert_eq!(hits.len(), text.len() / line.len());
+        assert!(
+            hits.windows(2).all(|w| w[0].1 <= w[1].0),
+            "ordered, no repeats"
+        );
+        let (a, b) = hits[hits.len() / 2];
+        assert_eq!(rope.slice(a..b).to_string(), "needle");
+    }
 
     #[test]
     fn literal_case_and_whole_word() {

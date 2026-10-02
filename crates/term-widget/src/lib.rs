@@ -441,6 +441,8 @@ impl Tab {
                     "id": e.id, "path": e.path,
                     "cursor": e.doc.selection().primary().head,
                     "scroll": e.scroll_line,
+                    // View mode: the caret's file line (the window moves).
+                    "line": e.is_view_only().then(|| e.caret_line_col().0 - 1),
                 })
             })
             .collect();
@@ -511,6 +513,9 @@ fn localize_detail(lang: miao_term_ui::i18n::Lang, text: &str) -> &str {
         "tty" => "终端设备",
         "File" => "文件",
         "Lines" => "行数",
+        "Mode" => "模式",
+        "View only" => "只读查看",
+        "File size" => "文件大小",
         "Cursor" => "光标",
         "Line ending" => "换行符",
         "Language" => "语言",
@@ -1111,6 +1116,16 @@ struct State {
     /// they were found for (a new query jumps to the match after the caret).
     editor_hits: Vec<(usize, usize)>,
     editor_hits_query: String,
+    /// Find running on a thread: in a view-mode file (byte ranges) or a
+    /// large document (char ranges).
+    bg_search: Option<BgSearch>,
+    /// A view-mode pane the user tried to edit: the confirm dialog's pane.
+    large_edit_offer: Option<String>,
+    /// A view-mode file loading for editing: its pane and the result.
+    large_loading: Option<(
+        String,
+        std::sync::mpsc::Receiver<Result<miao_term_editor::Document, String>>,
+    )>,
     update_url: Option<String>,
     update_rx: Option<std::sync::mpsc::Receiver<UpdateResult>>,
     update_install: UpdateInstall,
@@ -2248,7 +2263,11 @@ impl State {
             return;
         }
         if let Some(ed) = self.active_editor_mut() {
-            ed.paste(text);
+            if ed.is_view_only() {
+                self.large_edit_offer = Some(ed.id.clone());
+            } else {
+                ed.paste(text);
+            }
             self.window.request_redraw();
             return;
         }
@@ -3222,6 +3241,7 @@ impl State {
         self.composer_window(ctx);
         self.quick_window(ctx);
         self.search_window(ctx);
+        self.large_edit_window(ctx);
         if let Some(i) = self.renaming {
             self.rename_window(ctx, i);
         }
@@ -3439,6 +3459,15 @@ impl State {
                     if let Ok(mut ed) =
                         editor_pane::EditorPane::open(id.clone(), std::path::Path::new(path))
                     {
+                        if ed.is_view_only() {
+                            let line = e.get("line").and_then(|x| x.as_u64()).unwrap_or(0);
+                            ed.go_to_line(line as usize);
+                            if let Some(old) = e.get("id").and_then(|x| x.as_str()) {
+                                map.insert(old.to_string(), id);
+                            }
+                            editors.push(ed);
+                            continue;
+                        }
                         let len = ed.doc.rope().len_chars();
                         let cursor = e.get("cursor").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
                         ed.doc
@@ -3677,7 +3706,17 @@ impl State {
                 let (line, col) = ed.caret_line_col();
                 rows.push(("Title".into(), self.title_of(tab)));
                 rows.push(("File".into(), ed.path.display().to_string()));
-                rows.push(("Lines".into(), ed.doc.rope().len_lines().to_string()));
+                let lines = ed.total_lines().to_string();
+                match &ed.large {
+                    Some(large) if !large.file.indexed() => {
+                        rows.push(("Lines".into(), format!("{lines}\u{2026}")));
+                    }
+                    _ => rows.push(("Lines".into(), lines)),
+                }
+                if let Some(large) = &ed.large {
+                    rows.push(("Mode".into(), "View only".into()));
+                    rows.push(("File size".into(), human_bytes(large.file.len_bytes())));
+                }
                 rows.push(("Cursor".into(), format!("{line}:{col}")));
                 rows.push(("Line ending".into(), ed.line_ending_name().into()));
                 rows.push((
@@ -3800,6 +3839,7 @@ enum Cmd {
     FindPrev,
     UseSelForFind,
     JumpToSel,
+    EditLargeFile,
     FindInAllTabs,
     Fullscreen,
     ReadOnly,
@@ -3912,6 +3952,10 @@ impl State {
                 t(l, "Use Selection for Find", "用所选内容查找"),
             ),
             (Cmd::JumpToSel, t(l, "Jump to Selection", "跳到所选")),
+            (
+                Cmd::EditLargeFile,
+                t(l, "Switch to Editing…", "切换为可编辑…"),
+            ),
             (
                 Cmd::FindInAllTabs,
                 t(l, "Find in All Tabs", "在所有标签中查找"),
@@ -4215,6 +4259,17 @@ impl State {
                     }
                 }
             }
+            Cmd::EditLargeFile => match self.active_editor().filter(|e| e.is_view_only()) {
+                Some(ed) => self.large_edit_offer = Some(ed.id.clone()),
+                None => self.show_notice(
+                    miao_term_ui::i18n::t(
+                        self.lang,
+                        "The active pane is not a file in view mode.",
+                        "当前 pane 不是只读查看中的文件。",
+                    )
+                    .to_string(),
+                ),
+            },
             Cmd::JumpToSel => {
                 if self.search.is_some() {
                     self.scroll_to_search_hit();
@@ -5330,6 +5385,7 @@ impl State {
             self.search_key.clear();
             self.editor_hits.clear();
             self.editor_hits_query.clear();
+            self.bg_search = None;
             return;
         }
         if self.active_editor().is_some() {
@@ -5358,8 +5414,27 @@ impl State {
         let Some(ed) = self.active_editor() else {
             return;
         };
-        let key = format!("{query}\u{0}{}\u{0}{}", ed.id, ed.doc.revision());
-        if key == self.search_key {
+        let key = format!(
+            "{query}\u{0}{}\u{0}{}\u{0}{}",
+            ed.id,
+            ed.doc.revision(),
+            ed.is_view_only()
+        );
+        let background = ed.is_view_only() || ed.doc.rope().len_bytes() > BG_SEARCH_BYTES;
+        let changed = key != self.search_key;
+        let new_query = query != self.editor_hits_query;
+        if background {
+            if changed {
+                self.search_key = key;
+                self.editor_hits_query = query.clone();
+                self.editor_hits.clear();
+                self.search_idx = 0;
+                self.bg_search = Some(self.spawn_search(query, new_query));
+            }
+            self.poll_bg_search();
+            return;
+        }
+        if !changed {
             return;
         }
         let caret = ed.doc.selection().primary().from();
@@ -5371,9 +5446,10 @@ impl State {
             },
         )
         .unwrap_or_default();
+        self.bg_search = None;
         self.search_key = key;
         self.editor_hits = found;
-        if query != self.editor_hits_query {
+        if new_query {
             self.editor_hits_query = query;
             self.search_idx = first_hit_from(&self.editor_hits, caret);
             self.scroll_to_search_hit();
@@ -5382,6 +5458,114 @@ impl State {
                 .search_idx
                 .min(self.editor_hits.len().saturating_sub(1));
         }
+    }
+
+    /// Search the active editor on a thread: the file itself in view mode
+    /// (byte ranges), else a snapshot of the document (char ranges).
+    fn spawn_search(&self, query: String, jump: bool) -> BgSearch {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let hits = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let done = Arc::new(AtomicBool::new(false));
+        let cancel = Arc::new(AtomicBool::new(false));
+        let view = self
+            .active_editor()
+            .and_then(|e| e.large.as_ref().map(|l| l.file.clone()));
+        let rope = self.active_editor().map(|e| e.doc.rope().clone());
+        let bytes = view.is_some();
+        let proxy = self.proxy.clone();
+        let (h, d, c) = (hits.clone(), done.clone(), cancel.clone());
+        let _ = std::thread::Builder::new()
+            .name("mtty-find".into())
+            .spawn(move || {
+                let wake = || {
+                    let _ = proxy.send_event(HostEvent::Wake);
+                };
+                if let Some(file) = view {
+                    let mut batch = Vec::new();
+                    let mut last = Instant::now();
+                    file.search(&query, MAX_SEARCH_HITS, &c, |a, b| {
+                        batch.push((a as usize, b as usize));
+                        if last.elapsed() > Duration::from_millis(100) {
+                            h.lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .append(&mut batch);
+                            last = Instant::now();
+                            wake();
+                        }
+                    });
+                    h.lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .append(&mut batch);
+                } else if let Some(rope) = rope {
+                    let found = miao_term_editor::search::find_all(
+                        &rope,
+                        &miao_term_editor::SearchQuery {
+                            pattern: query,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+                    if !c.load(Ordering::Relaxed) {
+                        let mut found = found;
+                        found.truncate(MAX_SEARCH_HITS);
+                        *h.lock().unwrap_or_else(|e| e.into_inner()) = found;
+                    }
+                }
+                d.store(true, Ordering::Release);
+                wake();
+            });
+        BgSearch {
+            hits,
+            done,
+            cancel,
+            jump,
+            bytes,
+        }
+    }
+
+    /// Take the matches a search thread found so far; a new query selects
+    /// the first match at or after the caret once there is one.
+    fn poll_bg_search(&mut self) {
+        let Some(bg) = &self.bg_search else {
+            return;
+        };
+        let (count, jump, bytes, done) = {
+            let hits = bg.hits.lock().unwrap_or_else(|e| e.into_inner());
+            if hits.len() != self.editor_hits.len() {
+                self.editor_hits = hits.clone();
+            }
+            (
+                hits.len(),
+                bg.jump,
+                bg.bytes,
+                bg.done.load(std::sync::atomic::Ordering::Acquire),
+            )
+        };
+        if !jump || count == 0 {
+            return;
+        }
+        let Some(ed) = self.active_editor() else {
+            return;
+        };
+        // Where the caret is, in the hits' units.
+        let caret = if bytes {
+            let (line, _) = ed.caret_line_col();
+            ed.large
+                .as_ref()
+                .map_or(0, |l| l.file.line_start(line - 1) as usize)
+        } else {
+            ed.doc.selection().primary().from()
+        };
+        let after = self.editor_hits.iter().position(|&(a, _)| a >= caret);
+        // Wait for a match after the caret unless the scan is over.
+        if after.is_none() && !done {
+            return;
+        }
+        self.search_idx = after.unwrap_or(0);
+        if let Some(bg) = &mut self.bg_search {
+            bg.jump = false;
+        }
+        self.scroll_to_search_hit();
     }
 
     /// Matches for the open Find bar, in the editor or the terminal.
@@ -5398,7 +5582,12 @@ impl State {
             let Some((start, end)) = self.editor_hits.get(self.search_idx).copied() else {
                 return;
             };
+            let bytes = self.bg_search.as_ref().is_some_and(|b| b.bytes);
             if let Some(ed) = self.active_editor_mut() {
+                if bytes {
+                    ed.select_bytes(start as u64, end as u64);
+                    return;
+                }
                 ed.doc.set_selection(miao_term_editor::Selection::single(
                     miao_term_editor::Range::new(start, end),
                 ));
@@ -5419,6 +5608,141 @@ impl State {
         pane.scroll = hist.saturating_sub(b);
     }
 
+    /// Asks before loading a view-mode file for editing, with what it costs.
+    fn large_edit_window(&mut self, ctx: &egui::Context) {
+        self.poll_large_loading();
+        let Some(id) = self.large_edit_offer.clone() else {
+            return;
+        };
+        let Some((name, size)) = self.tabs.iter().find_map(|t| {
+            t.editors
+                .iter()
+                .find(|e| e.id == id && e.is_view_only())
+                .map(|e| {
+                    (
+                        e.path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default(),
+                        e.large.as_ref().map_or(0, |l| l.file.len_bytes()),
+                    )
+                })
+        }) else {
+            self.large_edit_offer = None;
+            return;
+        };
+        use miao_term_ui::i18n::t;
+        let l = self.lang;
+        let loading = self.large_loading.is_some();
+        let (mut go, mut cancel) = (false, false);
+        egui::Window::new(t(l, "Switch to Editing?", "切换为可编辑?"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.set_max_width(420.0);
+                ui.label(
+                    if l == miao_term_ui::i18n::Lang::En {
+                        format!(
+                            "{name} ({}) is open in view mode: read from disk a screen at a time, so it needs little memory.\n\nEditing loads the whole file into memory, about {} for this file. Opening, searching and saving it take longer too.",
+                            human_bytes(size),
+                            human_bytes(edit_memory_estimate(size)),
+                        )
+                    } else {
+                        format!(
+                            "{name}({})正以只读查看模式打开:按屏从磁盘读取,占用内存很少。\n\n切换为可编辑会把整个文件读入内存,此文件约需 {}。打开、查找和保存也会更慢。",
+                            human_bytes(size),
+                            human_bytes(edit_memory_estimate(size)),
+                        )
+                    }
+                );
+                ui.add_space(8.0);
+                if loading {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(t(l, "Loading for editing…", "正在加载为可编辑…"));
+                    });
+                } else {
+                    ui.horizontal(|ui| {
+                        go = ui.button(t(l, "Load for Editing", "加载为可编辑")).clicked();
+                        cancel = ui.button(t(l, "Keep Viewing", "继续只读查看")).clicked();
+                    });
+                }
+            });
+        if cancel || (!loading && ctx.input(|i| i.key_pressed(egui::Key::Escape))) {
+            self.large_edit_offer = None;
+        }
+        if go {
+            let Some(path) = self.tabs.iter().find_map(|t| {
+                t.editors
+                    .iter()
+                    .find(|e| e.id == id)
+                    .map(|e| e.path.clone())
+            }) else {
+                return;
+            };
+            let (tx, rx) = std::sync::mpsc::channel();
+            let proxy = self.proxy.clone();
+            let _ = std::thread::Builder::new()
+                .name("mtty-load".into())
+                .spawn(move || {
+                    let doc = std::fs::read(&path)
+                        .map_err(|e| e.to_string())
+                        .and_then(|b| {
+                            miao_term_editor::Document::from_bytes(&b).map_err(|e| e.to_string())
+                        });
+                    let _ = tx.send(doc);
+                    let _ = proxy.send_event(HostEvent::Wake);
+                });
+            self.large_loading = Some((id, rx));
+        }
+    }
+
+    /// A view-mode file finished loading for editing: the pane becomes an
+    /// editor on the same line.
+    fn poll_large_loading(&mut self) {
+        let Some((id, rx)) = &self.large_loading else {
+            return;
+        };
+        let Ok(result) = rx.try_recv() else {
+            return;
+        };
+        let id = id.clone();
+        self.large_loading = None;
+        self.large_edit_offer = None;
+        let lang = self.lang;
+        let pane = self
+            .tabs
+            .iter_mut()
+            .flat_map(|t| t.editors.iter_mut())
+            .find(|e| e.id == id);
+        match (result, pane) {
+            (Ok(doc), Some(ed)) => {
+                let (line, _) = ed.caret_line_col();
+                let fresh = editor_pane::EditorPane::with_doc(ed.id.clone(), ed.path.clone(), doc);
+                let (rows, cols) = (ed.rows, ed.cols);
+                *ed = fresh;
+                ed.rows = rows;
+                ed.cols = cols;
+                ed.go_to_line(line - 1);
+                self.search_key.clear();
+                self.bg_search = None;
+                self.show_notice(
+                    miao_term_ui::i18n::t(lang, "The file is now editable.", "文件已可编辑。")
+                        .to_string(),
+                );
+            }
+            (Err(e), _) => {
+                self.show_notice(format!(
+                    "{}: {e}",
+                    miao_term_ui::i18n::t(lang, "Could not load for editing", "无法加载为可编辑")
+                ));
+            }
+            (Ok(_), None) => {}
+        }
+        self.window.request_redraw();
+    }
+
     fn search_window(&mut self, ctx: &egui::Context) {
         if self.search.is_none() {
             return;
@@ -5426,6 +5750,11 @@ impl State {
         let lang = self.lang;
         let n = self.search_count();
         let idx = self.search_idx;
+        // Still scanning: the count may grow.
+        let more = self
+            .bg_search
+            .as_ref()
+            .is_some_and(|b| !b.done.load(std::sync::atomic::Ordering::Acquire));
         let Some(query) = self.search.as_mut() else {
             return;
         };
@@ -5456,7 +5785,8 @@ impl State {
                 if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                     close = true;
                 }
-                ui.label(format!("{} / {}", if n == 0 { 0 } else { idx + 1 }, n));
+                let more = if more { "\u{2026}" } else { "" };
+                ui.label(format!("{} / {n}{more}", if n == 0 { 0 } else { idx + 1 }));
             });
         if close {
             self.search = None;
@@ -5464,6 +5794,7 @@ impl State {
             self.search_key.clear();
             self.editor_hits.clear();
             self.editor_hits_query.clear();
+            self.bg_search = None;
             self.window.request_redraw();
             return;
         }
@@ -7810,7 +8141,6 @@ impl State {
     /// A key for the focused editor pane. False when it is the app's (⌘S,
     /// ⌘W, ⌘T…), so the shortcut path gets it.
     fn editor_key(&mut self, event: &KeyEvent) -> bool {
-        use editor_pane::Command;
         let kind = winit_key_kind(event);
         let (shift, alt) = (self.mods.shift_key(), self.mods.alt_key());
         let (sup, ctrl) = (self.mods.super_key(), self.mods.control_key());
@@ -7818,16 +8148,16 @@ impl State {
         let Some(ed) = self.active_editor_mut() else {
             return false;
         };
+        // Editing a file in view mode asks first (see `large_edit_window`).
+        let view = ed.is_view_only().then(|| ed.id.clone());
         if let Some(command) = editor_pane::keymap(kind, shift, alt, sup, ctrl) {
-            let edits = !matches!(
-                command,
-                Command::Move(..)
-                    | Command::SelectAll
-                    | Command::SelectLine
-                    | Command::SelectNextOccurrence
-                    | Command::AddCursor(_)
-                    | Command::Escape
-            );
+            let edits = editor_pane::EditorPane::edits(command);
+            if edits && !read_only {
+                if let Some(id) = view {
+                    self.large_edit_offer = Some(id);
+                    return true;
+                }
+            }
             if !(read_only && edits) {
                 ed.run(command);
             }
@@ -7839,7 +8169,9 @@ impl State {
         if matches!(kind, input::KeyKind::Char(_) | input::KeyKind::Other) {
             if let Some(text) = event.text.as_ref().filter(|t| !t.is_empty()) {
                 if !text.chars().all(char::is_control) {
-                    if !read_only {
+                    if let (Some(id), false) = (view, read_only) {
+                        self.large_edit_offer = Some(id);
+                    } else if !read_only {
                         ed.type_text(text);
                     }
                     return true;
@@ -8018,7 +8350,9 @@ impl State {
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"));
         let large = std::fs::metadata(&path).is_ok_and(|m| m.len() > editor_pane::MAX_PANE_BYTES);
-        if !readonly && !markdown && !large {
+        // A large file opens in view mode whatever its kind: the floating
+        // editor would read all of it into one text field.
+        if large || (!readonly && !markdown) {
             return self.open_editor_pane(&path);
         }
         match std::fs::read_to_string(&path) {
@@ -9313,6 +9647,9 @@ impl ApplicationHandler<HostEvent> for Host {
             search_key: String::new(),
             editor_hits: Vec::new(),
             editor_hits_query: String::new(),
+            bg_search: None,
+            large_edit_offer: None,
+            large_loading: None,
             update_url: cfg.update_check_url.clone(),
             update_rx: None,
             update_install: UpdateInstall::Idle,
@@ -9798,7 +10135,11 @@ impl ApplicationHandler<HostEvent> for Host {
                     if state.read_only {
                         // Read-only blocks typing into any pane.
                     } else if let Some(ed) = state.active_editor_mut() {
-                        ed.type_text(&text);
+                        if ed.is_view_only() {
+                            state.large_edit_offer = Some(ed.id.clone());
+                        } else {
+                            ed.type_text(&text);
+                        }
                         state.window.request_redraw();
                     } else {
                         state.write_input(text.as_bytes());
@@ -10227,6 +10568,49 @@ impl ApplicationHandler<HostEvent> for Host {
 /// Case-insensitive matches of `query` in a line's cells (see
 /// `ATerm::line_chars_abs`), as (start column, width in cells). Columns come
 /// from the cells, so wide characters before or inside a match line up.
+/// Documents larger than this are searched on a thread, so typing in Find
+/// never waits on a scan.
+const BG_SEARCH_BYTES: usize = 8 << 20;
+
+/// Matches kept for one search.
+const MAX_SEARCH_HITS: usize = 100_000;
+
+/// A search running on a thread; dropping it cancels the thread.
+struct BgSearch {
+    hits: Arc<std::sync::Mutex<Vec<(usize, usize)>>>,
+    done: Arc<std::sync::atomic::AtomicBool>,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+    /// Select the first match after the caret once matches arrive.
+    jump: bool,
+    /// Hits are file byte ranges (view mode), not char ranges.
+    bytes: bool,
+}
+
+impl Drop for BgSearch {
+    fn drop(&mut self) {
+        self.cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Memory to load a file for editing, from its size: measured at about
+/// 2.2 times the file at the peak of loading (the bytes read plus the rope).
+fn edit_memory_estimate(bytes: u64) -> u64 {
+    bytes * 22 / 10
+}
+
+/// A byte count as people read it ("1.4 GB", "512 MB").
+fn human_bytes(bytes: u64) -> String {
+    const GB: f64 = (1u64 << 30) as f64;
+    const MB: f64 = (1u64 << 20) as f64;
+    let b = bytes as f64;
+    if b >= GB {
+        format!("{:.1} GB", b / GB)
+    } else {
+        format!("{:.0} MB", (b / MB).max(1.0))
+    }
+}
+
 /// Whether a key goes to the active editor pane before the app's shortcuts:
 /// not while hint mode reads labels, and not while an egui text field (Find,
 /// the palette, a rename) has the keyboard, so typing there never edits the
@@ -11190,6 +11574,23 @@ impl chrome::Chrome for State {
     fn status_right(&self) -> String {
         if let Some(ed) = self.active_editor() {
             let (line, col) = ed.caret_line_col();
+            if let Some(large) = &ed.large {
+                use miao_term_ui::i18n::t;
+                let l = self.lang;
+                let mut s = format!(
+                    "{} \u{00b7} {} \u{00b7} {line}:{col}",
+                    t(l, "View only", "只读查看"),
+                    human_bytes(large.file.len_bytes())
+                );
+                if !large.file.indexed() {
+                    s.push_str(&format!(
+                        " \u{00b7} {} {:.0}%",
+                        t(l, "indexing", "建立索引"),
+                        large.file.progress() * 100.0
+                    ));
+                }
+                return s;
+            }
             let lang = ed.language().unwrap_or("Plain Text");
             return format!(
                 "{lang} \u{00b7} {line}:{col} \u{00b7} {}",

@@ -2392,6 +2392,7 @@ dependencies = [
  "arborium-vue",
  "arborium-zsh",
  "dekobon-tree-sitter-groovy",
+ "memchr",
  "regex",
  "ropey",
  "syntect",

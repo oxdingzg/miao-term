@@ -203,3 +203,69 @@ fn an_8_mb_source_file_highlights_in_the_background() {
     let range = rope.line_to_byte(line)..rope.line_to_byte(line + 60);
     assert!(!syntax.highlights(rope, range).is_empty());
 }
+
+#[test]
+#[ignore = "perf gate; run `cargo test --release -- --ignored`"]
+fn a_1_gb_file_opens_in_view_mode_without_loading_it() {
+    use miao_term_editor::large::LargeFile;
+    use std::io::Write;
+    let path = std::env::temp_dir().join(format!("mtty-perf-1g-{}.log", std::process::id()));
+    {
+        let mut out = std::io::BufWriter::new(std::fs::File::create(&path).unwrap());
+        let mut written = 0usize;
+        let mut i = 0usize;
+        while written < 1 << 30 {
+            let line =
+                format!("2026-10-02 12:23:39,409 [INFO] request id={i:08} handled in 12ms 中文\n");
+            out.write_all(line.as_bytes()).unwrap();
+            written += line.len();
+            i += 1;
+        }
+        // One match, near the end.
+        out.write_all(b"the needle line\n").unwrap();
+    }
+
+    let t = Instant::now();
+    let file = LargeFile::open(&path).unwrap();
+    let (first, _) = file.read_lines(0, 60, usize::MAX);
+    check(
+        "open 1 GB and show the first screen",
+        t.elapsed().as_secs_f64() * 1e3,
+        100.0,
+    );
+    assert!(first.starts_with("2026-10-02"));
+
+    let t = Instant::now();
+    while !file.indexed() {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    check(
+        "index the line breaks of 1 GB",
+        t.elapsed().as_secs_f64() * 1e3,
+        10_000.0,
+    );
+
+    let last = file.line_count() - 2;
+    let t = Instant::now();
+    let (end, n) = file.read_lines(last - 59, 60, usize::MAX);
+    check(
+        "read the last screen of 1 GB",
+        t.elapsed().as_secs_f64() * 1e3,
+        50.0,
+    );
+    assert_eq!(n, 60);
+    assert!(end.ends_with("the needle line"));
+
+    let t = Instant::now();
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let mut hits = Vec::new();
+    file.search("NEEDLE", 10, &cancel, |a, b| hits.push((a, b)));
+    check(
+        "search all of 1 GB",
+        t.elapsed().as_secs_f64() * 1e3,
+        10_000.0,
+    );
+    assert_eq!(hits.len(), 1);
+    assert_eq!(file.line_of(hits[0].0), last);
+    let _ = std::fs::remove_file(&path);
+}
