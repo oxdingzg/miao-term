@@ -484,7 +484,24 @@ fn localize_detail(lang: miao_term_ui::i18n::Lang, text: &str) -> &str {
         "lsof unavailable" => "lsof 不可用",
         "state" => "状态",
         "session_id" => "会话 ID",
+        "agent" => "Agent",
+        "tty" => "终端设备",
         _ => text,
+    }
+}
+
+/// An agent state as the details panel shows it. Only the Agent rows' state
+/// values go through this: a tab or file could be named `idle` too.
+fn agent_state_label(lang: miao_term_ui::i18n::Lang, state: &str) -> &str {
+    if lang == miao_term_ui::i18n::Lang::En {
+        return state;
+    }
+    match state {
+        "processing" => "处理中",
+        "idle" => "空闲",
+        "awaiting" => "等待你",
+        "error" => "出错",
+        _ => state,
     }
 }
 
@@ -3271,6 +3288,11 @@ impl State {
                 Some(a) => {
                     for k in ["agent", "state", "session_id", "tty"] {
                         if let Some(v) = a.get(k).and_then(|v| v.as_str()) {
+                            let v = if k == "state" {
+                                agent_state_label(self.lang, v)
+                            } else {
+                                v
+                            };
                             rows.push((k.to_string(), v.to_string()));
                         }
                     }
@@ -11264,6 +11286,16 @@ mod tests {
         );
         assert_eq!(localize_detail(Lang::Zh, "src/main.rs"), "src/main.rs");
         assert_eq!(localize_detail(Lang::En, "Directory"), "Directory");
+        assert_eq!(localize_detail(Lang::Zh, "tty"), "终端设备");
+        assert_eq!(agent_state_label(Lang::Zh, "awaiting"), "等待你");
+        assert_eq!(agent_state_label(Lang::Zh, "processing"), "处理中");
+        assert_eq!(agent_state_label(Lang::En, "idle"), "idle");
+        assert_eq!(agent_state_label(Lang::Zh, "custom"), "custom");
+        assert_eq!(
+            localize_detail(Lang::Zh, "idle"),
+            "idle",
+            "only Agent state values are states"
+        );
     }
 
     #[test]
