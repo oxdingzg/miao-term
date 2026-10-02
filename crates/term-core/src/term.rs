@@ -490,6 +490,25 @@ impl Terminal {
         }
     }
 
+    /// The foreground program's arguments (`["vim", "notes.md"]`), to offer
+    /// running it again after a restart. `None` while the shell itself waits
+    /// for input. Unix only.
+    pub fn foreground_args(&self) -> Option<Vec<String>> {
+        #[cfg(unix)]
+        {
+            let leader = self.master.as_ref()?.process_group_leader()?;
+            let leader = u32::try_from(leader).ok()?;
+            if Some(leader) == self.pid() {
+                return None;
+            }
+            process_args(leader).filter(|args| !args.is_empty())
+        }
+        #[cfg(not(unix))]
+        {
+            None
+        }
+    }
+
     /// The file the foreground program was started on: its first argument that
     /// is not an option and names an existing file, resolved against the
     /// program's working directory (`src/main.rs` for `vim src/main.rs`).

@@ -8,6 +8,7 @@ font-size = 13                   # default
 # background-opacity = 1.0         # 0.1–1.0; <1 needs a compositing WM (translucent window)
 # notifications = true             # system notification when an agent needs attention
 # prevent-sleep = true             # keep the machine awake while an agent is processing
+# restore-scrollback = true        # save terminals' contents at quit and show them on relaunch
 
 # quick-terminal-hotkey = "cmd+shift+t"  # system-wide Quick Terminal toggle
 # editor-vim = true                # minimal vim mode in the built-in editor

@@ -257,6 +257,8 @@ struct RawConfig {
     notifications: Option<bool>,
     #[serde(rename = "prevent-sleep")]
     prevent_sleep: Option<bool>,
+    #[serde(rename = "restore-scrollback")]
+    restore_scrollback: Option<bool>,
     badges: Option<RawBadges>,
     language: Option<String>,
     #[serde(rename = "update-check-url")]
@@ -350,6 +352,9 @@ pub struct Config {
     pub notifications: bool,
     /// Keep the machine awake while an agent is processing.
     pub prevent_sleep: bool,
+    /// Save each terminal's contents when mtty quits and show them again
+    /// in the restored panes (kept in the data directory, owner-only).
+    pub restore_scrollback: bool,
     /// Which agent states show a tab badge.
     pub badges: Badges,
     /// UI language tag (`en`, `zh`, …); `None` detects from `$LANG`.
@@ -426,6 +431,7 @@ impl Default for Config {
             background_opacity: 1.0,
             notifications: true,
             prevent_sleep: true,
+            restore_scrollback: true,
             badges: Badges::default(),
             language: None,
             update_check_url: Some(
@@ -750,6 +756,11 @@ impl Config {
                         cfg.prevent_sleep = v;
                     }
                 }
+                "restore-scrollback" => {
+                    if let Ok(v) = value.parse::<bool>() {
+                        cfg.restore_scrollback = v;
+                    }
+                }
                 "palette" => {
                     if let Some((idx, hex)) = value.split_once('=') {
                         if let (Ok(i), Some(c)) = (idx.trim().parse::<usize>(), Rgb::parse(hex)) {
@@ -791,6 +802,9 @@ impl Config {
         }
         if let Some(v) = raw.prevent_sleep {
             cfg.prevent_sleep = v;
+        }
+        if let Some(v) = raw.restore_scrollback {
+            cfg.restore_scrollback = v;
         }
         if let Some(lang) = raw.language {
             let lang = lang.trim();

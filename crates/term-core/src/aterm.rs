@@ -225,6 +225,91 @@ impl ATerm {
         out
     }
 
+    /// The main screen's last `max_lines` rows (scrollback and screen, down to
+    /// the last non-blank row) as text with SGR colours and attributes, for
+    /// showing a pane's contents again in a new session. Soft-wrapped rows
+    /// are joined, so the text reflows at whatever width it is replayed at.
+    ///
+    /// With a full-screen program on the alternate screen (vim, less), the
+    /// shell output underneath is read; the alternate screen is cleared in
+    /// the process, so call this only as the session ends.
+    pub fn snapshot_ansi(&mut self, max_lines: usize) -> String {
+        let alt = self.term.mode().contains(TermMode::ALT_SCREEN);
+        if alt {
+            self.term.swap_alt();
+        }
+        let out = self.main_screen_ansi(max_lines);
+        if alt {
+            self.term.swap_alt();
+        }
+        out
+    }
+
+    fn main_screen_ansi(&self, max_lines: usize) -> String {
+        let grid = self.term.grid();
+        let history = grid.history_size() as i32;
+        let blank = |c: &alacritty_terminal::term::cell::Cell| {
+            c.c == ' '
+                && c.bg == Color::Named(NamedColor::Background)
+                && !c.flags.intersects(Flags::INVERSE | Flags::UNDERLINE)
+                && c.zerowidth().is_none()
+        };
+        // Buffer rows as alacritty lines: -history (oldest) ..= rows - 1.
+        let rows: Vec<Line> = (-history..self.rows as i32).map(Line).collect();
+        let Some(last) = rows
+            .iter()
+            .rposition(|&l| !(0..self.cols).all(|c| blank(&grid[l][Column(c)])))
+        else {
+            return String::new();
+        };
+        let first = (last + 1).saturating_sub(max_lines);
+        let mut out = String::new();
+        let mut attrs = String::new();
+        for &line in &rows[first..=last] {
+            let row = &grid[line];
+            let wraps = row[Column(self.cols - 1)].flags.contains(Flags::WRAPLINE);
+            // A wrapped row continues on the next one: keep its full width.
+            let end = if wraps {
+                self.cols
+            } else {
+                (0..self.cols)
+                    .rposition(|c| !blank(&row[Column(c)]))
+                    .map_or(0, |c| c + 1)
+            };
+            for c in 0..end {
+                let cell = &row[Column(c)];
+                if cell
+                    .flags
+                    .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                {
+                    continue;
+                }
+                let want = sgr_params(cell.fg, cell.bg, cell.flags);
+                if want != attrs {
+                    out.push_str("\x1b[0");
+                    out.push_str(&want);
+                    out.push('m');
+                    attrs = want;
+                }
+                out.push(cell.c);
+                if let Some(marks) = cell.zerowidth() {
+                    out.extend(marks);
+                }
+            }
+            if !wraps {
+                if !attrs.is_empty() {
+                    out.push_str("\x1b[0m");
+                    attrs.clear();
+                }
+                out.push_str("\r\n");
+            }
+        }
+        if !attrs.is_empty() {
+            out.push_str("\x1b[0m");
+        }
+        out
+    }
+
     /// Current scrollback offset (lines scrolled up from the bottom).
     pub fn scroll_offset(&self) -> usize {
         self.term.grid().display_offset()
@@ -302,6 +387,40 @@ impl ATerm {
     }
 }
 
+/// The SGR parameters (after a reset) for a cell's colours and attributes.
+fn sgr_params(fg: Color, bg: Color, flags: Flags) -> String {
+    let mut out = String::new();
+    for (flag, code) in [
+        (Flags::BOLD, "1"),
+        (Flags::DIM, "2"),
+        (Flags::ITALIC, "3"),
+        (Flags::UNDERLINE, "4"),
+        (Flags::INVERSE, "7"),
+        (Flags::STRIKEOUT, "9"),
+    ] {
+        if flags.contains(flag) {
+            out.push(';');
+            out.push_str(code);
+        }
+    }
+    for (color, is_bg) in [(fg, false), (bg, true)] {
+        let default = if is_bg {
+            NamedColor::Background
+        } else {
+            NamedColor::Foreground
+        };
+        if color != Color::Named(default) {
+            // `sgr` yields "\x1b[<params>m": keep the parameters.
+            let one = sgr(color, is_bg);
+            if let Some(params) = one.strip_prefix("\x1b[").and_then(|r| r.strip_suffix('m')) {
+                out.push(';');
+                out.push_str(params);
+            }
+        }
+    }
+    out
+}
+
 /// An SGR fragment for a colour (`bg` selects 48/49 instead of 38/39).
 fn sgr(c: Color, bg: bool) -> String {
     match c {
@@ -333,6 +452,59 @@ fn sgr(c: Color, bg: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn replay(snapshot: &str, cols: u16) -> ATerm {
+        let mut term = ATerm::new(cols, 10, 100);
+        term.process(snapshot.as_bytes());
+        term
+    }
+
+    #[test]
+    fn snapshots_keep_colours_and_reflow_wrapped_lines() {
+        let mut term = ATerm::new(10, 4, 100);
+        term.process(b"one\r\n\x1b[1;31mred\x1b[0m plain\r\n0123456789abcdef\r\n$ ");
+        let snap = term.snapshot_ansi(1000);
+        assert!(snap.contains("\x1b[0;1;31mred\x1b[0m plain"), "{snap:?}");
+        // 16 characters wrapped at 10 columns come back as one line.
+        assert!(snap.contains("0123456789abcdef\r\n"), "{snap:?}");
+        let wide = replay(&snap, 20);
+        assert_eq!(wide.line_text(2), "0123456789abcdef");
+        assert_eq!(wide.line_text(1), "red plain");
+        let red = wide.cell(1, 0).unwrap();
+        assert!(red.bold && red.fg == Color::Named(NamedColor::Red));
+    }
+
+    #[test]
+    fn snapshots_include_scrollback_up_to_a_limit() {
+        let mut term = ATerm::new(10, 3, 100);
+        for i in 0..20 {
+            term.process(format!("line {i}\r\n").as_bytes());
+        }
+        let all = term.snapshot_ansi(1000);
+        assert!(all.starts_with("line 0\r\n") && all.ends_with("line 19\r\n"));
+        let last = term.snapshot_ansi(5);
+        assert!(last.starts_with("line 15\r\n"), "{last:?}");
+        assert_eq!(ATerm::new(10, 3, 100).snapshot_ansi(10), "");
+    }
+
+    #[test]
+    fn snapshots_read_the_shell_output_under_a_full_screen_program() {
+        let mut term = ATerm::new(20, 3, 100);
+        term.process(b"$ vim notes\r\n\x1b[?1049h\x1b[2Jvim screen");
+        let snap = term.snapshot_ansi(100);
+        assert!(
+            snap.contains("$ vim notes") && !snap.contains("vim screen"),
+            "{snap:?}"
+        );
+        assert!(term.alternate_scroll(), "still on the alternate screen");
+    }
+
+    #[test]
+    fn snapshots_keep_wide_characters() {
+        let mut term = ATerm::new(10, 3, 100);
+        term.process("中文 ok\r\n".as_bytes());
+        assert_eq!(term.snapshot_ansi(10), "中文 ok\r\n");
+    }
 
     #[test]
     fn wheel_goes_to_full_screen_programs_on_the_alternate_screen() {

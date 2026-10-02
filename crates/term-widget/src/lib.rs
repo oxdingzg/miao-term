@@ -339,18 +339,19 @@ struct Pane {
     id: String,
     term: Terminal,
     scroll: usize,
-    /// A restored ssh session waiting for Enter to reconnect (the command).
-    reconnect: Option<String>,
+    /// What Enter types once, offered after a restore: the ssh command that
+    /// reconnects the session, or the program that was running at quit.
+    on_enter: Option<String>,
     /// The last command output already published to the control plane.
     published_output: Option<miao_term_core::CommandOutput>,
 }
 
-/// Input for a pane that offers to reconnect: Enter becomes the ssh command;
-/// anything else means the user wants the local shell, so the offer ends and
-/// the input passes through unchanged.
-fn reconnect_input(pending: &mut Option<String>, bytes: &[u8]) -> Option<Vec<u8>> {
-    let command = pending.take()?;
-    (bytes == b"\r").then(|| typed_ssh(&command).into_bytes())
+/// Input for a pane with an offer pending (reconnect, run again): Enter types
+/// the offered command; anything else means the user wants the shell as it
+/// is, so the offer ends and the input passes through unchanged.
+fn on_enter_input(pending: &mut Option<String>, bytes: &[u8]) -> Option<Vec<u8>> {
+    let typed = pending.take()?;
+    (bytes == b"\r").then(|| typed.into_bytes())
 }
 
 /// An ssh command as typed into a pane's shell: a leading space keeps it out
@@ -1084,6 +1085,7 @@ struct State {
     opacity: f32,
     notifications: bool,
     prevent_sleep: bool,
+    restore_scrollback: bool,
     sleep: miao_term_ui::agentloop::SleepGuard,
     agent_states: HashMap<String, String>,
     composer: Option<String>,
@@ -1442,7 +1444,7 @@ impl State {
                     id,
                     term,
                     scroll: 0,
-                    reconnect: None,
+                    on_enter: None,
                     published_output: None,
                 }
             })
@@ -2117,7 +2119,7 @@ impl State {
         }
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
             if let Some(pane) = tab.panes.iter_mut().find(|p| p.id == tab.active) {
-                if let Some(command) = reconnect_input(&mut pane.reconnect, bytes) {
+                if let Some(command) = on_enter_input(&mut pane.on_enter, bytes) {
                     pane.scroll = 0;
                     pane.term.write(&command);
                     return;
@@ -2129,7 +2131,7 @@ impl State {
             if self.broadcast {
                 let active = tab.active.clone();
                 for pane in tab.panes.iter_mut().filter(|p| p.id != active) {
-                    pane.reconnect = None;
+                    pane.on_enter = None;
                     pane.term.write(bytes);
                     pane.scroll = 0;
                 }
@@ -3276,6 +3278,83 @@ impl State {
         }
     }
 
+    /// The session as mtty quits: also each terminal's contents (when
+    /// `restore-scrollback` is on) and the program running in it, so the
+    /// next launch can show them and offer to run it again.
+    fn save_session_on_exit(&mut self) {
+        let mut value = self.session_value();
+        let dir = scrollback_dir();
+        if let Some(dir) = &dir {
+            // Contents from the last session that were never restored.
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        for (t, tab) in self.tabs.iter_mut().enumerate() {
+            for pane in &mut tab.panes {
+                let mut extra = serde_json::Map::new();
+                if !tab.ssh {
+                    if let Some(args) = pane.term.foreground_args() {
+                        let line: Vec<String> = args.iter().map(|a| shell_quote(a)).collect();
+                        extra.insert("command".into(), line.join(" ").into());
+                    }
+                }
+                if self.restore_scrollback {
+                    let text = pane.term.screen_mut().snapshot_ansi(SCROLLBACK_LINES);
+                    let file = format!("{}.ansi", pane.id);
+                    if let Some(dir) = dir.as_deref().filter(|_| !text.is_empty()) {
+                        if write_private(dir, &file, text.as_bytes()).is_ok() {
+                            extra.insert("scrollback".into(), file.into());
+                        }
+                    }
+                }
+                if extra.is_empty() {
+                    continue;
+                }
+                let saved = value["tabs"][t]["panes"]
+                    .as_array_mut()
+                    .and_then(|panes| panes.iter_mut().find(|p| p["id"] == pane.id.as_str()));
+                if let Some(serde_json::Value::Object(saved)) = saved {
+                    saved.extend(extra);
+                }
+            }
+        }
+        if let Some(path) = session_file() {
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(path, serde_json::to_vec(&value).unwrap_or_default());
+        }
+    }
+
+    /// A restored pane: show what it held at quit, then offer the program
+    /// that was running (never run it unasked).
+    fn restore_pane_contents(&self, pane: &mut Pane, saved: &serde_json::Value) {
+        let t = |en, zh| miao_term_ui::i18n::t(self.lang, en, zh);
+        let file = saved["scrollback"]
+            .as_str()
+            .filter(|f| is_plain_file_name(f));
+        if let Some(path) = file.and_then(|f| scrollback_dir().map(|d| d.join(f))) {
+            if let Ok(text) = std::fs::read(&path) {
+                pane.term.screen_mut().process(&text);
+                let note = format!(
+                    "\x1b[0;2m[mtty] {}\x1b[0m\r\n",
+                    t("Restored from the last session.", "以上为上次会话的内容。")
+                );
+                pane.term.screen_mut().process(note.as_bytes());
+            }
+            // Shown once: the next quit saves the contents afresh.
+            let _ = std::fs::remove_file(&path);
+        }
+        if let Some(command) = saved["command"].as_str().filter(|c| !c.trim().is_empty()) {
+            let note = format!(
+                "\x1b[0;2m[mtty] {} {command}  {}\x1b[0m\r\n",
+                t("Was running:", "上次正在运行:"),
+                t("Press Enter to run it again.", "按回车重新运行。"),
+            );
+            pane.term.screen_mut().process(note.as_bytes());
+            pane.on_enter = Some(format!("{command}\r"));
+        }
+    }
+
     /// Persist the prompt queue so it survives a restart.
     fn save_queue(&self) {
         if let Some(path) = queue_file() {
@@ -3328,7 +3407,8 @@ impl State {
                         .get("cwd")
                         .and_then(|x| x.as_str())
                         .map(std::path::PathBuf::from);
-                    if let Some(pane) = self.spawn_pane(cwd) {
+                    if let Some(mut pane) = self.spawn_pane(cwd) {
+                        self.restore_pane_contents(&mut pane, p);
                         if let Some(old) = p.get("id").and_then(|x| x.as_str()) {
                             map.insert(old.to_string(), pane.id.clone());
                         }
@@ -4265,7 +4345,7 @@ impl State {
                 if self.show_settings {
                     self.persist_settings();
                 }
-                self.save_session();
+                self.save_session_on_exit();
                 self.sleep.set_awake(false);
                 std::process::exit(0);
             }
@@ -4367,6 +4447,7 @@ impl State {
         let mut graphics = self.graphics_enabled;
         let mut notifications = self.notifications;
         let mut prevent_sleep = self.prevent_sleep;
+        let mut restore_scrollback = self.restore_scrollback;
         let mut install_agent: Option<&'static str> = None;
         let mut launch: Option<usize> = None;
         self.refresh_agents_detected();
@@ -4437,6 +4518,14 @@ impl State {
                         ui.checkbox(
                             &mut prevent_sleep,
                             miao_term_ui::i18n::t(self.lang, "Prevent sleep", "防休眠"),
+                        );
+                        ui.checkbox(
+                            &mut restore_scrollback,
+                            miao_term_ui::i18n::t(
+                                self.lang,
+                                "Restore terminal contents on relaunch",
+                                "重新打开时恢复终端内容",
+                            ),
                         );
                         ui.separator();
                         ui.label(miao_term_ui::i18n::t(
@@ -4537,6 +4626,7 @@ impl State {
             self.integration_msg = Some(msg);
         }
         self.notifications = notifications;
+        self.restore_scrollback = restore_scrollback;
         if self.prevent_sleep != prevent_sleep {
             self.prevent_sleep = prevent_sleep;
             if !prevent_sleep {
@@ -4586,6 +4676,7 @@ impl State {
             ("graphics", self.graphics_enabled.to_string()),
             ("notifications", self.notifications.to_string()),
             ("prevent-sleep", self.prevent_sleep.to_string()),
+            ("restore-scrollback", self.restore_scrollback.to_string()),
         ];
         if !self.theme_name.is_empty() {
             v.push(("theme", toml_string(&self.theme_name.to_ascii_lowercase())));
@@ -5414,7 +5505,7 @@ impl State {
             miao_term_ui::i18n::t(self.lang, "Press Enter to reconnect.", "按回车重新连接。"),
         );
         pane.term.screen_mut().process(note.as_bytes());
-        pane.reconnect = Some(cmd);
+        pane.on_enter = Some(typed_ssh(&cmd));
     }
 
     fn open_ssh(&mut self, input: &str) {
@@ -8862,6 +8953,9 @@ impl ApplicationHandler<HostEvent> for Host {
         if self.state.is_some() {
             return;
         }
+        // Launch has finished: AppKit's quit handler is in place to replace.
+        #[cfg(target_os = "macos")]
+        macos_url::install_quit();
         let (init_w, init_h) = load_window_size().unwrap_or((1100.0, 720.0));
         let opacity = miao_term_config::Config::load()
             .background_opacity
@@ -9113,6 +9207,7 @@ impl ApplicationHandler<HostEvent> for Host {
             opacity,
             notifications: cfg.notifications,
             prevent_sleep: cfg.prevent_sleep,
+            restore_scrollback: cfg.restore_scrollback,
             sleep: miao_term_ui::agentloop::SleepGuard::new(),
             agent_states: HashMap::new(),
             composer: None,
@@ -9319,6 +9414,11 @@ impl ApplicationHandler<HostEvent> for Host {
                 let intent = miao_term_ui::launch::Intent::from_args(&[url]);
                 state.apply_launch(&intent);
                 state.window.request_redraw();
+            }
+            // Quit from the Dock, logout or AppleScript: mtty's own quit.
+            #[cfg(target_os = "macos")]
+            if macos_url::take_quit() {
+                state.run_command(Cmd::Quit);
             }
             // Launches forwarded by later processes (ADR 0019).
             for line in miao_term_ui::launch::drain_inbox() {
@@ -9566,7 +9666,7 @@ impl ApplicationHandler<HostEvent> for Host {
                 if state.show_settings {
                     state.persist_settings();
                 }
-                state.save_session();
+                state.save_session_on_exit();
                 event_loop.exit();
             }
             WindowEvent::Focused(f) => {
@@ -10754,6 +10854,38 @@ fn list_recipes() -> Vec<String> {
 
 fn session_file() -> Option<std::path::PathBuf> {
     window_file().map(|p| p.with_file_name("session.json"))
+}
+
+/// Terminal contents saved at quit, one file per pane (see
+/// `save_session_on_exit`).
+fn scrollback_dir() -> Option<std::path::PathBuf> {
+    miao_term_config::data_dir().map(|d| d.join("scrollback"))
+}
+
+/// Rows of each terminal kept for the next launch.
+const SCROLLBACK_LINES: usize = 5000;
+
+/// A bare file name (no directories), as the session names saved contents.
+fn is_plain_file_name(name: &str) -> bool {
+    !name.is_empty() && std::path::Path::new(name).file_name() == Some(std::ffi::OsStr::new(name))
+}
+
+/// Write `bytes` to `dir/name` readable by the owner only: terminal output
+/// can hold secrets.
+fn write_private(dir: &std::path::Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+        builder.mode(0o700);
+        options.mode(0o600);
+    }
+    builder.create(dir)?;
+    options.open(dir.join(name))?.write_all(bytes)
 }
 
 fn queue_file() -> Option<std::path::PathBuf> {
@@ -12267,23 +12399,44 @@ mod tests {
     }
 
     #[test]
-    fn restored_ssh_panes_reconnect_on_enter_only() {
-        let mut pending = Some("ssh -t 'work'".to_string());
+    fn restored_panes_type_their_offer_on_enter_only() {
         // Typed for the local shell: " clear; …" for sh, "cls & …" for cmd.
-        let typed = miao_term_ui::ssh::Syntax::local().typed("ssh -t 'work'");
+        let typed = typed_ssh("ssh -t 'work'");
         assert!(typed.ends_with("ssh -t 'work'\r"), "{typed}");
-        assert_eq!(
-            reconnect_input(&mut pending, b"\r").as_deref(),
-            Some(typed.as_bytes())
-        );
         if cfg!(unix) {
             assert_eq!(typed, " clear; ssh -t 'work'\r");
         }
-        assert!(pending.is_none(), "reconnect is offered once");
-        let mut pending = Some("ssh -t 'work'".to_string());
-        assert!(reconnect_input(&mut pending, b"l").is_none());
-        assert!(pending.is_none(), "other input keeps the local shell");
-        assert!(reconnect_input(&mut None, b"\r").is_none());
+        let mut pending = Some(typed.clone());
+        assert_eq!(
+            on_enter_input(&mut pending, b"\r").as_deref(),
+            Some(typed.as_bytes())
+        );
+        assert!(pending.is_none(), "the offer is made once");
+        let mut pending = Some("vim notes.md\r".to_string());
+        assert!(on_enter_input(&mut pending, b"l").is_none());
+        assert!(pending.is_none(), "other input keeps the shell as it is");
+        assert!(on_enter_input(&mut None, b"\r").is_none());
+    }
+
+    #[test]
+    fn saved_contents_stay_private_and_inside_their_folder() {
+        assert!(is_plain_file_name("p1.ansi"));
+        for name in ["", "../x.ansi", "/etc/passwd", "a/b.ansi", ".."] {
+            assert!(!is_plain_file_name(name), "{name}");
+        }
+        let dir = std::env::temp_dir().join(format!("mtty-scrollback-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        write_private(&dir, "p1.ansi", b"hello\r\n").unwrap();
+        assert_eq!(std::fs::read(dir.join("p1.ansi")).unwrap(), b"hello\r\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode =
+                |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode(&dir), 0o700);
+            assert_eq!(mode(&dir.join("p1.ansi")), 0o600);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

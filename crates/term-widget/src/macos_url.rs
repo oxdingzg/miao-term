@@ -4,6 +4,11 @@
 //! `NSAppleEventManager`, queues the URLs and wakes the event loop, which
 //! applies them like command-line launches (ADR 0019).
 //!
+//! The same handler takes the quit Apple Event (`kAEQuitApplication`) that
+//! the Dock, logout, shutdown and `osascript … to quit` send: AppKit's own
+//! handler terminates the process at once, skipping mtty's quit (which
+//! saves the session and the terminals' contents), so it is routed there.
+//!
 //! Plain `msg_send!` keeps the dependency to objc2 and NSString; the typed
 //! bindings for these calls would pull in CoreServices.
 
@@ -18,7 +23,12 @@ use objc2_foundation::NSString;
 const GURL: u32 = u32::from_be_bytes(*b"GURL");
 const KEY_DIRECT_OBJECT: u32 = u32::from_be_bytes(*b"----");
 
+/// `kCoreEventClass` / `kAEQuitApplication`.
+const AEVT: u32 = u32::from_be_bytes(*b"aevt");
+const QUIT: u32 = u32::from_be_bytes(*b"quit");
+
 static PENDING: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static QUIT_ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static WAKE: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
 
 define_class!(
@@ -52,13 +62,19 @@ define_class!(
                 }
             }
         }
+
+        // SAFETY: the signature matches the selector registered below.
+        #[unsafe(method(handleQuitEvent:withReplyEvent:))]
+        fn handle_quit(&self, _event: &AnyObject, _reply: &AnyObject) {
+            QUIT_ASKED.store(true, std::sync::atomic::Ordering::SeqCst);
+            if let Some(wake) = WAKE.get() {
+                wake();
+            }
+        }
     }
 );
 
-/// Register the handler. Call before the event loop runs, so the URL that
-/// launched the app is caught too.
-pub fn install(wake: impl Fn() + Send + Sync + 'static) {
-    let _ = WAKE.set(Box::new(wake));
+fn register(selector: objc2::runtime::Sel, class_id: u32, event_id: u32) {
     let Some(class) = AnyClass::get(c"NSAppleEventManager") else {
         return;
     };
@@ -73,13 +89,32 @@ pub fn install(wake: impl Fn() + Send + Sync + 'static) {
         let _: () = msg_send![
             &*manager,
             setEventHandler: &*handler,
-            andSelector: sel!(handleGetURLEvent:withReplyEvent:),
-            forEventClass: GURL,
-            andEventID: GURL
+            andSelector: selector,
+            forEventClass: class_id,
+            andEventID: event_id
         ];
         // The event manager does not retain its handler.
         std::mem::forget(handler);
     }
+}
+
+/// Register the handler. Call before the event loop runs, so the URL that
+/// launched the app is caught too.
+pub fn install(wake: impl Fn() + Send + Sync + 'static) {
+    let _ = WAKE.set(Box::new(wake));
+    register(sel!(handleGetURLEvent:withReplyEvent:), GURL, GURL);
+}
+
+/// Take over the quit Apple Event. Call once the app has finished launching:
+/// AppKit installs its own quit handler during launch, replacing an earlier
+/// one.
+pub fn install_quit() {
+    register(sel!(handleQuitEvent:withReplyEvent:), AEVT, QUIT);
+}
+
+/// Whether the OS asked the app to quit since the last call.
+pub fn take_quit() -> bool {
+    QUIT_ASKED.swap(false, std::sync::atomic::Ordering::SeqCst)
 }
 
 /// URLs received since the last call.

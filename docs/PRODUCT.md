@@ -116,7 +116,7 @@ point); problems fixed in M0–M3 are no longer listed.
 | Command palette `⌘K` | Works | |
 | Open Quickly `⌘⇧O` | Works | Tabs, agents, snippets, hosts, files and folders in the current directory, recent files; no file-content or scrollback search |
 | Details panel: Info / Agent / Outline / Git / Files / Ports / Queue | Works | Ports cover the shell and its children; non-git dirs say so; while hidden only git is checked, every 10 s (the status line shows the branch) |
-| Session restore (layout, directories, titles, groups) | Works | Fixed now: `⌘Q` skipped the save. Restores layout, not running processes |
+| Session restore (layout, directories, titles, groups, terminal contents) | Works | Each terminal's last 5,000 rows come back (colours kept, owner-only files, `restore-scrollback = false` turns it off), and the program that was running is offered on Enter, never rerun unasked. Quit from the Dock, logout or AppleScript now saves too. Running processes do not survive a quit (that needs a separate PTY daemon) |
 | Recipes save/open | Works | Names are validated as file names; write failures are shown |
 | Picture-in-picture, hints, read-only mode | Works | Read-only blocks MTP `pane.send/run` |
 | View rules | Works | Alias, title, icon, badge; matching by path/command/agent/host/file (the file the foreground program opened); `views.json` hot reload |
