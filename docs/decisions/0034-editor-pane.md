@@ -46,8 +46,10 @@ renderer and laid out by the existing split tree.
    each with the highlight query its crate ships; the macOS binary grew from
    39.8 MB with 20 grammars to 87.8 MB. Files no grammar claims fall back to Sublime syntaxes through
    syntect: its default set plus permissively licensed syntaxes vendored from
-   bat, parsed line by line from checkpoints every 64 lines. Highlighting
-   stops above 1 MB, because a reparse takes time proportional to the file.
+   bat, parsed line by line from checkpoints every 64 lines. Above 512 KB
+   the parse runs on a background thread, with edits made meanwhile replayed
+   on its result; tree-sitter stops at 8 MB, because a tree takes 25-35
+   times the file in memory, and the Sublime fallback at 1 MB.
    Licences are listed in `docs/third-party/SYNTAXES.md`.)
 4. **Rendering through the terminal pipeline.** The editor builds the visible
    rows as styled spans on the monospace cell grid (tabs expanded, wide
