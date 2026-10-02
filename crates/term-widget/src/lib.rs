@@ -11156,6 +11156,124 @@ mod tests {
     }
 
     #[test]
+    fn markdown_table_columns_do_not_overlap() {
+        // A key/description table with inline code, like miao's guide: the
+        // first wrap patch narrowed the whole grid per cell, so the second
+        // column was drawn over the first. mtty's own style: its row stripes
+        // are opaque.
+        let ctx = egui::Context::default();
+        configure_egui(&ctx);
+        let md = "| Field | Purpose |\n|---|---|\n\
+            | `model` | default model (`provider/model`) |\n\
+            | `default_agent` | default agent |\n\
+            | `permission` | permission rules (`allow` / `ask` / `deny`, by tool/path); \
+            unmatched defaults to `ask` |\n\
+            | `agents` | custom agents (model, system prompt, permissions, step cap) |\n\
+            | `skills` / `commands` / `instructions` | skills, commands, instructions |\n\
+            | `lsp` | language servers: `true` enables all built-ins, `false` disables, \
+            or a per-name record. **Omitted = all disabled** |\n";
+        let mut cache = egui_commonmark::CommonMarkCache::default();
+        let mut texts: Vec<(String, egui::Rect)> = Vec::new();
+        let mut starts: Vec<f32> = Vec::new();
+        let mut viewport = egui::Rect::NOTHING;
+        for _ in 0..4 {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(500.0, 600.0),
+                )),
+                ..Default::default()
+            };
+            let output = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    viewport = egui::ScrollArea::both()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            egui_commonmark::CommonMarkViewer::new().show(ui, &mut cache, md);
+                        })
+                        .inner_rect;
+                });
+            });
+            // A filled rect painted after a text (the next row's stripe)
+            // hides whatever part of the text it covers.
+            for (i, shape) in output.shapes.iter().enumerate() {
+                let egui::Shape::Text(t) = &shape.shape else {
+                    continue;
+                };
+                let text_rect = t.visual_bounding_rect().shrink(1.0);
+                for later in &output.shapes[i + 1..] {
+                    if let egui::Shape::Rect(r) = &later.shape {
+                        assert!(
+                            r.fill.a() == 0 || !r.rect.intersects(text_rect),
+                            "{:?} at {text_rect:?} is painted over by {:?}",
+                            t.galley.text(),
+                            r.rect
+                        );
+                    }
+                }
+            }
+            starts = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if t.galley.text().starts_with("custom agents") => Some(t),
+                    _ => None,
+                })
+                .flat_map(|t| {
+                    t.galley
+                        .rows
+                        .iter()
+                        .filter_map(move |r| r.glyphs.first().map(|g| t.pos.x + g.pos.x))
+                })
+                .collect();
+            // One rect per laid-out line, spanning its glyphs: a wrapped run
+            // starts mid-line, so its bounding box covers text before it.
+            texts = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if !t.galley.text().trim().is_empty() => Some(t),
+                    _ => None,
+                })
+                .flat_map(|t| {
+                    let text = t.galley.text().to_string();
+                    t.galley.rows.iter().filter_map(move |r| {
+                        let first = r.glyphs.iter().find(|g| !g.chr.is_whitespace())?;
+                        let last = r.glyphs.iter().rev().find(|g| !g.chr.is_whitespace())?;
+                        let rect = egui::Rect::from_min_max(
+                            t.pos + egui::vec2(first.pos.x, r.rect.min.y),
+                            t.pos + egui::vec2(last.max_x(), r.rect.max.y),
+                        );
+                        Some((text.clone(), rect.shrink(1.0)))
+                    })
+                })
+                .collect();
+        }
+        for (i, (a, ra)) in texts.iter().enumerate() {
+            for (b, rb) in &texts[i + 1..] {
+                assert!(
+                    !ra.intersects(*rb),
+                    "{a:?} at {ra:?} overlaps {b:?} at {rb:?}"
+                );
+            }
+            assert!(
+                ra.right() <= viewport.right() + 1.0,
+                "{a:?} at {ra:?} is cut off"
+            );
+        }
+        // The key column keeps its natural width: `default_agent` on one line.
+        let key = texts.iter().find(|(t, _)| t == "default_agent").unwrap().1;
+        assert!(key.height() < 24.0, "{key:?}");
+        // A wrapped cell's lines start at the same x (upstream put a
+        // two-space label before each cell's first line).
+        assert!(starts.len() >= 2, "the long cell wraps: {starts:?}");
+        assert!(
+            starts.iter().all(|x| (x - starts[0]).abs() < 0.5),
+            "wrapped lines start at {starts:?}"
+        );
+    }
+
+    #[test]
     fn markdown_table_cells_wrap_inside_the_preview() {
         // A long cell used to be truncated at the window edge (egui truncates
         // text in horizontal layouts), so scrolling could not reveal it.
