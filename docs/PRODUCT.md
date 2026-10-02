@@ -346,7 +346,7 @@ verified on its own:
 ### M6 Remote, PuTTY-style (design in [ADR 0037](decisions/0037-serial-telnet-tcp.md))
 
 - [x] **R1** Serial (baud, parity, flow control) and Telnet sessions, raw TCP; saved in the host library. (ADR 0037. A session opens in a pane over a byte pipe (`Terminal::from_pipe`) dialled on a background thread: raw TCP and an in-tree Telnet codec add no dependency, serial uses the MIT `serialport` crate with `default-features = false` (no libudev). *New Serial/Telnet/TCP Session…* is in the Shell menu and the palette with a profile form; `hosts.toml` gains `kind` (`ssh` default, `serial`, `telnet`, `tcp`) and `[host.serial]`, so the sidebar, `mtty://host/<name>` and the palette open the new kinds too. Telnet and raw TCP are marked unencrypted, serial is not. A restored session reconnects, Duplicate dials again, and the pane ends when the connection drops; shell shims, OSC 7 cwd and command capture do not apply. Evidence: pipe-terminal and Telnet-codec unit tests, host-kind round trips, a transport-target JSON test, and a workspace build on macOS and Linux.)
-- [ ] **R2** `.ppk` key import (to OpenSSH format, never stored unencrypted).
+- [ ] **R2** `.ppk` key import (to OpenSSH format, never stored unencrypted). (Design in [ADR 0038](decisions/0038-ppk-import.md).)
 - [ ] **R3** Decide in an ADR whether SSH moves from the system OpenSSH to a Rust-native stack (gains: Windows without OpenSSH, in-process SFTP and forwarding; costs: re-implementing `~/.ssh/config`, ProxyJump and agent forwarding).
 
 ### M7 AI-native workspace (needs design)
