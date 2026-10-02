@@ -226,6 +226,15 @@
 - [x] **B4.4** bash / fish / PowerShell 的 shell 集成。(真实 PTY 端到端测试:macOS 上的 zsh、bash 3.2/5.3,Linux 上的 bash 5.2、fish 3.7、PowerShell 7.5;Windows 上的 PowerShell 由 CI 运行。Windows PowerShell 5.1 不记录历史。)
 - [x] **B4.5** 可选的端到端加密同步,默认关闭。(ADR 0033:主机与片段经用户已在同步的文件夹传递,XChaCha20-Poly1305 加密,密钥不进入该文件夹,每台设备一个文件,按条目合并并记录删除。在 Mac mini 上用两个应用实例经共享文件夹完成汇合,文件夹中无明文。)
 
+### M5 编辑器 pane(设计见 [ADR 0034](decisions/0034-editor-pane.zh-CN.md),提议中)
+
+- [ ] **E1** `term-editor` 内核:rope、事务、撤销、选区、搜索。
+- [ ] **E2** 编辑器 pane MVP:pane 类型、带样式文字段与裁剪、键盘、鼠标、输入法、剪贴板、打开/保存/关闭、会话恢复。
+- [ ] **E3** tree-sitter 高亮(约 20 种语言)、大文件模式、远端文件。
+- [ ] **E4** 多光标、查找替换、跳转到行、Markdown 预览 pane。
+- [ ] **E5** LSP:诊断、悬停、补全、跳转定义。
+- [ ] **E6** pane 中的 vim 模式、折叠与大纲、外部修改重新加载。
+
 ## 5. 不做的事
 
 - 不做账号体系和强制登录;任何云能力都是可选的。
