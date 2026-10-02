@@ -788,8 +788,8 @@ impl<'a> TextProvider<&'a [u8]> for RopeText<'a> {
     }
 }
 
-/// The parse tree of one document in a built-in language.
-pub struct Syntax {
+/// The parse tree of one document in a built-in tree-sitter language.
+struct TreeSyntax {
     name: &'static str,
     parser: Parser,
     tree: Option<Tree>,
@@ -798,16 +798,13 @@ pub struct Syntax {
     stale: bool,
 }
 
-impl Syntax {
-    /// Highlighting for `path` (its first line for a `#!`), when the language
-    /// is built in and its query compiles.
-    pub fn for_file(path: &Path, rope: &Rope) -> Option<Syntax> {
-        let first: String = rope.lines().next().map(String::from).unwrap_or_default();
-        let def = lang_for(path, &first)?;
+impl TreeSyntax {
+    fn for_file(path: &Path, rope: &Rope, first: &str) -> Option<TreeSyntax> {
+        let def = lang_for(path, first)?;
         let compiled = compiled(def)?;
         let mut parser = Parser::new();
         parser.set_language(&(def.language)()).ok()?;
-        let mut syntax = Syntax {
+        let mut syntax = TreeSyntax {
             name: def.name,
             parser,
             tree: None,
@@ -909,6 +906,69 @@ impl Syntax {
     }
 }
 
+enum Engine {
+    Tree(TreeSyntax),
+    Sublime(crate::fallback::Fallback),
+}
+
+/// Highlighting for one document: a tree-sitter grammar when one of the
+/// built-in languages claims the file, else a Sublime syntax from syntect's
+/// default set (see [`crate::fallback`]).
+pub struct Syntax {
+    engine: Engine,
+}
+
+impl Syntax {
+    /// Highlighting for `path` (its first line for a `#!`), when any engine
+    /// knows the language.
+    pub fn for_file(path: &Path, rope: &Rope) -> Option<Syntax> {
+        let first: String = rope.lines().next().map(String::from).unwrap_or_default();
+        let engine = match TreeSyntax::for_file(path, rope, &first) {
+            Some(tree) => Engine::Tree(tree),
+            None => Engine::Sublime(crate::fallback::Fallback::for_file(path, &first)?),
+        };
+        Some(Syntax { engine })
+    }
+
+    /// The language's display name ("Rust", "OCaml"…).
+    pub fn name(&self) -> &'static str {
+        match &self.engine {
+            Engine::Tree(t) => t.name(),
+            Engine::Sublime(f) => f.name(),
+        }
+    }
+
+    /// Whether a tree-sitter grammar (not the line-based fallback) is used.
+    pub fn is_tree_sitter(&self) -> bool {
+        matches!(self.engine, Engine::Tree(_))
+    }
+
+    /// Catch up with `rope` after `edits` (from `Document::take_edits`).
+    pub fn update(&mut self, rope: &Rope, edits: &[ByteEdit]) {
+        match &mut self.engine {
+            Engine::Tree(t) => t.update(rope, edits),
+            Engine::Sublime(f) => {
+                // Lines before the first edited one are unchanged in every
+                // version the edits pass through.
+                if let Some(row) = edits.iter().map(|e| e.start.0).min() {
+                    f.invalidate_from(row);
+                }
+            }
+        }
+    }
+
+    /// Highlighted byte ranges within `range`, sorted and not overlapping.
+    pub fn highlights(&self, rope: &Rope, range: Range<usize>) -> Vec<(Range<usize>, Highlight)> {
+        if rope.len_bytes() > MAX_HIGHLIGHT_BYTES {
+            return Vec::new();
+        }
+        match &self.engine {
+            Engine::Tree(t) => t.highlights(rope, range),
+            Engine::Sublime(f) => f.highlights(rope, range),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -923,6 +983,19 @@ mod tests {
             .filter(|(r, _)| r.start <= at && at < r.end)
             .map(|(_, k)| k)
             .collect()
+    }
+
+    #[test]
+    fn files_no_grammar_claims_fall_back_to_sublime_syntaxes() {
+        let rope = Rope::from_str("let x = 1\n");
+        let ml = Syntax::for_file(Path::new("a.ml"), &rope).unwrap();
+        assert_eq!((ml.name(), ml.is_tree_sitter()), ("OCaml", false));
+        let rs = Syntax::for_file(Path::new("a.rs"), &rope).unwrap();
+        assert!(
+            rs.is_tree_sitter(),
+            "tree-sitter wins where both know the file"
+        );
+        assert!(Syntax::for_file(Path::new("a.txt"), &rope).is_none());
     }
 
     #[test]
