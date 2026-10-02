@@ -41,6 +41,14 @@ glyphon/cosmic-text,ADR 0030),并受性能门约束;egui 只画外围界面。�
 6. **文件。** 文件面板、Open Quickly、`app.edit`、拖放与 Hint 模式都打开编辑器 pane(新标签,或按修饰键分屏)。未保存
    状态显示在标签上;关闭时询问。远端文件沿用 ssh 读写路径。
 7. **LSP 放在后面**,按工作区根目录经 stdio 运行:诊断、悬停、补全、跳转定义,在 `config.toml` 中按语言配置。
+   (实现说明,E5:不依赖 GPU 的 crate `term-lsp` 只用 serde_json,经服务器的 stdio 收发 JSON-RPC。每个语言组与工作区根目录
+   (最近的含项目文件的目录,否则是含 `.git` 的目录)各运行一个服务器;启动、初始化与读取都在后台线程完成,并在登录 shell
+   的 `PATH` 中查找程序(从 Dock 启动的应用没有这个 PATH)。每次修改都以不带范围的 `textDocument/didChange` 同步全文,
+   让客户端保持简单且正确;超过 2 MB 的文件不启用服务器。位置编码优先协商 UTF-8,否则用 UTF-16。诊断在对应单元格下画线并
+   在状态栏计数;指针停留 450 ms 后显示悬停信息;补全在输入触发字符、输入单词时或按 Ctrl+Space 时打开,在客户端过滤,片段
+   以纯文本写入、光标落在第一个占位符,并一起应用附加编辑(如 import);F12 或 ⌘ 单击跳转到定义,F8 跳到下一个问题。默认
+   支持 rust-analyzer、typescript-language-server、pyright、gopls 与 clangd,可在 `config.toml` 的 `[lsp]` 中覆盖。已用
+   rust-analyzer 1.94 与 typescript-language-server 5.3(TypeScript 5.9)验收。)
 8. pane 覆盖现有功能后,下线浮窗编辑器;Markdown 预览改为编辑器旁边的预览 pane。(实现说明,E4:标签在终端与编辑器之外
    持有 `previews`,布局树同样按 id 指向它们。预览随输入实时显示所属编辑器的文本,由 egui 在 pane 卡片内、背景层中渲染,
    因此对话框始终在其上方;关闭编辑器会一并关闭它的预览,会话会保存预览。本地 Markdown 文件在编辑器 pane 中打开,右侧附带

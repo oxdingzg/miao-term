@@ -279,6 +279,8 @@ struct RawConfig {
     sync_dir: Option<String>,
     theme: Option<String>,
     colors: Option<RawColors>,
+    /// `[lsp]`: `enabled`, and a table per server (`[lsp.rust]`).
+    lsp: Option<toml::Table>,
 }
 
 fn theme_from(bg: &str, fg: &str, palette: &[&str; 16]) -> Theme {
@@ -381,12 +383,66 @@ pub struct Config {
     /// The folder hosts and snippets sync through, encrypted (ADR 0033);
     /// `None` (the default, or an empty value) leaves sync off.
     pub sync_dir: Option<PathBuf>,
+    /// Language servers for the editor pane (ADR 0034, E5).
+    pub lsp: LspConfig,
     pub theme: Theme,
     /// The named theme the colours started from (`theme = "…"`), if any.
     pub theme_name: Option<String>,
     /// Set when no `config.toml` was used and settings were imported
     /// (`"ghostty"` / `"alacritty"`).
     pub imported_from: Option<&'static str>,
+}
+
+/// `[lsp]` in `config.toml`: language servers are on unless
+/// `enabled = false`; `[lsp.<server>]` (`rust`, `typescript`, `python`,
+/// `go`, `c`) sets `command` (a string split at spaces, or a list),
+/// `root-markers`, or `enabled = false` for that server.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LspConfig {
+    pub disabled: bool,
+    pub servers: std::collections::BTreeMap<String, LspServerConfig>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LspServerConfig {
+    pub command: Option<Vec<String>>,
+    pub root_markers: Option<Vec<String>>,
+    pub disabled: bool,
+}
+
+impl LspConfig {
+    fn from_table(table: &toml::Table) -> Self {
+        let strings = |v: &toml::Value| -> Option<Vec<String>> {
+            let list: Vec<String> = match v {
+                toml::Value::String(s) => s.split_whitespace().map(str::to_string).collect(),
+                toml::Value::Array(a) => a
+                    .iter()
+                    .filter_map(|x| x.as_str().map(str::to_string))
+                    .collect(),
+                _ => return None,
+            };
+            (!list.is_empty()).then_some(list)
+        };
+        let mut cfg = LspConfig::default();
+        for (key, value) in table {
+            match value {
+                toml::Value::Boolean(on) if key == "enabled" => cfg.disabled = !on,
+                toml::Value::Table(server) => {
+                    cfg.servers.insert(
+                        key.clone(),
+                        LspServerConfig {
+                            command: server.get("command").and_then(strings),
+                            root_markers: server.get("root-markers").and_then(strings),
+                            disabled: server.get("enabled").and_then(|v| v.as_bool())
+                                == Some(false),
+                        },
+                    );
+                }
+                _ => {}
+            }
+        }
+        cfg
+    }
 }
 
 /// Per-state tab badge switches (`settings.agents.badge_*`).
@@ -445,6 +501,7 @@ impl Default for Config {
             quick_terminal_hotkey: None,
             update_pubkey: None,
             sync_dir: None,
+            lsp: LspConfig::default(),
             theme_name: None,
             imported_from: None,
             theme: Theme::default(),
@@ -854,6 +911,9 @@ impl Config {
                 cfg.sync_dir = Some(expand_home(dir));
             }
         }
+        if let Some(table) = raw.lsp {
+            cfg.lsp = LspConfig::from_table(&table);
+        }
         if let Some(key) = raw.update_pubkey {
             let key = key.trim();
             if !key.is_empty() {
@@ -904,6 +964,27 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn lsp_servers_are_configured_per_key() {
+        let cfg = Config::from_toml(
+            "[lsp.rust]\ncommand = \"ra-multiplex client\"\n\n[lsp.python]\ncommand = [\"pylsp\"]\nroot-markers = [\"setup.py\"]\n\n[lsp.go]\nenabled = false\n",
+        )
+        .unwrap();
+        assert!(!cfg.lsp.disabled);
+        assert_eq!(
+            cfg.lsp.servers["rust"].command,
+            Some(vec!["ra-multiplex".to_string(), "client".to_string()])
+        );
+        assert_eq!(
+            cfg.lsp.servers["python"].root_markers,
+            Some(vec!["setup.py".to_string()])
+        );
+        assert!(cfg.lsp.servers["go"].disabled);
+        let off = Config::from_toml("[lsp]\nenabled = false\n").unwrap();
+        assert!(off.lsp.disabled);
+        assert_eq!(Config::from_toml("").unwrap().lsp, LspConfig::default());
+    }
 
     #[test]
     fn config_lives_in_the_platform_folder_on_windows() {
