@@ -415,9 +415,33 @@ struct Tab {
     group: Option<String>,
     /// Something happened here while it was in the background (B2.5).
     attention: Option<Attention>,
-    /// Editor panes (ADR 0034); the layout's leaves name either these or
-    /// `panes` by id.
+    /// Editor panes (ADR 0034); the layout's leaves name these, `panes` or
+    /// `previews` by id.
     editors: Vec<editor_pane::EditorPane>,
+    /// Markdown previews of editors in this tab (ADR 0034, E4).
+    previews: Vec<PreviewPane>,
+}
+
+/// A Markdown preview of an editor pane in the same tab (ADR 0034, E4): the
+/// editor's text as it is typed, rendered by egui inside the pane's card.
+struct PreviewPane {
+    id: String,
+    /// The editor pane it shows.
+    source: String,
+    /// The editor's text at `revision` (taken again when it changes).
+    text: Arc<String>,
+    revision: Option<u64>,
+}
+
+impl PreviewPane {
+    fn new(source: String) -> Self {
+        PreviewPane {
+            id: gen_id(),
+            source,
+            text: Arc::default(),
+            revision: None,
+        }
+    }
 }
 
 /// Why a background tab wants a look, most urgent last (so `max` wins).
@@ -451,6 +475,22 @@ impl Attention {
 }
 
 impl Tab {
+    /// Whether a pane of any kind has this id.
+    fn has_pane(&self, id: &str) -> bool {
+        self.panes.iter().any(|p| p.id == id)
+            || self.editors.iter().any(|e| e.id == id)
+            || self.previews.iter().any(|p| p.id == id)
+    }
+
+    /// Drop an editor pane and the previews showing it (from the layout too).
+    fn remove_editor(&mut self, id: &str) {
+        self.editors.retain(|e| e.id != id);
+        for preview in self.previews.iter().filter(|p| p.source == id) {
+            let _ = self.layout.remove(&preview.id);
+        }
+        self.previews.retain(|p| p.source != id);
+    }
+
     fn session_value(&self) -> serde_json::Value {
         let panes: Vec<_> = self
             .panes
@@ -470,9 +510,15 @@ impl Tab {
                 })
             })
             .collect();
+        let previews: Vec<_> = self
+            .previews
+            .iter()
+            .map(|p| serde_json::json!({ "id": p.id, "source": p.source }))
+            .collect();
         serde_json::json!({
             "title": self.title, "active": self.active,
             "layout": layout_to_json(&self.layout), "panes": panes, "editors": editors,
+            "previews": previews,
             "prefix": self.prefix, "mark": self.mark, "group": self.group,
             "title_set": self.title_set,
             "ssh": self.ssh, "ssh_target": self.ssh_target, "ssh_cmd": self.ssh_cmd,
@@ -1553,6 +1599,14 @@ impl State {
                     "path": e.path,
                 }));
             }
+            for p in &tab.previews {
+                panes.push(serde_json::json!({
+                    "id": p.id,
+                    "title": "Preview",
+                    "kind": "preview",
+                    "source": p.source,
+                }));
+            }
         }
         self.mtp.set_panes(panes);
         self.save_session();
@@ -1600,6 +1654,7 @@ impl State {
             group: None,
             attention: None,
             editors: Vec::new(),
+            previews: Vec::new(),
         });
         self.active_tab = self.tabs.len() - 1;
         self.selection = None;
@@ -1667,6 +1722,7 @@ impl State {
             group: None,
             attention: None,
             editors: Vec::new(),
+            previews: Vec::new(),
         });
         self.active_tab = self.tabs.len() - 1;
         self.selection = None;
@@ -1684,6 +1740,15 @@ impl State {
             return;
         };
         let target = tab.active.clone();
+        if let Some(preview) = tab.previews.iter().find(|p| p.id == target) {
+            // A preview closes on its own; its editor takes the focus.
+            let source = preview.source.clone();
+            tab.previews.retain(|p| p.id != target);
+            let _ = tab.layout.remove(&target);
+            tab.active = source;
+            self.publish_panes();
+            return;
+        }
         if tab.panes.len() + tab.editors.len() <= 1 {
             // The last tab stays alive as a shell: closing a lone editor there
             // opens a terminal tab in its place.
@@ -1708,7 +1773,7 @@ impl State {
             return;
         }
         tab.panes.retain(|p| p.id != target);
-        tab.editors.retain(|e| e.id != target);
+        tab.remove_editor(&target);
         let _ = tab.layout.remove(&target);
         tab.active = tab.layout.ids().first().cloned().unwrap_or_default();
         self.selection = None;
@@ -1997,6 +2062,19 @@ impl State {
 
     /// Close one pane by id (drops its tab when it was the last one).
     fn close_pane_id(&mut self, id: &str) {
+        if let Some(tab) = self
+            .tabs
+            .iter_mut()
+            .find(|t| t.previews.iter().any(|p| p.id == id))
+        {
+            tab.previews.retain(|p| p.id != id);
+            let _ = tab.layout.remove(id);
+            if tab.active == id {
+                tab.active = tab.layout.ids().first().cloned().unwrap_or_default();
+            }
+            self.publish_panes();
+            return;
+        }
         // An editor pane closes only without unsaved changes: a client cannot
         // answer "discard them?".
         if let Some(ti) = self
@@ -2020,7 +2098,7 @@ impl State {
                     return;
                 }
             }
-            tab.editors.retain(|e| e.id != id);
+            tab.remove_editor(id);
             let _ = tab.layout.remove(id);
             if tab.panes.is_empty() && tab.editors.is_empty() {
                 if self.tabs.len() == 1 {
@@ -2533,9 +2611,7 @@ impl State {
         for command in self.mtp.take_commands() {
             match command {
                 miao_term_mtp::Command::Focus(id) => {
-                    let found = self.tabs.iter().position(|t| {
-                        t.panes.iter().any(|p| p.id == id) || t.editors.iter().any(|e| e.id == id)
-                    });
+                    let found = self.tabs.iter().position(|t| t.has_pane(&id));
                     if let Some(ti) = found {
                         self.tabs[ti].active = id.clone();
                         self.active_tab = ti;
@@ -2624,6 +2700,21 @@ impl State {
                                 current_match: search_idx,
                             },
                         ));
+                    } else if tab.previews.iter().any(|p| &p.id == id) {
+                        // The card only: egui draws the preview inside it.
+                        let bg = panel_bg;
+                        let card = card_rect(*r);
+                        draws.push(PaneDraw {
+                            id: id.clone(),
+                            rect: card_inner(*r),
+                            quads: vec![Quad::rounded(
+                                (card.x * scale, card.y * scale),
+                                ((card.x + card.w) * scale, (card.y + card.h) * scale),
+                                (bg.0, bg.1, bg.2, 255),
+                                CARD_RADIUS * scale,
+                            )],
+                            rows: Vec::new(),
+                        });
                     }
                     continue;
                 };
@@ -3015,6 +3106,7 @@ impl State {
     fn chrome(&mut self, ctx: &egui::Context) {
         // Shared, host-agnostic chrome (menu/tabs/sidebar/details/status).
         chrome::render(ctx, self);
+        self.preview_panes(ctx);
         if self.update_dialog {
             use miao_term_ui::i18n::t;
             let lang = self.lang;
@@ -3576,6 +3668,24 @@ impl State {
                     }
                 }
             }
+            // Previews follow their editors to the new ids.
+            let mut previews = Vec::new();
+            if let Some(arr) = t.get("previews").and_then(|e| e.as_array()) {
+                for p in arr {
+                    let source = p
+                        .get("source")
+                        .and_then(|x| x.as_str())
+                        .and_then(|old| map.get(old).cloned());
+                    let Some(source) = source.filter(|s| editors.iter().any(|e| &e.id == s)) else {
+                        continue;
+                    };
+                    let preview = PreviewPane::new(source);
+                    if let Some(old) = p.get("id").and_then(|x| x.as_str()) {
+                        map.insert(old.to_string(), preview.id.clone());
+                    }
+                    previews.push(preview);
+                }
+            }
             let first = panes
                 .first()
                 .map(|p| p.id.clone())
@@ -3590,8 +3700,9 @@ impl State {
                 .and_then(|l| json_to_layout(l, &map))
                 .unwrap_or_else(|| Layout::leaf(first.clone()));
             for leaf in layout.ids() {
-                let known =
-                    panes.iter().any(|p| p.id == leaf) || editors.iter().any(|e| e.id == leaf);
+                let known = panes.iter().any(|p| p.id == leaf)
+                    || editors.iter().any(|e| e.id == leaf)
+                    || previews.iter().any(|p| p.id == leaf);
                 if !known {
                     let _ = layout.remove(&leaf);
                 }
@@ -3601,7 +3712,9 @@ impl State {
                 .and_then(|x| x.as_str())
                 .map(|old| map.get(old).cloned().unwrap_or_else(|| old.to_string()))
                 .filter(|id| {
-                    panes.iter().any(|p| &p.id == id) || editors.iter().any(|e| &e.id == id)
+                    panes.iter().any(|p| &p.id == id)
+                        || editors.iter().any(|e| &e.id == id)
+                        || previews.iter().any(|p| &p.id == id)
                 })
                 .unwrap_or(first);
             // Sessions saved before the flag existed: a title other than the
@@ -3624,6 +3737,7 @@ impl State {
                 group: None,
                 attention: None,
                 editors,
+                previews,
             };
             tab.restore_decorations(t);
             if tab.ssh {
@@ -3943,6 +4057,8 @@ enum Cmd {
     /// Find with the replace field (editor panes).
     Replace,
     GoToLine,
+    /// Open or close a Markdown preview beside the active editor.
+    MarkdownPreview,
     /// Multiple cursors in the active editor (ADR 0034, E4).
     SelectAllOccurrences,
     CursorsAtLineEnds,
@@ -4058,6 +4174,10 @@ impl State {
             (Cmd::Find, t(l, "Find…", "查找…")),
             (Cmd::Replace, t(l, "Replace…", "替换…")),
             (Cmd::GoToLine, t(l, "Go to Line…", "跳转到行…")),
+            (
+                Cmd::MarkdownPreview,
+                t(l, "Toggle Markdown Preview", "开关 Markdown 预览"),
+            ),
             (
                 Cmd::SelectAllOccurrences,
                 t(l, "Select All Occurrences", "选中所有相同项"),
@@ -4356,6 +4476,7 @@ impl State {
                     self.find_opts.replace = Some(String::new());
                 }
             }
+            Cmd::MarkdownPreview => self.toggle_markdown_preview(),
             Cmd::GoToLine => {
                 if self.require_editor() {
                     self.goto_line = Some(String::new());
@@ -5915,6 +6036,143 @@ impl State {
             (Ok(_), None) => {}
         }
         self.window.request_redraw();
+    }
+
+    /// The Markdown previews in the active tab: each editor's text as it is
+    /// now, rendered inside its pane's card. A press in one focuses it.
+    fn preview_panes(&mut self, ctx: &egui::Context) {
+        let rects = self.pane_rects();
+        let Some(tab) = self.tabs.get_mut(self.active_tab) else {
+            return;
+        };
+        let mut shown = Vec::new();
+        for preview in &mut tab.previews {
+            let Some(ed) = tab.editors.iter().find(|e| e.id == preview.source) else {
+                continue;
+            };
+            let Some((_, r)) = rects.iter().find(|(id, _)| *id == preview.id) else {
+                continue;
+            };
+            if preview.revision != Some(ed.doc.revision()) {
+                preview.revision = Some(ed.doc.revision());
+                preview.text = Arc::new(ed.doc.rope().to_string());
+            }
+            let base = ed.path.parent().map(std::path::Path::to_path_buf);
+            shown.push((
+                preview.id.clone(),
+                card_inner(*r),
+                preview.text.clone(),
+                base,
+            ));
+        }
+        let ch = self.theme.chrome();
+        let fg = miao_term_ui::chrome::bg_color(ch.text);
+        let panel = miao_term_ui::chrome::bg_color(ch.card);
+        let mut focus = None;
+        for (id, r, text, base) in shown {
+            let rect = egui::Rect::from_min_size(egui::pos2(r.x, r.y), egui::vec2(r.w, r.h));
+            // The background order keeps Find and other windows above it.
+            let area = egui::Area::new(egui::Id::new(("mtty-preview", &id)))
+                .order(egui::Order::Background)
+                .fixed_pos(rect.min)
+                .show(ctx, |ui| {
+                    ui.set_clip_rect(rect);
+                    ui.set_width(rect.width());
+                    ui.set_height(rect.height());
+                    egui::ScrollArea::both()
+                        .id_salt(("mtty-preview-scroll", &id))
+                        .auto_shrink([false, false])
+                        .max_width(rect.width())
+                        .max_height(rect.height())
+                        .show(ui, |ui| {
+                            ui.set_max_width(rect.width() - 12.0);
+                            render_markdown(
+                                ui,
+                                &text,
+                                base.as_deref(),
+                                &mut self.cmark,
+                                &mut self.mmd,
+                                fg,
+                                panel,
+                            );
+                        });
+                });
+            let pressed = ctx.input(|i| {
+                i.pointer.any_pressed()
+                    && i.pointer.interact_pos().is_some_and(|p| rect.contains(p))
+            });
+            if pressed
+                && ctx
+                    .layer_id_at(rect.center())
+                    .is_some_and(|l| l == area.response.layer_id)
+            {
+                focus = Some(id);
+            }
+        }
+        if let (Some(id), Some(tab)) = (focus, self.tabs.get_mut(self.active_tab)) {
+            if tab.active != id {
+                tab.active = id;
+                self.selection = None;
+            }
+        }
+    }
+
+    /// Open a Markdown preview of the active editor to its right, or close
+    /// it when there is one (from the editor or the preview itself).
+    fn toggle_markdown_preview(&mut self) {
+        let Some(tab) = self.tabs.get_mut(self.active_tab) else {
+            return;
+        };
+        let active = tab.active.clone();
+        let source = match tab.previews.iter().find(|p| p.id == active) {
+            Some(p) => Some(p.source.clone()),
+            None => tab
+                .editors
+                .iter()
+                .find(|e| e.id == active && !e.is_view_only())
+                .map(|e| e.id.clone()),
+        };
+        let Some(source) = source else {
+            self.show_notice(
+                miao_term_ui::i18n::t(
+                    self.lang,
+                    "Markdown preview works for a file open in an editor pane.",
+                    "Markdown 预览用于在编辑器 pane 中打开的文件。",
+                )
+                .to_string(),
+            );
+            return;
+        };
+        if let Some(preview) = tab.previews.iter().find(|p| p.source == source) {
+            let id = preview.id.clone();
+            tab.previews.retain(|p| p.id != id);
+            let _ = tab.layout.remove(&id);
+            tab.active = source;
+        } else {
+            self.add_markdown_preview();
+        }
+        self.publish_panes();
+    }
+
+    /// A preview of the active editor split to its right, unless it has one.
+    /// The editor keeps the focus.
+    fn add_markdown_preview(&mut self) {
+        let Some(tab) = self.tabs.get_mut(self.active_tab) else {
+            return;
+        };
+        let source = tab.active.clone();
+        let editable = tab
+            .editors
+            .iter()
+            .any(|e| e.id == source && !e.is_view_only());
+        if !editable || tab.previews.iter().any(|p| p.source == source) {
+            return;
+        }
+        let preview = PreviewPane::new(source.clone());
+        if tab.layout.split(&source, &preview.id, SplitDir::Right) {
+            tab.previews.push(preview);
+        }
+        self.publish_panes();
     }
 
     /// Go to Line (⌃G / Ctrl+G): `line` or `line:column`, 1-based, in the
@@ -8687,6 +8945,7 @@ impl State {
                     group: None,
                     attention: None,
                     editors: vec![ed],
+                    previews: Vec::new(),
                 });
                 self.active_tab = self.tabs.len() - 1;
                 self.selection = None;
@@ -8823,9 +9082,15 @@ impl State {
             .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"));
         let large = std::fs::metadata(&path).is_ok_and(|m| m.len() > editor_pane::MAX_PANE_BYTES);
         // A large file opens in view mode whatever its kind: the floating
-        // editor would read all of it into one text field.
-        if large || (!readonly && !markdown) {
-            return self.open_editor_pane(&path);
+        // editor would read all of it into one text field. Markdown opens
+        // in an editor pane with its preview beside it (ADR 0034, E4); the
+        // floating editor is left for read-only views (`app.view`).
+        if large || !readonly {
+            let opened = self.open_editor_pane(&path);
+            if opened && markdown && !large {
+                self.add_markdown_preview();
+            }
+            return opened;
         }
         match std::fs::read_to_string(&path) {
             Ok(text) => {
@@ -11459,13 +11724,18 @@ fn draw_editor(
     }
 }
 
-fn card_inner(r: Rect) -> Rect {
-    let card = Rect {
+/// A pane's card: its rect less the margin between cards.
+fn card_rect(r: Rect) -> Rect {
+    Rect {
         x: r.x + CARD_MARGIN,
         y: r.y + CARD_MARGIN,
         w: (r.w - CARD_MARGIN * 2.0).max(1.0),
         h: (r.h - CARD_MARGIN * 2.0).max(1.0),
-    };
+    }
+}
+
+fn card_inner(r: Rect) -> Rect {
+    let card = card_rect(r);
     Rect {
         x: card.x + CARD_PAD,
         y: card.y + CARD_PAD,
@@ -12567,6 +12837,7 @@ impl chrome::Chrome for State {
             Find => Cmd::Find,
             Replace => Cmd::Replace,
             GoToLine => Cmd::GoToLine,
+            MarkdownPreview => Cmd::MarkdownPreview,
             FindNext => Cmd::FindNext,
             FindPrev => Cmd::FindPrev,
             UseSelForFind => Cmd::UseSelForFind,
@@ -13418,7 +13689,32 @@ mod tests {
             group: None,
             attention: None,
             editors: Vec::new(),
+            previews: Vec::new(),
         }
+    }
+
+    #[test]
+    fn closing_an_editor_takes_its_previews_along() {
+        let mut tab = empty_tab("t1");
+        let ed = editor_pane::EditorPane::with_doc(
+            "e1".into(),
+            "/tmp/notes.md".into(),
+            miao_term_editor::Document::from_text("# Notes\n"),
+        );
+        assert!(tab.layout.split("t1", "e1", SplitDir::Right));
+        tab.editors.push(ed);
+        let preview = PreviewPane::new("e1".into());
+        let pid = preview.id.clone();
+        assert!(tab.layout.split("e1", &pid, SplitDir::Right));
+        tab.previews.push(preview);
+        assert!(tab.has_pane(&pid) && tab.has_pane("e1") && !tab.has_pane("x"));
+        let saved = tab.session_value();
+        assert_eq!(saved["previews"][0]["source"], "e1");
+        assert_eq!(saved["previews"][0]["id"], pid.as_str());
+        tab.remove_editor("e1");
+        assert!(tab.previews.is_empty());
+        let _ = tab.layout.remove("e1");
+        assert_eq!(tab.layout.ids(), vec!["t1".to_string()]);
     }
 
     #[test]

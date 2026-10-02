@@ -21,7 +21,7 @@ agents in one fast, native window. It is built on three pillars:
 | Pillar | Today | Next |
 |---|---|---|
 | **Terminal and remote** — absorbs Termius and PuTTY | GPU-rendered terminal, tabs and splits, session restore; host library, keys, SFTP/FTP, port forwarding, jump hosts, snippets, broadcast input (over the system OpenSSH) | Serial, Telnet and raw TCP connections, `.ppk` keys; a Rust-native SSH stack is under consideration (needs an ADR) |
-| **Editor** — a first-class text editor, not a side feature | Built-in viewer/editor with Markdown and Mermaid preview; `term-editor` core (rope, multi-cursor, undo, search) done | Editor pane beside terminals with tree-sitter highlighting, LSP and large-file speed ([ADR 0034](docs/decisions/0034-editor-pane.md)) |
+| **Editor** — a first-class text editor, not a side feature | Editor pane beside terminals: tree-sitter highlighting in 80 languages, files of any size (view mode above 64 MB), multiple cursors, find and replace with regex, go to line, a live Markdown and Mermaid preview pane | LSP, vim mode in the pane, folding and outline ([ADR 0034](docs/decisions/0034-editor-pane.md)) |
 | **Agent workspace** — absorbs mtty, AI-native | State hooks for Claude Code, Codex, OpenCode and miao; attention badges and notifications; prompt queue; a git worktree per task with diff review; the MTP control plane | Agents' edits reviewed inline as undoable diffs; an ACP client; selections, diagnostics and terminal output as one-click agent context |
 
 What ties them together: Rust and GPU rendering held to a performance gate;

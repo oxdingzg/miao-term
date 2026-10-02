@@ -718,6 +718,8 @@ pub enum MenuId {
     Replace,
     /// Go to a line in an editor pane.
     GoToLine,
+    /// Open or close the Markdown preview beside an editor pane.
+    MarkdownPreview,
     DuplicateTab,
     ReopenClosed,
     ClearScrollback,
