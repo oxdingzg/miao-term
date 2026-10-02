@@ -361,6 +361,20 @@ mtty-cli file write --path /tmp/x --data-b64 "AAECAw=="   # 二进制
 
 在 Linux 与 Windows 上,单独的 `Ctrl` 组合键(`Ctrl+C`、`Ctrl+W`、`Ctrl+D`……)始终交给 shell,`Super`/`Win` 组合留给桌面。
 
+在编辑器 pane 中,下列按键优先于上面的应用快捷键:
+
+| macOS | Linux / Windows | 操作 |
+|---|---|---|
+| `⌘D` | `Ctrl+D` | 选中当前词,再按添加下一个相同项 |
+| `⇧⌘L` | `Ctrl+Shift+L` | 选中所有相同项 |
+| `⌥⌘↑` / `⌥⌘↓` | `Ctrl+Alt+↑` / `Ctrl+Alt+↓` | 在上方 / 下方添加光标 |
+| `⌥` 单击 | `Alt` 单击 | 添加光标 |
+| `⇧⌥I` | `Shift+Alt+I` | 在所选各行末尾添加光标 |
+| `⌥⌘F` | `Ctrl+H` | 查找替换(`Aa` 区分大小写、`ab` 全字匹配、`.*` 正则) |
+| 查找框中 `⌥↩` | 查找框中 `Alt+Enter` | 选中全部匹配 |
+| `⌃G` | `Ctrl+G` | 跳转到行(`行` 或 `行:列`) |
+| `⌘Z` / `⇧⌘Z` | `Ctrl+Z` / `Ctrl+Y` | 撤销 / 重做 |
+
 ---
 
 ## 文档

@@ -714,6 +714,10 @@ pub enum MenuId {
     Settings,
     Palette,
     Find,
+    /// Find with the replace field (an editor pane).
+    Replace,
+    /// Go to a line in an editor pane.
+    GoToLine,
     DuplicateTab,
     ReopenClosed,
     ClearScrollback,

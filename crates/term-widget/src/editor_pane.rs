@@ -96,7 +96,15 @@ pub enum Command {
     SelectAll,
     SelectLine,
     SelectNextOccurrence,
+    /// Select every occurrence of the selection (or the word at the caret).
+    SelectAllOccurrences,
+    /// A caret at the end of each selected line.
+    CursorsAtLineEnds,
     AddCursor(bool),
+    /// Ask for a line to go to (the host shows the prompt).
+    GoToLine,
+    /// Find with the replace field open (the host's Find bar).
+    FindReplace,
     Undo,
     Redo,
     Escape,
@@ -104,8 +112,11 @@ pub enum Command {
 
 /// The macOS text conventions (ADR 0034): ⌥ moves by word, ⌘ by line or
 /// document, ⇧ extends. On Linux/Windows Ctrl plays ⌥'s word role and Home/End
-/// cover line moves. Returns `None` for keys the pane leaves to text input or
-/// to the app (⌘S, ⌘W, …).
+/// cover line moves. Multiple cursors and find follow VS Code: ⇧⌘L every
+/// occurrence, ⇧⌥I carets at line ends, ⌃G go to line, ⌥⌘F replace (Ctrl+G
+/// and Ctrl+H elsewhere). Returns `None` for keys the pane leaves to text
+/// input or to the app (⌘S, ⌘W, …). `key` is the key without modifiers, so
+/// ⇧⌥I is `i`, not the dead key ⌥ types.
 pub fn keymap(key: KeyKind, shift: bool, alt: bool, cmd: bool, ctrl: bool) -> Option<Command> {
     let mac = cfg!(target_os = "macos");
     // The "word" modifier and the "line/document" modifier per platform.
@@ -114,12 +125,15 @@ pub fn keymap(key: KeyKind, shift: bool, alt: bool, cmd: bool, ctrl: bool) -> Op
     let primary = if mac { cmd } else { ctrl };
     let page = 20;
     Some(match key {
+        // Before ⌘↑/⌘↓, which would otherwise take ⌥⌘↑/⌥⌘↓.
+        KeyKind::Up if mac && alt && cmd => Command::AddCursor(false),
+        KeyKind::Down if mac && alt && cmd => Command::AddCursor(true),
+        KeyKind::Up if !mac && alt && ctrl => Command::AddCursor(false),
+        KeyKind::Down if !mac && alt && ctrl => Command::AddCursor(true),
         KeyKind::Left if line => Command::Move(Motion::LineStart, shift),
         KeyKind::Right if line => Command::Move(Motion::LineEnd, shift),
         KeyKind::Up if line => Command::Move(Motion::DocStart, shift),
         KeyKind::Down if line => Command::Move(Motion::DocEnd, shift),
-        KeyKind::Up if mac && alt && cmd => Command::AddCursor(false),
-        KeyKind::Down if mac && alt && cmd => Command::AddCursor(true),
         KeyKind::Left if word => Command::Move(Motion::WordLeft, shift),
         KeyKind::Right if word => Command::Move(Motion::WordRight, shift),
         KeyKind::Left => Command::Move(Motion::Left, shift),
@@ -140,10 +154,22 @@ pub fn keymap(key: KeyKind, shift: bool, alt: bool, cmd: bool, ctrl: bool) -> Op
         KeyKind::Tab if shift => Command::Outdent,
         KeyKind::Tab if !primary => Command::Indent,
         KeyKind::Escape => Command::Escape,
+        KeyKind::Char(c) if shift && alt && !cmd && !ctrl && c.eq_ignore_ascii_case(&'i') => {
+            Command::CursorsAtLineEnds
+        }
+        KeyKind::Char(c) if mac && ctrl && !cmd && !alt && c.eq_ignore_ascii_case(&'g') => {
+            Command::GoToLine
+        }
+        KeyKind::Char(c) if mac && cmd && alt && !ctrl && c.eq_ignore_ascii_case(&'f') => {
+            Command::FindReplace
+        }
         KeyKind::Char(c) if primary && !alt => match c.to_ascii_lowercase() {
             'a' => Command::SelectAll,
+            'l' if shift => Command::SelectAllOccurrences,
             'l' => Command::SelectLine,
             'd' => Command::SelectNextOccurrence,
+            'g' if !mac && !shift => Command::GoToLine,
+            'h' if !mac && !shift => Command::FindReplace,
             'z' if shift => Command::Redo,
             'z' => Command::Undo,
             'y' if !mac => Command::Redo,
@@ -299,6 +325,26 @@ impl EditorPane {
             self.scroll_line = local.saturating_sub(self.rows / 3);
         }
         self.keep_window();
+    }
+
+    /// Go to file line `line` and cell column `col` (both 0-based; a column
+    /// past the line's end stops at its end), as Go to Line does.
+    pub fn go_to_line_col(&mut self, line: usize, col: usize) {
+        self.go_to_line(line);
+        if col == 0
+            || self
+                .large
+                .as_ref()
+                .is_some_and(|l| l.pending_line.is_some())
+        {
+            return;
+        }
+        let rope = self.doc.rope();
+        let local = rope.char_to_line(self.doc.selection().primary().head);
+        let offset = layout::offset_at_col(rope.line(local), col, self.doc.tab_width());
+        let at = rope.line_to_char(local) + offset;
+        self.doc.set_selection(Selection::cursor(at));
+        self.reveal_cursor();
     }
 
     /// Select file bytes `start..end` (a search hit in view mode), on the
@@ -483,7 +529,11 @@ impl EditorPane {
                 | Command::SelectAll
                 | Command::SelectLine
                 | Command::SelectNextOccurrence
+                | Command::SelectAllOccurrences
+                | Command::CursorsAtLineEnds
                 | Command::AddCursor(_)
+                | Command::GoToLine
+                | Command::FindReplace
                 | Command::Escape
         )
     }
@@ -529,7 +579,13 @@ impl EditorPane {
             Command::SelectNextOccurrence => {
                 self.doc.select_next_occurrence();
             }
+            Command::SelectAllOccurrences => {
+                self.doc.select_all_occurrences();
+            }
+            Command::CursorsAtLineEnds => self.doc.cursors_at_line_ends(),
             Command::AddCursor(below) => self.doc.add_cursor(below),
+            // The host's prompts; nothing to do in the document.
+            Command::GoToLine | Command::FindReplace => return false,
             Command::Undo => {
                 self.doc.undo();
             }
@@ -649,6 +705,74 @@ impl EditorPane {
         }
     }
 
+    /// The cells of chars `from..to` on the visible rows (columns include
+    /// the gutter). A span running past a line's end shows one cell for its
+    /// line break.
+    fn span_cells(&self, from: usize, to: usize, out: &mut Vec<CellRect>) {
+        let rope = self.doc.rope();
+        let tab = self.doc.tab_width();
+        let gutter = self.gutter();
+        let last = motion::last_line(rope).min(self.scroll_line + self.rows.saturating_sub(1));
+        let first = rope.char_to_line(from).max(self.scroll_line);
+        let end_line = rope.char_to_line(to).min(last);
+        for line in first..=end_line {
+            let slice = rope.line(line);
+            let line_start = rope.line_to_char(line);
+            let content = layout::content_len(slice);
+            let a = from.max(line_start);
+            let b = to.min(line_start + slice.len_chars());
+            if a >= b && !(from <= line_start && to > line_start + content) {
+                continue;
+            }
+            let c0 = layout::visual_col(slice, a.saturating_sub(line_start), tab);
+            let mut c1 = layout::visual_col(slice, (b - line_start).min(content), tab);
+            if to > line_start + content {
+                c1 += 1;
+            }
+            let c0 = c0.saturating_sub(self.scroll_col);
+            let c1 = c1.saturating_sub(self.scroll_col).min(self.cols);
+            if c1 > c0 {
+                out.push(CellRect {
+                    row: line - self.scroll_line,
+                    col: gutter + c0,
+                    width: c1 - c0,
+                });
+            }
+        }
+    }
+
+    /// The chars from the first visible line's start to the last visible
+    /// line's end.
+    fn visible_chars(&self) -> (usize, usize) {
+        let rope = self.doc.rope();
+        let last = motion::last_line(rope);
+        let top = rope.line_to_char(self.scroll_line.min(last));
+        let bottom = motion::line_end(
+            rope,
+            (self.scroll_line + self.rows.saturating_sub(1)).min(last),
+        );
+        (top, bottom)
+    }
+
+    /// Cells of the Find matches on screen, each with whether it is the
+    /// current one. `hits` are sorted char ranges.
+    pub fn match_cells(&self, hits: &[(usize, usize)], current: usize) -> Vec<(CellRect, bool)> {
+        let rope = self.doc.rope();
+        let (top, bottom) = self.visible_chars();
+        let first = hits.partition_point(|&(_, end)| end <= top);
+        let mut out = Vec::new();
+        let mut cells = Vec::new();
+        for (i, &(a, b)) in hits.iter().enumerate().skip(first) {
+            if a > bottom || b > rope.len_chars() {
+                break;
+            }
+            cells.clear();
+            self.span_cells(a, b, &mut cells);
+            out.extend(cells.iter().map(|c| (*c, i == current)));
+        }
+        out
+    }
+
     /// The visible rows: glyph spans (gutter numbers, then text clipped to
     /// the text area), selection and caret cells.
     pub fn draw(&self, palette: Palette, focused: bool, carets_on: bool) -> EditorDraw {
@@ -690,8 +814,6 @@ impl EditorPane {
             };
             spans.push(Span::new((gutter - 1 - number.len()) as u16, number, color));
             let slice = rope.line(line);
-            let line_start = rope.line_to_char(line);
-            let content = layout::content_len(slice);
             let mut byte = rope.line_to_byte(line);
             let mut run = String::new();
             let mut run_col = 0usize;
@@ -746,43 +868,27 @@ impl EditorPane {
             }
             flush(&mut run, run_col, run_color, &mut spans);
             rows.push(spans);
-
-            // Selection cells on this line; a selection running past the
-            // line's end shows one cell for its line break.
-            for r in selection.ranges() {
-                if r.is_empty() {
-                    continue;
-                }
-                let from = r.from().max(line_start);
-                let to = r.to().min(line_start + slice.len_chars());
-                if from >= to && !(r.from() <= line_start && r.to() > line_start + content) {
-                    continue;
-                }
-                let c0 = layout::visual_col(slice, from.saturating_sub(line_start), tab);
-                let mut c1 = layout::visual_col(slice, (to - line_start).min(content), tab);
-                if r.to() > line_start + content {
-                    c1 += 1;
-                }
-                let c0 = c0.saturating_sub(self.scroll_col);
-                let c1 = c1.saturating_sub(self.scroll_col).min(self.cols);
-                if c1 > c0 {
-                    sel_cells.push(CellRect {
-                        row,
-                        col: gutter + c0,
-                        width: c1 - c0,
-                    });
-                }
+        }
+        // Only the ranges on screen: there may be thousands (every
+        // occurrence selected). They are sorted and do not overlap.
+        let (top, bottom) = self.visible_chars();
+        let ranges = selection.ranges();
+        let first = ranges.partition_point(|r| r.to() < top);
+        for r in ranges[first..].iter().take_while(|r| r.from() <= bottom) {
+            if !r.is_empty() {
+                self.span_cells(r.from(), r.to(), &mut sel_cells);
             }
-            if focused && carets_on {
-                for r in selection.ranges() {
-                    if rope.char_to_line(r.head) != line {
-                        continue;
-                    }
-                    let c = layout::visual_col(slice, r.head - line_start, tab);
-                    if c >= self.scroll_col && c - self.scroll_col <= self.cols {
-                        carets.push((row, gutter + c - self.scroll_col));
-                    }
-                }
+            if !(focused && carets_on) {
+                continue;
+            }
+            let line = rope.char_to_line(r.head);
+            if line < self.scroll_line || line >= self.scroll_line + self.rows {
+                continue;
+            }
+            let slice = rope.line(line);
+            let c = layout::visual_col(slice, r.head - rope.line_to_char(line), tab);
+            if c >= self.scroll_col && c - self.scroll_col <= self.cols {
+                carets.push((line - self.scroll_line, gutter + c - self.scroll_col));
             }
         }
         let current_line = (head_line >= self.scroll_line
@@ -835,6 +941,22 @@ impl EditorPane {
         (c >= self.scroll_col)
             .then(|| (line - self.scroll_line, self.gutter() + c - self.scroll_col))
     }
+}
+
+/// A Go to Line entry: `line`, `line:col` or `line,col` (1-based, as the
+/// status bar shows them). Returns 0-based line and cell column.
+pub fn parse_line_target(input: &str) -> Option<(usize, usize)> {
+    let input = input.trim().trim_start_matches(':');
+    let (line, col) = match input.split_once([':', ',']) {
+        Some((l, c)) => (l.trim(), Some(c.trim())),
+        None => (input, None),
+    };
+    let line: usize = line.parse().ok().filter(|l| *l > 0)?;
+    let col = match col {
+        Some(c) if !c.is_empty() => c.parse::<usize>().ok().filter(|c| *c > 0)?,
+        _ => 1,
+    };
+    Some((line - 1, col - 1))
 }
 
 #[cfg(test)]
@@ -1144,6 +1266,163 @@ mod tests {
         assert_eq!(p.copy(), "\nnext");
     }
 
+    /// One step of a replay: a key with modifiers, or typed text.
+    enum Step {
+        Key(KeyKind, &'static str),
+        Text(&'static str),
+    }
+
+    /// Feed keys through the keymap into the pane, as the host does; `mods`
+    /// names the platform's primary modifier as `P` (⌘ / Ctrl), its word
+    /// modifier as `W` (⌥ / Ctrl), plus `S` shift, `A` alt, `C` ctrl.
+    fn replay(p: &mut EditorPane, steps: &[Step]) -> Vec<Command> {
+        let mac = cfg!(target_os = "macos");
+        let mut ran = Vec::new();
+        for step in steps {
+            match step {
+                Step::Text(t) => p.type_text(t),
+                Step::Key(key, mods) => {
+                    let has = |c| mods.contains(c);
+                    let shift = has('S');
+                    let alt = has('A') || (mac && has('W'));
+                    let cmd = mac && has('P');
+                    let ctrl = has('C') || (!mac && (has('P') || has('W')));
+                    let command = keymap(*key, shift, alt, cmd, ctrl)
+                        .unwrap_or_else(|| panic!("a key with {mods} maps to nothing"));
+                    p.run(command);
+                    ran.push(command);
+                }
+            }
+        }
+        ran
+    }
+
+    fn texts(p: &EditorPane) -> String {
+        p.doc.rope().to_string()
+    }
+
+    #[test]
+    fn replay_multiple_cursors() {
+        use KeyKind::*;
+        let mac = cfg!(target_os = "macos");
+        // Add carets below (⌥⌘↓ / Ctrl+Alt+↓), type on every line.
+        let mut p = pane("a\nb\nc\n");
+        let below = if mac { "PA" } else { "CA" };
+        replay(
+            &mut p,
+            &[
+                Step::Key(Down, below),
+                Step::Key(Down, below),
+                Step::Text("- "),
+            ],
+        );
+        assert_eq!(texts(&p), "- a\n- b\n- c\n");
+        assert_eq!(p.draw(palette(), true, true).carets.len(), 3);
+        // Escape keeps the primary caret only.
+        replay(&mut p, &[Step::Key(Escape, "")]);
+        assert_eq!(p.doc.selection().len(), 1);
+
+        // ⇧⌘L selects every occurrence of the word; typing renames them all.
+        let mut p = pane("let n = n + 1; n");
+        p.doc.set_selection(Selection::cursor(4));
+        replay(&mut p, &[Step::Key(Char('l'), "PS"), Step::Text("count")]);
+        assert_eq!(texts(&p), "let count = count + 1; count");
+        // One undo step brings the name back everywhere.
+        replay(&mut p, &[Step::Key(Char('z'), "P")]);
+        assert_eq!(texts(&p), "let n = n + 1; n");
+
+        // ⌘D twice, then ⇧⌥I on a block: carets at each line end.
+        let mut p = pane("x = 1\nx = 2\nx = 3\n");
+        replay(
+            &mut p,
+            &[
+                Step::Key(Char('d'), "P"),
+                Step::Key(Char('d'), "P"),
+                Step::Text("y"),
+            ],
+        );
+        assert_eq!(texts(&p), "y = 1\ny = 2\nx = 3\n");
+        p.doc.set_selection(Selection::single(Range::new(0, 17)));
+        replay(&mut p, &[Step::Key(Char('i'), "SA"), Step::Text(";")]);
+        assert_eq!(texts(&p), "y = 1;\ny = 2;\nx = 3;\n");
+    }
+
+    #[test]
+    fn replay_find_and_go_to_line_keys_reach_the_host() {
+        use KeyKind::*;
+        let mac = cfg!(target_os = "macos");
+        let mut p = pane("one\ntwo\n");
+        let go = if mac { "C" } else { "P" };
+        let replace = if mac { "PA" } else { "P" };
+        let ran = replay(
+            &mut p,
+            &[
+                Step::Key(Char('g'), go),
+                Step::Key(Char(if mac { 'f' } else { 'h' }), replace),
+            ],
+        );
+        assert_eq!(ran, vec![Command::GoToLine, Command::FindReplace]);
+        assert!(!p.run(Command::GoToLine), "nothing changes in the pane");
+        assert!(!EditorPane::edits(Command::FindReplace));
+    }
+
+    #[test]
+    fn go_to_line_targets_parse_and_land() {
+        assert_eq!(parse_line_target("12"), Some((11, 0)));
+        assert_eq!(parse_line_target(" 12:5 "), Some((11, 4)));
+        assert_eq!(parse_line_target(":3,2"), Some((2, 1)));
+        assert_eq!(parse_line_target("12:"), Some((11, 0)));
+        assert_eq!(parse_line_target("0"), None);
+        assert_eq!(parse_line_target("x"), None);
+        assert_eq!(parse_line_target("3:y"), None);
+        let mut p = pane(&"\tline\n".repeat(40));
+        p.go_to_line_col(29, 6);
+        assert_eq!(p.caret_line_col(), (30, 7), "a tab is four cells");
+        assert!(p.scroll_line <= 29 && 29 < p.scroll_line + p.rows);
+        p.go_to_line_col(5, 99);
+        assert_eq!(p.caret_line_col(), (6, 9), "stops at the line end");
+        p.go_to_line_col(9999, 0);
+        assert_eq!(p.caret_line_col().0, 41, "past the end: the last line");
+    }
+
+    #[test]
+    fn find_matches_draw_on_screen_only() {
+        let mut p = pane(&"ab ab\n".repeat(20));
+        let hits = miao_term_editor::search::find_all(
+            p.doc.rope(),
+            &miao_term_editor::SearchQuery::literal("ab"),
+        )
+        .unwrap();
+        assert_eq!(hits.len(), 40);
+        p.scroll_by(3);
+        let cells = p.match_cells(&hits, 7);
+        assert_eq!(cells.len(), 10, "two a line on five rows");
+        assert_eq!(
+            cells[0],
+            (
+                CellRect {
+                    row: 0,
+                    col: 4,
+                    width: 2
+                },
+                false
+            ),
+            "line 4, after a three-cell gutter"
+        );
+        assert_eq!(cells.iter().filter(|c| c.1).count(), 1);
+        assert_eq!(
+            cells[1],
+            (
+                CellRect {
+                    row: 0,
+                    col: 7,
+                    width: 2
+                },
+                true
+            )
+        );
+    }
+
     #[test]
     fn cut_and_paste_round_trip() {
         let mut p = pane("one two");
@@ -1183,6 +1462,42 @@ mod tests {
             .unwrap_or(1.0);
         eprintln!("editor rows for one screen of a 100 MB file: {ms:.4} ms");
         assert!(glyphs > 0);
+        assert!(ms <= 4.0 * scale, "{ms:.4} ms per frame, budget 4 ms");
+    }
+
+    /// Perf gate (ADR 0034, E4): every occurrence selected in a 100 MB file
+    /// (over a million carets) still draws a screen within the frame budget,
+    /// as only the ranges on screen are visited.
+    #[test]
+    #[ignore = "perf gate; run `cargo test --release -- --ignored`"]
+    fn drawing_with_every_occurrence_selected_fits_a_frame() {
+        let line = "    let value = compute(index, &table[offset..end]); // 中文注释\n";
+        let text = line.repeat((100 << 20) / line.len());
+        let mut p =
+            EditorPane::with_doc("e".into(), "/tmp/big.rs".into(), Document::from_text(&text));
+        p.resize(200, 60);
+        let at = p.doc.rope().len_chars() / 2 + 8;
+        p.doc.set_selection(Selection::cursor(at));
+        let start = Instant::now();
+        assert!(p.doc.select_all_occurrences());
+        eprintln!(
+            "select {} occurrences in 100 MB: {:.1} ms",
+            p.doc.selection().len(),
+            start.elapsed().as_secs_f64() * 1e3
+        );
+        p.reveal_cursor();
+        let runs = 200;
+        let start = Instant::now();
+        for _ in 0..runs {
+            let d = p.draw(palette(), true, true);
+            assert!(!d.carets.is_empty());
+        }
+        let ms = start.elapsed().as_secs_f64() * 1e3 / runs as f64;
+        let scale: f64 = std::env::var("MTTY_PERF_SCALE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1.0);
+        eprintln!("editor rows with every occurrence selected: {ms:.4} ms");
         assert!(ms <= 4.0 * scale, "{ms:.4} ms per frame, budget 4 ms");
     }
 

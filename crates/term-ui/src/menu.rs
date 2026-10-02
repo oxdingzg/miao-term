@@ -106,6 +106,14 @@ pub fn menus(lang: Lang) -> Vec<(&'static str, Vec<Entry>)> {
                     MenuId::SelectAll,
                     Some("CmdOrCtrl+A"),
                 ),
+                Entry::Separator,
+                item(
+                    t(lang, "Replace…", "替换…"),
+                    MenuId::Replace,
+                    Some("CmdOrCtrl+Alt+F"),
+                ),
+                // ⌃G stays the terminal's (BEL); the editor maps it itself.
+                item(t(lang, "Go to Line…", "跳转到行…"), MenuId::GoToLine, None),
             ],
         ),
         (
@@ -263,6 +271,8 @@ pub const IDS: &[(&str, MenuId)] = &[
     ("settings", MenuId::Settings),
     ("palette", MenuId::Palette),
     ("find", MenuId::Find),
+    ("replace", MenuId::Replace),
+    ("go-to-line", MenuId::GoToLine),
     ("find-next", MenuId::FindNext),
     ("find-prev", MenuId::FindPrev),
     ("find-all-tabs", MenuId::FindInAllTabs),
