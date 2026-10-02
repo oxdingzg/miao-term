@@ -1116,6 +1116,8 @@ struct State {
     alert_target: Option<(String, Instant)>,
     /// egui showed a resize cursor last frame (pointer on a panel edge).
     ui_resize_hover: bool,
+    /// Wheel/trackpad movement not yet amounting to a whole line.
+    wheel_accum: f64,
     /// The pointer was on empty title-row space last frame: a press there
     /// moves the window (unified title bar only).
     title_drag_hover: bool,
@@ -9132,6 +9134,7 @@ impl ApplicationHandler<HostEvent> for Host {
             jobs_rx,
             agents_detected: None,
             ui_resize_hover: false,
+            wheel_accum: 0.0,
             title_drag_hover: false,
             title_pressed_at: None,
             sidebar_w: load_panel_widths().0,
@@ -9770,10 +9773,14 @@ impl ApplicationHandler<HostEvent> for Host {
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 use winit::event::MouseScrollDelta;
-                let lines = match delta {
-                    MouseScrollDelta::LineDelta(_, y) => y as i32,
-                    MouseScrollDelta::PixelDelta(p) => (p.y / 12.0) as i32,
+                let moved = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => f64::from(y),
+                    MouseScrollDelta::PixelDelta(p) => {
+                        let line_px = f64::from(state.ch) * state.window.scale_factor();
+                        p.y / line_px.max(1.0)
+                    }
                 };
+                let lines = wheel_lines(&mut state.wheel_accum, moved);
                 if lines != 0 {
                     // Full-screen apps that grabbed the mouse (TUIs like miao)
                     // expect wheel events instead of scrollback navigation.
@@ -9799,6 +9806,15 @@ impl ApplicationHandler<HostEvent> for Host {
                                 ed.scroll_by(-(lines as isize) * 3);
                             }
                             if let Some(pane) = tab
+                                .panes
+                                .iter_mut()
+                                .find(|p| Some(&p.id) == hovered.as_ref())
+                                .filter(|p| p.scroll == 0 && p.term.screen().alternate_scroll())
+                            {
+                                // vim, less, man: arrow keys, as other terminals do.
+                                let app_cursor = pane.term.screen().application_cursor();
+                                pane.term.write(&alternate_scroll_keys(lines, app_cursor));
+                            } else if let Some(pane) = tab
                                 .panes
                                 .iter_mut()
                                 .find(|p| Some(&p.id) == hovered.as_ref())
@@ -10258,6 +10274,32 @@ fn card_inner(r: Rect) -> Rect {
         w: (card.w - CARD_PAD * 2.0).max(1.0),
         h: (card.h - CARD_PAD * 2.0).max(1.0),
     }
+}
+
+/// Whole lines to scroll for a wheel or trackpad movement of `moved` lines,
+/// keeping the fraction for the next event: a trackpad sends many small
+/// pixel deltas, each well under a line, which truncation used to drop.
+fn wheel_lines(accum: &mut f64, moved: f64) -> i32 {
+    if moved.signum() != accum.signum() && *accum != 0.0 {
+        // A change of direction starts afresh.
+        *accum = 0.0;
+    }
+    *accum += moved;
+    let lines = accum.trunc();
+    *accum -= lines;
+    lines as i32
+}
+
+/// Arrow keys for `lines` of wheel movement (positive is up) sent to a
+/// full-screen program on the alternate screen, in its cursor-key mode.
+fn alternate_scroll_keys(lines: i32, app_cursor: bool) -> Vec<u8> {
+    let key: &[u8] = match (lines > 0, app_cursor) {
+        (true, true) => b"\x1bOA",
+        (true, false) => b"\x1b[A",
+        (false, true) => b"\x1bOB",
+        (false, false) => b"\x1b[B",
+    };
+    key.repeat(lines.unsigned_abs().min(64) as usize)
 }
 
 /// Encode a mouse report for the terminal application.
@@ -11548,6 +11590,33 @@ mod tests {
         }]);
         let after = frame(vec![]);
         (before.width(), after.width())
+    }
+
+    #[test]
+    fn trackpad_deltas_add_up_to_lines() {
+        let mut acc = 0.0;
+        let total: i32 = (0..10).map(|_| wheel_lines(&mut acc, 0.25)).sum();
+        assert_eq!(total, 2, "ten quarter-line deltas are two lines, not zero");
+        assert!((acc - 0.5).abs() < 1e-9);
+        assert_eq!(wheel_lines(&mut acc, -0.75), 0, "a reversal starts afresh");
+        assert_eq!(wheel_lines(&mut acc, -0.5), -1);
+        assert_eq!(
+            wheel_lines(&mut 0.0, 3.0),
+            3,
+            "a mouse wheel notch passes through"
+        );
+    }
+
+    #[test]
+    fn wheel_on_the_alternate_screen_sends_arrow_keys() {
+        assert_eq!(alternate_scroll_keys(2, false), b"\x1b[A\x1b[A");
+        assert_eq!(alternate_scroll_keys(-1, false), b"\x1b[B");
+        assert_eq!(
+            alternate_scroll_keys(1, true),
+            b"\x1bOA",
+            "application cursor keys"
+        );
+        assert_eq!(alternate_scroll_keys(-1000, true).len(), 64 * 3, "capped");
     }
 
     #[test]
