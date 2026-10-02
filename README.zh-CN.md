@@ -384,9 +384,10 @@ CI 性能基线已持久化于 `benches/perf-baseline.json`,由 nightly/手动�
 
 仍待完成:
 
-- **发布验收**:手动演练覆盖四个 runner 构建、包检查、minisign 校验与更新清单汇总。
-  仍需正式发布及下载/安装验收;**Apple 公证**与 **Windows MSI 签名**需要凭证。
-  见 `docs/RELEASE.zh-CN.md`。
+- **发布验收**:正式版本由四个 runner 构建、经 minisign 签名并附带更新清单发布(最新为 v0.0.8)。
+  通过"软件更新"升级已安装的应用,仍需在各类桌面上端到端验证;**Apple 公证**与 **Windows MSI 签名**
+  需要凭证。见 `docs/RELEASE.zh-CN.md`。
+- **尚未设计**:agent 的 Resume 与配额显示、跳转行高亮、Open Externally。
 - **平台验证(需要硬件)**:Linux 的 wgpu 渲染路径已在 CI 中通过 Mesa 软件 Vulkan(lavapipe)
   覆盖,Windows 也在真机上经 MTP 驱动;真实 Linux 桌面会话、Wayland 门户热键、Windows 的
   IME/GUI 路径仍需一台交互机器。

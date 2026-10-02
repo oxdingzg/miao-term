@@ -80,6 +80,8 @@ Status meanings:
 Evidence: `cargo test --workspace` (183 tests), `cargo clippy -D warnings`,
 `scripts/smoke-hosts.py` (real window + real shell + GPU capture), and a
 feature-by-feature review of the native host code for this baseline.
+Re-checked against the code and updated on 2026-10-02 (282 tests at that
+point); problems fixed in M0–M3 are no longer listed.
 
 ### 3.1 Terminal core
 
@@ -90,7 +92,7 @@ feature-by-feature review of the native host code for this baseline.
 | Find `⌘F` (highlights + count) | Works | Fixed now: CJK queries never matched; highlights were misplaced on CJK lines |
 | Key encoding: Ctrl/Alt/modified navigation, F1–F12, Insert | Works | Fixed now: F1–F12 and Insert were not sent at all |
 | kitty keyboard protocol | Partial | Disambiguate level only |
-| IME inline preedit | Partial | Candidate window is not placed at the cursor (no `set_ime_cursor_area`) |
+| IME inline preedit | Works | Candidate window placed at the cursor (`set_ime_cursor_area`); its position on macOS awaits a desktop check |
 | Inline images: Sixel / Kitty / iTerm2 | Works | No Kitty z-index; session restore keeps no images |
 | Mouse reporting (SGR / X10) | Works | |
 
@@ -98,17 +100,17 @@ feature-by-feature review of the native host code for this baseline.
 
 | Feature | Status | Notes |
 |---|---|---|
-| Session sidebar (full height) and tab bar (sidebar hidden): drag reorder, `+`, `×`, row menu (rename/prefix/mark/group/duplicate/move/close others/close below) | Works | Duplicate drops mark and group; Close Others/Below are not reopenable |
-| Split tree `⌘D` / `⇧⌘D`, divider drag, per-pane close | Works | New splits/tabs do not inherit the current directory |
+| Session sidebar (full height) and tab bar (sidebar hidden): drag reorder, `+`, `×`, row menu (rename/prefix/mark/group/duplicate/move/close others/close below) | Works | Duplicate keeps mark and group; Close Others/Below can be reopened |
+| Split tree `⌘D` / `⇧⌘D`, divider drag, per-pane close | Works | New splits/tabs inherit the current directory (except SSH tabs) |
 | Quick Terminal `⌘⇧T`, reopen closed tab `⌘⇧Z` | Works | Reopen restores the directory only |
 | Global Quick Terminal hotkey | Works | Fixed now: one press did two things (switch to Quick, then hide the window) |
 | Command palette `⌘K` | Works | |
-| Open Quickly `⌘⇧O` | Partial | Tabs, directories and recent files only; no files, agents or content hits |
-| Details panel: Info / Agent / Outline / Git / Files / Ports / Queue | Partial | Ports sees the shell process only; non-git dirs show "clean"; polls every 2 s even when hidden |
+| Open Quickly `⌘⇧O` | Works | Tabs, agents, snippets, hosts, files and folders in the current directory, recent files; no file-content or scrollback search |
+| Details panel: Info / Agent / Outline / Git / Files / Ports / Queue | Works | Ports cover the shell and its children; non-git dirs say so; while hidden only git is checked, every 10 s (the status line shows the branch) |
 | Session restore (layout, directories, titles, groups) | Works | Fixed now: `⌘Q` skipped the save. Restores layout, not running processes |
-| Recipes save/open | Partial | Write failures are silent; names are not validated as file names |
-| Picture-in-picture, hints, read-only mode | Works | Read-only does not block MTP `pane.send/run` |
-| View rules | Partial | Alias and title only; icons, badges and command/host/file matching are not applied; no hot reload |
+| Recipes save/open | Works | Names are validated as file names; write failures are shown |
+| Picture-in-picture, hints, read-only mode | Works | Read-only blocks MTP `pane.send/run` |
+| View rules | Works | Alias, title, icon, badge; matching by path/command/agent/host/file (the file the foreground program opened); `views.json` hot reload |
 | macOS menu bar | Works | Fixed now: menu Copy/Paste/Select All acted on the terminal while a text field had focus |
 | Settings window `⌘,` | Works | Fixed now: changes were never saved, the theme name was forced to Nord, and a broken config fell back silently |
 
@@ -117,27 +119,29 @@ feature-by-feature review of the native host code for this baseline.
 | Feature | Status | Notes |
 |---|---|---|
 | Read-only view, edit, line numbers, syntax colouring, minimal vim mode | Works | Fixed now: failed saves were swallowed and shown as saved; closing did not confirm unsaved changes |
-| Markdown + Mermaid subset | Partial | Relative local images do not render; external `mermaid-command` runs on the UI thread |
-| Jump-to-line highlight, Open Externally, Edit in Tab | Not available | The `editor` setting is not read |
+| Markdown + Mermaid subset | Works | Relative images resolve against the document's folder; table cells wrap; external `mermaid-command` runs in the background |
+| Edit in Tab | Works | Local files; runs the `editor` setting, else `$EDITOR`, else `vi` (Notepad on Windows); disabled while there are unsaved changes |
+| Jump-to-line highlight, Open Externally | Not available | |
 
 ### 3.4 Agents
 
 | Feature | Status | Notes |
 |---|---|---|
-| Detect claude / codex / opencode / miao, install the state hook, show the wiring snippet | Works | The snippet has no Copy button |
+| Detect claude / codex / opencode / miao, install the state hook, show the wiring snippet | Works | The snippet has a Copy button |
 | Badges, needs-attention marks, system notifications, sleep guard | Works | Fixed now: the sleep inhibitor could outlive the app |
 | Composer `⌘⇧E`, prompt queue (sent by hand) | Works | |
-| Automatic queue delivery when an agent turns idle | Not available | The queue has no target-pane model |
-| Launch an agent from the UI | Not available | |
-| Resume (session id), quota display | Works | Depends on fields the hook reports |
+| Automatic queue delivery when an agent turns idle | Works | Queued prompts are bound to a pane; items saved by older versions without one are sent by hand |
+| Launch an agent from the UI | Works | Settings and the command palette |
+| Show the session id the hook reports | Works | The Agent tab shows agent, state, session id and tty |
+| Resume, quota display | Not available | Not designed yet |
 
 ### 3.5 Remote and operations
 
 | Feature | Status | Notes |
 |---|---|---|
-| New SSH session (`~/.ssh/config`, ControlMaster reuse, zero-install terminfo) | Partial | `ssh -G` runs on the UI thread; restored SSH tabs come back as local shells |
-| Remote file view/edit over ssh | Partial | Host typed by hand; read/write block the UI thread (failures are now shown) |
-| Host library, groups, key management, SFTP, FTP, port forwarding, snippets | Not available | See M3 |
+| New SSH session (`~/.ssh/config`, ControlMaster reuse, zero-install terminfo) | Works | No `ssh -G` on the UI thread; a restored SSH tab says it is disconnected and reconnects on Enter |
+| Remote file view/edit over ssh | Works | Host taken from the active SSH tab (typed otherwise); reads and writes run in the background and failures are shown |
+| Host library, groups, key management, SFTP, FTP, port forwarding, snippets | Works | See M3; mosh is tested only as command construction |
 
 ### 3.6 System integration and automation
 
@@ -145,10 +149,10 @@ feature-by-feature review of the native host code for this baseline.
 |---|---|---|
 | Config file + ghostty / alacritty import | Works | Fixed now: a `config.toml` with syntax errors is reported with the reason |
 | Shell integration (OSC 7, OSC 133, history) | Works | zsh, bash, fish, PowerShell |
-| URL schemes and single-instance forwarding | Partial | Command-line URLs work; macOS URL events from a browser/Finder are not handled |
+| URL schemes and single-instance forwarding | Works | From the command line and from a macOS browser/Finder |
 | MTP control plane and `mtty-cli` | Works | Covered by the real-window smoke |
 | Version check and update | Works | SHA-256 and a required minisign signature are checked in process; macOS install-and-relaunch checked end to end; AppImage/Windows unit-tested only |
-| English / Chinese UI | Partial | Some details-panel rows are still English |
+| English / Chinese UI | Works | A few sample/agent strings stay English on purpose |
 
 ## 4. Roadmap and execution batches
 
@@ -196,7 +200,7 @@ verified on its own:
   - Acceptance: `scripts/package-macos.sh` + `check-macos-bundle.py` +
     `smoke-hosts.py --bundle` pass; `test-release-manifest.py` passes; a manual
     release-workflow rehearsal **[owner]**.
-- [ ] **B1.3 Docs and website**
+- [x] **B1.3 Docs and website** (checked 2026-10-02: in the repository `miaotty` appears only in compatibility notes and history, mtty.dev's main branch says mtty, `check-privacy.sh` passes)
   - READMEs, `docs/*`, AGENTS.md and the example config say mtty; APP-IDENTITY
     becomes the migration guide; historical ADRs stay as written.
   - The mtty.dev site's install, config and CLI examples say mtty (separate

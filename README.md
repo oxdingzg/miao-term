@@ -474,10 +474,13 @@ report-only, with absolute budgets enforced.
 
 Still open:
 
-- **Release acceptance**: manual rehearsals cover four runner builds, package
-  checks, minisign verification and update-manifest assembly. A published release
-  and download/install acceptance are still needed; **Apple notarization** and
-  **Windows MSI signing** require credentials. See [`docs/RELEASE.md`](docs/RELEASE.md).
+- **Release acceptance**: releases are built on four runners, signed with
+  minisign and published with an update manifest (latest: v0.0.8). Updating an
+  installed app through Software Update still needs an end-to-end check on each
+  desktop; **Apple notarization** and **Windows MSI signing** require
+  credentials. See [`docs/RELEASE.md`](docs/RELEASE.md).
+- **Not designed yet**: agent Resume and quota display, jump-to-line highlight,
+  Open Externally.
 - **Platform verification (needs hardware)**: the Linux wgpu render path runs in
   CI via Mesa software Vulkan (lavapipe) and Windows is driven over MTP on real
   hardware; a real Linux desktop session, the Wayland portal hotkey and the
