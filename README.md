@@ -1,6 +1,6 @@
 # miao-term
 
-**A fast, embeddable, cross-platform terminal emulator and engine, written in Rust.**
+**mtty — an AI-native terminal and editor for local and remote work, written in Rust.**
 
 [![CI](https://github.com/oxdingzg/miao-term/actions/workflows/ci.yml/badge.svg)](https://github.com/oxdingzg/miao-term/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
@@ -15,13 +15,27 @@
 
 ## Overview
 
-`miao-term` is two things in one repository:
+**mtty** puts your terminals, your files, your remote hosts and your AI coding
+agents in one fast, native window. It is built on three pillars:
+
+| Pillar | Today | Next |
+|---|---|---|
+| **Terminal and remote** — absorbs Termius and PuTTY | GPU-rendered terminal, tabs and splits, session restore; host library, keys, SFTP/FTP, port forwarding, jump hosts, snippets, broadcast input (over the system OpenSSH) | Serial, Telnet and raw TCP connections, `.ppk` keys; a Rust-native SSH stack is under consideration (needs an ADR) |
+| **Editor** — a first-class text editor, not a side feature | Built-in viewer/editor with Markdown and Mermaid preview; `term-editor` core (rope, multi-cursor, undo, search) done | Editor pane beside terminals with tree-sitter highlighting, LSP and large-file speed ([ADR 0034](docs/decisions/0034-editor-pane.md)) |
+| **Agent workspace** — absorbs Superset, AI-native | State hooks for Claude Code, Codex, OpenCode and miao; attention badges and notifications; prompt queue; a git worktree per task with diff review; the MTP control plane | Agents' edits reviewed inline as undoable diffs; an ACP client; selections, diagnostics and terminal output as one-click agent context |
+
+What ties them together: Rust and GPU rendering held to a performance gate;
+terminal, editor, remote hosts and agents in the same tabs and splits; no
+account, no forced cloud — mtty hosts the agents you choose and never calls a
+model itself.
+
+In this repository:
 
 - a **terminal engine** — `miao-term-core` owns the hot path from the PTY to the
   screen and depends on no windowing or GPU code;
-- **`mtty`** — a batteries-included terminal application built on that engine,
-  with tabs, panes, side panels, a settings window, shell integration and a
-  scriptable control plane.
+- an **editor core** — `miao-term-editor`, equally free of UI code;
+- **`mtty`** — the application built on them, with tabs, panes, side panels, a
+  settings window, shell integration and a scriptable control plane.
 
 **`mtty` is the single application**, powered by the native `winit` +
 `wgpu` host in `miao-term-widget`. `mtty-app` provides the executable and
@@ -51,7 +65,7 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 
 | Project | What it is | Links |
 |---|---|---|
-| **mtty** (this repository) | The terminal application and the embeddable engine behind it | [mtty.dev/mtty](https://mtty.dev/mtty) · [oxdingzg/miao-term](https://github.com/oxdingzg/miao-term) |
+| **mtty** (this repository) | The AI-native terminal and editor, and the embeddable engines behind it | [mtty.dev/mtty](https://mtty.dev/mtty) · [oxdingzg/miao-term](https://github.com/oxdingzg/miao-term) |
 | **miao** | Open-source AI coding agent for the terminal | [mtty.dev/miao](https://mtty.dev/miao) · [oxdingzg/miao](https://github.com/oxdingzg/miao) |
 | **mtty.dev** | The website and documentation for both | [mtty.dev](https://mtty.dev) |
 
@@ -240,6 +254,7 @@ The engine is layered so that dependencies point inward only
 | [`miao-term-graphics`](crates/term-graphics) | Inline-graphics stream scanner and decoders (Sixel, Kitty, iTerm2). |
 | [`miao-term-render`](crates/term-render) | `wgpu` + `glyphon` glyph-grid renderer, quad and image pipelines. |
 | [`miao-term-ui`](crates/term-ui) | Host-agnostic UI shared by mtty: theme, input encoding, selection, split layout, egui chrome, palette, hints, vim, markdown, ssh, update and agent-integration helpers. |
+| [`miao-term-editor`](crates/term-editor) | Editing core for the editor pane: rope buffer, transactions and undo, multiple selections, motions, search and replace (ADR 0034). No UI code. |
 | [`miao-term-config`](crates/term-config) | Configuration and themes, ghostty/alacritty import, and the View-rule engine. |
 | [`miao-term-mtp`](crates/term-mtp) | MTP protocol, host/client and transport (Unix socket, Windows named pipe, TCP). |
 | [`miao-term-widget`](crates/term-widget) | The native host library for mtty: `winit` + `wgpu` render loop that draws the grid directly and composites the egui chrome. |
@@ -462,6 +477,18 @@ version kept in sync as `*.zh-CN.md`.
 The product direction for **mtty**, the
 verified feature baseline and the milestone plan live in
 [`docs/PRODUCT.md`](docs/PRODUCT.md).
+
+Next milestones:
+
+- **M5 Editor pane** ([ADR 0034](docs/decisions/0034-editor-pane.md)): E1, the
+  `term-editor` core, is done; next the pane itself, then tree-sitter
+  highlighting, multi-cursor and find/replace, LSP, and a vim mode.
+- **M6 Remote, PuTTY-style**: serial, Telnet and raw TCP sessions, `.ppk` key
+  import; whether to move SSH to a Rust-native stack is an open design
+  question.
+- **M7 AI-native workspace**: agents' edits reviewed inline as undoable diffs,
+  an ACP client, and selections, diagnostics and terminal output sent to an
+  agent in one step.
 
 Done recently: the Windows named-pipe transport and ConPTY path (verified on
 real hardware), session restore, View rules, Open Quickly, the details panels,
