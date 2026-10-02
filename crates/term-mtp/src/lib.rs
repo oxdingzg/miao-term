@@ -232,6 +232,23 @@ pub enum Command {
         line: Option<usize>,
         column: Option<usize>,
     },
+    /// Propose an edit to an open editor pane (ADR 0040, A1).
+    Propose {
+        pane: Option<String>,
+        path: Option<String>,
+        edits: Vec<ProposedEdit>,
+        /// Replace the whole file with this instead of `edits`.
+        text: Option<String>,
+        label: Option<String>,
+    },
+}
+
+/// One replacement in `editor.propose`: characters `start..end` become `text`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProposedEdit {
+    pub start: usize,
+    pub end: usize,
+    pub text: String,
 }
 
 impl ServerState {
@@ -486,7 +503,7 @@ fn method_cap(ns: &str, method: &str) -> &'static str {
         ("core", "ping" | "health" | "wait" | "subscribe") => "core.basic",
         // A pane's output may hold secrets: reading it is its own capability.
         ("pane", "output") => "pane.read",
-        ("pane", _) | ("app", _) => "app.view.write",
+        ("pane", _) | ("app", _) | ("editor", _) => "app.view.write",
         ("file", "read") => "file.read",
         ("file", "write") => "file.write",
         ("agent", "state.list") => "agent.state.read",
@@ -612,6 +629,48 @@ fn dispatch(state: &ServerState, req: Request) -> Response {
                 Command::Edit { path, line, column }
             };
             state.queue_command(command);
+            Response::ok(id, rev, json!({ "ok": true }))
+        }
+        ("editor", "propose") => {
+            let pane = str_field(&params, "pane_id");
+            let path = str_field(&params, "path");
+            if pane.is_none() && path.is_none() {
+                return Response::err(id, rev, "no_pane", "pane_id or path is required");
+            }
+            let label = str_field(&params, "label");
+            let text = str_field(&params, "text");
+            let edits: Vec<ProposedEdit> = params
+                .get("edits")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|e| {
+                            let start = e.get("start").and_then(Value::as_u64)? as usize;
+                            let end = e
+                                .get("end")
+                                .and_then(Value::as_u64)
+                                .map(|n| n as usize)
+                                .unwrap_or(start);
+                            let text = e
+                                .get("text")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string();
+                            Some(ProposedEdit { start, end, text })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if edits.is_empty() && text.is_none() {
+                return Response::err(id, rev, "no_edits", "edits or text is required");
+            }
+            state.queue_command(Command::Propose {
+                pane,
+                path,
+                edits,
+                text,
+                label,
+            });
             Response::ok(id, rev, json!({ "ok": true }))
         }
         ("file", "read") => {
@@ -1406,6 +1465,42 @@ mod tests {
         let bad = dispatch(&state, request("app", "view", json!({})));
         assert!(!bad.ok);
         assert_eq!(bad.error.unwrap().code, "no_path");
+    }
+
+    #[test]
+    fn editor_propose_queues_edits() {
+        let state = ServerState::new();
+        assert!(
+            dispatch(
+                &state,
+                request(
+                    "editor",
+                    "propose",
+                    json!({
+                        "path": "/tmp/a",
+                        "label": "agent",
+                        "edits": [{ "start": 4, "end": 7, "text": "TWO" }],
+                    }),
+                ),
+            )
+            .ok
+        );
+        let commands = state.take_commands();
+        assert!(matches!(
+            commands.as_slice(),
+            [Command::Propose { edits, label: Some(l), .. }]
+                if edits.len() == 1
+                    && edits[0].start == 4
+                    && edits[0].end == 7
+                    && edits[0].text == "TWO"
+                    && l == "agent"
+        ));
+        let bad = dispatch(
+            &state,
+            request("editor", "propose", json!({ "path": "/tmp/a" })),
+        );
+        assert!(!bad.ok);
+        assert_eq!(bad.error.unwrap().code, "no_edits");
     }
 
     #[test]

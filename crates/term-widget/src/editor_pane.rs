@@ -74,6 +74,20 @@ pub struct EditorDraw {
     pub gutter: usize,
     /// Diagnostic underlines and their severity (1 error … 4 hint).
     pub underlines: Vec<(CellRect, u8)>,
+    /// Changed lines of a pending agent proposal (ADR 0040, A1).
+    pub proposal: Vec<CellRect>,
+}
+
+/// A pending agent edit (ADR 0040, A1): applied as one undoable transaction
+/// and tinted until the user accepts (typing, saving, another edit) or rejects
+/// (`undo`).
+#[derive(Clone, Debug)]
+pub struct Proposal {
+    pub label: Option<String>,
+    /// Changed file lines (0-based).
+    pub lines: Vec<usize>,
+    /// The document revision right after it was applied; any change ends it.
+    revision: u64,
 }
 
 /// A language server's diagnostic in this pane's text (ADR 0034, E5): a
@@ -290,6 +304,8 @@ pub struct EditorPane {
     folded: std::collections::HashSet<usize>,
     /// Vim state when `editor-vim` is on (ADR 0034, E6); `None` is off.
     pub vim: Option<miao_term_editor::vim::Vim>,
+    /// A pending agent edit (ADR 0040, A1), tinted until accepted or rejected.
+    pub proposal: Option<Proposal>,
     last_click: Option<(Instant, usize, u8)>,
 }
 
@@ -533,6 +549,7 @@ impl EditorPane {
             cols: 1,
             dragging: false,
             close_armed: false,
+            proposal: None,
             last_click: None,
         }
     }
@@ -576,6 +593,7 @@ impl EditorPane {
         }
         self.doc.mark_saved();
         self.close_armed = false;
+        self.proposal = None;
         self.disk = disk_stamp(&self.path);
         self.missing_warned = false;
         Ok(())
@@ -646,9 +664,77 @@ impl EditorPane {
         }
     }
 
+    /// Apply an agent's edits as one undoable transaction and mark the changed
+    /// lines (ADR 0040, A1). The edits are `(start, end, text)` in character
+    /// offsets of the current document and may be given in any order.
+    pub fn propose(&mut self, edits: Vec<(usize, usize, String)>, label: Option<String>) {
+        if edits.is_empty() {
+            return;
+        }
+        let mut sorted: Vec<(usize, usize, usize)> = edits
+            .iter()
+            .map(|(s, e, t)| (*s, *e, t.chars().count()))
+            .collect();
+        sorted.sort_by_key(|c| (c.0, c.1));
+        // Ranges in the document as it will be after the transaction.
+        let mut ranges = Vec::with_capacity(sorted.len());
+        let mut delta: isize = 0;
+        for (start, end, added) in sorted {
+            let from = (start as isize + delta).max(0) as usize;
+            ranges.push((from, from + added));
+            delta += added as isize - (end as isize - start as isize);
+        }
+        let changes = edits
+            .into_iter()
+            .map(|(s, e, t)| miao_term_editor::Change::replace(s, e, t))
+            .collect();
+        self.doc
+            .apply_external(miao_term_editor::Transaction::new(changes));
+        let rope = self.doc.rope();
+        let mut lines = Vec::new();
+        for (from, to) in ranges {
+            let len = rope.len_chars();
+            let a = rope.char_to_line(from.min(len));
+            let b = rope.char_to_line(to.min(len));
+            lines.extend(a..=b);
+        }
+        lines.sort_unstable();
+        lines.dedup();
+        self.proposal = Some(Proposal {
+            label,
+            lines,
+            revision: self.doc.revision(),
+        });
+        self.reveal_cursor();
+    }
+
+    pub fn proposal(&self) -> Option<&Proposal> {
+        self.proposal.as_ref()
+    }
+
+    /// Keep the proposal (its text is already applied).
+    pub fn accept_proposal(&mut self) {
+        self.proposal = None;
+    }
+
+    /// Undo the proposal as one step. Returns whether there was one.
+    pub fn reject_proposal(&mut self) -> bool {
+        if self.proposal.is_none() {
+            return false;
+        }
+        self.proposal = None;
+        self.doc.undo()
+    }
+
     /// Catch the parse tree up with the edits made since the last call (call
     /// before drawing; cheap when nothing changed).
     pub fn sync_syntax(&mut self) {
+        // Any edit after a proposal is an accept (the text is already in).
+        if let Some(p) = &self.proposal {
+            if self.doc.revision() != p.revision {
+                self.proposal = None;
+            }
+        }
         // View mode: a line waiting for indexing to reach it.
         if let Some(large) = &self.large {
             if let Some(line) = large.pending_line {
@@ -1424,6 +1510,19 @@ impl EditorPane {
         let current_line = (head_line >= self.scroll_line
             && head_line < self.scroll_line + self.rows)
             .then(|| head_line - self.scroll_line);
+        // A pending agent proposal tints its changed lines.
+        let mut proposal_cells = Vec::new();
+        if let Some(p) = &self.proposal {
+            for &line in &p.lines {
+                if let Some(row) = self.row_of_line(line) {
+                    proposal_cells.push(CellRect {
+                        row,
+                        col: gutter,
+                        width: self.cols.saturating_sub(gutter).max(1),
+                    });
+                }
+            }
+        }
         EditorDraw {
             rows,
             selection: sel_cells,
@@ -1431,6 +1530,7 @@ impl EditorPane {
             carets,
             gutter,
             underlines,
+            proposal: proposal_cells,
         }
     }
 
@@ -2303,5 +2403,40 @@ mod tests {
         p.remote_loaded(b"a\nb\nc\n");
         assert_eq!(p.total_lines(), 4);
         assert!(p.syntax.is_some(), "the parse tree follows the bytes");
+    }
+
+    #[test]
+    fn a_proposal_applies_as_one_transaction_and_rejects_with_undo() {
+        let mut p = pane("one\ntwo\nthree\n");
+        let before = p.doc.rope().to_string();
+        // Replace "two" (chars 4..7) with "TWO!".
+        p.propose(vec![(4, 7, "TWO!".into())], Some("agent".into()));
+        assert_eq!(p.doc.rope().to_string(), "one\nTWO!\nthree\n");
+        assert!(p.doc.is_modified());
+        assert!(p.proposal().is_some());
+        // Reject is a single undo step back to the pre-image.
+        assert!(p.reject_proposal());
+        assert_eq!(p.doc.rope().to_string(), before);
+        assert!(p.proposal().is_none());
+        assert!(!p.doc.is_modified());
+        assert!(!p.reject_proposal(), "nothing left to reject");
+    }
+
+    #[test]
+    fn a_new_edit_accepts_a_proposal() {
+        let mut p = pane("one\ntwo\n");
+        p.propose(vec![(4, 7, "TWO".into())], None);
+        assert!(p.proposal().is_some());
+        // Typing moves the revision on, so the next sync accepts it.
+        p.type_text("!");
+        p.sync_syntax();
+        assert!(p.proposal().is_none());
+        assert!(p.doc.rope().to_string().contains("TWO"));
+        // Accept keeps the text and drops the marking.
+        p.propose(vec![(0, 1, "X".into())], None);
+        assert!(p.proposal().is_some());
+        p.accept_proposal();
+        assert!(p.proposal().is_none());
+        assert!(p.doc.rope().to_string().starts_with('X'));
     }
 }
