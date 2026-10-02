@@ -243,6 +243,8 @@ impl EditorPane {
             if !edits.is_empty() {
                 syntax.update(self.doc.rope(), &edits);
             }
+            // A large file's parse finishes on a background thread.
+            syntax.poll();
         }
     }
 

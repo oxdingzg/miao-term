@@ -90,16 +90,19 @@ fn editing_a_100_mb_file_stays_interactive() {
 
 #[test]
 #[ignore = "perf gate; run `cargo test --release -- --ignored`"]
-fn highlighting_a_1_mb_source_file_stays_interactive() {
+fn highlighting_the_largest_synchronously_parsed_file_stays_interactive() {
+    use miao_term_editor::syntax::SYNC_PARSE_BYTES;
     use miao_term_editor::Syntax;
     let unit = "/// Doc comment with 中文.\npub fn compute(index: usize, table: &[u8]) -> Option<u8> {\n    let value = table.get(index)?; // a comment\n    Some(value.wrapping_add(1))\n}\n\n";
-    let text = unit.repeat((1 << 20) / unit.len() - 1);
+    // Just under the size where parsing moves to a background thread.
+    let text = unit.repeat(SYNC_PARSE_BYTES / unit.len() - 1);
     let mut doc = Document::from_text(&text);
 
     let t = Instant::now();
     let mut syntax = Syntax::for_file(std::path::Path::new("big.rs"), doc.rope()).unwrap();
+    assert!(!syntax.parsing(), "parsed on this thread");
     check(
-        "first parse of 1 MB",
+        "first parse of 512 KB",
         t.elapsed().as_secs_f64() * 1e3,
         1000.0,
     );
@@ -142,4 +145,61 @@ fn highlighting_a_1_mb_source_file_stays_interactive() {
         t.elapsed().as_secs_f64() * 1e3 / 20.0,
         16.0,
     );
+}
+
+#[test]
+#[ignore = "perf gate; run `cargo test --release -- --ignored`"]
+fn an_8_mb_source_file_highlights_in_the_background() {
+    use miao_term_editor::Syntax;
+    let unit = "/// Doc comment with 中文.\npub fn compute(index: usize, table: &[u8]) -> Option<u8> {\n    let value = table.get(index)?; // a comment\n    Some(value.wrapping_add(1))\n}\n\n";
+    let text = unit.repeat((8 << 20) / unit.len() - 1);
+    let mut doc = Document::from_text(&text);
+    let settle = |syntax: &mut Syntax| {
+        let t = Instant::now();
+        loop {
+            syntax.poll();
+            if !syntax.parsing() {
+                return t.elapsed().as_secs_f64() * 1e3;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    };
+
+    let t = Instant::now();
+    let mut syntax = Syntax::for_file(std::path::Path::new("big.rs"), doc.rope()).unwrap();
+    check(
+        "open 8 MB (UI thread)",
+        t.elapsed().as_secs_f64() * 1e3,
+        50.0,
+    );
+    check(
+        "first background parse of 8 MB",
+        settle(&mut syntax),
+        4000.0,
+    );
+
+    // Typing: the UI thread only moves the tree; the reparse runs behind.
+    let middle = doc.rope().line_to_char(doc.rope().len_lines() / 2);
+    doc.set_selection(Selection::cursor(middle + 4));
+    let t = Instant::now();
+    for _ in 0..20 {
+        doc.type_text("x");
+        let edits = doc.take_edits();
+        syntax.update(doc.rope(), &edits);
+        syntax.poll();
+    }
+    check(
+        "keystroke on the UI thread, 8 MB",
+        t.elapsed().as_secs_f64() * 1e3 / 20.0,
+        1.0,
+    );
+    check(
+        "reparse after typing settles, 8 MB",
+        settle(&mut syntax),
+        2000.0,
+    );
+    let rope = doc.rope();
+    let line = rope.len_lines() / 2;
+    let range = rope.line_to_byte(line)..rope.line_to_byte(line + 60);
+    assert!(!syntax.highlights(rope, range).is_empty());
 }

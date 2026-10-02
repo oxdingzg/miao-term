@@ -5,10 +5,16 @@
 //! incrementally, and [`Syntax::highlights`] runs the language's highlight
 //! query over a byte range only (the visible lines), so the cost follows the
 //! screen, not the file.
+//!
+//! Above [`SYNC_PARSE_BYTES`] a parse takes longer than a frame, so it runs
+//! on a background thread: edits move the current tree at once (colours stay
+//! in place while the new parse runs), and the new tree replaces it when it
+//! arrives, with any edits made meanwhile replayed on it.
 
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::Path;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use ropey::Rope;
@@ -19,12 +25,32 @@ use tree_sitter::{
 
 use crate::change::ByteEdit;
 
-/// Documents larger than this are not parsed (they stay plain text). Parsing
-/// runs on the UI thread, and a reparse after a keystroke grows with the file
-/// (about 4 ms per MB of Rust on an M4: tree-sitter re-walks the top-level
-/// items after the edit), so the cap keeps a keystroke within a frame.
-/// Reparsing on a background thread would lift it.
-pub const MAX_HIGHLIGHT_BYTES: usize = 1 << 20;
+/// Documents larger than this are not parsed by tree-sitter (they stay plain
+/// text). The parse runs in the background above [`SYNC_PARSE_BYTES`], so the
+/// limit is memory: a tree takes 25–35 times the file's size (about 250 MB
+/// for 8 MB of Rust on an M4, where the first parse takes 0.5 s and a
+/// keystroke's reparse 65 ms).
+pub const MAX_HIGHLIGHT_BYTES: usize = 8 << 20;
+
+/// Documents up to this size are reparsed on the caller's thread: a
+/// keystroke's reparse grows with the file (about 4 ms per MB of Rust,
+/// tree-sitter re-walking the top-level items after the edit), and stays
+/// within a frame here.
+pub const SYNC_PARSE_BYTES: usize = 512 << 10;
+
+/// Sublime syntaxes (the fallback) parse line by line from checkpoints on the
+/// caller's thread; a jump to the end of the file parses everything before
+/// it once, so they keep a lower limit.
+pub const MAX_FALLBACK_BYTES: usize = 1 << 20;
+
+static PARSE_WAKER: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
+
+/// Called from the parse thread when a background parse finishes, so the UI
+/// can draw again (the app wakes its event loop). Set once; later calls are
+/// ignored.
+pub fn set_parse_waker(wake: impl Fn() + Send + Sync + 'static) {
+    let _ = PARSE_WAKER.set(Box::new(wake));
+}
 
 /// What a highlighted span is, mapped to a colour by the editor's palette.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -791,11 +817,96 @@ impl<'a> TextProvider<&'a [u8]> for RopeText<'a> {
 /// The parse tree of one document in a built-in tree-sitter language.
 struct TreeSyntax {
     name: &'static str,
+    language: fn() -> Language,
     parser: Parser,
     tree: Option<Tree>,
     compiled: Arc<Compiled>,
     /// Edits were applied to the tree since it was last parsed.
     stale: bool,
+    /// Parses off the caller's thread, once the document outgrew
+    /// [`SYNC_PARSE_BYTES`].
+    worker: Option<Worker>,
+}
+
+/// A text snapshot to parse, with the tree to reuse (edited to match it).
+struct Job {
+    rope: Rope,
+    tree: Option<Tree>,
+}
+
+/// The background parse of one document. One job is in flight at a time;
+/// edits made meanwhile wait in `since` and are replayed on its result.
+struct Worker {
+    jobs: Sender<Job>,
+    done: Receiver<Option<Tree>>,
+    in_flight: bool,
+    since: Vec<ByteEdit>,
+    /// The text as of the latest edit (a rope clone shares its nodes).
+    rope: Rope,
+}
+
+impl Worker {
+    fn spawn(language: fn() -> Language, rope: Rope) -> Option<Worker> {
+        let (jobs, inbox) = mpsc::channel::<Job>();
+        let (results, done) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("mtty-parse".into())
+            .spawn(move || {
+                let mut parser = Parser::new();
+                if parser.set_language(&language()).is_err() {
+                    return;
+                }
+                // Ends when the document's Syntax is dropped.
+                while let Ok(job) = inbox.recv() {
+                    let tree = parse_rope(&mut parser, &job.rope, job.tree.as_ref());
+                    if results.send(tree).is_err() {
+                        return;
+                    }
+                    if let Some(wake) = PARSE_WAKER.get() {
+                        wake();
+                    }
+                }
+            })
+            .ok()?;
+        Some(Worker {
+            jobs,
+            done,
+            in_flight: false,
+            since: Vec::new(),
+            rope,
+        })
+    }
+
+    fn send(&mut self, tree: Option<Tree>) {
+        let job = Job {
+            rope: self.rope.clone(),
+            tree,
+        };
+        self.in_flight = self.jobs.send(job).is_ok();
+    }
+}
+
+fn parse_rope(parser: &mut Parser, rope: &Rope, old: Option<&Tree>) -> Option<Tree> {
+    let len = rope.len_bytes();
+    let mut read = |byte: usize, _: Point| -> &[u8] {
+        if byte >= len {
+            return &[];
+        }
+        let (chunk, start, _, _) = rope.chunk_at_byte(byte);
+        &chunk.as_bytes()[byte - start..]
+    };
+    parser.parse_with_options(&mut read, old, None)
+}
+
+fn input_edit(e: &ByteEdit) -> InputEdit {
+    InputEdit {
+        start_byte: e.start_byte,
+        old_end_byte: e.old_end_byte,
+        new_end_byte: e.new_end_byte,
+        start_position: Point::new(e.start.0, e.start.1),
+        old_end_position: Point::new(e.old_end.0, e.old_end.1),
+        new_end_position: Point::new(e.new_end.0, e.new_end.1),
+    }
 }
 
 impl TreeSyntax {
@@ -806,10 +917,12 @@ impl TreeSyntax {
         parser.set_language(&(def.language)()).ok()?;
         let mut syntax = TreeSyntax {
             name: def.name,
+            language: def.language,
             parser,
             tree: None,
             compiled,
             stale: true,
+            worker: None,
         };
         syntax.update(rope, &[]);
         Some(syntax)
@@ -824,36 +937,65 @@ impl TreeSyntax {
     /// `Document::take_edits`): incremental when there is a tree.
     pub fn update(&mut self, rope: &Rope, edits: &[ByteEdit]) {
         if rope.len_bytes() > MAX_HIGHLIGHT_BYTES {
+            // Too big to parse: drop the tree (and the worker with it).
             self.tree = None;
+            self.worker = None;
+            self.stale = true;
             return;
         }
         if let Some(tree) = &mut self.tree {
             for e in edits {
-                tree.edit(&InputEdit {
-                    start_byte: e.start_byte,
-                    old_end_byte: e.old_end_byte,
-                    new_end_byte: e.new_end_byte,
-                    start_position: Point::new(e.start.0, e.start.1),
-                    old_end_position: Point::new(e.old_end.0, e.old_end.1),
-                    new_end_position: Point::new(e.new_end.0, e.new_end.1),
-                });
-            }
-            if edits.is_empty() && !self.stale {
-                return;
+                tree.edit(&input_edit(e));
             }
         }
-        let len = rope.len_bytes();
-        let mut read = |byte: usize, _: Point| -> &[u8] {
-            if byte >= len {
-                return &[];
+        if self.worker.is_none() && rope.len_bytes() > SYNC_PARSE_BYTES {
+            self.worker = Worker::spawn(self.language, rope.clone());
+        }
+        if let Some(worker) = &mut self.worker {
+            worker.rope = rope.clone();
+            if worker.in_flight {
+                worker.since.extend_from_slice(edits);
+            } else if !edits.is_empty() || self.stale || self.tree.is_none() {
+                worker.send(self.tree.clone());
+                self.stale = false;
             }
-            let (chunk, start, _, _) = rope.chunk_at_byte(byte);
-            &chunk.as_bytes()[byte - start..]
-        };
-        self.tree = self
-            .parser
-            .parse_with_options(&mut read, self.tree.as_ref(), None);
+            return;
+        }
+        if self.tree.is_some() && edits.is_empty() && !self.stale {
+            return;
+        }
+        self.tree = parse_rope(&mut self.parser, rope, self.tree.as_ref());
         self.stale = false;
+    }
+
+    /// Take a finished background parse: replay the edits made since its
+    /// job was sent, adopt the tree, and send the next job if there were
+    /// any. True when the tree changed.
+    fn poll(&mut self) -> bool {
+        let Some(worker) = &mut self.worker else {
+            return false;
+        };
+        let Ok(tree) = worker.done.try_recv() else {
+            return false;
+        };
+        worker.in_flight = false;
+        let Some(mut tree) = tree else {
+            return false;
+        };
+        for e in &worker.since {
+            tree.edit(&input_edit(e));
+        }
+        let more = !std::mem::take(&mut worker.since).is_empty();
+        self.tree = Some(tree);
+        if more {
+            worker.send(self.tree.clone());
+        }
+        true
+    }
+
+    /// A background parse is running (or queued behind edits).
+    fn parsing(&self) -> bool {
+        self.worker.as_ref().is_some_and(|w| w.in_flight)
     }
 
     /// Highlighted byte ranges within `range`, sorted and not overlapping.
@@ -957,14 +1099,31 @@ impl Syntax {
         }
     }
 
+    /// Take a finished background parse (call before drawing). True when
+    /// the highlighting changed.
+    pub fn poll(&mut self) -> bool {
+        match &mut self.engine {
+            Engine::Tree(t) => t.poll(),
+            Engine::Sublime(_) => false,
+        }
+    }
+
+    /// A background parse is running: what is drawn may lag the text.
+    pub fn parsing(&self) -> bool {
+        match &self.engine {
+            Engine::Tree(t) => t.parsing(),
+            Engine::Sublime(_) => false,
+        }
+    }
+
     /// Highlighted byte ranges within `range`, sorted and not overlapping.
     pub fn highlights(&self, rope: &Rope, range: Range<usize>) -> Vec<(Range<usize>, Highlight)> {
-        if rope.len_bytes() > MAX_HIGHLIGHT_BYTES {
-            return Vec::new();
-        }
         match &self.engine {
-            Engine::Tree(t) => t.highlights(rope, range),
-            Engine::Sublime(f) => f.highlights(rope, range),
+            Engine::Tree(t) if rope.len_bytes() <= MAX_HIGHLIGHT_BYTES => t.highlights(rope, range),
+            Engine::Sublime(f) if rope.len_bytes() <= MAX_FALLBACK_BYTES => {
+                f.highlights(rope, range)
+            }
+            _ => Vec::new(),
         }
     }
 }
@@ -1113,6 +1272,69 @@ mod tests {
         assert_eq!(kinds_at(&syntax, &rope, "const"), vec![Highlight::Keyword]);
         assert_eq!(kinds_at(&syntax, &rope, "'a'"), vec![Highlight::String]);
         assert_eq!(kinds_at(&syntax, &rope, "number"), vec![Highlight::Type]);
+    }
+
+    /// Poll until the background parse settles (or fail after 20 s).
+    fn settle(syntax: &mut Syntax) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            syntax.poll();
+            if !syntax.parsing() {
+                return;
+            }
+            assert!(std::time::Instant::now() < deadline, "parse never settled");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    fn big_rust(bytes: usize) -> String {
+        let unit = "pub fn compute(index: usize) -> usize {\n    index + 1 // note\n}\n\n";
+        unit.repeat(bytes / unit.len() + 1)
+    }
+
+    #[test]
+    fn large_files_parse_in_the_background_and_catch_up_with_edits() {
+        static WAKES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        set_parse_waker(|| {
+            WAKES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+        let mut doc = Document::from_text(&big_rust(SYNC_PARSE_BYTES * 2));
+        let mut syntax = Syntax::for_file(Path::new("big.rs"), doc.rope()).unwrap();
+        assert!(syntax.parsing(), "the first parse runs in the background");
+        // Edit while that parse runs: the edits wait and are replayed.
+        let middle = doc.rope().line_to_char(doc.rope().len_lines() / 2);
+        doc.set_selection(Selection::cursor(middle));
+        for line in ["// first marker\n", "fn added() {}\n", "// last marker\n"] {
+            doc.type_text(line);
+            let edits = doc.take_edits();
+            syntax.update(doc.rope(), &edits);
+        }
+        settle(&mut syntax);
+        let text = doc.rope().to_string();
+        let kind_at = |needle: &str| {
+            let at = text.find(needle).unwrap();
+            syntax
+                .highlights(doc.rope(), at..at + needle.len())
+                .first()
+                .map(|(_, k)| *k)
+        };
+        assert_eq!(kind_at("// first marker"), Some(Highlight::Comment));
+        assert_eq!(kind_at("// last marker"), Some(Highlight::Comment));
+        assert_eq!(kind_at("fn added"), Some(Highlight::Keyword));
+        assert!(WAKES.load(std::sync::atomic::Ordering::SeqCst) > 0);
+    }
+
+    #[test]
+    fn small_files_parse_at_once_and_huge_ones_not_at_all() {
+        let small = Rope::from_str("fn main() {}\n");
+        let syntax = Syntax::for_file(Path::new("a.rs"), &small).unwrap();
+        assert!(!syntax.parsing());
+        assert!(!syntax.highlights(&small, 0..small.len_bytes()).is_empty());
+        let huge = Rope::from_str(&big_rust(MAX_HIGHLIGHT_BYTES + 1));
+        let mut syntax = Syntax::for_file(Path::new("huge.rs"), &huge).unwrap();
+        assert!(!syntax.parsing(), "no background parse past the limit");
+        assert!(!syntax.poll());
+        assert!(syntax.highlights(&huge, 0..1000).is_empty());
     }
 
     #[test]
