@@ -92,6 +92,20 @@ pub fn alert(title: &str, body: &str) {
     }
 }
 
+/// The clipboard's image as PNG bytes when it holds one, or `None` on platforms
+/// without a backend yet (ADR 0036). Callers fall back to text or the
+/// application's own clipboard reader.
+pub fn clipboard_image() -> Option<Vec<u8>> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::clipboard_image()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
 /// Escape a string for an AppleScript double-quoted literal.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn escape(s: &str) -> String {

@@ -246,7 +246,18 @@ mod appmenu {
 /// Point `MTTY_CLI` (and the former `MIAOTTY_CLI`, read by installed hooks and
 /// miao) at the CLI shipped beside this executable: inside an app bundle it is
 /// not on `PATH`, and an inherited value may belong to another build.
+/// Where the host writes a clipboard image for the pane's application to read
+/// (ADR 0036). The clipboard is global, so every pane shares one path.
+fn clipboard_image_path() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("mtty-clipboard-{}.png", std::process::id()))
+}
+
 fn export_pane_environment() {
+    // A TUI cannot read the pasteboard directly (on macOS that means shelling
+    // out to osascript, which Script Editor owns), so the host writes image
+    // pastes here and the application reads the file (ADR 0036).
+    std::env::set_var("MTTY_CLIPBOARD_FILE", clipboard_image_path());
+
     let cli = std::env::current_exe()
         .ok()
         .map(|exe| exe.with_file_name(format!("mtty-cli{}", std::env::consts::EXE_SUFFIX)));
@@ -2449,8 +2460,18 @@ impl State {
     }
 
     fn paste_clipboard(&mut self) {
-        // Image-only clipboards have no text. Still send an empty bracketed
-        // paste: TUIs such as miao use it to read native clipboard attachments.
+        // Image pastes go through a file the host owns, so the application does
+        // not need osascript to reach the pasteboard (ADR 0036). A text paste
+        // clears any earlier image, so a later empty paste cannot read a stale
+        // one.
+        let path = clipboard_image_path();
+        if let Some(image) = miao_term_platform::clipboard_image() {
+            if std::fs::write(&path, image).is_ok() {
+                self.paste("");
+                return;
+            }
+        }
+        let _ = std::fs::remove_file(&path);
         let text = self.clipboard_text().unwrap_or_default();
         self.paste(&text);
     }
