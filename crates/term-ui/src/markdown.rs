@@ -60,10 +60,7 @@ mod tests {
     fn relative_images_resolve_against_the_document_directory() {
         let scheme = dir_uri_scheme(Path::new("/srv/docs"));
         assert_eq!(scheme, "file:///srv/docs/");
-        assert_eq!(
-            format!("{scheme}img/a.png"),
-            "file:///srv/docs/img/a.png"
-        );
+        assert_eq!(format!("{scheme}img/a.png"), "file:///srv/docs/img/a.png");
         assert_eq!(dir_uri_scheme(Path::new("/")), "file:///");
         assert_eq!(dir_uri_scheme(Path::new("C:\\d\\e")), "file:///C:/d/e/");
     }
