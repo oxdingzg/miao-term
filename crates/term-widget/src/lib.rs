@@ -29,7 +29,8 @@ enum HostEvent {
     Hotkey,
     /// A command from the OS menu bar (macOS, inside an app bundle).
     #[cfg(target_os = "macos")]
-    Menu(miao_term_ui::chrome::MenuId),
+    /// The flag says the menu item's shortcut was pressed, not clicked.
+    Menu(miao_term_ui::chrome::MenuId, bool),
 }
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
@@ -201,7 +202,7 @@ mod appmenu {
             let key = e.id.0.as_str();
             match miao_term_ui::menu::from_key(key) {
                 Some(id) => {
-                    let _ = proxy.send_event(HostEvent::Menu(id));
+                    let _ = proxy.send_event(HostEvent::Menu(id, current_event_is_key()));
                 }
                 None => {
                     if key == "documentation" {
@@ -216,6 +217,29 @@ mod appmenu {
             _items: items,
             _submenus: submenus,
         })
+    }
+
+    /// Whether the event AppKit is handling is a key press: a menu item
+    /// fired by its shortcut rather than a click. Called from the menu's
+    /// action, on the main thread.
+    fn current_event_is_key() -> bool {
+        use objc2::runtime::AnyObject;
+        use objc2::{class, msg_send};
+        const NS_EVENT_TYPE_KEY_DOWN: usize = 10;
+        // SAFETY: NSApplication and -currentEvent / -type exist on every
+        // supported macOS; nil results are checked before use.
+        unsafe {
+            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+            if app.is_null() {
+                return false;
+            }
+            let event: *mut AnyObject = msg_send![app, currentEvent];
+            if event.is_null() {
+                return false;
+            }
+            let kind: usize = msg_send![event, type];
+            kind == NS_EVENT_TYPE_KEY_DOWN
+        }
     }
 }
 
@@ -1119,6 +1143,15 @@ struct State {
     /// they were found for (a new query jumps to the match after the caret).
     editor_hits: Vec<(usize, usize)>,
     editor_hits_query: String,
+    /// Find options and the replace field, for editor panes (ADR 0034, E4).
+    find_opts: FindOptions,
+    /// Why the editor's pattern finds nothing (an invalid regex).
+    find_error: Option<String>,
+    /// Select the match at or after the caret on the next refresh, as a new
+    /// query does (after a replace, the caret is past the replaced match).
+    find_rejump: bool,
+    /// The Go to Line prompt's text, while it is open.
+    goto_line: Option<String>,
     /// Find running on a thread: in a view-mode file (byte ranges) or a
     /// large document (char ranges).
     bg_search: Option<BgSearch>,
@@ -2557,6 +2590,14 @@ impl State {
         let search_on = self.search.as_ref().map(|s| !s.is_empty()).unwrap_or(false);
         let search_hits = self.search_hits.clone();
         let search_idx = self.search_idx;
+        // An editor's Find matches, when they are char ranges (view-mode
+        // matches are file bytes and show as the selection only).
+        let editor_hits: &[(usize, usize)] =
+            if search_on && !self.bg_search.as_ref().is_some_and(|b| b.bytes) {
+                &self.editor_hits
+            } else {
+                &[]
+            };
         let mut draws: Vec<PaneDraw> = Vec::new();
         let mut image_quads: Vec<(u64, i32, u32, ImageInstance)> = Vec::new();
         let mut image_uploads = Vec::new();
@@ -2579,6 +2620,8 @@ impl State {
                                 panel_bg,
                                 focused: id == &active_id,
                                 carets_on: self.cursor_on,
+                                matches: if id == &active_id { editor_hits } else { &[] },
+                                current_match: search_idx,
                             },
                         ));
                     }
@@ -3264,6 +3307,7 @@ impl State {
         self.composer_window(ctx);
         self.quick_window(ctx);
         self.search_window(ctx);
+        self.goto_line_window(ctx);
         self.large_edit_window(ctx);
         if let Some(i) = self.renaming {
             self.rename_window(ctx, i);
@@ -3896,6 +3940,12 @@ enum Cmd {
     CopyAnsi,
     PasteEscaped,
     Find,
+    /// Find with the replace field (editor panes).
+    Replace,
+    GoToLine,
+    /// Multiple cursors in the active editor (ADR 0034, E4).
+    SelectAllOccurrences,
+    CursorsAtLineEnds,
     FindNext,
     FindPrev,
     UseSelForFind,
@@ -4006,6 +4056,16 @@ impl State {
                 t(l, "Paste Escaping Special Characters", "转义粘贴"),
             ),
             (Cmd::Find, t(l, "Find…", "查找…")),
+            (Cmd::Replace, t(l, "Replace…", "替换…")),
+            (Cmd::GoToLine, t(l, "Go to Line…", "跳转到行…")),
+            (
+                Cmd::SelectAllOccurrences,
+                t(l, "Select All Occurrences", "选中所有相同项"),
+            ),
+            (
+                Cmd::CursorsAtLineEnds,
+                t(l, "Add Cursors to Line Ends", "在各行末尾添加光标"),
+            ),
             (Cmd::FindNext, t(l, "Find Next", "查找下一个")),
             (Cmd::FindPrev, t(l, "Find Previous", "查找上一个")),
             (
@@ -4274,6 +4334,45 @@ impl State {
                 self.search = Some(String::new());
                 self.search_idx = 0;
                 self.search_key.clear();
+                self.find_opts.replace = None;
+            }
+            Cmd::Replace => {
+                if !self.require_editor() {
+                    return;
+                }
+                // Keep a query already typed; start from the selection
+                // otherwise, as Use Selection for Find does.
+                if self.search.as_deref().map_or(true, str::is_empty) {
+                    let selected = self.active_editor().map(|e| e.copy()).unwrap_or_default();
+                    self.search = Some(if selected.contains('\n') {
+                        String::new()
+                    } else {
+                        selected
+                    });
+                    self.search_idx = 0;
+                    self.search_key.clear();
+                }
+                if self.find_opts.replace.is_none() {
+                    self.find_opts.replace = Some(String::new());
+                }
+            }
+            Cmd::GoToLine => {
+                if self.require_editor() {
+                    self.goto_line = Some(String::new());
+                }
+            }
+            Cmd::SelectAllOccurrences | Cmd::CursorsAtLineEnds => {
+                if !self.require_editor() {
+                    return;
+                }
+                let command = if matches!(cmd, Cmd::SelectAllOccurrences) {
+                    editor_pane::Command::SelectAllOccurrences
+                } else {
+                    editor_pane::Command::CursorsAtLineEnds
+                };
+                if let Some(ed) = self.active_editor_mut() {
+                    ed.run(command);
+                }
             }
             Cmd::CopyAnsi => {
                 // An editor's text has no terminal colours: copy it as is.
@@ -5446,6 +5545,7 @@ impl State {
             self.search_key.clear();
             self.editor_hits.clear();
             self.editor_hits_query.clear();
+            self.find_error = None;
             self.bg_search = None;
             return;
         }
@@ -5467,6 +5567,16 @@ impl State {
         }
     }
 
+    /// The Find bar's query with its options, for an editor pane.
+    fn editor_query(&self) -> miao_term_editor::SearchQuery {
+        miao_term_editor::SearchQuery {
+            pattern: self.search.clone().unwrap_or_default(),
+            regex: self.find_opts.regex,
+            case_sensitive: self.find_opts.case_sensitive,
+            whole_word: self.find_opts.whole_word,
+        }
+    }
+
     /// Find in the active editor pane: matches are found again when the
     /// query, the pane or the text changes; a new query selects the first
     /// match at or after the caret.
@@ -5475,43 +5585,50 @@ impl State {
         let Some(ed) = self.active_editor() else {
             return;
         };
+        let o = &self.find_opts;
         let key = format!(
-            "{query}\u{0}{}\u{0}{}\u{0}{}",
+            "{query}\u{0}{}\u{0}{}\u{0}{}\u{0}{}{}{}",
             ed.id,
             ed.doc.revision(),
-            ed.is_view_only()
+            ed.is_view_only(),
+            o.case_sensitive,
+            o.whole_word,
+            o.regex,
         );
         let background = ed.is_view_only() || ed.doc.rope().len_bytes() > BG_SEARCH_BYTES;
         let changed = key != self.search_key;
-        let new_query = query != self.editor_hits_query;
+        let options = format!("{}{}{}", o.case_sensitive, o.whole_word, o.regex);
+        let tagged = format!("{query}\u{0}{options}");
+        let new_query = tagged != self.editor_hits_query || self.find_rejump;
         if background {
-            if changed {
+            if changed || self.find_rejump {
+                self.find_rejump = false;
                 self.search_key = key;
-                self.editor_hits_query = query.clone();
+                self.editor_hits_query = tagged;
                 self.editor_hits.clear();
                 self.search_idx = 0;
-                self.bg_search = Some(self.spawn_search(query, new_query));
+                self.find_error = None;
+                self.bg_search = Some(self.spawn_search(new_query));
             }
             self.poll_bg_search();
             return;
         }
-        if !changed {
+        if !changed && !self.find_rejump {
             return;
         }
         let caret = ed.doc.selection().primary().from();
-        let found = miao_term_editor::search::find_all(
-            ed.doc.rope(),
-            &miao_term_editor::SearchQuery {
-                pattern: query.clone(),
-                ..Default::default()
-            },
-        )
-        .unwrap_or_default();
+        let found = miao_term_editor::search::find_all(ed.doc.rope(), &self.editor_query());
+        self.find_rejump = false;
+        self.find_error = match &found {
+            Err(miao_term_editor::SearchError::Invalid(why)) => Some(why.clone()),
+            _ => None,
+        };
+        let found = found.unwrap_or_default();
         self.bg_search = None;
         self.search_key = key;
         self.editor_hits = found;
         if new_query {
-            self.editor_hits_query = query;
+            self.editor_hits_query = tagged;
             self.search_idx = first_hit_from(&self.editor_hits, caret);
             self.scroll_to_search_hit();
         } else {
@@ -5523,7 +5640,9 @@ impl State {
 
     /// Search the active editor on a thread: the file itself in view mode
     /// (byte ranges), else a snapshot of the document (char ranges).
-    fn spawn_search(&self, query: String, jump: bool) -> BgSearch {
+    fn spawn_search(&self, jump: bool) -> BgSearch {
+        let editor_query = self.editor_query();
+        let query = editor_query.pattern.clone();
         use std::sync::atomic::{AtomicBool, Ordering};
         let hits = Arc::new(std::sync::Mutex::new(Vec::new()));
         let done = Arc::new(AtomicBool::new(false));
@@ -5558,14 +5677,8 @@ impl State {
                         .unwrap_or_else(|e| e.into_inner())
                         .append(&mut batch);
                 } else if let Some(rope) = rope {
-                    let found = miao_term_editor::search::find_all(
-                        &rope,
-                        &miao_term_editor::SearchQuery {
-                            pattern: query,
-                            ..Default::default()
-                        },
-                    )
-                    .unwrap_or_default();
+                    let found = miao_term_editor::search::find_all(&rope, &editor_query)
+                        .unwrap_or_default();
                     if !c.load(Ordering::Relaxed) {
                         let mut found = found;
                         found.truncate(MAX_SEARCH_HITS);
@@ -5804,10 +5917,76 @@ impl State {
         self.window.request_redraw();
     }
 
+    /// Go to Line (⌃G / Ctrl+G): `line` or `line:column`, 1-based, in the
+    /// active editor pane.
+    fn goto_line_window(&mut self, ctx: &egui::Context) {
+        let Some(text) = self.goto_line.as_mut() else {
+            return;
+        };
+        use miao_term_ui::i18n::t;
+        let lang = self.lang;
+        let Some((total, (line, _))) = self
+            .tabs
+            .get(self.active_tab)
+            .and_then(|tab| tab.editors.iter().find(|e| e.id == tab.active))
+            .map(|e| (e.total_lines(), e.caret_line_col()))
+        else {
+            self.goto_line = None;
+            return;
+        };
+        let target = editor_pane::parse_line_target(text);
+        let (mut go, mut close) = (false, false);
+        egui::Window::new(t(lang, "Go to Line", "跳转到行"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_TOP, [0.0, 40.0])
+            .show(ctx, |ui| {
+                let hint = if lang == miao_term_ui::i18n::Lang::En {
+                    format!("line[:column] — now {line} of {total}")
+                } else {
+                    format!("行[:列] —— 当前第 {line} 行,共 {total} 行")
+                };
+                let r = ui.add(
+                    egui::TextEdit::singleline(text)
+                        .hint_text(hint)
+                        .desired_width(280.0),
+                );
+                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if !enter {
+                    r.request_focus();
+                }
+                go = enter;
+                if !text.trim().is_empty() && target.is_none() {
+                    ui.label(
+                        egui::RichText::new(t(
+                            lang,
+                            "Type a line number, or line:column.",
+                            "请输入行号,或 行:列。",
+                        ))
+                        .color(egui::Color32::from_rgb(0xbf, 0x61, 0x6a)),
+                    );
+                }
+                close = ui.input(|i| i.key_pressed(egui::Key::Escape));
+            });
+        if go {
+            if let Some((line, col)) = target {
+                if let Some(ed) = self.active_editor_mut() {
+                    ed.go_to_line_col(line, col);
+                }
+                close = true;
+            }
+        }
+        if close {
+            self.goto_line = None;
+            self.window.request_redraw();
+        }
+    }
+
     fn search_window(&mut self, ctx: &egui::Context) {
         if self.search.is_none() {
             return;
         }
+        use miao_term_ui::i18n::t;
         let lang = self.lang;
         let n = self.search_count();
         let idx = self.search_idx;
@@ -5816,47 +5995,129 @@ impl State {
             .bg_search
             .as_ref()
             .is_some_and(|b| !b.done.load(std::sync::atomic::Ordering::Acquire));
+        // Options and replace apply to a document in memory; a file in view
+        // mode is searched as literal text and cannot be changed.
+        let editor = self.active_editor().map(|e| e.is_view_only());
+        let can_replace = editor == Some(false) && !self.read_only;
+        let error = self.find_error.clone();
         let Some(query) = self.search.as_mut() else {
             return;
         };
+        let opts = &mut self.find_opts;
         let mut step = 0i32;
         let mut close = false;
-        egui::Window::new(miao_term_ui::i18n::t(lang, "Find", "查找"))
+        let (mut select_all, mut replace_one, mut replace_all) = (false, false, false);
+        let replace_id = egui::Id::new("mtty-find-replace");
+        egui::Window::new(t(lang, "Find", "查找"))
             .collapsible(false)
             .anchor(egui::Align2::CENTER_TOP, [0.0, 40.0])
             .show(ctx, |ui| {
-                let r = ui.add(
-                    egui::TextEdit::singleline(query)
-                        .hint_text(miao_term_ui::i18n::t(self.lang, "search…", "搜索…"))
-                        .desired_width(260.0),
-                );
-                // Check Enter before re-taking focus: Enter makes the field give it up,
-                // and taking it back first would hide that (`lost_focus` stays false).
-                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if !enter {
-                    r.request_focus();
+                ui.horizontal(|ui| {
+                    let r = ui.add(
+                        egui::TextEdit::singleline(query)
+                            .hint_text(t(lang, "search…", "搜索…"))
+                            .desired_width(260.0),
+                    );
+                    // Check Enter before re-taking focus: Enter makes the field give it up,
+                    // and taking it back first would hide that (`lost_focus` stays false).
+                    let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let replacing = ui.memory(|m| m.has_focus(replace_id));
+                    if !enter && !replacing {
+                        r.request_focus();
+                    }
+                    if enter {
+                        let m = ui.input(|i| i.modifiers);
+                        if m.alt && editor == Some(false) {
+                            select_all = true;
+                        } else {
+                            step = if m.shift { -1 } else { 1 };
+                        }
+                    }
+                    if editor == Some(false) {
+                        let toggles = [
+                            (
+                                &mut opts.case_sensitive,
+                                "Aa",
+                                t(lang, "Match Case", "区分大小写"),
+                            ),
+                            (
+                                &mut opts.whole_word,
+                                "ab",
+                                t(lang, "Whole Word", "全字匹配"),
+                            ),
+                            (
+                                &mut opts.regex,
+                                ".*",
+                                t(lang, "Regular Expression", "正则表达式"),
+                            ),
+                        ];
+                        for (on, label, tip) in toggles {
+                            let text = egui::RichText::new(label).monospace();
+                            if ui.selectable_label(*on, text).on_hover_text(tip).clicked() {
+                                *on = !*on;
+                            }
+                        }
+                    }
+                    let more = if more { "\u{2026}" } else { "" };
+                    ui.label(format!("{} / {n}{more}", if n == 0 { 0 } else { idx + 1 }));
+                });
+                if let Some(why) = &error {
+                    ui.label(
+                        egui::RichText::new(why.lines().last().unwrap_or(why))
+                            .color(egui::Color32::from_rgb(0xbf, 0x61, 0x6a)),
+                    );
                 }
-                if enter {
-                    step = if ui.input(|i| i.modifiers.shift) {
-                        -1
+                if let (Some(replace), true) = (opts.replace.as_mut(), can_replace) {
+                    ui.horizontal(|ui| {
+                        let hint = if opts.regex {
+                            t(lang, "replace ($1 for groups)…", "替换为($1 引用分组)…")
+                        } else {
+                            t(lang, "replace…", "替换为…")
+                        };
+                        let r = ui.add(
+                            egui::TextEdit::singleline(replace)
+                                .id(replace_id)
+                                .hint_text(hint)
+                                .desired_width(260.0),
+                        );
+                        if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            let m = ui.input(|i| i.modifiers);
+                            if m.command && m.alt {
+                                replace_all = true;
+                            } else {
+                                replace_one = true;
+                            }
+                            r.request_focus();
+                        }
+                        replace_one |= ui.button(t(lang, "Replace", "替换")).clicked();
+                        replace_all |= ui.button(t(lang, "Replace All", "全部替换")).clicked();
+                    });
+                }
+                if editor == Some(false) && n > 0 {
+                    let label = t(lang, "Select All Matches", "选中全部匹配");
+                    let tip = if cfg!(target_os = "macos") {
+                        "\u{2325}\u{21a9}"
                     } else {
-                        1
+                        "Alt+Enter"
                     };
+                    select_all |= ui.small_button(label).on_hover_text(tip).clicked();
                 }
                 if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                     close = true;
                 }
-                let more = if more { "\u{2026}" } else { "" };
-                ui.label(format!("{} / {n}{more}", if n == 0 { 0 } else { idx + 1 }));
             });
+        if replace_one {
+            self.replace_current_match();
+        }
+        if replace_all {
+            self.replace_all_matches();
+        }
+        if select_all {
+            self.select_all_matches();
+            close = true;
+        }
         if close {
-            self.search = None;
-            self.search_hits.clear();
-            self.search_key.clear();
-            self.editor_hits.clear();
-            self.editor_hits_query.clear();
-            self.bg_search = None;
-            self.window.request_redraw();
+            self.close_search();
             return;
         }
         if step != 0 && n > 0 {
@@ -5864,6 +6125,82 @@ impl State {
             self.scroll_to_search_hit();
             self.window.request_redraw();
         }
+    }
+
+    fn close_search(&mut self) {
+        self.search = None;
+        self.search_hits.clear();
+        self.search_key.clear();
+        self.editor_hits.clear();
+        self.editor_hits_query.clear();
+        self.find_error = None;
+        self.find_opts.replace = None;
+        self.bg_search = None;
+        self.window.request_redraw();
+    }
+
+    /// Replace: the current match in the active editor, then on to the next
+    /// one after it (found again once the text has changed).
+    fn replace_current_match(&mut self) {
+        let Some(replacement) = self.find_opts.replace.clone() else {
+            return;
+        };
+        let Some((start, end)) = self.editor_hits.get(self.search_idx).copied() else {
+            return;
+        };
+        let query = self.editor_query();
+        let lang = self.lang;
+        let Some(ed) = self.active_editor_mut().filter(|e| !e.is_view_only()) else {
+            return;
+        };
+        match ed.doc.replace_match(&query, start, end, &replacement) {
+            Ok(_) => {
+                // A stale match is skipped the same way: on to the next one.
+                ed.reveal_cursor();
+                self.find_rejump = true;
+            }
+            Err(e) => self.show_notice(format!("{}: {e}", t_replace_failed(lang))),
+        }
+        self.window.request_redraw();
+    }
+
+    /// Replace All in the active editor: one undo step.
+    fn replace_all_matches(&mut self) {
+        let Some(replacement) = self.find_opts.replace.clone() else {
+            return;
+        };
+        let query = self.editor_query();
+        let lang = self.lang;
+        let Some(ed) = self.active_editor_mut().filter(|e| !e.is_view_only()) else {
+            return;
+        };
+        let msg = match ed.doc.replace_all(&query, &replacement) {
+            Ok(n) => {
+                ed.reveal_cursor();
+                if lang == miao_term_ui::i18n::Lang::En {
+                    format!("Replaced {n} {}.", if n == 1 { "match" } else { "matches" })
+                } else {
+                    format!("已替换 {n} 处。")
+                }
+            }
+            Err(e) => format!("{}: {e}", t_replace_failed(lang)),
+        };
+        self.show_notice(msg);
+    }
+
+    /// Select All Matches: every Find match in the editor becomes a selection.
+    fn select_all_matches(&mut self) {
+        let in_bytes = self.bg_search.as_ref().is_some_and(|b| b.bytes);
+        if in_bytes || self.editor_hits.is_empty() {
+            return;
+        }
+        let hits = std::mem::take(&mut self.editor_hits);
+        if let Some(ed) = self.active_editor_mut() {
+            let caret = ed.doc.selection().primary().from();
+            ed.doc.select_ranges(&hits, caret);
+            ed.reveal_cursor();
+        }
+        self.editor_hits = hits;
     }
 
     fn composer_window(&mut self, ctx: &egui::Context) {
@@ -8210,31 +8547,55 @@ impl State {
         Some((row, col))
     }
 
+    /// Editor-only commands from the palette or menu: true with an editor
+    /// pane active, otherwise a notice says what they need.
+    fn require_editor(&mut self) -> bool {
+        if self.active_editor().is_some() {
+            return true;
+        }
+        self.show_notice(
+            miao_term_ui::i18n::t(
+                self.lang,
+                "This works in a file opened in an editor pane.",
+                "此操作用于在编辑器 pane 中打开的文件。",
+            )
+            .to_string(),
+        );
+        false
+    }
+
     /// A key for the focused editor pane. False when it is the app's (⌘S,
     /// ⌘W, ⌘T…), so the shortcut path gets it.
     fn editor_key(&mut self, event: &KeyEvent) -> bool {
-        let kind = winit_key_kind(event);
         let (shift, alt) = (self.mods.shift_key(), self.mods.alt_key());
         let (sup, ctrl) = (self.mods.super_key(), self.mods.control_key());
+        // Chords match the key without modifiers: ⌥ turns ⇧⌥I into a dead
+        // key and Ctrl+G into a control character.
+        let kind = if alt || ctrl || sup {
+            chord_key_kind(event)
+        } else {
+            winit_key_kind(event)
+        };
+        match editor_pane::keymap(kind, shift, alt, sup, ctrl) {
+            Some(editor_pane::Command::GoToLine) => {
+                self.run_command(Cmd::GoToLine);
+                return true;
+            }
+            Some(editor_pane::Command::FindReplace) => {
+                self.run_command(Cmd::Replace);
+                return true;
+            }
+            _ => {}
+        }
+        if let Some(command) = editor_pane::keymap(kind, shift, alt, sup, ctrl) {
+            return self.run_editor_command(command);
+        }
         let read_only = self.read_only;
         let Some(ed) = self.active_editor_mut() else {
             return false;
         };
         // Editing a file in view mode asks first (see `large_edit_window`).
         let view = ed.is_view_only().then(|| ed.id.clone());
-        if let Some(command) = editor_pane::keymap(kind, shift, alt, sup, ctrl) {
-            let edits = editor_pane::EditorPane::edits(command);
-            if edits && !read_only {
-                if let Some(id) = view {
-                    self.large_edit_offer = Some(id);
-                    return true;
-                }
-            }
-            if !(read_only && edits) {
-                ed.run(command);
-            }
-            return true;
-        }
         if sup || ctrl {
             return false;
         }
@@ -8251,6 +8612,45 @@ impl State {
             }
         }
         false
+    }
+
+    /// Run a command in the active editor pane: refused while read-only if it
+    /// edits, and an edit to a file in view mode asks first. False without
+    /// an editor pane.
+    fn run_editor_command(&mut self, command: editor_pane::Command) -> bool {
+        let read_only = self.read_only;
+        let Some(ed) = self.active_editor_mut() else {
+            return false;
+        };
+        let edits = editor_pane::EditorPane::edits(command);
+        if edits && !read_only && ed.is_view_only() {
+            // Editing a file in view mode asks first (see `large_edit_window`).
+            self.large_edit_offer = Some(ed.id.clone());
+            return true;
+        }
+        if !(read_only && edits) {
+            ed.run(command);
+        }
+        true
+    }
+
+    /// A menu command whose shortcut is also an editor chord (⌘D, ⇧⌘Z,
+    /// ⇧⌘L), pressed while an editor pane has the keyboard: the OS menu bar
+    /// sees the key before the window does, so hand it to the editor as the
+    /// key path would (ADR 0034). True when the editor took it.
+    #[cfg(target_os = "macos")]
+    fn menu_key_for_editor(&mut self, id: chrome::MenuId) -> bool {
+        if !editor_takes_keys(
+            self.active_editor().is_some(),
+            self.hint_mode,
+            self.egui_ctx.wants_keyboard_input(),
+        ) {
+            return false;
+        }
+        match editor_command_for_menu_key(id) {
+            Some(command) => self.run_editor_command(command),
+            None => false,
+        }
     }
 
     /// Open `path` in an editor pane in a new tab, or switch to the pane
@@ -9720,6 +10120,10 @@ impl ApplicationHandler<HostEvent> for Host {
             search_key: String::new(),
             editor_hits: Vec::new(),
             editor_hits_query: String::new(),
+            find_opts: FindOptions::default(),
+            find_error: None,
+            find_rejump: false,
+            goto_line: None,
             bg_search: None,
             large_edit_offer: None,
             large_loading: None,
@@ -9843,8 +10247,10 @@ impl ApplicationHandler<HostEvent> for Host {
             }
             // OS menu bar command.
             #[cfg(target_os = "macos")]
-            HostEvent::Menu(id) => {
-                chrome::Chrome::on_menu(state, id);
+            HostEvent::Menu(id, by_key) => {
+                if !(by_key && state.menu_key_for_editor(id)) {
+                    chrome::Chrome::on_menu(state, id);
+                }
                 state.window.request_redraw();
             }
         }
@@ -10663,6 +11069,16 @@ const BG_SEARCH_BYTES: usize = 8 << 20;
 /// Matches kept for one search.
 const MAX_SEARCH_HITS: usize = 100_000;
 
+/// How Find matches in an editor pane, and its replace field (shown while
+/// `Some`). A file in view mode is searched as literal text, ignoring case.
+#[derive(Default)]
+struct FindOptions {
+    case_sensitive: bool,
+    whole_word: bool,
+    regex: bool,
+    replace: Option<String>,
+}
+
 /// A search running on a thread; dropping it cancels the thread.
 struct BgSearch {
     hits: Arc<std::sync::Mutex<Vec<(usize, usize)>>>,
@@ -10745,6 +11161,23 @@ fn home_relative(path: &str, home: Option<&str>) -> String {
         },
         None => path.to_string(),
     }
+}
+
+/// The editor command a menu shortcut means while an editor pane has the
+/// keyboard: the menu items whose shortcuts are editor chords.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn editor_command_for_menu_key(id: chrome::MenuId) -> Option<editor_pane::Command> {
+    use chrome::MenuId;
+    Some(match id {
+        MenuId::SplitRight => editor_pane::Command::SelectNextOccurrence,
+        MenuId::ReopenClosed => editor_pane::Command::Redo,
+        MenuId::ToggleSidebar => editor_pane::Command::SelectAllOccurrences,
+        _ => return None,
+    })
+}
+
+fn t_replace_failed(lang: miao_term_ui::i18n::Lang) -> &'static str {
+    miao_term_ui::i18n::t(lang, "Replace failed", "替换失败")
 }
 
 /// Whether a key goes to the active editor pane before the app's shortcuts:
@@ -10832,9 +11265,20 @@ fn terminal_paste_shortcut(
     }
 }
 
+/// The key of a chord: the character without modifiers in the user's
+/// layout, so ⌥ and Ctrl do not change it.
+fn chord_key_kind(event: &KeyEvent) -> input::KeyKind {
+    use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
+    key_kind(&event.key_without_modifiers())
+}
+
 fn winit_key_kind(event: &KeyEvent) -> input::KeyKind {
+    key_kind(&event.logical_key)
+}
+
+fn key_kind(key: &Key) -> input::KeyKind {
     use input::KeyKind;
-    match &event.logical_key {
+    match key {
         Key::Character(s) => s
             .chars()
             .next()
@@ -10923,6 +11367,9 @@ struct EditorFrame<'a> {
     panel_bg: miao_term_ui::theme::Rgb,
     focused: bool,
     carets_on: bool,
+    /// Find matches (char ranges) and the current one's index.
+    matches: &'a [(usize, usize)],
+    current_match: usize,
 }
 
 /// An editor pane's card, current-line band, selection and carets as quads,
@@ -10980,6 +11427,15 @@ fn draw_editor(
             cols.saturating_sub(d.gutter),
             (h.0, h.1, h.2, 90),
         ));
+    }
+    // Find matches under the selection, in the terminal's match colours.
+    for (c, current) in ed.match_cells(f.matches, f.current_match) {
+        let color = if current {
+            (0x2e, 0x5b, 0x8f, 255)
+        } else {
+            (0x33, 0x3d, 0x4d, 255)
+        };
+        quads.push(cell(c.row, c.col, c.width, color));
     }
     let sel = f.theme.selection;
     for s in &d.selection {
@@ -12109,6 +12565,8 @@ impl chrome::Chrome for State {
             CopyAnsi => Cmd::CopyAnsi,
             PasteEscaped => Cmd::PasteEscaped,
             Find => Cmd::Find,
+            Replace => Cmd::Replace,
+            GoToLine => Cmd::GoToLine,
             FindNext => Cmd::FindNext,
             FindPrev => Cmd::FindPrev,
             UseSelForFind => Cmd::UseSelForFind,
@@ -13129,6 +13587,39 @@ mod tests {
         );
         assert_eq!(home_relative("/srv/x", home), "/srv/x");
         assert_eq!(home_relative("/srv/x", None), "/srv/x");
+    }
+
+    #[test]
+    fn menu_shortcuts_that_are_editor_chords_reach_the_editor() {
+        // The OS menu bar takes ⌘D, ⇧⌘Z and ⇧⌘L before the window sees them;
+        // each must mean what the editor's keymap makes of the same chord.
+        use miao_term_ui::input::KeyKind;
+        let mut mapped = 0;
+        for (_, entries) in miao_term_ui::menu::menus(miao_term_ui::i18n::Lang::En) {
+            for entry in entries {
+                let miao_term_ui::menu::Entry::Item { id, shortcut, .. } = entry else {
+                    continue;
+                };
+                let Some(command) = editor_command_for_menu_key(id) else {
+                    continue;
+                };
+                mapped += 1;
+                let chord = shortcut.expect("a mapped item has a shortcut");
+                let shift = chord.contains("Shift+");
+                let key = chord.rsplit('+').next().unwrap().to_ascii_lowercase();
+                let key = KeyKind::Char(key.chars().next().unwrap());
+                assert_eq!(
+                    editor_pane::keymap(key, shift, false, true, false),
+                    if cfg!(target_os = "macos") {
+                        Some(command)
+                    } else {
+                        editor_pane::keymap(key, shift, false, true, false)
+                    },
+                    "{chord}"
+                );
+            }
+        }
+        assert_eq!(mapped, 3);
     }
 
     #[test]

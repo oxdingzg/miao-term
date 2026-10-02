@@ -129,6 +129,50 @@ pub fn find_next(
     Ok(found.copied())
 }
 
+/// What replacing the match `start..end` (char range) writes, its groups
+/// expanded in regex mode. `None` when that range is no longer a match (the
+/// text changed since it was found). The match is tested in the context of
+/// its lines, so `^`, `$` and `\b` mean what they did when searching.
+pub fn replacement_at(
+    rope: &Rope,
+    query: &SearchQuery,
+    start: usize,
+    end: usize,
+    replacement: &str,
+) -> Result<Option<String>, SearchError> {
+    let re = query.compile()?;
+    if start >= end || end > rope.len_chars() {
+        return Ok(None);
+    }
+    let first = rope.char_to_line(start);
+    let last = rope.char_to_line(end);
+    let window_start = rope.line_to_byte(first);
+    let window_end = if last + 1 < rope.len_lines() {
+        rope.line_to_byte(last + 1)
+    } else {
+        rope.len_bytes()
+    };
+    let window = rope.byte_slice(window_start..window_end).to_string();
+    let (a, b) = (
+        rope.char_to_byte(start) - window_start,
+        rope.char_to_byte(end) - window_start,
+    );
+    let Some(caps) = re.captures_at(&window, a) else {
+        return Ok(None);
+    };
+    let m = caps.get(0).unwrap();
+    if (m.start(), m.end()) != (a, b) {
+        return Ok(None);
+    }
+    Ok(Some(if query.regex {
+        let mut out = String::new();
+        caps.expand(replacement, &mut out);
+        out
+    } else {
+        replacement.to_string()
+    }))
+}
+
 /// One transaction replacing every match. In regex mode `replacement` may use
 /// `$1` / `${name}` groups; in literal mode it is inserted as written.
 pub fn replace_all(
@@ -231,6 +275,32 @@ mod tests {
         assert_eq!(tx.changes().len(), 2);
         tx.apply(&mut rope);
         assert_eq!(rope.to_string(), "const a: i32 = 1;\nconst b: i32 = 2;\n");
+    }
+
+    #[test]
+    fn one_match_is_replaced_only_while_it_still_matches() {
+        let rope = Rope::from_str("let a = 1;\nlet b = 2;\n");
+        let q = SearchQuery {
+            regex: true,
+            case_sensitive: true,
+            ..SearchQuery::literal(r"^let (\w)")
+        };
+        let hits = find_all(&rope, &q).unwrap();
+        assert_eq!(
+            replacement_at(&rope, &q, hits[1].0, hits[1].1, "var $1").unwrap(),
+            Some("var b".to_string())
+        );
+        // Not at a line start any more: `^` fails, as it would in a search.
+        assert_eq!(replacement_at(&rope, &q, 1, 6, "x").unwrap(), None);
+        // A stale range (the text moved) is refused.
+        assert_eq!(replacement_at(&rope, &q, 0, 4, "x").unwrap(), None);
+        let lit = SearchQuery::literal("$1");
+        let rope = Rope::from_str("cost $1");
+        assert_eq!(
+            replacement_at(&rope, &lit, 5, 7, "$2").unwrap(),
+            Some("$2".to_string()),
+            "literal mode writes the replacement as is"
+        );
     }
 
     #[test]

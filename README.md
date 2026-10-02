@@ -450,6 +450,20 @@ Pass `--socket PATH` or set `MTTY_SOCKET` to target a non-default socket.
 Plain `Ctrl` chords (`Ctrl+C`, `Ctrl+W`, `Ctrl+D`, …) always reach the shell on
 Linux and Windows, and `Super`/`Win` combinations are left to the desktop.
 
+In an editor pane these take precedence over the app's shortcuts above:
+
+| macOS | Linux / Windows | Action |
+|---|---|---|
+| `⌘D` | `Ctrl+D` | Select the word, then add the next occurrence |
+| `⇧⌘L` | `Ctrl+Shift+L` | Select every occurrence |
+| `⌥⌘↑` / `⌥⌘↓` | `Ctrl+Alt+↑` / `Ctrl+Alt+↓` | Add a caret above / below |
+| `⌥`-click | `Alt`-click | Add a caret |
+| `⇧⌥I` | `Shift+Alt+I` | A caret at the end of each selected line |
+| `⌥⌘F` | `Ctrl+H` | Find and replace (`Aa` case, `ab` whole word, `.*` regex) |
+| `⌥↩` in Find | `Alt+Enter` in Find | Select all matches |
+| `⌃G` | `Ctrl+G` | Go to line (`line` or `line:column`) |
+| `⌘Z` / `⇧⌘Z` | `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
+
 ---
 
 ## Documentation

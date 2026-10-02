@@ -639,6 +639,90 @@ impl Document {
         }
     }
 
+    /// `⇧⌘L`: select every occurrence of the primary selection's text, or of
+    /// the word under a bare cursor (whole words only, as `⌘D` picks words).
+    /// False when there is nothing to select.
+    pub fn select_all_occurrences(&mut self) -> bool {
+        let primary = self.selection.primary();
+        let query = if primary.is_empty() {
+            let (start, end) = motion::word_at(&self.rope, primary.head);
+            if start == end {
+                return false;
+            }
+            SearchQuery {
+                whole_word: true,
+                ..SearchQuery::literal(String::from(self.rope.slice(start..end)))
+            }
+        } else {
+            SearchQuery::literal(String::from(self.rope.slice(primary.from()..primary.to())))
+        };
+        match search::find_all(&self.rope, &query) {
+            Ok(hits) if !hits.is_empty() => {
+                self.select_ranges(&hits, primary.head);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Select each of `ranges` (search matches), the primary being the one
+    /// at or after `near` (wrapping to the first). Nothing for none.
+    pub fn select_ranges(&mut self, ranges: &[(usize, usize)], near: usize) {
+        if ranges.is_empty() {
+            return;
+        }
+        let primary = ranges.iter().position(|&(_, end)| end >= near).unwrap_or(0);
+        let sel = Selection::new(
+            ranges.iter().map(|&(a, b)| Range::new(a, b)).collect(),
+            primary,
+        );
+        self.set_selection(sel);
+    }
+
+    /// `⇧⌥I`: a cursor at the end of every line a selection covers (the last
+    /// line's at the selection's end). A selection within one line becomes a
+    /// cursor at its end.
+    pub fn cursors_at_line_ends(&mut self) {
+        let rope = &self.rope;
+        let mut ranges = Vec::new();
+        let mut primary = 0;
+        for (i, r) in self.selection.ranges().iter().enumerate() {
+            let first = rope.char_to_line(r.from());
+            let mut last = rope.char_to_line(r.to());
+            if last > first && motion::line_start(rope, last) == r.to() {
+                last -= 1;
+            }
+            if i == self.selection.primary_index() {
+                primary = ranges.len();
+            }
+            for line in first..last {
+                ranges.push(Range::cursor(motion::line_end(rope, line)));
+            }
+            ranges.push(Range::cursor(r.to().min(motion::line_end(rope, last))));
+        }
+        let sel = Selection::new(ranges, primary);
+        self.set_selection(sel);
+    }
+
+    /// Replace the match `start..end` of `query` with `replacement` (groups
+    /// expanded), one undo step, and put the caret after it. `Ok(None)` when
+    /// the range is no longer a match.
+    pub fn replace_match(
+        &mut self,
+        query: &SearchQuery,
+        start: usize,
+        end: usize,
+        replacement: &str,
+    ) -> Result<Option<usize>, search::SearchError> {
+        let Some(text) = search::replacement_at(&self.rope, query, start, end, replacement)? else {
+            return Ok(None);
+        };
+        let tx = Transaction::new(vec![Change::replace(start, end, text)]);
+        let after = tx.map(end, Assoc::After);
+        self.apply(tx, Selection::cursor(after), EditKind::Other);
+        Ok(Some(after))
+    }
+
     /// Escape with several cursors: keep the primary only.
     pub fn collapse_to_primary(&mut self) {
         let sel = self.selection.clone().into_primary();
@@ -857,6 +941,59 @@ mod tests {
         assert_eq!(heads(&d), vec![9]);
         d.undo();
         assert_eq!(text(&d), "hello world");
+    }
+
+    #[test]
+    fn select_all_occurrences_of_a_word_or_the_selection() {
+        let mut d = doc("let x = x + xx; x", 8);
+        assert!(d.select_all_occurrences());
+        let ranges: Vec<_> = d
+            .selection()
+            .ranges()
+            .iter()
+            .map(|r| (r.from(), r.to()))
+            .collect();
+        assert_eq!(
+            ranges,
+            vec![(4, 5), (8, 9), (16, 17)],
+            "whole words from a cursor"
+        );
+        assert_eq!(d.selection().primary(), Range::new(8, 9));
+        d.type_text("y");
+        assert_eq!(text(&d), "let y = y + xx; y");
+        let mut d = doc("ab ab-ab", 0);
+        d.set_selection(Selection::single(Range::new(0, 2)));
+        assert!(d.select_all_occurrences());
+        assert_eq!(d.selection().len(), 3, "a selection matches anywhere");
+        let mut d = doc("   ", 1);
+        assert!(!d.select_all_occurrences(), "no word under the cursor");
+    }
+
+    #[test]
+    fn cursors_go_to_the_ends_of_selected_lines() {
+        let mut d = doc("one\ntwo\nthree\n", 1);
+        d.set_selection(Selection::single(Range::new(1, 10)));
+        d.cursors_at_line_ends();
+        assert_eq!(heads(&d), vec![3, 7, 10]);
+        d.type_text(";");
+        assert_eq!(text(&d), "one;\ntwo;\nth;ree\n");
+        // A selection ending at a line start does not take that line.
+        let mut d = doc("a\nb\nc", 0);
+        d.set_selection(Selection::single(Range::new(0, 4)));
+        d.cursors_at_line_ends();
+        assert_eq!(heads(&d), vec![1, 3]);
+    }
+
+    #[test]
+    fn replacing_one_match_is_an_undo_step_and_moves_past_it() {
+        let mut d = doc("a-b-c", 0);
+        let q = SearchQuery::literal("-");
+        assert_eq!(d.replace_match(&q, 3, 4, "+").unwrap(), Some(4));
+        assert_eq!(text(&d), "a-b+c");
+        assert_eq!(heads(&d), vec![4]);
+        assert_eq!(d.replace_match(&q, 3, 4, "+").unwrap(), None, "stale");
+        d.undo();
+        assert_eq!(text(&d), "a-b-c");
     }
 
     #[test]
