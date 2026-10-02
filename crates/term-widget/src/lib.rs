@@ -514,6 +514,8 @@ impl Tab {
             .map(|e| {
                 serde_json::json!({
                     "id": e.id, "path": e.path,
+                    // The ssh destination when the file lives on a host.
+                    "remote": e.remote.as_ref().map(|r| r.dest.clone()),
                     "cursor": e.doc.selection().primary().head,
                     "scroll": e.scroll_line,
                     // View mode: the caret's file line (the window moves).
@@ -820,7 +822,12 @@ struct Editor {
 /// Work finished on a background thread. Network and process work never runs
 /// on the UI thread; the result comes back through `State::jobs_rx`.
 enum JobDone {
+    /// Bytes read over ssh. `id` is `Some` when the pane already exists
+    /// (session restore); `None` opens a new editor pane (remote dialog).
     RemoteRead {
+        id: Option<String>,
+        cursor: usize,
+        scroll: usize,
         dest: String,
         path: String,
         result: std::io::Result<Vec<u8>>,
@@ -870,10 +877,12 @@ enum JobDone {
         result: Result<String, String>,
     },
     RemoteWrite {
+        /// `Some` for an editor pane, `None` for the floating editor.
+        id: Option<String>,
         dest: String,
         path: String,
-        /// The buffer as written; edits made meanwhile stay "modified".
-        text: String,
+        /// The bytes as written; edits made meanwhile stay "modified".
+        text: Vec<u8>,
         result: std::io::Result<()>,
     },
 }
@@ -1625,6 +1634,7 @@ impl State {
                     "title": e.title(),
                     "kind": "editor",
                     "path": e.path,
+                    "remote": e.remote.as_ref().map(|r| r.dest.clone()),
                 }));
             }
             for p in &tab.previews {
@@ -3669,6 +3679,8 @@ impl State {
         let Some(tabs) = v.get("tabs").and_then(|t| t.as_array()) else {
             return false;
         };
+        // Remote editors are re-fetched after the tabs are in place.
+        let mut pending_remote: Vec<(String, String, String, usize, usize)> = Vec::new();
         for t in tabs {
             let title = t
                 .get("title")
@@ -3713,6 +3725,29 @@ impl State {
                         continue;
                     };
                     let id = gen_id();
+                    // A remote file is re-read from its host after restore.
+                    if let Some(dest) = e.get("remote").and_then(|x| x.as_str()) {
+                        let cursor = e.get("cursor").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                        let scroll = e.get("scroll").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                        let mut ed = editor_pane::EditorPane::open_remote_pending(
+                            id.clone(),
+                            dest.to_string(),
+                            path.to_string(),
+                        );
+                        ed.set_vim(self.editor_vim);
+                        if let Some(old) = e.get("id").and_then(|x| x.as_str()) {
+                            map.insert(old.to_string(), id.clone());
+                        }
+                        pending_remote.push((
+                            id,
+                            dest.to_string(),
+                            path.to_string(),
+                            cursor,
+                            scroll,
+                        ));
+                        editors.push(ed);
+                        continue;
+                    }
                     if let Ok(mut ed) =
                         editor_pane::EditorPane::open(id.clone(), std::path::Path::new(path))
                     {
@@ -3815,6 +3850,20 @@ impl State {
                 self.offer_reconnect(&mut tab);
             }
             self.tabs.push(tab);
+        }
+        // Fetch the restored remote files now that their panes exist.
+        for (id, dest, path, cursor, scroll) in pending_remote {
+            self.spawn_job(move || {
+                let result = miao_term_ui::ssh::read_remote(&dest, &path);
+                JobDone::RemoteRead {
+                    id: Some(id),
+                    cursor,
+                    scroll,
+                    dest,
+                    path,
+                    result,
+                }
+            });
         }
         if self.tabs.is_empty() {
             return false;
@@ -6385,7 +6434,11 @@ impl State {
     fn lsp_frame(&mut self) {
         let mut open = std::collections::HashSet::new();
         for tab in &self.tabs {
-            for ed in tab.editors.iter().filter(|e| !e.is_view_only()) {
+            for ed in tab
+                .editors
+                .iter()
+                .filter(|e| !e.is_view_only() && e.remote.is_none())
+            {
                 open.insert(ed.path.clone());
                 self.lsp
                     .sync(&ed.path, ed.language(), ed.doc.rope(), ed.doc.revision());
@@ -6404,7 +6457,7 @@ impl State {
             return;
         };
         if let Some(ed) = tab.editors.iter().find(|e| e.id == tab.active) {
-            if !ed.is_view_only() {
+            if !ed.is_view_only() && ed.remote.is_none() {
                 self.lsp
                     .sync(&ed.path, ed.language(), ed.doc.rope(), ed.doc.revision());
             }
@@ -6421,7 +6474,7 @@ impl State {
                     .tabs
                     .iter_mut()
                     .flat_map(|t| t.editors.iter_mut())
-                    .filter(|e| e.path == path)
+                    .filter(|e| e.path == path && e.remote.is_none())
                 {
                     let rope = ed.doc.rope();
                     let mut diagnostics: Vec<editor_pane::PaneDiagnostic> = list
@@ -6522,6 +6575,10 @@ impl State {
         let Some(ed) = active_editor_of(&self.tabs, self.active_tab) else {
             return;
         };
+        // No language server for a remote file.
+        if ed.remote.is_some() {
+            return;
+        }
         let (path, at) = (ed.path.clone(), ed.doc.selection().primary().head);
         let asked = self.lsp.definition(&path, ed.doc.rope(), at);
         if !asked {
@@ -6537,6 +6594,13 @@ impl State {
         let Some(ed) = active_editor_of(&self.tabs, self.active_tab) else {
             return;
         };
+        // No language server for a remote file.
+        if ed.remote.is_some() {
+            if invoked {
+                self.show_notice(no_server_notice(lang));
+            }
+            return;
+        }
         let rope = ed.doc.rope();
         let caret = ed.doc.selection().primary().head;
         let start = word_start(rope, caret);
@@ -6579,7 +6643,7 @@ impl State {
         let Some(ed) = self.active_editor() else {
             return;
         };
-        if ed.is_view_only() || !self.lsp.handles(&ed.path) {
+        if ed.is_view_only() || ed.remote.is_some() || !self.lsp.handles(&ed.path) {
             return;
         }
         let rope = ed.doc.rope();
@@ -6733,7 +6797,8 @@ impl State {
             .map(|d| (d.severity, d.message.clone()))
             .collect();
         let path = ed.path.clone();
-        let asked = !ed.is_view_only() && self.lsp.hover(&path, ed.doc.rope(), at);
+        let asked =
+            !ed.is_view_only() && ed.remote.is_none() && self.lsp.hover(&path, ed.doc.rope(), at);
         if diagnostics.is_empty() && !asked {
             return;
         }
@@ -7097,6 +7162,14 @@ impl State {
             _ => (false, false),
         };
         if save {
+            // A remote `:wq` closes once the write lands, not before.
+            if quit && self.active_editor().is_some_and(|ed| ed.remote.is_some()) {
+                if let Some(ed) = self.active_editor_mut() {
+                    ed.quit_after_save = true;
+                }
+                self.save_active_editor();
+                return;
+            }
             self.save_active_editor();
         }
         if quit {
@@ -9527,7 +9600,14 @@ impl State {
             self.show_notice(msg);
             self.spawn_job(move || {
                 let result = miao_term_ui::ssh::read_remote(&dest, &path);
-                JobDone::RemoteRead { dest, path, result }
+                JobDone::RemoteRead {
+                    id: None,
+                    cursor: 0,
+                    scroll: 0,
+                    dest,
+                    path,
+                    result,
+                }
             });
         } else if !open {
             self.remote_dialog = None;
@@ -9977,9 +10057,166 @@ impl State {
         }
     }
 
+    /// Open bytes read from `dest:path` in a new editor pane (ADR 0034, E3),
+    /// focusing an existing pane for the same file instead.
+    fn open_remote_editor_pane(&mut self, dest: String, path: String, bytes: &[u8]) -> bool {
+        if let Some((ti, id)) = self.tabs.iter().enumerate().find_map(|(ti, tab)| {
+            tab.editors
+                .iter()
+                .find(|e| {
+                    e.remote
+                        .as_ref()
+                        .is_some_and(|r| r.dest == dest && r.path == path)
+                })
+                .map(|e| (ti, e.id.clone()))
+        }) {
+            self.tabs[ti].active = id;
+            self.active_tab = ti;
+            self.selection = None;
+            return true;
+        }
+        let id = gen_id();
+        match editor_pane::EditorPane::open_remote(id.clone(), dest, path.clone(), bytes) {
+            Ok(mut ed) => {
+                ed.set_vim(self.editor_vim);
+                let title = ed.title();
+                self.tabs.push(Tab {
+                    layout: Layout::leaf(id.clone()),
+                    panes: Vec::new(),
+                    active: id,
+                    title,
+                    title_set: false,
+                    ssh: false,
+                    ssh_target: None,
+                    ssh_cmd: None,
+                    prefix: None,
+                    mark: None,
+                    group: None,
+                    attention: None,
+                    editors: vec![ed],
+                    previews: Vec::new(),
+                });
+                self.active_tab = self.tabs.len() - 1;
+                self.selection = None;
+                self.publish_panes();
+                true
+            }
+            Err(e) => {
+                let msg = format!(
+                    "{} {path}: {e}",
+                    miao_term_ui::i18n::t(self.lang, "Open failed", "打开失败")
+                );
+                self.show_notice(msg);
+                false
+            }
+        }
+    }
+
+    /// Fill a session-restored remote pane once its bytes arrive.
+    fn remote_pane_loaded(&mut self, id: &str, bytes: &[u8], cursor: usize, scroll: usize) {
+        for tab in &mut self.tabs {
+            if let Some(ed) = tab.editors.iter_mut().find(|e| e.id == id) {
+                ed.remote_loaded(bytes);
+                let len = ed.doc.rope().len_chars();
+                ed.doc
+                    .set_selection(miao_term_editor::Selection::cursor(cursor.min(len)));
+                ed.scroll_line = scroll;
+                break;
+            }
+        }
+        self.publish_panes();
+    }
+
+    /// A background ssh write for an editor pane finished: mark the pane
+    /// saved (only if it still holds the written bytes) and honour `:wq`.
+    fn finish_pane_remote_write(
+        &mut self,
+        id: &str,
+        dest: String,
+        path: String,
+        text: &[u8],
+        result: std::io::Result<()>,
+    ) {
+        let mut quit = false;
+        let mut found = false;
+        for tab in &mut self.tabs {
+            if let Some(ed) = tab.editors.iter_mut().find(|e| e.id == id) {
+                found = true;
+                match &result {
+                    Ok(()) => {
+                        ed.remote_saved(text);
+                        quit = ed.quit_after_save;
+                        ed.quit_after_save = false;
+                    }
+                    Err(_) => {
+                        ed.saving = false;
+                        ed.quit_after_save = false;
+                    }
+                }
+                break;
+            }
+        }
+        match result {
+            Ok(()) if found => {
+                if quit {
+                    // `:wq`: discard anything typed while the write ran.
+                    for tab in &mut self.tabs {
+                        if let Some(ed) = tab.editors.iter_mut().find(|e| e.id == id) {
+                            ed.close_armed = true;
+                        }
+                    }
+                    self.close_pane_id(id);
+                }
+                self.window.request_redraw();
+            }
+            Err(e) => {
+                let msg = format!(
+                    "{} {dest}:{path}: {e}",
+                    miao_term_ui::i18n::t(self.lang, "Save failed", "保存失败")
+                );
+                self.show_notice(msg);
+            }
+            Ok(()) => {}
+        }
+    }
+
     /// ⌘S in an editor pane. A failure stays visible and the pane modified.
     fn save_active_editor(&mut self) {
         let lang = self.lang;
+        // A remote pane writes over ssh on a background thread.
+        let remote = self.active_editor().and_then(|ed| {
+            ed.remote
+                .as_ref()
+                .map(|r| (ed.id.clone(), r.dest.clone(), r.path.clone(), ed.saving))
+        });
+        if let Some((id, dest, path, saving)) = remote {
+            if saving {
+                return;
+            }
+            let bytes = match self.active_editor() {
+                Some(ed) => ed.doc.to_bytes(),
+                None => return,
+            };
+            if let Some(ed) = self.active_editor_mut() {
+                ed.saving = true;
+            }
+            let msg = format!(
+                "{} {dest}:{path}…",
+                miao_term_ui::i18n::t(lang, "Saving", "正在保存")
+            );
+            self.show_notice(msg);
+            self.spawn_job(move || {
+                let result = miao_term_ui::ssh::write_remote(&dest, &path, &bytes);
+                JobDone::RemoteWrite {
+                    id: Some(id),
+                    dest,
+                    path,
+                    text: bytes,
+                    result,
+                }
+            });
+            return;
+        }
         let Some(ed) = self.active_editor_mut() else {
             return;
         };
@@ -10397,9 +10634,10 @@ impl State {
                 self.spawn_job(move || {
                     let result = miao_term_ui::ssh::write_remote(&dest, &path, text.as_bytes());
                     JobDone::RemoteWrite {
+                        id: None,
                         dest,
                         path,
-                        text,
+                        text: text.into_bytes(),
                         result,
                     }
                 });
@@ -10458,7 +10696,8 @@ impl State {
         let mut deleted: Option<String> = None;
         for tab in &mut self.tabs {
             for ed in &mut tab.editors {
-                if ed.is_view_only() {
+                // Only local files have a disk stamp to poll.
+                if ed.is_view_only() || ed.remote.is_some() {
                     continue;
                 }
                 let Some(stamp) = editor_pane::disk_stamp(&ed.path) else {
@@ -10676,64 +10915,73 @@ impl State {
                 self.show_notice(msg);
                 self.reload_tasks();
             }
-            JobDone::RemoteRead { dest, path, result } => match result {
-                Ok(bytes) => {
-                    let text = String::from_utf8_lossy(&bytes).to_string();
-                    self.editor = Some(Editor {
-                        path: std::path::PathBuf::from(&path),
-                        original: text.clone(),
-                        text,
-                        preview: path.ends_with(".md"),
-                        readonly: false,
-                        remote: Some((dest, path)),
-                        close_armed: false,
-                        saving: false,
-                        quit_after_save: false,
-                    });
-                    self.notice = None;
-                }
+            JobDone::RemoteRead {
+                id,
+                cursor,
+                scroll,
+                dest,
+                path,
+                result,
+            } => match result {
+                Ok(bytes) => match id {
+                    Some(id) => self.remote_pane_loaded(&id, &bytes, cursor, scroll),
+                    None => {
+                        if self.open_remote_editor_pane(dest, path, &bytes) {
+                            self.notice = None;
+                        }
+                    }
+                },
                 Err(e) => {
                     let msg = format!(
                         "{} {dest}:{path}: {e}",
                         t(self.lang, "Remote read failed", "读取远端文件失败")
                     );
                     self.show_notice(msg);
+                    // A restored pane whose file cannot be read is dropped.
+                    if let Some(id) = id {
+                        self.close_pane_id(&id);
+                    }
                 }
             },
             JobDone::RemoteWrite {
+                id,
                 dest,
                 path,
                 text,
                 result,
             } => {
-                let target = Some((dest.clone(), path.clone()));
-                let Some(ed) = self.editor.as_mut().filter(|ed| ed.remote == target) else {
-                    // The editor moved on; still report a failure.
-                    if let Err(e) = result {
-                        let msg = format!(
-                            "{} {dest}:{path}: {e}",
-                            t(self.lang, "Save failed", "保存失败")
-                        );
-                        self.show_notice(msg);
-                    }
-                    return;
-                };
-                ed.saving = false;
-                match result {
-                    Ok(()) => {
-                        ed.mark_saved(text);
-                        if ed.quit_after_save {
-                            self.editor = None;
-                            self.vim = None;
+                if let Some(id) = id {
+                    self.finish_pane_remote_write(&id, dest, path, &text, result);
+                } else {
+                    let target = Some((dest.clone(), path.clone()));
+                    let Some(ed) = self.editor.as_mut().filter(|ed| ed.remote == target) else {
+                        // The editor moved on; still report a failure.
+                        if let Err(e) = result {
+                            let msg = format!(
+                                "{} {dest}:{path}: {e}",
+                                t(self.lang, "Save failed", "保存失败")
+                            );
+                            self.show_notice(msg);
                         }
-                    }
-                    Err(e) => {
-                        ed.quit_after_save = false;
-                        let msg = format!(
-                            "{} {dest}:{path}: {e}",
-                            t(self.lang, "Save failed", "保存失败")
-                        );
-                        self.show_notice(msg);
+                        return;
+                    };
+                    ed.saving = false;
+                    match result {
+                        Ok(()) => {
+                            ed.mark_saved(String::from_utf8_lossy(&text).into_owned());
+                            if ed.quit_after_save {
+                                self.editor = None;
+                                self.vim = None;
+                            }
+                        }
+                        Err(e) => {
+                            ed.quit_after_save = false;
+                            let msg = format!(
+                                "{} {dest}:{path}: {e}",
+                                t(self.lang, "Save failed", "保存失败")
+                            );
+                            self.show_notice(msg);
+                        }
                     }
                 }
             }
