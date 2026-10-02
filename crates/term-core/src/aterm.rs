@@ -260,6 +260,15 @@ impl ATerm {
         self.term.mode().contains(TermMode::APP_CURSOR)
     }
 
+    /// A full-screen program (vim, less, man) is on the alternate screen and
+    /// alternate scroll (DECSET 1007, on by default) is set: the wheel should
+    /// send it arrow keys rather than scroll a scrollback it does not have.
+    pub fn alternate_scroll(&self) -> bool {
+        self.term
+            .mode()
+            .contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL)
+    }
+
     pub fn bracketed_paste(&self) -> bool {
         self.term.mode().contains(TermMode::BRACKETED_PASTE)
     }
@@ -324,6 +333,18 @@ fn sgr(c: Color, bg: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wheel_goes_to_full_screen_programs_on_the_alternate_screen() {
+        let mut term = ATerm::new(20, 3, 100);
+        assert!(!term.alternate_scroll(), "the main screen scrolls back");
+        term.process(b"\x1b[?1049h");
+        assert!(term.alternate_scroll(), "vim/less: on by default");
+        term.process(b"\x1b[?1007l");
+        assert!(!term.alternate_scroll(), "a program can turn it off");
+        term.process(b"\x1b[?1007h\x1b[?1049l");
+        assert!(!term.alternate_scroll(), "back on the main screen");
+    }
 
     #[test]
     fn mouse_tracking_protocols_include_clicks() {
