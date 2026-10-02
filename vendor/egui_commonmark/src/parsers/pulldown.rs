@@ -645,7 +645,11 @@ impl CommonMarkViewerInternal {
                 });
             }
             pulldown_cmark::Tag::Image { dest_url, .. } => {
-                self.image = Some(crate::Image::new(&dest_url, options));
+                // miao patch: an absolute path is a file URL of its own, so
+                // it keeps working when the implicit scheme names the
+                // document's directory (see PATCHES.miao.md).
+                let dest = absolute_file_uri(&dest_url).unwrap_or_else(|| dest_url.to_string());
+                self.image = Some(crate::Image::new(&dest, options));
             }
             pulldown_cmark::Tag::HtmlBlock => {}
             pulldown_cmark::Tag::MetadataBlock(_) => {}
@@ -774,4 +778,22 @@ fn wrapped_cell<R>(
         .max(MIN_TABLE_COLUMN);
     ui.set_max_width(width);
     ui.horizontal_wrapped(add)
+}
+
+/// miao patch: `file://` URL for an absolute local path without a scheme.
+/// Relative paths return `None` and take the implicit scheme instead.
+fn absolute_file_uri(url: &str) -> Option<String> {
+    if url.contains("://") || url.starts_with("data:") {
+        return None;
+    }
+    let path = std::path::Path::new(url);
+    if !path.is_absolute() {
+        return None;
+    }
+    let mut url = url.replace('\\', "/");
+    if !url.starts_with('/') {
+        // `C:/dir/x.png` becomes `file:///C:/dir/x.png`.
+        url.insert(0, '/');
+    }
+    Some(format!("file://{url}"))
 }

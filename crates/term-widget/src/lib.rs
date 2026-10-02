@@ -7505,7 +7505,16 @@ impl State {
                 egui::ScrollArea::both()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        render_markdown(ui, &ed.text, &mut self.cmark, &mut self.mmd, fg, panel);
+                        let base = ed.remote.is_none().then(|| ed.path.parent()).flatten();
+                        render_markdown(
+                            ui,
+                            &ed.text,
+                            base,
+                            &mut self.cmark,
+                            &mut self.mmd,
+                            fg,
+                            panel,
+                        );
                     });
             } else {
                 let mut vim_effect = miao_term_ui::vim::VimEffect::Nothing;
@@ -9667,9 +9676,21 @@ impl Mmd {
     }
 }
 
-fn open_commonmark(ui: &mut egui::Ui, cache: &mut egui_commonmark::CommonMarkCache, text: &str) {
+/// Render a Markdown run. `base` is the document's directory, which relative
+/// image paths resolve against (a remote document has none).
+fn open_commonmark(
+    ui: &mut egui::Ui,
+    cache: &mut egui_commonmark::CommonMarkCache,
+    text: &str,
+    base: Option<&std::path::Path>,
+) {
     if !text.trim().is_empty() {
-        egui_commonmark::CommonMarkViewer::new().show(ui, cache, text);
+        let mut viewer = egui_commonmark::CommonMarkViewer::new();
+        if let Some(dir) = base {
+            viewer =
+                viewer.default_implicit_uri_scheme(miao_term_ui::markdown::dir_uri_scheme(dir));
+        }
+        viewer.show(ui, cache, text);
     }
 }
 
@@ -9677,6 +9698,7 @@ fn open_commonmark(ui: &mut egui::Ui, cache: &mut egui_commonmark::CommonMarkCac
 fn render_markdown(
     ui: &mut egui::Ui,
     text: &str,
+    base: Option<&std::path::Path>,
     cache: &mut egui_commonmark::CommonMarkCache,
     mmd: &mut Mmd,
     fg: egui::Color32,
@@ -9685,13 +9707,13 @@ fn render_markdown(
     let mut rest = text;
     loop {
         let Some(i) = rest.find("```mermaid") else {
-            open_commonmark(ui, cache, rest);
+            open_commonmark(ui, cache, rest, base);
             break;
         };
-        open_commonmark(ui, cache, &rest[..i]);
+        open_commonmark(ui, cache, &rest[..i], base);
         let after = &rest[i + "```mermaid".len()..];
         let Some(j) = after.find("```") else {
-            open_commonmark(ui, cache, after);
+            open_commonmark(ui, cache, after, base);
             break;
         };
         let body = &after[..j];
@@ -10961,6 +10983,64 @@ mod tests {
             after.height() > before.height() + 60.0,
             "{before:?} -> {after:?}"
         );
+    }
+
+    /// Whether the Markdown preview of `md` (a document in `base`) paints a
+    /// loaded image, letting the background file loader finish.
+    fn markdown_paints_an_image(md: &str, base: &std::path::Path) -> bool {
+        let ctx = egui::Context::default();
+        egui_extras::install_image_loaders(&ctx);
+        let mut cache = egui_commonmark::CommonMarkCache::default();
+        let mut mmd = Mmd::default();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            let output = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    render_markdown(
+                        ui,
+                        md,
+                        Some(base),
+                        &mut cache,
+                        &mut mmd,
+                        egui::Color32::WHITE,
+                        egui::Color32::BLACK,
+                    );
+                });
+            });
+            // egui 0.30 paints an image as a rect filled with its texture.
+            let image = output.shapes.iter().any(|s| {
+                matches!(&s.shape, egui::Shape::Rect(r)
+                    if r.fill_texture_id != egui::TextureId::default())
+            });
+            if image {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        false
+    }
+
+    #[test]
+    fn markdown_images_resolve_relative_to_the_document() {
+        const PNG: [u8; 73] = [
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 2,
+            8, 2, 0, 0, 0, 253, 212, 154, 115, 0, 0, 0, 16, 73, 68, 65, 84, 120, 156, 99, 248, 207,
+            192, 0, 68, 12, 16, 10, 0, 31, 238, 3, 253, 139, 95, 20, 212, 0, 0, 0, 0, 73, 69, 78,
+            68, 174, 66, 96, 130,
+        ];
+        let dir = std::env::temp_dir().join(format!("mtty-md-img-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("img")).unwrap();
+        std::fs::write(dir.join("img/dot.png"), PNG).unwrap();
+        assert!(
+            markdown_paints_an_image("![dot](img/dot.png)\n", &dir),
+            "a relative path next to the document"
+        );
+        let absolute = format!("![dot]({})\n", dir.join("img/dot.png").display());
+        assert!(
+            markdown_paints_an_image(&absolute, std::path::Path::new("/nonexistent")),
+            "an absolute path ignores the document directory"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
