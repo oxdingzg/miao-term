@@ -565,6 +565,19 @@ impl Attention {
         }
     }
 
+    /// Whether the mark is shown on the tab the user is looking at. A
+    /// finished agent is: watching the tab does not mean the user saw it
+    /// finish, and the spinner's last frame looks much like the one before.
+    fn shows_while_visible(self) -> bool {
+        self == Attention::Done
+    }
+
+    /// What is left of `mark` once the user looks at the tab: the finished
+    /// mark stays until they type into it or the agent starts again.
+    fn seen(mark: Option<Self>) -> Option<Self> {
+        mark.filter(|a| a.shows_while_visible())
+    }
+
     /// The attention an agent state change asks for, if any.
     fn for_transition(previous: Option<&str>, now: &str) -> Option<Self> {
         match now {
@@ -2749,6 +2762,9 @@ impl State {
             return;
         }
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+            if tab.attention == Some(Attention::Done) {
+                tab.attention = None;
+            }
             if let Some(pane) = tab.panes.iter_mut().find(|p| p.id == tab.active) {
                 if let Some(command) = on_enter_input(&mut pane.on_enter, bytes) {
                     pane.scroll = 0;
@@ -2877,6 +2893,9 @@ impl State {
             return;
         }
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+            if tab.attention == Some(Attention::Done) {
+                tab.attention = None;
+            }
             if let Some(pane) = tab.panes.iter_mut().find(|p| p.id == tab.active) {
                 let bytes = input::encode_paste(text, pane.term.screen().bracketed_paste());
                 pane.term.write(&bytes);
@@ -3064,7 +3083,7 @@ impl State {
         self.save_scrollback_periodically();
         if self.focused {
             if let Some(tab) = self.tabs.get_mut(self.active_tab) {
-                tab.attention = None;
+                tab.attention = Attention::seen(tab.attention);
             }
         }
         self.refresh_search();
@@ -4509,17 +4528,15 @@ impl State {
         }
     }
 
-    fn agent_badge(&self, pane_id: &str) -> Option<miao_term_ui::theme::Rgb> {
-        use miao_term_ui::theme::Rgb;
-        let a = self.mtp.agent_for(pane_id)?;
+    /// The icon and colour an agent's tab shows (see `agent_icon`), or
+    /// `None` when the pane runs no agent.
+    fn agent_tab_icon(
+        &self,
+        tab: &Tab,
+    ) -> Option<(miao_term_ui::icons::Icon, Option<miao_term_ui::theme::Rgb>)> {
+        let a = self.mtp.agent_for(&tab.active)?;
         let state = a.get("state").and_then(|v| v.as_str())?;
-        Some(match state {
-            "processing" => Rgb(0x81, 0xa1, 0xc1),
-            "idle" => Rgb(0xa3, 0xbe, 0x8c),
-            "awaiting" => Rgb(0xeb, 0xcb, 0x8b),
-            "error" => Rgb(0xbf, 0x61, 0x6a),
-            _ => Rgb(0x88, 0x88, 0x88),
-        })
+        Some(agent_icon(state, tab.attention))
     }
 
     fn details_rows(&self) -> Vec<(String, String)> {
@@ -6167,7 +6184,7 @@ impl State {
                 .tabs
                 .get(self.active_tab)
                 .is_some_and(|t| t.panes.iter().any(|p| p.id == pane));
-        if visible {
+        if visible && !level.shows_while_visible() {
             return;
         }
         if let Some(tab) = self
@@ -6177,6 +6194,21 @@ impl State {
         {
             tab.attention = tab.attention.max(Some(level));
             self.window.request_redraw();
+        }
+    }
+
+    /// The user acted on `pane` (typed, pasted) or its agent started again:
+    /// its tab's finished mark has done its job.
+    fn clear_done(&mut self, pane: &str) {
+        if let Some(tab) = self
+            .tabs
+            .iter_mut()
+            .find(|t| t.panes.iter().any(|p| p.id == pane))
+        {
+            if tab.attention == Some(Attention::Done) {
+                tab.attention = None;
+                self.window.request_redraw();
+            }
         }
     }
 
@@ -6222,6 +6254,9 @@ impl State {
                     .on_state(&change.pane, prev.as_deref(), &change.state)
             {
                 deliveries.push(item);
+            }
+            if change.state == "processing" {
+                self.clear_done(&change.pane);
             }
             if let Some(level) = Attention::for_transition(prev.as_deref(), &change.state) {
                 self.raise_attention(&change.pane, level);
@@ -12943,6 +12978,25 @@ fn reserve_id(id: &str) {
     }
 }
 
+/// An agent's tab icon, by shape first so it reads without colour: half a
+/// circle while working, a full one when it finished and the user has not
+/// acted on it yet (green) or when it waits for them (amber, red on error,
+/// with `!` in the title), an empty ring otherwise.
+fn agent_icon(
+    state: &str,
+    attention: Option<Attention>,
+) -> (miao_term_ui::icons::Icon, Option<miao_term_ui::theme::Rgb>) {
+    use miao_term_ui::icons::Icon;
+    use miao_term_ui::theme::Rgb;
+    match state {
+        "processing" => (Icon::StateHalf, Some(Rgb(0x81, 0xa1, 0xc1))),
+        "awaiting" => (Icon::StateFull, Some(Rgb(0xeb, 0xcb, 0x8b))),
+        "error" => (Icon::StateFull, Some(Rgb(0xbf, 0x61, 0x6a))),
+        _ if attention == Some(Attention::Done) => (Icon::StateFull, Some(Rgb(0xa3, 0xbe, 0x8c))),
+        _ => (Icon::StateEmpty, None),
+    }
+}
+
 /// A hosted pane's host, as the session records it.
 fn pane_host(term: &Terminal) -> serde_json::Value {
     #[cfg(unix)]
@@ -13444,7 +13498,11 @@ impl ApplicationHandler<HostEvent> for Host {
                 for pane in &mut tab.panes {
                     let output = pane.drain_output();
                     changed |= output;
-                    if output && (ti != active_tab || !focused) && tab.attention.is_none() {
+                    // An agent's pane redraws its spinner all the time: its tab
+                    // is marked by the agent's state instead.
+                    let agent = state.mtp.agent_for(&pane.id).is_some();
+                    if output && !agent && (ti != active_tab || !focused) && tab.attention.is_none()
+                    {
                         tab.attention = Some(Attention::Unread);
                     }
                     // Publish a newly finished command's output (OSC 133).
@@ -15713,16 +15771,15 @@ impl chrome::Chrome for State {
         self.tabs
             .iter()
             .map(|t| {
-                let badge = self.agent_badge(&t.active);
-                let builtin = if badge.is_some() {
-                    miao_term_ui::icons::Icon::Agent
-                } else if t.ssh {
-                    miao_term_ui::icons::Icon::Server
-                } else {
-                    miao_term_ui::icons::Icon::Terminal
+                let agent = self.agent_tab_icon(t);
+                let builtin = match agent {
+                    Some((icon, _)) => icon,
+                    None if t.ssh => miao_term_ui::icons::Icon::Server,
+                    None => miao_term_ui::icons::Icon::Terminal,
                 };
                 let view = self.view_for(t);
                 let mut icon = miao_term_ui::icons::TabIcon::from(builtin);
+                icon.color = agent.and_then(|(_, color)| color);
                 if let Some(rule) = view.as_ref().and_then(|v| v.icon.as_ref()) {
                     let color = rule.rgb();
                     icon.glyph = miao_term_ui::icons::rule_glyph(
@@ -15730,7 +15787,9 @@ impl chrome::Chrome for State {
                         rule.emoji.as_deref(),
                         color.is_some(),
                     );
-                    icon.color = color.map(|c| miao_term_ui::theme::Rgb(c.0, c.1, c.2));
+                    icon.color = color
+                        .map(|c| miao_term_ui::theme::Rgb(c.0, c.1, c.2))
+                        .or(icon.color);
                 }
                 let rule_badge = view.as_ref().and_then(|v| v.badge.clone());
                 let mut title = self.title_with(t, view);
@@ -15743,12 +15802,16 @@ impl chrome::Chrome for State {
                 if let Some(b) = rule_badge.filter(|b| !b.trim().is_empty()) {
                     title = format!("{title} \u{00b7} {b}");
                 }
-                if let Some(a) = t.attention {
+                // An agent's tab shows that it finished by its icon.
+                if let Some(a) = t
+                    .attention
+                    .filter(|a| agent.is_none() || *a != Attention::Done)
+                {
                     title.push_str(a.marker());
                 }
                 chrome::ChromeTab {
                     title,
-                    badge,
+                    badge: None,
                     icon,
                     location: tab_location(t),
                 }
@@ -17330,9 +17393,36 @@ mod tests {
         );
         assert_eq!(Attention::for_transition(Some("idle"), "processing"), None);
         assert!(Attention::Needs > Attention::Done && Attention::Done > Attention::Unread);
+        // Looking at a tab clears what it says except that its agent finished.
+        assert_eq!(
+            Attention::seen(Some(Attention::Done)),
+            Some(Attention::Done)
+        );
+        assert_eq!(Attention::seen(Some(Attention::Unread)), None);
+        assert_eq!(Attention::seen(Some(Attention::Needs)), None);
+        assert_eq!(Attention::seen(None), None);
+        assert!(Attention::Done.shows_while_visible());
+        assert!(!Attention::Needs.shows_while_visible());
         assert_eq!(
             Some(Attention::Done).max(Some(Attention::Unread)),
             Some(Attention::Done)
+        );
+    }
+
+    #[test]
+    fn agent_tabs_show_their_state_by_shape() {
+        use miao_term_ui::icons::Icon;
+        let shape = |state, attention| super::agent_icon(state, attention).0;
+        assert_eq!(shape("processing", None), Icon::StateHalf);
+        assert_eq!(shape("processing", Some(Attention::Done)), Icon::StateHalf);
+        assert_eq!(shape("idle", Some(Attention::Done)), Icon::StateFull);
+        assert_eq!(shape("idle", None), Icon::StateEmpty, "seen and acted on");
+        assert_eq!(shape("awaiting", None), Icon::StateFull);
+        assert_eq!(shape("error", None), Icon::StateFull);
+        // Finished and waiting share the shape, not the colour.
+        assert_ne!(
+            super::agent_icon("idle", Some(Attention::Done)).1,
+            super::agent_icon("awaiting", None).1
         );
     }
 
