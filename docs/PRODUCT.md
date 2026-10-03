@@ -142,7 +142,7 @@ point); problems fixed in M0–M3 are no longer listed.
 | Automatic queue delivery when an agent turns idle | Works | Queued prompts are bound to a pane; items saved by older versions without one are sent by hand |
 | Launch an agent from the UI | Works | Settings and the command palette |
 | Show the session id the hook reports | Works | The Agent tab shows agent, state, session id and tty |
-| Resume, quota display | Not available | Not designed yet |
+| Resume, quota display | Planned | [ADR 0042](decisions/0042-agent-resume-quota.md); built as M7/A4 |
 
 ### 3.5 Remote and operations
 
@@ -354,6 +354,7 @@ verified on its own:
 - [x] **A1** Agents' edits arrive as editor transactions, shown inline as diffs to accept or reject, undoable. (ADR 0040. MTP `editor.propose` takes `pane_id`/`path` plus `edits` (`{start,end,text}` character ranges) or a whole-file `text`; the host applies them to the editor pane's `Document` as one transaction (`apply_external`), tints the changed lines green, and marks them in the status bar. Typing, saving or another edit accepts it; *Reject Agent Edit* is one undo step back to the pre-image. Evidence: editor-pane tests for one-transaction apply/undo, accept-on-edit and accept, and an MTP test for the request.)
 - [x] **A2** An ACP (Agent Client Protocol) client, so any ACP agent works with the editor pane. (ADR 0040. The GPU-free `miao-term-acp` crate launches an agent and speaks newline-delimited JSON-RPC 2.0 over its stdio: `initialize`/`session/new`/`session/prompt`/`session/cancel`, answering `fs/read_text_file`, `fs/write_text_file` and `session/request_permission`, and forwarding `session/update` notifications and responses to a `Handler`. The host starts agents from `config.toml`'s `[acp]` (`[[acp.agent]]` with `name`/`command`) or a typed command via *ACP Agent…*; an ACP window shows the streamed transcript, sends prompts, cancels a turn, turns agent diffs into A1 proposals, and answers permission requests with Allow/Deny. Evidence: `term-acp` tests against a fake agent (initialize + streamed update, an fs read), a config-parse test, and the workspace build/tests.)
 - [x] **A3** Send a selection, diagnostics or a command's output to an agent in one step; agents open files at a line through MTP. (ADR 0040. MTP `app.edit`/`app.view` take an optional 1-based `line` and `column`; the host opens the file and moves the editor pane there. *Send Selection to Agent*, *Send Diagnostics to Agent* and *Send Last Command Output to Agent* are in the palette: each finds the tab's agent pane and types a short, fenced prompt into it, pressing Enter. Evidence: an MTP test that `app.edit` carries `line`/`column`, and the workspace build/tests.)
+- [ ] **A4** Agent session resume and quota display ([ADR 0042](decisions/0042-agent-resume-quota.md)). A *Resume Agent Session…* command relaunches the agent into a session it reported (per-agent command template), and the Agent tab shows an agent-reported quota line when one is present. MTP/`mtty-cli` gain `agent.sessions` and `agent.resume`.
 
 ## 5. Non-goals
 

@@ -478,7 +478,8 @@ Still open:
   installed app through Software Update still needs an end-to-end check on each
   desktop; **Apple notarization** and **Windows MSI signing** require
   credentials. See [`docs/RELEASE.md`](docs/RELEASE.md).
-- **Not designed yet**: agent Resume and quota display.
+- **Designed, not built yet**: agent session resume and quota display
+  ([ADR 0042](docs/decisions/0042-agent-resume-quota.md)).
 - **Platform verification (needs hardware)**: the Linux wgpu render path runs in
   CI via Mesa software Vulkan (lavapipe) and Windows is driven over MTP on real
   hardware; a real Linux desktop session, the Wayland portal hotkey and the

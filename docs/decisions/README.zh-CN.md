@@ -46,3 +46,4 @@
 | [0035](./0035-native-notifications.zh-CN.md) | 原生系统通知 | 已接受 |
 | [0036](./0036-clipboard-forwarding.zh-CN.md) | 宿主转发剪贴板图片 | 已接受 |
 | [0041](./0041-pty-host.zh-CN.md) | pane 跨应用重启存活(每 pane 一个 PTY 宿主进程) | 已接受 |
+| [0042](./0042-agent-resume-quota.zh-CN.md) | Agent 会话恢复与配额显示 | 已接受 |
