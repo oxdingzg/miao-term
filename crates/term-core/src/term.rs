@@ -138,13 +138,12 @@ impl Terminal {
         let shell_path = shell.unwrap_or_else(default_shell);
         let mut cmd = CommandBuilder::new(&shell_path);
         cmd.args(crate::shell::startup_args(&shell_path));
-        // Inherit the current environment (PATH, MTTY_SOCKET, …), then override.
-        for (k, v) in std::env::vars() {
-            cmd.env(k, v);
-        }
+        // CommandBuilder already inherits the environment and, on Windows,
+        // refreshes machine/user variables from the registry. Reapplying the
+        // host's startup snapshot here would undo updated PATH/proxy values.
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
-        if let Some((k, v)) = default_colour_env(|name| std::env::var_os(name).is_some()) {
+        if let Some((k, v)) = default_colour_env(|name| cmd.get_env(name).is_some()) {
             cmd.env(k, v);
         }
         #[cfg(unix)]
@@ -173,7 +172,10 @@ impl Terminal {
                 .rev()
                 .find(|(k, _)| k == name)
                 .map(|(_, v)| v.clone())
-                .or_else(|| std::env::var(name).ok())
+                .or_else(|| {
+                    cmd.get_env(name)
+                        .map(|value| value.to_string_lossy().into_owned())
+                })
         };
         let integration = crate::shell::integration(&shell_path, &seen);
         cmd.args(&integration.args);

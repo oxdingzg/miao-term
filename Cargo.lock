@@ -2812,6 +2812,7 @@ dependencies = [
  "miao-term-graphics",
  "portable-pty",
  "serde_json",
+ "winreg",
 ]
 
 [[package]]

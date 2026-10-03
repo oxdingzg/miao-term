@@ -23,6 +23,11 @@ def main():
         expected.append(((width, height, colors, reserved, planes, depth, size), icon[offset:offset + size]))
     assert {(entry[0] or 256) for entry, data in expected} == {16, 24, 32, 48, 64, 128, 256}
 
+    if binary.read_bytes()[:6] == icon[:6]:
+        assert binary.read_bytes() == icon, "registered icon differs from shared artwork"
+        print(f"Verified {count} registered icon sizes in {binary.name}")
+        return
+
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel.LoadLibraryExW.argtypes = [wintypes.LPCWSTR, ctypes.c_void_p, wintypes.DWORD]
     kernel.LoadLibraryExW.restype = ctypes.c_void_p
