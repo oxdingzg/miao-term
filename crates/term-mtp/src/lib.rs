@@ -40,6 +40,7 @@ pub const HOST_CAPS: &[&str] = &[
     "file.write",
     "agent.state.read",
     "agent.state.write",
+    "agent.resume",
     "history.read",
     "history.write",
 ];
@@ -241,6 +242,12 @@ pub enum Command {
         text: Option<String>,
         label: Option<String>,
     },
+    /// Resume a reported agent session in a new tab (ADR 0042, A4).
+    ResumeAgent {
+        agent: String,
+        session: String,
+        cwd: Option<String>,
+    },
 }
 
 /// One replacement in `editor.propose`: characters `start..end` become `text`.
@@ -377,6 +384,40 @@ impl ServerState {
         self.states.lock().unwrap().get(&k).cloned()
     }
 
+    /// Agent sessions that reported a session id, newest first (ADR 0042).
+    pub fn agent_sessions(&self) -> Vec<Value> {
+        let mut out: Vec<Value> = self
+            .states
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, e)| {
+                e.get("session_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|s| !s.is_empty())
+            })
+            .map(|(k, e)| {
+                let mut e = e.clone();
+                if let Value::Object(ref mut m) = e {
+                    m.entry("pane").or_insert_with(|| json!(k));
+                }
+                e
+            })
+            .collect();
+        out.sort_by_key(|e| std::cmp::Reverse(e.get("seq").and_then(Value::as_i64).unwrap_or(0)));
+        out
+    }
+
+    /// The stored agent entry matching a pane id or a session id (ADR 0042).
+    pub fn agent_session(&self, pane: Option<&str>, session: Option<&str>) -> Option<Value> {
+        self.states.lock().unwrap().values().find_map(|e| {
+            let pane_ok = pane.is_some_and(|p| e.get("pane_id").and_then(Value::as_str) == Some(p));
+            let sess_ok =
+                session.is_some_and(|s| e.get("session_id").and_then(Value::as_str) == Some(s));
+            (pane_ok || sess_ok).then(|| e.clone())
+        })
+    }
+
     /// Start an event stream. The returned receiver yields one JSON object per
     /// state change; dropping it unsubscribes.
     pub fn subscribe(&self) -> std::sync::mpsc::Receiver<Value> {
@@ -508,6 +549,8 @@ fn method_cap(ns: &str, method: &str) -> &'static str {
         ("file", "write") => "file.write",
         ("agent", "state.list") => "agent.state.read",
         ("agent", "state.set") => "agent.state.write",
+        ("agent", "sessions") => "agent.state.read",
+        ("agent", "resume") => "agent.resume",
         ("history", "list") => "history.read",
         ("history", "add") => "history.write",
         _ => "",
@@ -768,6 +811,46 @@ fn dispatch(state: &ServerState, req: Request) -> Response {
         ("agent", "state.list") => {
             let states: Vec<Value> = state.states.lock().unwrap().values().cloned().collect();
             Response::ok(id, rev, json!({ "revision": rev, "states": states }))
+        }
+        ("agent", "sessions") => Response::ok(
+            id,
+            rev,
+            json!({ "revision": rev, "sessions": state.agent_sessions() }),
+        ),
+        ("agent", "resume") => {
+            if state.read_only.load(Ordering::SeqCst) {
+                return Response::err(id, rev, "read_only", "the terminal is in read-only mode");
+            }
+            let pane = str_field(&params, "pane_id");
+            let session = str_field(&params, "session_id");
+            let Some(entry) = state.agent_session(pane.as_deref(), session.as_deref()) else {
+                return Response::err(id, rev, "no_session", "no matching agent session");
+            };
+            let agent = entry
+                .get("agent")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let session_id = entry
+                .get("session_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let cwd = entry.get("cwd").and_then(Value::as_str).map(str::to_string);
+            if agent.is_empty() || session_id.is_empty() {
+                return Response::err(
+                    id,
+                    rev,
+                    "no_session",
+                    "the agent did not report a session id",
+                );
+            }
+            state.queue_command(Command::ResumeAgent {
+                agent,
+                session: session_id,
+                cwd,
+            });
+            Response::ok(id, state.bump(), json!({ "ok": true }))
         }
         ("history", "add") => {
             let pane = str_field(&params, "pane_id");
@@ -1537,6 +1620,50 @@ mod tests {
         assert_eq!(event["agent"], json!("claude"));
         assert_eq!(event["state"], json!("processing"));
         assert!(event["revision"].as_i64().unwrap() >= 1);
+    }
+
+    #[test]
+    fn sessions_list_newest_first_and_resume_queues_a_command() {
+        let st = ServerState::new();
+        for (pane, agent, session) in [("pane0", "claude", "s-1"), ("pane1", "codex", "s-2")] {
+            dispatch(
+                &st,
+                request(
+                    "agent",
+                    "state.set",
+                    json!({ "pane_id": pane, "agent": agent, "state": "idle",
+                            "session_id": session, "cwd": "/tmp" }),
+                ),
+            );
+        }
+        // A state without a session id is not offered for resume.
+        dispatch(
+            &st,
+            request(
+                "agent",
+                "state.set",
+                json!({ "pane_id": "pane2", "agent": "miao", "state": "idle" }),
+            ),
+        );
+        let listed = dispatch(&st, request("agent", "sessions", json!({})));
+        let sessions = listed.result.expect("sessions result");
+        let sessions = sessions["sessions"].as_array().unwrap();
+        assert_eq!(sessions.len(), 2);
+        // Newest first: pane1 was set last.
+        assert_eq!(sessions[0]["session_id"], json!("s-2"));
+
+        // Resume by session id queues a ResumeAgent command for the host.
+        let ok = dispatch(
+            &st,
+            request("agent", "resume", json!({ "session_id": "s-1" })),
+        );
+        assert!(ok.ok, "{:?}", ok.error);
+        let commands = st.take_commands();
+        assert!(matches!(
+            commands.as_slice(),
+            [Command::ResumeAgent { agent, session, cwd }]
+                if agent == "claude" && session == "s-1" && cwd.as_deref() == Some("/tmp")
+        ));
     }
 
     #[cfg(unix)]

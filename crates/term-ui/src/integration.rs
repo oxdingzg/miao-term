@@ -15,6 +15,9 @@ pub struct Agent {
     pub name: &'static str,
     pub bin: &'static str,
     pub launch: &'static str,
+    /// Resume command template with a `{session}` placeholder (ADR 0042).
+    /// Empty means the agent cannot be resumed from mtty.
+    pub resume: &'static str,
     /// Where the hook is registered, for the snippet text.
     pub hook_via: &'static str,
     /// The agent reports its own state from inside mtty; no hook wiring is
@@ -27,6 +30,7 @@ pub const AGENTS: &[Agent] = &[
         name: "claude",
         bin: "claude",
         launch: "claude",
+        resume: "claude --resume {session}",
         hook_via: "Claude Code hooks (Stop / Notification / PreToolUse)",
         auto: false,
     },
@@ -34,6 +38,7 @@ pub const AGENTS: &[Agent] = &[
         name: "codex",
         bin: "codex",
         launch: "codex",
+        resume: "codex resume {session}",
         hook_via: "codex hook config",
         auto: false,
     },
@@ -41,6 +46,7 @@ pub const AGENTS: &[Agent] = &[
         name: "opencode",
         bin: "opencode",
         launch: "opencode",
+        resume: "opencode --session {session}",
         hook_via: "the opencode plugin `event` hook",
         auto: false,
     },
@@ -48,6 +54,7 @@ pub const AGENTS: &[Agent] = &[
         name: "miao",
         bin: "miao",
         launch: "miao",
+        resume: "miao --resume {session}",
         hook_via: "the built-in miao integration",
         auto: true,
     },
@@ -81,6 +88,7 @@ pub fn hook_script(agent: &str) -> String {
          pane=\"${{MTTY_PANE_ID:-${{MIAOTTY_PANE_ID:-}}}}\"\n\
          # Hooks are global; only report for agents running inside an mtty pane.\n\
          [ -n \"$pane\" ] || exit 0\n\
+         cwd=\"${{PWD:-}}\"\n\
          # Claude Code and codex pass the event as JSON on stdin.\n\
          if [ \"$session\" = --stdin ]; then\n\
          \x20 session=$(sed -n 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n 1)\n\
@@ -90,6 +98,7 @@ pub fn hook_script(agent: &str) -> String {
          set -- state {agent} --state \"$state\"\n\
          [ -n \"$session\" ] && set -- \"$@\" --session \"$session\"\n\
          [ -n \"$pane\" ] && set -- \"$@\" --pane \"$pane\"\n\
+         [ -n \"$cwd\" ] && set -- \"$@\" --cwd \"$cwd\"\n\
          \"$exe\" \"$@\" >/dev/null 2>&1 || true\n"
     )
 }
@@ -231,6 +240,19 @@ pub fn launch_command(agent: &Agent) -> String {
     agent.launch.to_string()
 }
 
+/// The command that resumes `session` in `agent`, or `None` when the agent has
+/// no resume template or the session id is not a safe token (ADR 0042).
+pub fn resume_command(agent: &Agent, session: &str) -> Option<String> {
+    if agent.resume.is_empty() || session.is_empty() {
+        return None;
+    }
+    // The id is typed into a pane's shell line, so accept only a token.
+    let safe = session
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    safe.then(|| agent.resume.replace("{session}", session))
+}
+
 /// Run `hook_script` through `sh -n` to check syntax (used in tests and by the
 /// installer as a sanity check).
 pub fn syntax_ok(script: &str) -> bool {
@@ -261,7 +283,23 @@ mod tests {
         assert!(s.starts_with("#!/bin/sh"));
         assert!(s.contains("state claude --state"));
         assert!(s.contains("MTTY_PANE_ID") && s.contains("MIAOTTY_PANE_ID"));
+        assert!(
+            s.contains("--cwd"),
+            "the hook reports the session directory"
+        );
         assert!(syntax_ok(&s), "hook script must pass `sh -n`");
+    }
+
+    #[test]
+    fn resume_uses_the_agent_template_and_a_token_session() {
+        let claude = AGENTS.iter().find(|a| a.name == "claude").unwrap();
+        assert_eq!(
+            resume_command(claude, "abc-123").as_deref(),
+            Some("claude --resume abc-123")
+        );
+        // The id is typed into a shell line: anything but a token is refused.
+        assert_eq!(resume_command(claude, "a; rm -rf /"), None);
+        assert_eq!(resume_command(claude, ""), None);
     }
 
     #[test]
@@ -354,12 +392,18 @@ mod tests {
         let _keep_stdin_open = child.stdin.take();
         assert!(child.wait().unwrap().success());
         let calls = std::fs::read_to_string(&log).unwrap();
-        assert_eq!(
-            calls.lines().collect::<Vec<_>>(),
-            [
-                "state codex --state awaiting --session abc-123 --pane pane3",
-                "state codex --state processing --session s9 --pane pane3",
-            ]
+        let lines: Vec<&str> = calls.lines().collect();
+        assert_eq!(lines.len(), 2, "{calls}");
+        assert!(
+            lines[0]
+                .starts_with("state codex --state awaiting --session abc-123 --pane pane3 --cwd "),
+            "{}",
+            lines[0]
+        );
+        assert!(
+            lines[1].starts_with("state codex --state processing --session s9 --pane pane3 --cwd "),
+            "{}",
+            lines[1]
         );
         std::fs::remove_dir_all(&dir).unwrap();
     }
