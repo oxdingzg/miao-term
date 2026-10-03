@@ -84,3 +84,68 @@ fn conpty_resize_updates_screen_and_pty() {
         "screen model should be resized"
     );
 }
+
+#[test]
+fn conpty_uses_current_user_environment_and_explicit_overrides() {
+    use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
+    use winreg::RegKey;
+    let key = RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey_with_flags("Environment", KEY_READ | KEY_WRITE)
+        .unwrap();
+    let name = format!("MTTY_ENV_QA_{}", std::process::id());
+    struct Cleanup {
+        key: RegKey,
+        name: String,
+    }
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = self.key.delete_value(&self.name);
+            std::env::remove_var(&self.name);
+        }
+    }
+    let cleanup = Cleanup { key, name };
+    std::env::set_var(&cleanup.name, "HOST_SNAPSHOT_OLD");
+    cleanup
+        .key
+        .set_value(&cleanup.name, &"USER_ENV_CURRENT")
+        .unwrap();
+    for (extra, expected) in [
+        (vec![], "USER_ENV_CURRENT"),
+        (
+            vec![(cleanup.name.clone(), "PANE_OVERRIDE".into())],
+            "PANE_OVERRIDE",
+        ),
+    ] {
+        let mut term = Terminal::new(
+            Some("cmd.exe".into()),
+            100,
+            30,
+            2000,
+            None,
+            &extra,
+            std::sync::Arc::new(|| {}),
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut sent = false;
+        let mut text = String::new();
+        while Instant::now() < deadline {
+            term.process_pending();
+            text = screen_text(&term);
+            if text.contains(expected) {
+                break;
+            }
+            if !sent && text.contains('>') {
+                term.write(format!("echo %{}%\r", cleanup.name).as_bytes());
+                sent = true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        term.write(b"exit\r");
+        assert!(
+            text.contains(expected),
+            "fresh environment not inherited: {text}"
+        );
+        assert!(!text.contains("HOST_SNAPSHOT_OLD"));
+    }
+}
