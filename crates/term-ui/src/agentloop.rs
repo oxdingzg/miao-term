@@ -3,7 +3,9 @@
 //! implementations moved to `miao-term-platform`, so macOS can post through
 //! the native `UserNotifications` center instead of `osascript` (ADR 0035).
 
-use std::process::{Child, Command};
+use std::process::Child;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use std::process::Command;
 
 // Re-exported so hosts keep calling `agentloop::notify` / `agentloop::alert`
 // (ADR 0010) while the platform code lives in `miao-term-platform`.
