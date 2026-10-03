@@ -106,7 +106,27 @@
                             Source='wix\License.rtf'
                             KeyPath='yes'/>
                     </Component>
-                    
+
+                    <!-- What mtty is actually built on: its own Apache-2.0
+                         licence, and every MIT, BSD and ISC crate compiled into
+                         the binaries, which each require their notice to travel
+                         with a distribution. Paths are relative to this crate,
+                         as `wix\License.rtf` above is. -->
+                    <Directory Id='LicensesFolder' Name='licenses'>
+                        <Component Id='ThirdPartyLicenses' Guid='*'>
+                            <File Id='MttyLicense'
+                                Name='LICENSE.txt'
+                                DiskId='1'
+                                Source='..\LICENSE'
+                                KeyPath='no'/>
+                            <File Id='ThirdPartyLicensesFile'
+                                Name='THIRD-PARTY-LICENSES.md'
+                                DiskId='1'
+                                Source='..\THIRD-PARTY-LICENSES.md'
+                                KeyPath='yes'/>
+                        </Component>
+                    </Directory>
+
                     <Directory Id='Bin' Name='bin'>
                         <Component Id='Path' Guid='B6BA5625-DEA3-42D8-AB26-784661E75FBE' KeyPath='yes'>
                             <Environment
@@ -198,7 +218,8 @@
               the license sidecar file from the installer.
             -->
             <ComponentRef Id='License'/>
-            
+            <ComponentRef Id='ThirdPartyLicenses'/>
+
             <ComponentRef Id='binary0'/>
             <ComponentRef Id='binary1'/>
             <ComponentRef Id='binary2'/>
