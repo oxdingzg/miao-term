@@ -28,7 +28,7 @@ font-size = 13                   # default
 #   JSON manifest: {"version":"0.2.0","artifacts":{"macos-aarch64":{"url":"…","sha256":"…"}}}
 #   A plain document whose first line is the version also works.
 
-# [badges]                         # which agent states show a tab badge
+# [badges]                         # which agent states show on tabs (circle and mark)
 # processing = true
 # idle = true
 # awaiting = true
