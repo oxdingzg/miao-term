@@ -15336,6 +15336,15 @@ fn draw_editor(
             (h.0, h.1, h.2, 90),
         ));
     }
+    // A jump-to-line highlight, over the current-line band.
+    if let Some(row) = d.flash_line {
+        quads.push(cell(
+            row,
+            d.gutter,
+            cols.saturating_sub(d.gutter),
+            (0x8a, 0x6d, 0x1f, 120),
+        ));
+    }
     // A pending agent proposal: its changed lines tinted green.
     for c in &d.proposal {
         quads.push(cell(c.row, c.col, c.width, (0x2f, 0x5d, 0x3a, 90)));
