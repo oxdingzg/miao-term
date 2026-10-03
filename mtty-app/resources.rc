@@ -1,0 +1,2 @@
+// The same multi-resolution icon is used by Explorer, the window and MSI.
+1 ICON "../assets/icons/mtty.ico"
