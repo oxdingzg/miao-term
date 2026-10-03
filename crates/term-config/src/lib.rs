@@ -389,8 +389,8 @@ pub struct Config {
     /// in the restored panes (kept in the data directory, owner-only).
     pub restore_scrollback: bool,
     /// Run each local shell in its own PTY host process, so it keeps
-    /// running while mtty restarts and is reattached (ADR 0041). Off by
-    /// default while it is being proven.
+    /// running while mtty restarts and is reattached (ADR 0041): an update
+    /// does not end what runs in the panes. On by default.
     pub pty_host: bool,
     /// An ordinary quit leaves hosted programs running for the next launch
     /// (tmux-like) instead of ending them.
@@ -576,7 +576,7 @@ impl Default for Config {
             notifications: true,
             prevent_sleep: true,
             restore_scrollback: true,
-            pty_host: false,
+            pty_host: true,
             keep_sessions_on_quit: false,
             detached_timeout: DEFAULT_DETACHED_TIMEOUT,
             badges: Badges::default(),
@@ -1381,10 +1381,10 @@ mod tests {
     }
 
     #[test]
-    fn pty_host_is_opt_in() {
-        assert!(!Config::from_toml("").unwrap().pty_host);
-        assert!(Config::from_toml("pty-host = true\n").unwrap().pty_host);
-        assert!(Config::from_ghostty_text("pty-host = true\n").pty_host);
+    fn pty_host_is_on_unless_turned_off() {
+        assert!(Config::from_toml("").unwrap().pty_host);
+        assert!(!Config::from_toml("pty-host = false\n").unwrap().pty_host);
+        assert!(!Config::from_ghostty_text("pty-host = false\n").pty_host);
     }
 
     #[test]

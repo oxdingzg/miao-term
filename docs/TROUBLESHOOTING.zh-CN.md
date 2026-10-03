@@ -60,11 +60,13 @@ Windows 上的 PowerShell 由 CI 运行)。
 
 ## 恢复会话后，之前运行的东西没回来
 
-恢复重放的是**布局**，并启动新的 shell;正在运行的进程不会被保留。若要在重启后保留 shell:
+更新、*重启 mtty(保留运行中的程序)* 和崩溃都不会结束正在运行的程序:每个 shell 运行在 PTY 宿主中(`pty-host`,默认开启),重启后的 mtty 会重新接上。普通退出会结束它们,除非设置:
 
 ```toml
-pty-host = true      # 实验性
+keep-sessions-on-quit = true
 ```
+
+`pty-host = false` 时打开的 pane,以及 SSH、串口、Telnet、TCP 标签,会重新开始:布局和内容会恢复,进程不会。
 
 ## `mtty-cli` 连不上
 

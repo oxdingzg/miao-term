@@ -9,8 +9,8 @@ font-size = 13                   # default
 # notifications = true             # system notification when an agent needs attention
 # prevent-sleep = true             # keep the machine awake while an agent is processing
 # restore-scrollback = true        # save terminals' contents at quit and show them on relaunch
-# pty-host = false                # keep shells running across restarts (experimental)
-# keep-sessions-on-quit = false   # with pty-host: quitting keeps programs running, like tmux
+# pty-host = true                 # updates, relaunches and crashes keep programs running
+# keep-sessions-on-quit = false   # quitting keeps programs running too, like tmux
 # detached-timeout = "24h"        # how long a kept program waits for mtty (90s, 30m, 24h, 7d)
 
 # quick-terminal-hotkey = "cmd+shift+t"  # system-wide Quick Terminal toggle

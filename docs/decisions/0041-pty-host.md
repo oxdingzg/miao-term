@@ -387,6 +387,16 @@ reboot is also out of scope.
   direct on macOS; the echo's p95 went from about 0.025 to 0.07 ms, against
   a 16 ms key-to-glyph budget.
 
+## Addendum: P5 (2026-10-03)
+
+`pty-host` is on by default from the next release, decided by the owner
+without the planned release of soak (mtty has a single user so far). An
+update, a relaunch and a crash no longer end what runs in local panes;
+`pty-host = false` turns it off and an ordinary quit still ends them unless
+`keep-sessions-on-quit` is set. The update *into* that release is still
+performed by the previous version, which has no hosts, so protection starts
+with the update after it.
+
 ## Review findings (2026-10-03)
 
 The first draft was checked against `alacritty_terminal` 0.25.1, vte 0.15 and
