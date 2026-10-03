@@ -33,6 +33,8 @@ pub struct CellView {
     pub bg: Color,
     pub inverse: bool,
     pub bold: bool,
+    /// SGR 2: faint text (Claude Code's suggested prompt, hints).
+    pub dim: bool,
     pub wide_spacer: bool,
 }
 
@@ -200,6 +202,7 @@ impl ATerm {
             bg: cell.bg,
             inverse: cell.flags.contains(Flags::INVERSE),
             bold: cell.flags.contains(Flags::BOLD),
+            dim: cell.flags.contains(Flags::DIM),
             wide_spacer: cell.flags.contains(Flags::WIDE_CHAR_SPACER),
         })
     }
