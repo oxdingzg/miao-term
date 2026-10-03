@@ -9,5 +9,6 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
+miao-term-platform = { path = "../term-platform" }
 miao-term-editor = { path = "../term-editor" }
 serde_json = "1.0"
