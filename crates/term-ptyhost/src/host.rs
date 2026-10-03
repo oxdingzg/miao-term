@@ -18,6 +18,13 @@ use crate::sys::{self, Listener as UnixListener, Stream as UnixStream};
 /// not end on a boundary) rather than held without bound.
 const MAX_PENDING: usize = 1 << 20;
 
+/// PTY reads queued for framing; a full queue holds the program back, as a
+/// slow terminal does.
+const OUTPUT_QUEUE: usize = 64;
+
+/// The most queued output combined into one frame.
+const MAX_BATCH: usize = 256 * 1024;
+
 /// A client that does not take its output within this long is dropped.
 const CLIENT_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -234,16 +241,18 @@ pub fn run(args: HostArgs) -> io::Result<i32> {
         killed: None,
     }));
 
-    // Output: scan, frame at boundaries, keep, forward.
+    // Output, in two stages so reading never waits on a client: one thread
+    // reads the PTY into a bounded queue; the other takes everything queued
+    // at once, frames it at sequence boundaries, keeps and forwards it.
+    // Idle output (an echo) goes out as soon as it is read; a flood collects
+    // into large frames while the previous one is being sent (Linux PTYs hand
+    // out a few hundred bytes per read).
     let (output_done_tx, output_done) = std::sync::mpsc::channel::<()>();
+    let (chunks_tx, chunks) = std::sync::mpsc::sync_channel::<Vec<u8>>(OUTPUT_QUEUE);
     {
-        let shared = shared.clone();
         #[cfg(windows)]
         let writer = writer.clone();
         std::thread::spawn(move || {
-            let mut scanner = Scanner::new();
-            let mut pending: Vec<u8> = Vec::new();
-            let mut pending_modes = scanner.modes().clone();
             let mut buf = vec![0u8; 64 * 1024];
             #[cfg(windows)]
             let mut first = true;
@@ -268,12 +277,31 @@ pub fn run(args: HostArgs) -> io::Result<i32> {
                         continue;
                     }
                 }
+                if chunks_tx.send(buf[..n].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+    {
+        let shared = shared.clone();
+        std::thread::spawn(move || {
+            let mut scanner = Scanner::new();
+            let mut pending: Vec<u8> = Vec::new();
+            let mut pending_modes = scanner.modes().clone();
+            while let Ok(mut chunk) = chunks.recv() {
+                while chunk.len() < MAX_BATCH {
+                    match chunks.try_recv() {
+                        Ok(more) => chunk.extend_from_slice(&more),
+                        Err(_) => break,
+                    }
+                }
                 if pending.is_empty() {
                     pending_modes = scanner.modes().clone();
                 }
                 let before = pending.len();
-                let cut = scanner.feed(&buf[..n]);
-                pending.extend_from_slice(&buf[..n]);
+                let cut = scanner.feed(&chunk);
+                pending.extend_from_slice(&chunk);
                 let (frame, boundary) = if cut > 0 {
                     let rest = pending.split_off(before + cut);
                     (std::mem::replace(&mut pending, rest), true)

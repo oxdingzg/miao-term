@@ -24,7 +24,7 @@ import sys
 
 enforce = os.environ.get("PERF_ENFORCE", "0") not in ("", "0", "false", "no")
 
-HIGHER_IS_BETTER = {"vt_parse_mbps"}
+HIGHER_IS_BETTER = {"vt_parse_mbps", "hosted_output_mbps"}
 
 # Times below these floors are jitter-dominated on shared CI runners: the same
 # code measured 0.06 then 0.10 ms between runs. There the *absolute* budget is
@@ -34,6 +34,10 @@ ENFORCE_FLOOR = {
     "build_rows_frame_ms": 0.5,
     "palette_rank_10k_ms": 10.0,
     "screen_snapshot_30_rows_ms": 0.5,
+    # Tens of microseconds: scheduler noise on a shared runner.
+    "hosted_echo_p95_ms": 1.0,
+    # Two processes and a socket: noisier than the in-process parse rate.
+    "hosted_output_mbps": 0.0,
 }
 
 measured_path = pathlib.Path(os.environ.get("PERF_MEASURED", "target/perf-measured.json"))

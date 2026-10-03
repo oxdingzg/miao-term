@@ -53,6 +53,8 @@ If no mtty configuration exists, ghostty's `config` and alacritty's
 | `prevent-sleep` | `true` | Keep the machine awake while an agent is processing |
 | `restore-scrollback` | `true` | Save terminals' contents at quit and show them on relaunch |
 | `pty-host` | `false` | Keep shells running across restarts (experimental) |
+| `keep-sessions-on-quit` | `false` | With `pty-host`, quitting keeps programs running for the next launch (tmux-like) |
+| `detached-timeout` | `"24h"` | How long a kept program waits for mtty: `90s`, `30m`, `24h`, `7d` or seconds |
 | `quick-terminal-hotkey` | — | System-wide Quick Terminal toggle, e.g. `cmd+shift+t` |
 | `editor-vim` | `false` | Minimal vim mode in the built-in editor |
 | `editor` | — | The command "Edit in Tab" runs, e.g. `code --wait` |
