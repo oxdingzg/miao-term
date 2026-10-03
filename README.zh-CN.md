@@ -275,6 +275,10 @@ Linux `.deb`/AppImage 以及 Windows MSI。[`dist-workspace.toml`](dist-workspac
 [cargo-dist](https://opensource.axo.dev/cargo-dist/) 脚手架。见
 [`docs/INSTALL.zh-CN.md`](docs/INSTALL.zh-CN.md) 与 [`docs/RELEASE.zh-CN.md`](docs/RELEASE.zh-CN.md)。
 
+Windows 安装包通过 [SignPath Foundation](https://signpath.org) 项目进行代码签名:
+free code signing provided by [SignPath.io](https://signpath.io), certificate by
+[SignPath Foundation](https://signpath.org)。
+
 ---
 
 ## 配置
