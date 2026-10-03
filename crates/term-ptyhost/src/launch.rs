@@ -1,29 +1,36 @@
-//! Starting hosts and finding them again (ADR 0041 §1, §5, §6; Unix).
+//! Starting hosts and finding them again (ADR 0041 §1, §5, §6).
 
-use std::io::{self, Read};
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
-use std::os::unix::process::CommandExt;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::host::HostArgs;
 
-/// The host binary's file name.
+/// The host binary's name (plus `.exe` on Windows, see [`binary_name`]).
 pub const BINARY: &str = "mtty-ptyhost";
 
+/// The host binary's file name on this platform.
+pub fn binary_name() -> String {
+    format!("{BINARY}{}", std::env::consts::EXE_SUFFIX)
+}
+
 /// Socket paths are limited to ~104 bytes on macOS (108 on Linux).
+#[cfg(unix)]
 const MAX_SOCKET_PATH: usize = 100;
 
 /// The private directory for host sockets and metadata, created `0700`:
 /// `$XDG_RUNTIME_DIR/mtty-hosts`, else `$TMPDIR/mtty-hosts`, else (when that
-/// would make socket paths too long) `/tmp/mtty-hosts-<uid>`.
+/// would make socket paths too long) `/tmp/mtty-hosts-<uid>`. On Windows,
+/// `%TEMP%\mtty-hosts` under the user's profile, private by its ACL.
 pub fn hosts_dir() -> io::Result<PathBuf> {
     let base = std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .unwrap_or_else(std::env::temp_dir);
+    #[allow(unused_mut)]
     let mut dir = base.join("mtty-hosts");
     // "/<32 hex>.sock"
+    #[cfg(unix)]
     if dir.as_os_str().len() + 38 > MAX_SOCKET_PATH {
         // SAFETY: getuid has no preconditions.
         dir = PathBuf::from(format!("/tmp/mtty-hosts-{}", unsafe { libc::getuid() }));
@@ -32,10 +39,17 @@ pub fn hosts_dir() -> io::Result<PathBuf> {
     Ok(dir)
 }
 
+/// Create `dir` for the user alone (Windows: the profile's ACL already is).
+#[cfg(windows)]
+fn private_dir(dir: &Path) -> io::Result<()> {
+    std::fs::create_dir_all(dir)
+}
+
 /// Create `dir` as `0700`, or accept it when it already is ours and private.
 /// The mode is set at creation, so no one ever sees it more open.
+#[cfg(unix)]
 fn private_dir(dir: &Path) -> io::Result<()> {
-    use std::os::unix::fs::DirBuilderExt;
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
     match std::fs::DirBuilder::new().mode(0o700).create(dir) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
@@ -56,9 +70,7 @@ fn private_dir(dir: &Path) -> io::Result<()> {
 
 /// A random host id: 32 hex digits.
 pub fn new_id() -> io::Result<String> {
-    let mut bytes = [0u8; 16];
-    std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
-    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+    crate::sys::random_hex()
 }
 
 /// An id is 32 hex digits; anything else (a tampered session file) is
@@ -78,7 +90,7 @@ pub fn meta_path(dir: &Path, id: &str) -> PathBuf {
 /// The host binary shipped next to the running executable.
 pub fn bundled_binary() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    let path = exe.parent()?.join(BINARY);
+    let path = exe.parent()?.join(binary_name());
     path.is_file().then_some(path)
 }
 
@@ -91,15 +103,26 @@ pub fn bundled_binary() -> Option<PathBuf> {
 pub fn install(source: &Path, data_dir: &Path) -> io::Result<PathBuf> {
     let dir = data_dir.join("ptyhost").join(crate::VERSION);
     std::fs::create_dir_all(&dir)?;
-    let dest = dir.join(BINARY);
+    let dest = dir.join(binary_name());
     let src_meta = std::fs::metadata(source)?;
     let fresh = std::fs::metadata(&dest)
         .is_ok_and(|d| d.len() == src_meta.len() && d.modified().ok() >= src_meta.modified().ok());
     if !fresh {
         let tmp = dir.join(format!("{BINARY}.{}.tmp", std::process::id()));
         std::fs::copy(source, &tmp)?;
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
-        std::fs::rename(&tmp, &dest)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
+        }
+        if let Err(e) = std::fs::rename(&tmp, &dest) {
+            let _ = std::fs::remove_file(&tmp);
+            // Windows cannot replace a binary a running host uses (only a
+            // development build changes it under one version): keep it.
+            if !(cfg!(windows) && dest.exists()) {
+                return Err(e);
+            }
+        }
     }
     Ok(dest)
 }
@@ -170,11 +193,7 @@ pub fn running_hosts(dir: &Path) -> Vec<HostInfo> {
 }
 
 fn alive_pid(pid: u64) -> bool {
-    let Ok(pid) = libc::pid_t::try_from(pid) else {
-        return false;
-    };
-    // SAFETY: signal 0 only checks that the process exists.
-    pid > 0 && unsafe { libc::kill(pid, 0) } == 0
+    crate::sys::alive(pid)
 }
 
 /// `"key":123` in the host's own flat metadata.
@@ -192,29 +211,57 @@ fn json_string(json: &str, key: &str) -> Option<String> {
     Some(rest[..rest.find('"')?].to_string())
 }
 
-/// Start a host detached from this process: its own session, no terminal,
+/// Start a host detached from this process: its own session (Windows: no
+/// console, outside the app's job when the job lets it go), no terminal,
 /// `env` as its whole environment (the program inherits it).
 pub fn spawn<'a>(
     binary: &Path,
     args: &HostArgs,
     env: impl IntoIterator<Item = (&'a str, &'a str)>,
 ) -> io::Result<()> {
-    let mut cmd = Command::new(binary);
-    cmd.args(args.to_args())
-        .env_clear()
-        .envs(env)
-        .current_dir("/")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    // SAFETY: setsid is async-signal-safe.
-    unsafe {
-        cmd.pre_exec(|| {
-            libc::setsid();
-            Ok(())
-        });
-    }
-    let mut child = cmd.spawn()?;
+    let env: Vec<(&str, &str)> = env.into_iter().collect();
+    let command = || {
+        let mut cmd = Command::new(binary);
+        cmd.args(args.to_args())
+            .env_clear()
+            .envs(env.iter().copied())
+            .current_dir(std::env::temp_dir())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        cmd
+    };
+    #[cfg(unix)]
+    let mut child = {
+        use std::os::unix::process::CommandExt;
+        let mut cmd = command();
+        // SAFETY: setsid is async-signal-safe.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+        cmd.spawn()?
+    };
+    #[cfg(windows)]
+    let mut child = {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+        // Not CREATE_NEW_PROCESS_GROUP: it disables Ctrl+C in the new
+        // process, and the shell and its programs would inherit that.
+        let flags = DETACHED_PROCESS;
+        // A job that does not allow breaking away refuses the flag: then the
+        // host stays in it (and ends with the app if the job says so).
+        match command()
+            .creation_flags(flags | CREATE_BREAKAWAY_FROM_JOB)
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(_) => command().creation_flags(flags).spawn()?,
+        }
+    };
     // Reap it whenever it ends, so it never lingers as a zombie of ours.
     std::thread::spawn(move || {
         let _ = child.wait();
@@ -270,15 +317,22 @@ mod tests {
         assert_eq!(json_number(meta, "missing"), None);
     }
 
+    #[cfg(unix)]
     #[test]
     fn installs_a_versioned_copy_and_refreshes_it() {
+        use std::os::unix::fs::MetadataExt;
         let root = std::env::temp_dir().join(format!("mtty-ptyhost-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let src = root.join("src-bin");
         std::fs::write(&src, b"v1").unwrap();
         let dest = install(&src, &root).unwrap();
-        assert_eq!(dest, root.join("ptyhost").join(crate::VERSION).join(BINARY));
+        assert_eq!(
+            dest,
+            root.join("ptyhost")
+                .join(crate::VERSION)
+                .join(binary_name())
+        );
         assert_eq!(std::fs::read(&dest).unwrap(), b"v1");
         assert_eq!(std::fs::metadata(&dest).unwrap().mode() & 0o777, 0o755);
         std::fs::write(&src, b"v22").unwrap();
@@ -295,8 +349,10 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     fn private_directories_are_enforced() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
         let dir = std::env::temp_dir().join(format!("mtty-hosts-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         private_dir(&dir).unwrap();

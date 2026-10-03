@@ -1,11 +1,8 @@
-//! The host process (ADR 0041 §1, Unix): owns the PTY and the program, keeps
-//! the output ring, and serves one client at a time over a private socket.
+//! The host process (ADR 0041 §1): owns the PTY and the program, keeps the
+//! output ring, and serves one client at a time over a private socket.
 
 use std::ffi::OsString;
 use std::io::{self, Read, Write};
-use std::os::unix::fs::PermissionsExt;
-use std::os::unix::io::AsRawFd;
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
@@ -15,6 +12,7 @@ use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use crate::proto::{FromHost, ToHost, PROTO};
 use crate::ring::Ring;
 use crate::scanner::Scanner;
+use crate::sys::{self, Listener as UnixListener, Stream as UnixStream};
 
 /// A pending sequence longer than this is sent anyway (as a frame that does
 /// not end on a boundary) rather than held without bound.
@@ -25,6 +23,10 @@ const CLIENT_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// After `Kill`, the program gets this long to exit on `SIGHUP`.
 const KILL_GRACE: Duration = Duration::from_millis(250);
+
+/// ConPTY's start-up cursor position request (DSR 6).
+#[cfg(windows)]
+const CURSOR_QUERY: &[u8] = b"\x1b[6n";
 
 /// How long the host waits for the program's last output after it exits.
 const LAST_OUTPUT_WAIT: Duration = Duration::from_millis(500);
@@ -154,36 +156,6 @@ fn now_secs() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
-/// The peer runs as the same user.
-fn same_user(stream: &UnixStream) -> bool {
-    let fd = stream.as_raw_fd();
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    {
-        let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
-        let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-        // SAFETY: `cred`/`len` describe a valid buffer for SO_PEERCRED.
-        let ok = unsafe {
-            libc::getsockopt(
-                fd,
-                libc::SOL_SOCKET,
-                libc::SO_PEERCRED,
-                (&mut cred as *mut libc::ucred).cast(),
-                &mut len,
-            )
-        } == 0;
-        // SAFETY: getuid has no preconditions.
-        ok && cred.uid == unsafe { libc::getuid() }
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "android")))]
-    {
-        let (mut uid, mut gid) = (0, 0);
-        // SAFETY: getpeereid writes the two ids on success.
-        let ok = unsafe { libc::getpeereid(fd, &mut uid, &mut gid) } == 0;
-        // SAFETY: getuid has no preconditions.
-        ok && uid == unsafe { libc::getuid() }
-    }
-}
-
 fn write_meta(args: &HostArgs, child_pid: u32, started_at: u64) {
     let Some(path) = &args.meta else {
         return;
@@ -216,7 +188,7 @@ fn write_meta(args: &HostArgs, child_pid: u32, started_at: u64) {
     );
     let tmp = path.with_extension("tmp");
     if std::fs::write(&tmp, json).is_ok() {
-        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+        sys::owner_only(&tmp);
         let _ = std::fs::rename(&tmp, path);
     }
 }
@@ -224,12 +196,8 @@ fn write_meta(args: &HostArgs, child_pid: u32, started_at: u64) {
 /// Run the host until the program has ended and a client has seen it, or no
 /// client came back within the timeout. Returns the process exit code.
 pub fn run(args: HostArgs) -> io::Result<i32> {
-    // SAFETY: plain libc calls without preconditions. Leave the app's session
-    // so its hang-up never reaches us, and ignore hang-ups ourselves.
-    unsafe {
-        libc::setsid();
-        libc::signal(libc::SIGHUP, libc::SIG_IGN);
-    }
+    // Leave the app's session, so its hang-up never reaches us.
+    sys::detach_self();
     let pair = native_pty_system()
         .openpty(PtySize {
             rows: args.rows,
@@ -254,7 +222,7 @@ pub fn run(args: HostArgs) -> io::Result<i32> {
 
     let _ = std::fs::remove_file(&args.socket);
     let listener = UnixListener::bind(&args.socket)?;
-    let _ = std::fs::set_permissions(&args.socket, std::fs::Permissions::from_mode(0o600));
+    sys::owner_only(&args.socket);
     write_meta(&args, child_pid, started_at);
 
     let shared = Arc::new(Mutex::new(Shared {
@@ -270,16 +238,36 @@ pub fn run(args: HostArgs) -> io::Result<i32> {
     let (output_done_tx, output_done) = std::sync::mpsc::channel::<()>();
     {
         let shared = shared.clone();
+        #[cfg(windows)]
+        let writer = writer.clone();
         std::thread::spawn(move || {
             let mut scanner = Scanner::new();
             let mut pending: Vec<u8> = Vec::new();
             let mut pending_modes = scanner.modes().clone();
             let mut buf = vec![0u8; 64 * 1024];
+            #[cfg(windows)]
+            let mut first = true;
             loop {
-                let n = match reader.read(&mut buf) {
+                #[allow(unused_mut)]
+                let mut n = match reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => n,
                 };
+                // ConPTY opens by asking where the cursor is and prints
+                // nothing until told. The pane is new, so it is at the top
+                // left: answer here, and keep the question out of the stream,
+                // so the start never waits for a client and no client
+                // answers it a second time into the program's input.
+                #[cfg(windows)]
+                if std::mem::take(&mut first) && buf[..n].starts_with(CURSOR_QUERY) {
+                    let mut w = writer.lock().unwrap();
+                    let _ = w.write_all(b"\x1b[1;1R").and_then(|()| w.flush());
+                    buf.copy_within(CURSOR_QUERY.len()..n, 0);
+                    n -= CURSOR_QUERY.len();
+                    if n == 0 {
+                        continue;
+                    }
+                }
                 if pending.is_empty() {
                     pending_modes = scanner.modes().clone();
                 }
@@ -331,7 +319,7 @@ pub fn run(args: HostArgs) -> io::Result<i32> {
         std::thread::spawn(move || {
             let mut next_id = 0u64;
             for stream in listener.incoming().flatten() {
-                if !same_user(&stream) {
+                if !sys::same_user(&stream) {
                     continue;
                 }
                 next_id += 1;
@@ -376,28 +364,8 @@ pub fn run(args: HostArgs) -> io::Result<i32> {
     Ok(code)
 }
 
-/// `SIGHUP` to the program's process group (it leads its own session), then
-/// `SIGKILL` after a grace period.
 fn hang_up(child_pid: u32) {
-    let Ok(pid) = libc::pid_t::try_from(child_pid) else {
-        return;
-    };
-    if pid <= 0 {
-        return;
-    }
-    // SAFETY: plain signal delivery to a known process group.
-    unsafe {
-        libc::kill(-pid, libc::SIGHUP);
-        libc::kill(pid, libc::SIGHUP);
-    }
-    std::thread::spawn(move || {
-        std::thread::sleep(KILL_GRACE);
-        // SAFETY: as above.
-        unsafe {
-            libc::kill(-pid, libc::SIGKILL);
-            libc::kill(pid, libc::SIGKILL);
-        }
-    });
+    sys::hang_up(child_pid, KILL_GRACE);
 }
 
 fn serve(

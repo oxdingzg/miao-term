@@ -48,7 +48,7 @@ palette    = ["#3b4252", "#bf616a", "#a3be8c", "#ebcb8b",
 | `notifications` | `true` | agent 需要你时发系统通知 |
 | `prevent-sleep` | `true` | agent 工作时保持系统不休眠 |
 | `restore-scrollback` | `true` | 退出时保存终端内容，重启后显示 |
-| `pty-host` | `false` | 重启后保留 shell 进程(Unix，实验性) |
+| `pty-host` | `false` | 重启后保留 shell 进程(实验性) |
 | `quick-terminal-hotkey` | — | 全局快速终端热键，如 `cmd+shift+t` |
 | `editor-vim` | `false` | 内置编辑器启用极简 vim 模式 |
 | `editor` | — | 「在标签中编辑」执行的命令，如 `code --wait` |

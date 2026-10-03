@@ -134,6 +134,16 @@
                                 Source='$(var.CargoTargetBinDir)\mtty-cli.exe'
                                 KeyPath='yes'/>
                         </Component>
+                        <!-- The PTY host (ADR 0041); mtty runs a copy of it from the
+                             user's data folder, so updates never meet it in use. -->
+                        <Component Id='binary2' Guid='*'>
+                            <File
+                                Id='exe2'
+                                Name='mtty-ptyhost.exe'
+                                DiskId='1'
+                                Source='$(var.CargoTargetBinDir)\mtty-ptyhost.exe'
+                                KeyPath='yes'/>
+                        </Component>
                     </Directory>
                 </Directory>
             </Directory>
@@ -191,6 +201,7 @@
             
             <ComponentRef Id='binary0'/>
             <ComponentRef Id='binary1'/>
+            <ComponentRef Id='binary2'/>
             <ComponentRef Id='StartMenuShortcut'/>
             <ComponentRef Id='DesktopShortcut'/>
             <!-- `mtty://` (and `miaotty://`) deep links. `ssh://` and

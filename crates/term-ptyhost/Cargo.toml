@@ -18,6 +18,11 @@ portable-pty = "0.9.0"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[target.'cfg(windows)'.dependencies]
+# AF_UNIX sockets on Windows (already in the tree through zbus; MIT).
+uds_windows = "1.2"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_Threading"] }
+
 [dev-dependencies]
 # End-to-end: a hosted Terminal against the real host binary.
 miao-term-core = { path = "../term-core" }

@@ -336,6 +336,38 @@ reboot is also out of scope.
   palette. A real update from one release to the next is checked when the
   next release ships.
 
+## Addendum: P3 as built (2026-10-03)
+
+- **Transport.** Windows hosts use AF_UNIX sockets (Windows 10 1803+, below
+  ConPTY's own 1809 floor) instead of the named pipe planned in §5: they are
+  full duplex, so a reader and a writer thread share one connection, which a
+  synchronous named-pipe handle does not allow. The socket sits in
+  `%TEMP%\mtty-hosts`, private through the profile's ACL; there is no peer
+  check on Windows. `uds_windows` (MIT) was already in the tree.
+- **Start-up.** ConPTY asks for the cursor position (`ESC[6n`) before
+  printing anything. The host answers its first such question itself
+  (`1;1`: the pane is new) and keeps it out of the stream, so a host never
+  waits for a client and a replay never answers it again.
+- **Processes.** The host is created detached and, when the app's job
+  allows, outside that job. It is *not* given its own process group:
+  `CREATE_NEW_PROCESS_GROUP` turns Ctrl+C off in the new process, the shell
+  inherits that, and Ctrl+C typed in the pane stopped reaching programs (found
+  on the desktop, now covered by a test). The host also turns Ctrl+C
+  handling back on at start. Ending a program runs
+  `taskkill /T /F` on its tree (ADR 0027). The host binary runs from
+  `%LOCALAPPDATA%\mtty\ptyhost\<version>\`, so an MSI update never meets it
+  in use; a copy in use is kept rather than replaced.
+- **Packaging.** `mtty-ptyhost.exe` ships in the MSI and the zip, and the zip
+  update copies it too. *Relaunch, Keeping Programs Running* uses a `.cmd`
+  helper.
+- Verified on Windows 11: host tests over ConPTY (attach, resume from an
+  offset, Ctrl+C reaching the program, exit status while detached, the detach
+  timeout ending the program tree, takeover) and a hosted `Terminal` across a
+  simulated restart with `cmd.exe`; on the desktop, a loop kept running
+  through *Relaunch, Keeping Programs Running*, and after `taskkill /F` of
+  the app a running `ping` was reattached, interrupted with Ctrl+C and the
+  pane took input again with its id kept.
+
 ## Review findings (2026-10-03)
 
 The first draft was checked against `alacritty_terminal` 0.25.1, vte 0.15 and

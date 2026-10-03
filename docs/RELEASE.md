@@ -42,8 +42,8 @@ Every artifact gets a `.sig` next to it when signing is configured.
 Detached signatures are generated once in the Linux assembly job, after platform
 codesigning, and verified there against the committed public key.
 All app bundles, archives and installers contain one native mtty application
-and mtty-cli; the macOS and Linux ones also carry `mtty-ptyhost`, the PTY host
-that keeps shells running across restarts (ADR 0041; not yet on Windows). No separate native application archive is published.
+and mtty-cli, plus `mtty-ptyhost`, the PTY host that keeps shells running
+across restarts (ADR 0041). No separate native application archive is published.
 All four runner builds and AppImage/MSI packaging are required to succeed.
 
 ## Secrets (all optional)

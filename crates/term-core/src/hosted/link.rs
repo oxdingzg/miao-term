@@ -1,7 +1,6 @@
-//! The app's connection to one host (Unix).
+//! The app's connection to one host.
 
 use std::io::{self, Write};
-use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::SyncSender;
@@ -10,6 +9,7 @@ use std::time::Duration;
 
 use miao_term_ptyhost::client;
 use miao_term_ptyhost::proto::{FromHost, ToHost};
+use miao_term_ptyhost::sys::Stream as UnixStream;
 use portable_pty::CommandBuilder;
 
 use super::Incoming;

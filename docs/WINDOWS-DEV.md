@@ -40,6 +40,10 @@ tar -czf /tmp/miao-term-src.tgz --exclude target --exclude .git --exclude dist m
 scp /tmp/miao-term-src.tgz <windows-host>:miao-term-src.tgz
 ```
 
+On macOS, set `COPYFILE_DISABLE=1` for that `tar`: otherwise it adds `._*`
+AppleDouble files, and `term-editor`'s build script fails reading the
+`._*.sublime-syntax` ones.
+
 ```powershell
 # on the Windows host
 Remove-Item -Recurse -Force "$env:USERPROFILE\miao-term" -ErrorAction SilentlyContinue

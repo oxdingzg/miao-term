@@ -52,7 +52,7 @@ If no mtty configuration exists, ghostty's `config` and alacritty's
 | `notifications` | `true` | A system notification when an agent needs attention |
 | `prevent-sleep` | `true` | Keep the machine awake while an agent is processing |
 | `restore-scrollback` | `true` | Save terminals' contents at quit and show them on relaunch |
-| `pty-host` | `false` | Keep shells running across restarts (Unix, experimental) |
+| `pty-host` | `false` | Keep shells running across restarts (experimental) |
 | `quick-terminal-hotkey` | — | System-wide Quick Terminal toggle, e.g. `cmd+shift+t` |
 | `editor-vim` | `false` | Minimal vim mode in the built-in editor |
 | `editor` | — | The command "Edit in Tab" runs, e.g. `code --wait` |

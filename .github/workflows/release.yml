@@ -131,6 +131,7 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item target/release/mtty.exe dist/
           Copy-Item target/release/mtty-cli.exe dist/
+          Copy-Item target/release/mtty-ptyhost.exe dist/
           Compress-Archive -Path dist/* -DestinationPath mtty-windows-x86_64.zip
 
       - name: MSI (Windows)
@@ -140,7 +141,7 @@ jobs:
           # picks it up through the WIX environment variable.
           choco install -y wixtoolset --no-progress
           cargo install cargo-wix --locked
-          cargo build --release -p mtty-cli
+          cargo build --release -p mtty-cli -p miao-term-ptyhost
           # The WiX template lives in mtty-app/wix and references wix\License.rtf
           # relative to the crate, so build from there.
           cd mtty-app
@@ -158,7 +159,7 @@ jobs:
           if ($install.ExitCode -notin @(0, 3010)) { throw "MSI installation failed: $($install.ExitCode)" }
           try {
             $bin = Join-Path $env:ProgramFiles 'mtty/bin'
-            foreach ($name in @('mtty.exe', 'mtty-cli.exe')) {
+            foreach ($name in @('mtty.exe', 'mtty-cli.exe', 'mtty-ptyhost.exe')) {
               if (-not (Test-Path (Join-Path $bin $name))) { throw "Missing installed binary: $name" }
             }
             & (Join-Path $bin 'mtty-cli.exe') --help
