@@ -1192,17 +1192,18 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
                     if ui.button("A-").clicked() {
                         font_delta = -1.0;
                     }
-                    if icon_button(ui, Icon::Sidebar, bg_color(ch.text))
-                        .on_hover_text(t(lang, "Toggle sidebar", "开关侧栏"))
-                        .clicked()
-                    {
-                        toggle_sidebar = true;
-                    }
+                    // This layout runs right to left: details sits to the right of sidebar.
                     if icon_button(ui, Icon::Details, bg_color(ch.text))
                         .on_hover_text(t(lang, "Toggle details", "开关详情"))
                         .clicked()
                     {
                         toggle_details = true;
+                    }
+                    if icon_button(ui, Icon::Sidebar, bg_color(ch.text))
+                        .on_hover_text(t(lang, "Toggle sidebar", "开关侧栏"))
+                        .clicked()
+                    {
+                        toggle_sidebar = true;
                     }
                 });
             });
