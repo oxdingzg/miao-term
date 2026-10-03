@@ -68,12 +68,17 @@ PowerShell in CI.
 
 ## Restoring a session does not bring back what was running
 
-Restoring replays the **layout** and starts new shells; running processes are
-not preserved. To keep shells alive across a restart, set:
+Programs keep running through an update, *Relaunch, Keeping Programs
+Running* and a crash: each shell runs in a PTY host (`pty-host`, on by
+default) and the relaunched mtty reattaches it. An ordinary quit ends them
+unless you set:
 
 ```toml
-pty-host = true      # experimental
+keep-sessions-on-quit = true
 ```
+
+Panes opened while `pty-host = false`, and SSH, serial, Telnet and TCP tabs,
+start afresh: their layout and contents come back, the processes do not.
 
 ## `mtty-cli` cannot connect
 
