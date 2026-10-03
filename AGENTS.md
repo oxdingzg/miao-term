@@ -65,6 +65,8 @@ target), so a plain reader can sample pixels directly. Drive the running app wit
 - `MTTY_QA_COMMAND="<palette label>"` runs one command-palette command at
   startup by its English label (for example `Agent Tasks…`), so windows that
   only open from the palette can be captured too.
+- `MTTY_QA_SCROLL=<lines>` scrolls the active pane back by that many lines,
+  like the wheel. Both run at startup, or `MTTY_QA_AFTER=<secs>` after startup.
 - Use isolated state (`HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
   `XDG_RUNTIME_DIR` pointing at a temporary directory) so a capture never reads
   or writes your real configuration; keep the runtime path short (Unix sockets
