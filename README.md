@@ -110,6 +110,10 @@ mtty instead.
   and surface.
 - Scrollback with a scrollbar indicator, drag and double-click selection,
   copy/paste, and wide-character / CJK layout with a system CJK font fallback.
+- Files dropped on a terminal insert their shell-quoted paths; dropped on the
+  band along its bottom (or with Option/Alt held) they open instead, files in
+  the editor and a folder as a terminal there. Both targets show while
+  dragging.
 - Find (`⌘F`) with match highlighting and a result count, CJK included.
 - The [kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/)
   (CSI-u, disambiguate level) when a program requests it, modifier-aware

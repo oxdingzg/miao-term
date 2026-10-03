@@ -39,6 +39,7 @@ enum HostEvent {
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
+mod drag;
 mod editor_pane;
 #[cfg(target_os = "macos")]
 mod macos_url;
@@ -1448,6 +1449,18 @@ struct State {
     /// A file drag is hovering the window. The drop target is painted so the
     /// destination is visible before the file is released.
     dropping: bool,
+    /// What is being dragged (unknown on Wayland until the drop).
+    drag_paths: Vec<std::path::PathBuf>,
+    /// The pointer is known while dragging (see `drag`): the open band is
+    /// offered.
+    drag_live: bool,
+    /// What the current drop does, decided at its first file so a drop of
+    /// several is handled alike (opening one changes the tab under the
+    /// pointer).
+    drop_choice: Option<(drag::DropAction, Option<String>)>,
+    /// QA: a drag set up by `MTTY_QA_DRAG` (its point is fixed and Alt is
+    /// as given, not read from the system).
+    qa_drag: Option<bool>,
     divider_drag: Option<(Vec<bool>, SplitDir, Rect)>,
     /// Mouse button currently forwarded to the application (0/1/2), if any.
     mouse_captured: Option<u8>,
@@ -3869,37 +3882,7 @@ impl State {
             );
         }
         if self.dropping {
-            let ch = self.theme.chrome();
-            let accent = egui::Color32::from_rgb(ch.accent.0, ch.accent.1, ch.accent.2);
-            let scale = self.window.scale_factor() as f32;
-            let hovered = self
-                .pane_rects()
-                .into_iter()
-                .find(|(_, r)| {
-                    r.contains(self.cursor.0 as f32 / scale, self.cursor.1 as f32 / scale)
-                })
-                .map(|(_, r)| card_inner(r));
-            // Over a pane the drop pastes a shell-quoted path, anywhere else it
-            // opens the editor. Which one is about to happen is the whole point
-            // of drawing this: the platform only shows a generic drag cursor.
-            let rect = match hovered {
-                Some(r) => egui::Rect::from_min_size(egui::pos2(r.x, r.y), egui::vec2(r.w, r.h)),
-                None => ctx.screen_rect(),
-            };
-            let painter = ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Foreground,
-                egui::Id::new("file_drop"),
-            ));
-            painter.rect_filled(
-                rect,
-                egui::Rounding::same(4.0),
-                egui::Color32::from_rgba_unmultiplied(ch.accent.0, ch.accent.1, ch.accent.2, 46),
-            );
-            painter.rect_stroke(
-                rect,
-                egui::Rounding::same(4.0),
-                egui::Stroke::new(2.0_f32, accent),
-            );
+            self.draw_drop_targets(ctx);
         }
         // Host-specific overlay windows.
         self.palette_window(ctx);
@@ -8683,7 +8666,8 @@ impl State {
     /// A file dropped on the window (X11 through winit, Wayland through
     /// `wayland_dnd`), at the pointer position in `self.cursor`.
     fn drop_file(&mut self, path: std::path::PathBuf) {
-        self.dropping = false;
+        // The first file of a drop decides for all of them.
+        let first = std::mem::take(&mut self.dropping) || self.drop_choice.is_none();
         // Onto the SFTP window: upload to its remote folder.
         let scale = self.window.scale_factor() as f32;
         let at = egui::pos2(self.cursor.0 as f32 / scale, self.cursor.1 as f32 / scale);
@@ -8705,35 +8689,157 @@ impl State {
             self.window.request_redraw();
             return;
         }
-        let over_pane = self
-            .pane_rects()
-            .into_iter()
-            .find(|(_, r)| r.contains(px / scale, py / scale));
-        // A directory never reaches the editor: `read_to_string` fails
-        // with EISDIR and leaves only a line on stderr, so a dragged
-        // folder looked like it did nothing at all. Pasting the path is
-        // what a dropped folder means in a terminal, so it always goes
-        // to the pane; only a file outside one opens in the editor.
-        // Whether a floating egui layer (a dialog, the editor, a popup) is at
-        // the drop point. Asked of the drop position itself: during a drag
-        // the window gets no pointer motion, so egui's own pointer state is
-        // stale (a Wayland drop on the terminal opened the editor).
-        let over_ui = self
-            .egui_ctx
-            .layer_id_at(egui::pos2(px / scale, py / scale))
-            .is_some_and(|layer| layer.order != egui::Order::Background);
-        if path.is_dir() || (over_pane.is_some() && !over_ui) {
-            if let Some((id, _)) = over_pane {
-                if let Some(tab) = self.tabs.get_mut(self.active_tab) {
-                    tab.active = id;
+        if first {
+            self.drop_choice = Some(self.drop_target(px / scale, py / scale));
+        }
+        let Some((action, pane)) = self.drop_choice.clone() else {
+            return;
+        };
+        match action {
+            drag::DropAction::InsertPath => {
+                if let Some(id) = pane {
+                    if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                        tab.active = id;
+                    }
                 }
+                // Into the terminal: the shell-quoted path.
+                self.paste(&format!("{} ", local_path_arg(&path.to_string_lossy())));
             }
-            // Drop onto the terminal: paste the shell-quoted path.
-            self.paste(&format!("{} ", local_path_arg(&path.to_string_lossy())));
-        } else {
-            self.open_editor(path);
+            // A folder never reaches the editor (`read_to_string` fails with
+            // EISDIR): it opens a terminal there.
+            drag::DropAction::Open if path.is_dir() => self.new_tab_in(Some(path)),
+            drag::DropAction::Open => {
+                self.open_editor(path);
+            }
         }
         self.window.request_redraw();
+    }
+
+    /// While files are dragged over the window, show what a drop does where
+    /// the pointer is (`drag`): over a terminal, its "insert path" area and
+    /// the "open" band along its bottom, the one under the pointer lit;
+    /// elsewhere the whole window opens. The platform only shows a generic
+    /// drag cursor.
+    fn draw_drop_targets(&self, ctx: &egui::Context) {
+        let ch = self.theme.chrome();
+        let accent = egui::Color32::from_rgb(ch.accent.0, ch.accent.1, ch.accent.2);
+        let text = chrome::fg_color(&self.theme);
+        let scale = self.window.scale_factor() as f32;
+        let (x, y) = (self.cursor.0 as f32 / scale, self.cursor.1 as f32 / scale);
+        let (action, _) = self.drop_target(x, y);
+        let (insert, open) = drag::labels(self.lang, &self.drag_paths);
+        let hint = drag::hint(self.lang);
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("file_drop"),
+        ));
+        let zone = |rect: egui::Rect, label: &str, lit: bool, hint: Option<&str>| {
+            let alpha = if lit { 56 } else { 14 };
+            painter.rect_filled(
+                rect.shrink(2.0),
+                egui::Rounding::same(6.0),
+                egui::Color32::from_rgba_unmultiplied(ch.accent.0, ch.accent.1, ch.accent.2, alpha),
+            );
+            painter.rect_stroke(
+                rect.shrink(2.0),
+                egui::Rounding::same(6.0),
+                egui::Stroke::new(
+                    if lit { 2.0_f32 } else { 1.0 },
+                    accent.gamma_multiply(if lit { 1.0 } else { 0.5 }),
+                ),
+            );
+            let color = if lit {
+                accent
+            } else {
+                text.gamma_multiply(0.6)
+            };
+            let size = if lit { 16.0 } else { 14.0 };
+            let at = rect.center() - egui::vec2(0.0, if hint.is_some() { 9.0 } else { 0.0 });
+            painter.text(
+                at,
+                egui::Align2::CENTER_CENTER,
+                label,
+                egui::FontId::proportional(size),
+                color,
+            );
+            if let Some(hint) = hint {
+                painter.text(
+                    at + egui::vec2(0.0, 20.0),
+                    egui::Align2::CENTER_CENTER,
+                    hint,
+                    egui::FontId::proportional(12.0),
+                    text.gamma_multiply(0.7),
+                );
+            }
+        };
+        let to_egui =
+            |r: Rect| egui::Rect::from_min_size(egui::pos2(r.x, r.y), egui::vec2(r.w, r.h));
+        match self.terminal_at(x, y) {
+            Some((_, r)) if self.drag_live => {
+                let band = drag::open_band_top(r);
+                let top = Rect { h: band - r.y, ..r };
+                let bottom = Rect {
+                    y: band,
+                    h: r.y + r.h - band,
+                    ..r
+                };
+                let insert_lit = action == drag::DropAction::InsertPath;
+                zone(
+                    to_egui(top),
+                    &insert,
+                    insert_lit,
+                    insert_lit.then_some(hint),
+                );
+                zone(
+                    to_egui(bottom),
+                    &open,
+                    !insert_lit,
+                    (!insert_lit).then_some(hint),
+                );
+            }
+            Some((_, r)) => {
+                let label = if action == drag::DropAction::InsertPath {
+                    &insert
+                } else {
+                    &open
+                };
+                zone(to_egui(r), label, true, Some(hint));
+            }
+            None => zone(ctx.screen_rect(), &open, true, None),
+        }
+    }
+
+    /// The terminal pane at `(x, y)` (logical points) and its text area,
+    /// unless a floating layer covers the point (an editor pane is not a
+    /// terminal).
+    fn terminal_at(&self, x: f32, y: f32) -> Option<(String, Rect)> {
+        let terminals: Vec<&str> = self
+            .tabs
+            .get(self.active_tab)
+            .map(|t| t.panes.iter().map(|p| p.id.as_str()).collect())
+            .unwrap_or_default();
+        // Asked of the point itself: during a drag the window gets no pointer
+        // motion, so egui's own pointer state is stale (a Wayland drop on the
+        // terminal opened the editor).
+        let over_ui = self
+            .egui_ctx
+            .layer_id_at(egui::pos2(x, y))
+            .is_some_and(|layer| layer.order != egui::Order::Background);
+        if over_ui {
+            return None;
+        }
+        self.pane_rects()
+            .into_iter()
+            .find(|(id, r)| terminals.contains(&id.as_str()) && r.contains(x, y))
+            .map(|(id, r)| (id, card_inner(r)))
+    }
+
+    /// What a drop at `(x, y)` does, and the terminal it goes to (`drag`).
+    fn drop_target(&self, x: f32, y: f32) -> (drag::DropAction, Option<String>) {
+        let pane = self.terminal_at(x, y);
+        let alt = self.qa_drag.unwrap_or_else(|| drag::alt_down(self.mods));
+        let action = drag::drop_action(pane.as_ref().map(|(_, r)| *r), y, self.drag_live, alt);
+        (action, pane.map(|(id, _)| id))
     }
 
     /// A local change: sync in a moment rather than at the next minute.
@@ -11099,6 +11205,30 @@ impl State {
             return;
         }
         self.qa_done = true;
+        // `MTTY_QA_DRAG=<x>,<y>[,alt]:<path>[;<path>…]` holds a file drag at
+        // a window point (logical) for a capture; with `MTTY_QA_DROP=1` the
+        // files are dropped there (synthetic drags cannot be posted).
+        if let Some(spec) = miao_term_config::env("QA_DRAG") {
+            if let Some((at, paths)) = spec.split_once(':') {
+                let mut parts = at.split(',');
+                let x = parts.next().and_then(|v| v.trim().parse::<f64>().ok());
+                let y = parts.next().and_then(|v| v.trim().parse::<f64>().ok());
+                if let (Some(x), Some(y)) = (x, y) {
+                    let scale = self.window.scale_factor();
+                    self.cursor = (x * scale, y * scale);
+                    self.qa_drag = Some(parts.next().is_some_and(|m| m.trim() == "alt"));
+                    self.drag_paths = paths.split(';').map(std::path::PathBuf::from).collect();
+                    self.drag_live = true;
+                    self.dropping = true;
+                    self.drop_choice = None;
+                    if miao_term_config::env("QA_DROP").is_some() {
+                        for path in self.drag_paths.clone() {
+                            self.drop_file(path);
+                        }
+                    }
+                }
+            }
+        }
         // `MTTY_QA_SCROLL=<lines>` scrolls the active pane back, like the
         // wheel, so scrollback behaviour can be captured without input events.
         if let Some(lines) =
@@ -13379,6 +13509,10 @@ impl ApplicationHandler<HostEvent> for Host {
             selection: None,
             dragging: false,
             dropping: false,
+            drag_paths: Vec::new(),
+            drag_live: false,
+            drop_choice: None,
+            qa_drag: None,
             divider_drag: None,
             mouse_captured: None,
             cursor: (0.0, 0.0),
@@ -13663,10 +13797,18 @@ impl ApplicationHandler<HostEvent> for Host {
                 for event in events {
                     match event {
                         wayland_dnd::DropEvent::Hover { x, y } => {
+                            if !state.dropping {
+                                state.drag_paths.clear();
+                                state.drop_choice = None;
+                            }
                             state.cursor = (x * scale, y * scale);
                             state.dropping = true;
+                            state.drag_live = true;
                         }
-                        wayland_dnd::DropEvent::Leave => state.dropping = false,
+                        wayland_dnd::DropEvent::Leave => {
+                            state.dropping = false;
+                            state.drag_live = false;
+                        }
                         wayland_dnd::DropEvent::Drop { paths, x, y } => {
                             state.cursor = (x * scale, y * scale);
                             for path in paths {
@@ -13714,6 +13856,16 @@ impl ApplicationHandler<HostEvent> for Host {
                 state.window.request_redraw();
             }
             let mut wake_at = Instant::now() + Duration::from_millis(500);
+            // A file drag sends no pointer motion or key events: follow the
+            // pointer and Alt from the system so the drop targets track them.
+            if state.dropping && state.qa_drag.is_none() {
+                if let Some(at) = drag::pointer_in_window(&state.window) {
+                    state.cursor = at;
+                    state.drag_live = true;
+                }
+                state.window.request_redraw();
+                wake_at = wake_at.min(Instant::now() + Duration::from_millis(30));
+            }
             if let Some(at) = state.image_wake {
                 if Instant::now() >= at {
                     state.image_wake = None;
@@ -14097,22 +14249,26 @@ impl ApplicationHandler<HostEvent> for Host {
             WindowEvent::DroppedFile(path) => {
                 // The drop point: a drag sends no pointer motion, so the
                 // last known position is wherever the pointer left before.
-                #[cfg(target_os = "macos")]
-                if let (Some((x, y)), Ok(inner)) = (
-                    macos_url::pointer_on_screen(),
-                    state.window.inner_position(),
-                ) {
-                    let scale = state.window.scale_factor();
-                    state.cursor = (x * scale - inner.x as f64, y * scale - inner.y as f64);
+                if let Some(at) = drag::pointer_in_window(&state.window) {
+                    state.cursor = at;
+                    state.drag_live = true;
                 }
                 state.drop_file(path);
             }
-            WindowEvent::HoveredFile(_) => {
+            WindowEvent::HoveredFile(path) => {
+                // One event per dragged file; a new drag starts afresh.
+                if !state.dropping {
+                    state.drag_paths.clear();
+                    state.drag_live = false;
+                    state.drop_choice = None;
+                }
+                state.drag_paths.push(path);
                 state.dropping = true;
                 state.window.request_redraw();
             }
             WindowEvent::HoveredFileCancelled => {
                 state.dropping = false;
+                state.drag_live = false;
                 state.window.request_redraw();
             }
             WindowEvent::MouseInput {

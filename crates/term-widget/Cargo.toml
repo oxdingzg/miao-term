@@ -31,6 +31,15 @@ egui-wgpu = "0.30"
 egui_extras = { version = "0.30", features = ["image", "file", "http"] }
 egui_commonmark = "0.19"
 
+[target.'cfg(windows)'.dependencies]
+# The pointer and Alt while files are dragged over the window (no window
+# events arrive then). Already in the tree through winit.
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # Native menu bar (MIT). Only used when the binary runs from an app bundle,
 # which is where the application icon lives that AppKit's about panel wants.
