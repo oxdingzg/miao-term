@@ -13,6 +13,9 @@ use std::process::Command;
 /// Output can still be captured with `Command::output`; GUI tools retain
 /// their own windows. Use ordinary commands for interactive terminal shells.
 pub fn background_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    #[cfg(windows)]
+    let program = find_executable(program.as_ref())
+        .unwrap_or_else(|| std::path::PathBuf::from(program.as_ref()));
     let command = Command::new(program);
     #[cfg(windows)]
     let command = {
@@ -22,6 +25,53 @@ pub fn background_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
         command
     };
     command
+}
+
+/// Locate a tool, including Windows executable and batch-file extensions.
+pub fn find_executable(program: impl AsRef<std::ffi::OsStr>) -> Option<std::path::PathBuf> {
+    let extensions: Vec<std::ffi::OsString> = if cfg!(windows) {
+        std::env::var("PATHEXT")
+            .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
+            .split(';')
+            .filter(|ext| ext.starts_with('.') && !ext.contains(['/', '\\']))
+            .map(std::ffi::OsString::from)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    find_program(
+        program.as_ref(),
+        std::env::var_os("PATH").as_deref(),
+        &extensions,
+    )
+}
+
+fn find_program(
+    program: &std::ffi::OsStr,
+    path: Option<&std::ffi::OsStr>,
+    extensions: &[std::ffi::OsString],
+) -> Option<std::path::PathBuf> {
+    let program_path = std::path::Path::new(program);
+    let dirs = if program_path.is_absolute() || program_path.components().count() > 1 {
+        vec![std::path::PathBuf::new()]
+    } else {
+        std::env::split_paths(path?).collect()
+    };
+    for dir in dirs {
+        let candidate = dir.join(program_path);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        for ext in extensions {
+            let mut name = candidate.as_os_str().to_os_string();
+            name.push(ext);
+            let candidate = std::path::PathBuf::from(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
 }
 
 #[cfg(target_os = "macos")]
@@ -152,6 +202,46 @@ fn escape_ps(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finds_native_and_batch_tools_with_windows_extensions() {
+        let root = std::env::temp_dir().join(format!("mtty-path-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let extensions = [".exe".into(), ".cmd".into()];
+        let path = std::env::join_paths([&root]).unwrap();
+        for name in ["claude.exe", "miao.cmd"] {
+            std::fs::write(root.join(name), "test").unwrap();
+        }
+        for (program, expected) in [("claude", "claude.exe"), ("miao", "miao.cmd")] {
+            assert_eq!(
+                find_program(program.as_ref(), Some(&path), &extensions),
+                Some(root.join(expected))
+            );
+            assert_eq!(
+                find_program(root.join(program).as_os_str(), None, &extensions),
+                Some(root.join(expected))
+            );
+        }
+        assert!(find_program("missing".as_ref(), Some(&path), &extensions).is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn background_batch_file_runs_with_spaces_and_captures_errors() {
+        let root = std::env::temp_dir().join(format!("mtty batch test {}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("probe.cmd"),
+            "@echo off\r\necho batch output\r\necho batch error 1>&2\r\nexit /b 9\r\n",
+        )
+        .unwrap();
+        let out = background_command(root.join("probe")).output().unwrap();
+        assert_eq!(out.status.code(), Some(9));
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "batch output");
+        assert_eq!(String::from_utf8_lossy(&out.stderr).trim(), "batch error");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     #[cfg(windows)]

@@ -55,13 +55,7 @@ pub const AGENTS: &[Agent] = &[
 
 /// Whether `bin` is an executable on `PATH`.
 pub fn detected(bin: &str) -> bool {
-    let Some(path) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&path).any(|dir| {
-        let candidate = dir.join(bin);
-        candidate.is_file()
-    })
+    miao_term_platform::find_executable(bin).is_some()
 }
 
 /// `~/.config/mtty/hooks`.
