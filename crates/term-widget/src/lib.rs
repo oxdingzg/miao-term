@@ -418,6 +418,23 @@ struct Pane {
     published_output: Option<miao_term_core::CommandOutput>,
 }
 
+impl Pane {
+    /// Feed queued output to the emulator. A scrolled-back viewport stays on
+    /// the same lines (the emulator grows its display offset as lines enter
+    /// history), so agents that redraw a spinner every second do not yank the
+    /// reader back to the bottom; input, paste and clears still return there.
+    /// Every drain goes through here so the grown offset is never overwritten
+    /// by a stale `scroll`.
+    fn drain_output(&mut self) -> bool {
+        self.term.screen_mut().set_scrollback(self.scroll);
+        let output = self.term.process_pending();
+        if output {
+            self.scroll = self.term.screen().scroll_offset();
+        }
+        output
+    }
+}
+
 /// Input for a pane with an offer pending (reconnect, run again): Enter types
 /// the offered command; anything else means the user wants the shell as it
 /// is, so the offer ends and the input passes through unchanged.
@@ -3025,16 +3042,10 @@ impl State {
                 }
             }
         }
-        // Drain every pane. Output keeps a scrolled-back viewport on the same
-        // lines (the emulator grows its display offset as lines enter history),
-        // so agents that redraw a spinner every second do not yank the reader
-        // back to the bottom; input, paste and clears still return there.
+        // Drain every pane (see `Pane::drain_output`).
         for tab in &mut self.tabs {
             for pane in &mut tab.panes {
-                pane.term.screen_mut().set_scrollback(pane.scroll);
-                if pane.term.process_pending() {
-                    pane.scroll = pane.term.screen().scroll_offset();
-                }
+                pane.drain_output();
             }
         }
         self.reap_exited();
@@ -13284,7 +13295,7 @@ impl ApplicationHandler<HostEvent> for Host {
             let focused = state.focused;
             for (ti, tab) in state.tabs.iter_mut().enumerate() {
                 for pane in &mut tab.panes {
-                    let output = pane.term.process_pending();
+                    let output = pane.drain_output();
                     changed |= output;
                     if output && (ti != active_tab || !focused) && tab.attention.is_none() {
                         tab.attention = Some(Attention::Unread);
@@ -16044,6 +16055,65 @@ impl chrome::Chrome for State {
 
 #[cfg(test)]
 mod tests {
+    /// A pane over a byte pipe the test feeds chunk by chunk.
+    fn piped_pane() -> (super::Pane, std::sync::mpsc::Sender<Vec<u8>>) {
+        struct ChunkReader(std::sync::mpsc::Receiver<Vec<u8>>);
+        impl std::io::Read for ChunkReader {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                let Ok(chunk) = self.0.recv() else {
+                    return Ok(0);
+                };
+                buf[..chunk.len()].copy_from_slice(&chunk);
+                Ok(chunk.len())
+            }
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let term = miao_term_core::Terminal::from_pipe(
+            10,
+            3,
+            100,
+            ChunkReader(rx),
+            Box::new(std::io::sink()),
+            std::sync::Arc::new(|| {}),
+        );
+        let pane = super::Pane {
+            id: "p".into(),
+            term,
+            scroll: 0,
+            on_enter: None,
+            published_output: None,
+        };
+        (pane, tx)
+    }
+
+    /// Drain until the reader thread has delivered `bytes`.
+    fn feed(pane: &mut super::Pane, tx: &std::sync::mpsc::Sender<Vec<u8>>, bytes: &[u8]) {
+        tx.send(bytes.to_vec()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !pane.drain_output() {
+            assert!(std::time::Instant::now() < deadline, "output never arrived");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn every_drain_keeps_a_scrolled_back_pane_anchored() {
+        let (mut pane, tx) = piped_pane();
+        feed(&mut pane, &tx, b"a\r\nb\r\nc\r\nd\r\ne");
+        pane.scroll = 2;
+        // Two drains in a row (the idle drain, then the frame's drain): the
+        // offset the first one grew must survive into the second.
+        feed(&mut pane, &tx, b"\r\nf");
+        feed(&mut pane, &tx, b"\r\ng");
+        assert_eq!(pane.scroll, 4);
+        assert_eq!(pane.term.screen().line_text(0), "a");
+        // A pane at the bottom follows output.
+        pane.scroll = 0;
+        feed(&mut pane, &tx, b"\r\nh");
+        assert_eq!(pane.scroll, 0);
+        assert_eq!(pane.term.screen().line_text(2), "h");
+    }
+
     #[test]
     fn windows_frame_resize_handles_edges_and_corners() {
         use winit::window::ResizeDirection::*;
