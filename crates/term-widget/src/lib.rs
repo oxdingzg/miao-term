@@ -10763,6 +10763,17 @@ impl State {
             return;
         }
         self.qa_done = true;
+        // `MTTY_QA_SCROLL=<lines>` scrolls the active pane back, like the
+        // wheel, so scrollback behaviour can be captured without input events.
+        if let Some(lines) =
+            miao_term_config::env("QA_SCROLL").and_then(|v| v.trim().parse::<usize>().ok())
+        {
+            if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                if let Some(pane) = tab.panes.iter_mut().find(|p| p.id == tab.active) {
+                    pane.scroll = (pane.scroll + lines).min(pane.term.screen().scrollback_len());
+                }
+            }
+        }
         let Some(label) = miao_term_config::env("QA_COMMAND") else {
             return;
         };
