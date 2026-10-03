@@ -70,6 +70,25 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
+  # Dependency policy (ADR 0006): permissive licences only, no copyleft inside
+  # the engine, and no advisories beyond the ones deny.toml argues for. It reads
+  # Cargo.lock and registry metadata, so it compiles nothing and takes seconds.
+  deny:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # -W unmaintained is a flag of the `check` subcommand, hence
+      # command-arguments. It keeps the unmaintained advisories printed on every
+      # run without failing the build; a newly disclosed vulnerability still
+      # fails it, which is the whole point.
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: ""
+          command-arguments: "-W unmaintained"
+
   # Full Linux test suite: PRs, the nightly run and manual dispatch (not pushes).
   test-linux:
     needs: changes

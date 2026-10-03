@@ -1,0 +1,89 @@
+# cargo-deny configuration — the gate docs/decisions/0006-license-policy.md
+# asks for.
+#
+#   cargo deny check -W unmaintained
+#
+# The flag matters: it demotes the "unmaintained" advisories to warnings, so the
+# gate is green today while still printing them on every run. Run the bare
+# `cargo deny check` only when you want them to fail, which is the point of
+# triaging a new one.
+#
+# Inbound policy: permissive licences only. cargo-deny evaluates each crate's
+# licence *expression*, so "MIT OR Apache-2.0" passes on the MIT choice, while a
+# copyleft-only crate does not. GPL/AGPL/SSPL and friends are therefore excluded
+# without listing them.
+
+[licenses]
+allow = [
+  "Apache-2.0",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "0BSD",
+  "CC0-1.0",
+  "Unicode-3.0",
+  "OFL-1.1",
+  "BSL-1.0",
+  # Permissive, but not in ADR 0006's original list. Recorded here rather than
+  # left implicit:
+  "CDLA-Permissive-2.0",   # webpki-roots, the root certificate list behind egui's http feature
+  "LicenseRef-UFL-1.0",    # the Ubuntu font egui ships as epaint_default_fonts
+  "Apache-2.0 WITH LLVM-exception",  # target-lexicon; the exception is strictly more permissive
+]
+# A crate whose licence cargo-deny cannot identify from its files must fail
+# rather than pass quietly.
+confidence-threshold = 0.9
+
+[bans]
+# A large workspace legitimately has several versions of a crate in flight,
+# usually behind different platform targets. That is not what this gate is for.
+multiple-versions = "allow"
+
+[advisories]
+# Yanked releases are reported but do not fail the build: a yanked version is
+# often still what Cargo.lock pins, and replacing it is a separate decision.
+yanked = "warn"
+
+# Every entry here is a decision, dated and argued. Anything not on this list
+# fails the build, which is the point: a new advisory should stop the line
+# until someone writes down why it is acceptable.
+ignore = [
+  # --- A vulnerability, assessed as unreachable ---------------------------------
+  # Marvin Attack: a timing side channel in RSA *decryption*. No fixed release
+  # exists (RustCrypto/RSA#626), so this cannot be resolved by upgrading.
+  #
+  # mtty reaches `rsa` only through `ssh-key`, and only to parse and re-encode a
+  # private key: crates/term-keys calls PrivateKey::from_openssh and to_openssh,
+  # and the workspace contains no sign, verify or RSA-decrypt call at all — the
+  # one `decrypt` in term-keys is the PuTTY .ppk's own AES-256-CBC. The crate is
+  # linked, but the vulnerable primitive is not on any path from this code.
+  #
+  # RE-ASSESS when ssh-key is upgraded. Assessed 2026-10-03.
+  "RUSTSEC-2023-0071",
+
+]
+
+# The unmaintained advisories are deliberately *not* ignored. "Unmaintained" says
+# upstream stopped developing a crate; it does not say the crate is faulty. The
+# `deny` job demotes them with `-W unmaintained`, so every run prints them —
+# silenced they would be forgotten, which is how the MPL-2.0 dependency survived
+# in this tree unnoticed. What they are, and why none is acted on today:
+#
+#   RUSTSEC-2025-0141  bincode 1.3.3 — the maintainers ceased development after
+#                      a harassment incident, and state that 1.3.3 is a complete
+#                      version needing no updates. Reached through syntect.
+#   RUSTSEC-2024-0436  paste — a proc-macro: it runs while compiling, and none
+#                      of it ships.
+#   RUSTSEC-2024-0370  proc-macro-error — compile time only; not in the normal
+#                      dependency tree at all.
+#   RUSTSEC-2024-0320  yaml-rust — a build dependency of syntect, also absent
+#                      from the normal dependency tree.
+#   RUSTSEC-2026-0206  rustybuzz  — text shaping, via glyphon -> cosmic-text.
+#   RUSTSEC-2026-0192  ttf-parser — font parsing, through the same stack.
+#
+# The last two do ship and do read font files, so they are the ones worth
+# watching. They are not a thing to hand-roll: skrifa, ttf-parser's successor in
+# the same stack, is already in the dependency tree, so the migration is
+# upstream's to finish. Assessed 2026-10-03.
