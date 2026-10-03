@@ -61,7 +61,7 @@ If no mtty configuration exists, ghostty's `config` and alacritty's
 | `remote-listen` | — | Serve the MTP control plane over TCP, e.g. `127.0.0.1:7273` (needs `MTTY_MTP_TOKEN`) |
 | `language` | — | UI language, `en` or `zh`; `$LANG` is read as well |
 | `update-pubkey` | — | minisign public key; enables signature checks |
-| `update-check-url` | — | Update manifest URL, see below |
+| `update-check-url` | the project's own manifest | Where an update check looks; see below |
 | `theme` | — | A built-in named theme, overridden by an explicit `[colors]` |
 
 ### Badges
@@ -116,11 +116,29 @@ drives a transcript window. `command` is a string split at spaces, or a list.
 
 ### Update checks
 
+**Nothing is fetched until you ask.** mtty makes no request at startup; the
+check runs from the menu's *Check for Updates*, and from the retry button in
+the update dialog after a failure. When it runs, it is a single plain `curl`:
+
+```sh
+curl -fsSL --max-time 8 <update-check-url>
+```
+
+`update-check-url` already points at the project's own release manifest, so
+this key is only for pointing it somewhere else — a mirror, or an internal
+host:
+
 ```toml
-# update-pubkey = "RW…"            # minisign public key; enables signature checks
 # update-check-url = "https://example.com/mtty/latest.json"
 #   JSON manifest: {"version":"0.2.0","artifacts":{"macos-aarch64":{"url":"…","sha256":"…"}}}
 #   A plain document whose first line is the version also works.
+```
+
+A downloaded artifact is verified against the `sha256` the manifest declares.
+Set `update-pubkey` to a minisign public key to require a signature as well:
+
+```toml
+# update-pubkey = "RW…"
 ```
 
 ## Shell integration
