@@ -234,6 +234,11 @@ pub fn menus(lang: Lang) -> Vec<(&'static str, Vec<Entry>)> {
                     MenuId::RevealCwd,
                     None,
                 ),
+                item(
+                    t(lang, "Open Externally", "用系统默认程序打开"),
+                    MenuId::OpenExternally,
+                    None,
+                ),
             ],
         ),
         (
@@ -308,6 +313,7 @@ pub const IDS: &[(&str, MenuId)] = &[
     ("pip", MenuId::Pip),
     ("copy-path", MenuId::CopyPath),
     ("reveal-cwd", MenuId::RevealCwd),
+    ("open-externally", MenuId::OpenExternally),
     ("composer", MenuId::Composer),
     ("quick-terminal", MenuId::QuickTerminal),
     ("check-updates", MenuId::CheckUpdates),

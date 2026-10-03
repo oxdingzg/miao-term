@@ -741,6 +741,7 @@ pub enum MenuId {
     Pip,
     CopyPath,
     RevealCwd,
+    OpenExternally,
     Quit,
 }
 
