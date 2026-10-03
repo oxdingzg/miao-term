@@ -257,11 +257,7 @@ impl Scanner {
                     self.csi_dispatch(b);
                     self.state = State::Ground;
                 }
-                0x20..=0x3f => {
-                    if self.csi.len() < MAX_CSI {
-                        self.csi.push(b);
-                    }
-                }
+                0x20..=0x3f if self.csi.len() < MAX_CSI => self.csi.push(b),
                 _ => {}
             },
             State::String { osc } => {
