@@ -279,132 +279,45 @@ Linux `.deb`/AppImage 以及 Windows MSI。[`dist-workspace.toml`](dist-workspac
 ## 配置
 
 mtty 读取 `~/.config/mtty/config.toml`(或
-`$XDG_CONFIG_HOME/mtty/config.toml`;Windows 上为 `%APPDATA%\mtty\config.toml`)。本 README 中其他
-`~/.config/mtty/...` 文件也都在同一目录。所有键均可选;完整参考见
-[`docs/config.example.toml`](docs/config.example.toml)。
+`$XDG_CONFIG_HOME/mtty/config.toml`;Windows 上为 `%APPDATA%\mtty\config.toml`)。所有键均可选;
+若不存在 mtty 配置，会自动导入 ghostty 的 `config` 与 alacritty 的 `alacritty.toml`。
 
 ```toml
-font-size   = 13                 # 默认 13
-font-family = "JetBrains Mono"   # 默认;回退到系统等宽字体
-theme       = "nord"             # nord | dracula | gruvbox | solarized | tokyo-night
-
-[colors]                          # 显式配色会覆盖命名主题
-background = "#2e3440"
-foreground = "#d8dee9"
-palette    = ["#3b4252", "#bf616a", "#a3be8c", "#ebcb8b",
-              "#81a1c1", "#b48ead", "#88c0d0", "#e5e9f0",
-              "#4c566a", "#bf616a", "#a3be8c", "#ebcb8b",
-              "#81a1c1", "#b48ead", "#8fbcbb", "#eceff4"]
+font-size = 13
+theme     = "nord"
 ```
 
-若不存在 mtty 配置,会自动导入 ghostty 的 `config` 与 alacritty 的
-`alacritty.toml`。
-
-### Shell 集成
-
-新 pane 中的 shell 会上报工作目录(OSC 7)、每条命令输出的起止与退出码(OSC 133)以及命令历史,无需手动配置。
-shim 写入仅当前用户可访问的私有目录,并先加载用户自己的启动文件:
-
-| Shell | shim 的加载方式 |
-|---|---|
-| zsh | 一个 `ZDOTDIR`,其 `.zshenv` 会恢复真实的 `ZDOTDIR` |
-| bash | `--rcfile`,先 source `~/.bashrc`;bash 4.4+ 用 `PS0`,更老的 bash(macOS 3.2)用 DEBUG trap |
-| fish | 经 `XDG_DATA_DIRS` 找到的 `vendor_conf.d` 脚本,并恢复原值 |
-| PowerShell | 在 profile 之后用 `-NoExit -Command` 加载;包装 `prompt` 与 PSReadLine(历史需 PowerShell 7) |
-
-每种都在真实 PTY 中做端到端测试(Linux 上的 zsh、bash 3.2/5.x、fish 3.7、PowerShell 7.5;Windows 上的
-PowerShell 由 CI 运行)。
+[`docs/CONFIG.zh-CN.md`](docs/CONFIG.zh-CN.md) 里有各配置项、编辑器与 ACP 部分，以及 shell 集成;
+[`docs/config.example.toml`](docs/config.example.toml) 则把每个键及其默认值放在一个文件里。
 
 ---
 
 ## 控制面
 
 **MTP**(mtty terminal protocol)控制面在 `$XDG_RUNTIME_DIR/mtty.sock`
-(回退到 `$TMPDIR`)上使用换行分隔的 JSON,且 socket 以仅属主可访问的权限创建。
-shell 会继承 `MTTY_SOCKET` 与 `MTTY_PANE_ID`。每个响应都带状态 `revision`;
-`core.wait` 会阻塞到该值超过给定值后再返回;`core.subscribe` 则把连接升级为事件流
-(`agent.state`、`panes`、`history`),客户端据此跟踪 agent 状态、pane 或历史,无需轮询。
-
-`mtty-cli` 是参考客户端:
+(回退到 `$TMPDIR`)上使用换行分隔的 JSON,且 socket 以仅属主可访问的权限创建。每个响应都带状态
+`revision`,客户端可以阻塞等待它变化，或订阅事件流，而不必轮询。`mtty-cli` 是参考客户端:
 
 ```sh
-mtty-cli ping
-mtty-cli wait --since 42               # 阻塞直到状态 revision 变化
-mtty-cli events                        # 以 JSON 行流式输出状态变化
-mtty-cli events --topic agent.state    # ...仅订阅某个 topic
 mtty-cli pane list
 mtty-cli pane run --pane ID --data "echo hello"
-mtty-cli pane focus --pane ID
-mtty-cli pane output --pane ID           # 上一条命令的输出与退出码
+mtty-cli events --topic agent.state
+mtty-cli wait --since 42
 mtty-cli state claude --state processing --pane ID
-mtty-cli state list
-mtty-cli history add --command "cargo test" --cwd "$PWD"
-mtty-cli history list --pane ID
-mtty-cli view /path/to/file            # 在应用中以只读方式打开
-mtty-cli edit /path/to/file            # 在编辑器中打开
-mtty-cli file read  --path /etc/hosts  # 单次上限 2 MB
-mtty-cli file read  --path app.bin --base64 --offset 0 --length 65536
-mtty-cli file write --path /tmp/x --data "hello"
-mtty-cli file write --path /tmp/x --data-b64 "AAECAw=="   # 二进制
 ```
 
-**远程访问**:设 `remote-listen = "127.0.0.1:7273"`(并设 `MTTY_MTP_TOKEN`)即可用 TCP 暴露控制
-平面,客户端 `mtty-cli --socket tcp://host:7273` 连接;**没令牌时 TCP 监听会拒绝启动**。注意控制平面
-能在你的 shell 里执行命令,令牌务必保密(并尽量只监听 loopback 或走 ssh 隧道)。
-
-若 host 以 `MTTY_MTP_TOKEN` 启动,请求必须携带该令牌;CLI 会从同一环境变量读取。
-`MTTY_MTP_ALLOW`(逗号分隔,如 `core.basic,file.read,history.read`)限定允许的能力,其余返回
-`forbidden`;不设=全允许,`core.basic`(ping/health)始终允许以便客户端发现 host,`ping` 会在
-`allowed` 里报告生效能力集。socket 可经 ssh 转发(`ssh -R /tmp/fwd.sock:<host socket>`),从而让远端
-客户端驱动 host。
-
-使用 `--socket PATH` 或设置 `MTTY_SOCKET` 可指定非默认 socket。
+[`docs/CLI.zh-CN.md`](docs/CLI.zh-CN.md) 里有完整命令集、状态版本号与事件模型、经 TCP 的远程访问，
+以及令牌与能力白名单。
 
 ---
 
 ## 快捷键
 
-| macOS | Linux / Windows | 操作 |
-|---|---|---|
-| `⌘T` | `Ctrl+Shift+T` | 新建标签 |
-| `⌘W` | `Ctrl+Shift+W` | 关闭当前 pane(或标签) |
-| `⌘D` / `⇧⌘D` | `Ctrl+Shift+D` / `Ctrl+Shift+Alt+D` | 向右 / 向下分屏 |
-| `⌘[` / `⌘]` | `Ctrl+Shift+[` / `Ctrl+Shift+]` | 上一个 / 下一个 pane |
-| `⇧⌘[` / `⇧⌘]` | `Ctrl+PgUp` / `Ctrl+PgDn`(或 `Ctrl+Tab`) | 上一个 / 下一个标签 |
-| `⌘1`…`⌘9` | `Alt+1`…`Alt+9` | 跳到标签 |
-| `⌘K`(或 `⇧⌘P`) | `Ctrl+Shift+K`(或 `Ctrl+Shift+P`) | 命令面板 |
-| `⇧⌘O` | `Ctrl+Shift+Alt+O` | Open Quickly(标签、agent、文件、主机) |
-| `⌘F` | `Ctrl+Shift+F` | 查找 |
-| `⌘G` / `⇧⌘G` | `Ctrl+Shift+G` / `Ctrl+Shift+Alt+G` | 下一个 / 上一个匹配 |
-| `⇧⌘H` | `Ctrl+Shift+Alt+H` | Hints(按标签打开链接或路径) |
-| `⌘E` | `Ctrl+Shift+E` | Composer(向焦点 pane 发送多行提示) |
-| `⇧⌘T` | `Ctrl+Shift+Alt+T` | 快速终端(临时标签) |
-| `⇧⌘Z` | `Ctrl+Shift+Alt+Z` | 重新打开最近关闭的标签 |
-| `⇧⌘L` / `⇧⌘R` | `Ctrl+Shift+Alt+L` / `Ctrl+Shift+Alt+R` | 开关侧栏 / details 面板 |
-| `⌘,` | `Ctrl+,` | 设置 |
-| `⌘+` / `⌘-` | `Ctrl+=` / `Ctrl+-` | 增大 / 减小字号 |
-| `⌘C` / `⌘V` | `Ctrl+Shift+C` / `Ctrl+Shift+V`(`Ctrl+V` 也可;有选区时 `Ctrl+C` 也可复制) | 复制 / 粘贴 |
-| `Shift+PgUp` / `Shift+PgDn` | 滚动视口 |
+`⌘T` 新建标签，`⌘D` / `⇧⌘D` 分屏，`⇧⌘O` 是 Open Quickly，`⌘K` 是命令面板，`⌘F` 是查找。
+在 Linux 与 Windows 上，单独的 `Ctrl` 组合键(`Ctrl+C`、`Ctrl+W`、`Ctrl+D`……)始终交给 shell，
+`Super`/`Win` 组合留给桌面。
 
-在 Linux 与 Windows 上,单独的 `Ctrl` 组合键(`Ctrl+C`、`Ctrl+W`、`Ctrl+D`……)始终交给 shell,`Super`/`Win` 组合留给桌面。
-
-在编辑器 pane 中,下列按键优先于上面的应用快捷键。语言相关功能需要该语言的语言服务器(见
-[`docs/config.example.toml`](docs/config.example.toml) 中的 `[lsp]`);鼠标停在代码上会显示类型、文档与问题。
-
-| macOS | Linux / Windows | 操作 |
-|---|---|---|
-| `⌘D` | `Ctrl+D` | 选中当前词,再按添加下一个相同项 |
-| `⇧⌘L` | `Ctrl+Shift+L` | 选中所有相同项 |
-| `⌥⌘↑` / `⌥⌘↓` | `Ctrl+Alt+↑` / `Ctrl+Alt+↓` | 在上方 / 下方添加光标 |
-| `⌥` 单击 | `Alt` 单击 | 添加光标 |
-| `⇧⌥I` | `Shift+Alt+I` | 在所选各行末尾添加光标 |
-| `⌥⌘F` | `Ctrl+H` | 查找替换(`Aa` 区分大小写、`ab` 全字匹配、`.*` 正则) |
-| 查找框中 `⌥↩` | 查找框中 `Alt+Enter` | 选中全部匹配 |
-| `⌃G` | `Ctrl+G` | 跳转到行(`行` 或 `行:列`) |
-| `⌃Space` | `Ctrl+Space` | 补全(输入时也会自动弹出;`↩`/`⇥` 确认) |
-| `F12` 或 `⌘` 单击 | `F12` 或 `Ctrl` 单击 | 跳转到定义 |
-| `F8` / `⇧F8` | `F8` / `Shift+F8` | 下一个 / 上一个问题 |
-| `⌘Z` / `⇧⌘Z` | `Ctrl+Z` / `Ctrl+Y` | 撤销 / 重做 |
+[`docs/SHORTCUTS.zh-CN.md`](docs/SHORTCUTS.zh-CN.md) 里有完整的两张表，包含编辑器窗格自己的按键。
 
 ---
 
@@ -417,6 +330,10 @@ mtty-cli file write --path /tmp/x --data-b64 "AAECAw=="   # 二进制
 | 架构与设计 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | [`docs/ARCHITECTURE.zh-CN.md`](docs/ARCHITECTURE.zh-CN.md) |
 | 架构决策记录 | [`docs/decisions/`](docs/decisions/README.md) | [`docs/decisions/README.zh-CN.md`](docs/decisions/README.zh-CN.md) |
 | 安装 | [`docs/INSTALL.md`](docs/INSTALL.md) | [`docs/INSTALL.zh-CN.md`](docs/INSTALL.zh-CN.md) |
+| 配置 | [`docs/CONFIG.md`](docs/CONFIG.md) | [`docs/CONFIG.zh-CN.md`](docs/CONFIG.zh-CN.md) |
+| `mtty-cli` 控制面 | [`docs/CLI.md`](docs/CLI.md) | [`docs/CLI.zh-CN.md`](docs/CLI.zh-CN.md) |
+| 快捷键 | [`docs/SHORTCUTS.md`](docs/SHORTCUTS.md) | [`docs/SHORTCUTS.zh-CN.md`](docs/SHORTCUTS.zh-CN.md) |
+| 排障 | [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) | [`docs/TROUBLESHOOTING.zh-CN.md`](docs/TROUBLESHOOTING.zh-CN.md) |
 | View 规则(标题/图标/徽章) | [`docs/VIEW-RULES.md`](docs/VIEW-RULES.md) | [`docs/VIEW-RULES.zh-CN.md`](docs/VIEW-RULES.zh-CN.md) |
 | 性能预算与门 | [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) | [`docs/PERFORMANCE.zh-CN.md`](docs/PERFORMANCE.zh-CN.md) |
 | Windows 开发/验证 | [`docs/WINDOWS-DEV.md`](docs/WINDOWS-DEV.md) | [`docs/WINDOWS-DEV.zh-CN.md`](docs/WINDOWS-DEV.zh-CN.md) |

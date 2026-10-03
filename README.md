@@ -365,143 +365,50 @@ app bundle, a Linux `.deb`/AppImage and a Windows MSI.
 
 mtty reads `~/.config/mtty/config.toml` (or
 `$XDG_CONFIG_HOME/mtty/config.toml`; on Windows `%APPDATA%\mtty\config.toml`).
-The other files named `~/.config/mtty/...` in this README live in the same
-directory. Every key is optional; see
-[`docs/config.example.toml`](docs/config.example.toml) for the full reference.
+Every key is optional, and if no mtty configuration exists, ghostty's `config`
+and alacritty's `alacritty.toml` are imported automatically.
 
 ```toml
-font-size   = 13                 # default 13
-font-family = "JetBrains Mono"   # default; falls back to the system monospace
-theme       = "nord"             # nord | dracula | gruvbox | solarized | tokyo-night
-
-[colors]                          # explicit colors override the named theme
-background = "#2e3440"
-foreground = "#d8dee9"
-palette    = ["#3b4252", "#bf616a", "#a3be8c", "#ebcb8b",
-              "#81a1c1", "#b48ead", "#88c0d0", "#e5e9f0",
-              "#4c566a", "#bf616a", "#a3be8c", "#ebcb8b",
-              "#81a1c1", "#b48ead", "#8fbcbb", "#eceff4"]
+font-size = 13
+theme     = "nord"
 ```
 
-If no mtty config exists, ghostty's `config` and alacritty's
-`alacritty.toml` are imported automatically.
-
-### Shell integration
-
-A new pane's shell reports its working directory (OSC 7), where each command's
-output starts and ends with its exit code (OSC 133) and its history, with no
-manual setup. Shims are written to a private, user-only directory and load the
-user's own startup files first:
-
-| Shell | How the shim is loaded |
-|---|---|
-| zsh | a `ZDOTDIR` whose `.zshenv` restores the real `ZDOTDIR` |
-| bash | `--rcfile`, which sources `~/.bashrc`; `PS0` on bash 4.4+, a DEBUG trap on older bash (macOS 3.2) |
-| fish | a `vendor_conf.d` script found through `XDG_DATA_DIRS`, which it restores |
-| PowerShell | `-NoExit -Command` after the profile; wraps `prompt` and PSReadLine (history needs PowerShell 7) |
-
-Each is tested end to end in a real PTY (zsh, bash 3.2/5.x, fish 3.7, PowerShell
-7.5 on Linux; Windows PowerShell runs in CI).
+[`docs/CONFIG.md`](docs/CONFIG.md) has the keys, the editor and ACP sections,
+and shell integration; [`docs/config.example.toml`](docs/config.example.toml)
+is every key with its default in one file.
 
 ---
 
 ## Control plane
 
 The **MTP** (mtty terminal protocol) control plane speaks newline-delimited
-JSON over `$XDG_RUNTIME_DIR/mtty.sock` (falling back to `$TMPDIR`), and the
-socket is created with owner-only permissions. The shell inherits
-`MTTY_SOCKET` and `MTTY_PANE_ID`. Every response carries a state
-`revision`; `core.wait` blocks until it moves past a given value, and
-`core.subscribe` upgrades a connection to an event stream (`agent.state`,
-`panes`, `history`) so a client can follow changes without polling in a loop.
-
-`mtty-cli` is the reference client:
+JSON over a per-user socket (`$XDG_RUNTIME_DIR/mtty.sock`, falling back to
+`$TMPDIR`), created with owner-only permissions. Every response carries a state
+`revision`, so a client waits on it or subscribes to an event stream instead of
+polling. `mtty-cli` is the reference client:
 
 ```sh
-mtty-cli ping
-mtty-cli wait --since 42               # block until the state revision moves
-mtty-cli events                        # stream state changes as JSON lines
-mtty-cli events --topic agent.state    # ... filtered to one topic
 mtty-cli pane list
 mtty-cli pane run --pane ID --data "echo hello"
-mtty-cli pane focus --pane ID
-mtty-cli pane output --pane ID           # last command's output and exit status
+mtty-cli events --topic agent.state
+mtty-cli wait --since 42
 mtty-cli state claude --state processing --pane ID
-mtty-cli state list
-mtty-cli history add --command "cargo test" --cwd "$PWD"
-mtty-cli history list --pane ID
-mtty-cli view /path/to/file            # open it read-only in the app
-mtty-cli edit /path/to/file            # open it in the editor
-mtty-cli file read  --path /etc/hosts  # bounded to 2 MB per call
-mtty-cli file read  --path app.bin --base64 --offset 0 --length 65536
-mtty-cli file write --path /tmp/x --data "hello"
-mtty-cli file write --path /tmp/x --data-b64 "AAECAw=="   # binary
 ```
 
-**Remote access**: set `remote-listen = "127.0.0.1:7273"` (and
-`MTTY_MTP_TOKEN`) to serve the control plane over TCP; connect with
-`mtty-cli --socket tcp://host:7273`. Without a token the TCP listener refuses
-to start. Note the control plane runs commands in your shell, so keep the token
-secret (and prefer a loopback/listen address you trust, or an ssh tunnel).
-
-If the host was started with `MTTY_MTP_TOKEN`, requests must carry it; the CLI
-picks it up from the same variable. `MTTY_MTP_ALLOW` (comma-separated, e.g.
-`core.basic,file.read,history.read`) restricts which capabilities are accepted —
-anything else returns `forbidden`. Unset means everything is allowed, and
-`core.basic` (ping/health) is always allowed so clients can discover the host;
-`ping` reports the effective set in `allowed`. The socket can be forwarded over
-ssh (`ssh -R /tmp/fwd.sock:<host socket>`) so a remote client drives the host.
-
-Pass `--socket PATH` or set `MTTY_SOCKET` to target a non-default socket.
+[`docs/CLI.md`](docs/CLI.md) has the full command set, the state-revision and
+event model, remote access over TCP, and the token and capability allowlist.
 
 ---
 
 ## Keyboard shortcuts
 
-| macOS | Linux / Windows | Action |
-|---|---|---|
-| `⌘T` | `Ctrl+Shift+T` | New tab |
-| `⌘W` | `Ctrl+Shift+W` | Close the focused pane (or tab) |
-| `⌘D` / `⇧⌘D` | `Ctrl+Shift+D` / `Ctrl+Shift+Alt+D` | Split right / split down |
-| `⌘[` / `⌘]` | `Ctrl+Shift+[` / `Ctrl+Shift+]` | Previous / next pane |
-| `⇧⌘[` / `⇧⌘]` | `Ctrl+PgUp` / `Ctrl+PgDn` (or `Ctrl+Tab`) | Previous / next tab |
-| `⌘1`…`⌘9` | `Alt+1`…`Alt+9` | Go to tab |
-| `⌘K` (or `⇧⌘P`) | `Ctrl+Shift+K` (or `Ctrl+Shift+P`) | Command palette |
-| `⇧⌘O` | `Ctrl+Shift+Alt+O` | Open Quickly (tabs, agents, files, hosts) |
-| `⌘F` | `Ctrl+Shift+F` | Find |
-| `⌘G` / `⇧⌘G` | `Ctrl+Shift+G` / `Ctrl+Shift+Alt+G` | Next / previous match |
-| `⇧⌘H` | `Ctrl+Shift+Alt+H` | Hints (open a link or path by its label) |
-| `⌘E` | `Ctrl+Shift+E` | Composer (multi-line prompt to the focused pane) |
-| `⇧⌘T` | `Ctrl+Shift+Alt+T` | Quick Terminal (scratch tab) |
-| `⇧⌘Z` | `Ctrl+Shift+Alt+Z` | Reopen the last closed tab |
-| `⇧⌘L` / `⇧⌘R` | `Ctrl+Shift+Alt+L` / `Ctrl+Shift+Alt+R` | Toggle the sidebar / details panel |
-| `⌘,` | `Ctrl+,` | Settings |
-| `⌘+` / `⌘-` | `Ctrl+=` / `Ctrl+-` | Larger / smaller font |
-| `⌘C` / `⌘V` | `Ctrl+Shift+C` / `Ctrl+Shift+V` (also `Ctrl+V`, and `Ctrl+C` with a selection) | Copy / paste |
-| `Shift+PgUp` / `Shift+PgDn` | Scroll the viewport |
+`⌘T` opens a tab, `⌘D` / `⇧⌘D` splits, `⇧⌘O` is Open Quickly, `⌘K` the command
+palette and `⌘F` find. On Linux and Windows plain `Ctrl` chords (`Ctrl+C`,
+`Ctrl+W`, `Ctrl+D`, …) always reach the shell, and `Super`/`Win` combinations
+are left to the desktop.
 
-Plain `Ctrl` chords (`Ctrl+C`, `Ctrl+W`, `Ctrl+D`, …) always reach the shell on
-Linux and Windows, and `Super`/`Win` combinations are left to the desktop.
-
-In an editor pane these take precedence over the app's shortcuts above. The
-language features need a server for the file's language (see `[lsp]` in
-[`docs/config.example.toml`](docs/config.example.toml)); hovering over code
-shows its type, docs and problems.
-
-| macOS | Linux / Windows | Action |
-|---|---|---|
-| `⌘D` | `Ctrl+D` | Select the word, then add the next occurrence |
-| `⇧⌘L` | `Ctrl+Shift+L` | Select every occurrence |
-| `⌥⌘↑` / `⌥⌘↓` | `Ctrl+Alt+↑` / `Ctrl+Alt+↓` | Add a caret above / below |
-| `⌥`-click | `Alt`-click | Add a caret |
-| `⇧⌥I` | `Shift+Alt+I` | A caret at the end of each selected line |
-| `⌥⌘F` | `Ctrl+H` | Find and replace (`Aa` case, `ab` whole word, `.*` regex) |
-| `⌥↩` in Find | `Alt+Enter` in Find | Select all matches |
-| `⌃G` | `Ctrl+G` | Go to line (`line` or `line:column`) |
-| `⌃Space` | `Ctrl+Space` | Completions (they also open as you type; `↩`/`⇥` accept) |
-| `F12` or `⌘`-click | `F12` or `Ctrl`-click | Go to definition |
-| `F8` / `⇧F8` | `F8` / `Shift+F8` | Next / previous problem |
-| `⌘Z` / `⇧⌘Z` | `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
+[`docs/SHORTCUTS.md`](docs/SHORTCUTS.md) has the full tables, including the
+editor pane's own bindings.
 
 ---
 
@@ -515,6 +422,10 @@ version kept in sync as `*.zh-CN.md`.
 | Architecture & design | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | [`docs/ARCHITECTURE.zh-CN.md`](docs/ARCHITECTURE.zh-CN.md) |
 | Architecture decision records | [`docs/decisions/`](docs/decisions/README.md) | [`docs/decisions/README.zh-CN.md`](docs/decisions/README.zh-CN.md) |
 | Installation | [`docs/INSTALL.md`](docs/INSTALL.md) | [`docs/INSTALL.zh-CN.md`](docs/INSTALL.zh-CN.md) |
+| Configuration | [`docs/CONFIG.md`](docs/CONFIG.md) | [`docs/CONFIG.zh-CN.md`](docs/CONFIG.zh-CN.md) |
+| The `mtty-cli` control plane | [`docs/CLI.md`](docs/CLI.md) | [`docs/CLI.zh-CN.md`](docs/CLI.zh-CN.md) |
+| Keyboard shortcuts | [`docs/SHORTCUTS.md`](docs/SHORTCUTS.md) | [`docs/SHORTCUTS.zh-CN.md`](docs/SHORTCUTS.zh-CN.md) |
+| Troubleshooting | [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) | [`docs/TROUBLESHOOTING.zh-CN.md`](docs/TROUBLESHOOTING.zh-CN.md) |
 | View rules (titles/icons/badges) | [`docs/VIEW-RULES.md`](docs/VIEW-RULES.md) | [`docs/VIEW-RULES.zh-CN.md`](docs/VIEW-RULES.zh-CN.md) |
 | Performance budgets & gate | [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) | [`docs/PERFORMANCE.zh-CN.md`](docs/PERFORMANCE.zh-CN.md) |
 | Windows dev/verification | [`docs/WINDOWS-DEV.md`](docs/WINDOWS-DEV.md) | [`docs/WINDOWS-DEV.zh-CN.md`](docs/WINDOWS-DEV.zh-CN.md) |
