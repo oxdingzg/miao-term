@@ -48,4 +48,4 @@ Docs are English by default; keep a Simplified Chinese version in sync
 | [0038](./0038-ppk-import.md) | Importing PuTTY `.ppk` private keys | accepted |
 | [0039](./0039-ssh-stack.md) | Keep the system OpenSSH client | accepted |
 | [0040](./0040-ai-native-workspace.md) | AI-native workspace: agent edits, ACP and context hand-off | accepted |
-| [0041](./0041-pty-host.md) | Panes survive an app restart (per-pane PTY host) | proposed |
+| [0041](./0041-pty-host.md) | Panes survive an app restart (per-pane PTY host) | accepted |

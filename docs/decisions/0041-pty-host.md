@@ -2,7 +2,10 @@
 
 > 简体中文版: [`0041-pty-host.zh-CN.md`](0041-pty-host.zh-CN.md)
 
-Status: proposed.
+Status: accepted (2026-10-03, with the proposed defaults: an ordinary quit
+ends the panes, `detached-timeout` 24 h, an 8 MiB ring). Revised after a
+review against `alacritty_terminal` 0.25 and the current restore code; see
+*Review findings* at the end.
 
 ## Context
 
@@ -43,8 +46,10 @@ the manner of `dtach`. The app is the host's client. The host:
   resize and signals;
 - keeps an **output ring** (default 8 MiB) addressed by the absolute byte
   offset since the child started;
-- does **no terminal emulation**. It never parses output or answers terminal
-  queries.
+- does **no screen emulation** and never answers terminal queries. It runs
+  only a small scanner over the output (section 4) that finds escape-sequence
+  and UTF-8 boundaries and tracks the private modes (DECSET/DECRST, the kitty
+  keyboard flags, the alternate screen).
 
 Why per pane rather than one daemon for all panes:
 
@@ -79,30 +84,56 @@ of a local PTY: a third backend next to the PTY and `from_pipe`.
 
 The state survives in two halves:
 
-1. **The app's snapshot.** The existing scrollback snapshot is extended to a
-   full **state snapshot**:
-   - both screens, with the alternate screen marked;
-   - cursor position, style and visibility, and the scroll region;
-   - the modes that change input or output: application cursor and keypad,
-     bracketed paste, mouse tracking and its encoding, focus reporting, the
-     kitty keyboard flags and the origin mode;
-   - the current SGR, the title and the OSC 7 working directory;
-   - **the host offset it covers.**
+1. **The app's state snapshot**, written atomically at detach and by the
+   existing once-a-minute save. It must reproduce the screen *exactly*, not
+   just its look: Claude Code (Ink) and every full-screen program redraw with
+   relative cursor moves, so a reflowed screen or a misplaced cursor would make
+   the replayed bytes paint over the wrong rows. It holds:
+   - the size it was taken at;
+   - history as SGR text (the cursor cannot reach history, so reflowing it
+     on a later resize is harmless);
+   - the visible rows of the main screen, and of the alternate screen when
+     active, as exact cells (`Cell` is `Clone` + `Serialize` with public
+     fields: character, colours, flags including `WRAPLINE`, zero-width
+     characters, hyperlink);
+   - each screen's cursor and saved cursor (position, template cell,
+     charsets, pending wrap; all public fields of `Grid`);
+   - `TermMode` (cursor keys, keypad, bracketed paste, mouse modes and
+     encoding, focus reporting, origin, insert, line wrap, the current kitty
+     keyboard flags) and the cursor style, title and OSC 7 directory;
+   - **the host offset it covers**, which is always the end of a whole
+     `Output` frame and therefore a sequence boundary (section 4). The app
+     cannot find boundaries itself: vte keeps its parser state private.
 
-   It is written atomically at detach and by the existing once-a-minute save.
-2. **The host's ring.** It holds everything after that offset.
+   Reading the main screen under an alternate screen goes through
+   `swap_alt`, which clears the alternate screen; the snapshot copies the
+   alternate screen's cells first and writes them back, so it no longer
+   destroys anything and can run while the program keeps drawing.
+2. **The host's ring**, which holds the output after that offset, evicted in
+   whole frames.
 
-On attach the app loads the snapshot and asks the host to replay from its
-offset, then streams live output.
+On attach the app builds a fresh screen **at the snapshot's size**, loads the
+snapshot, replays the ring from its offset, and only then resizes the pane to
+its current size.
 
-If the ring no longer reaches that offset (more than 8 MiB while detached, or
-a crash with an old snapshot), the app:
+**Replies are muted while loading and replaying.** The screen model answers
+queries it parses (DA, cursor position, OSC 10/11 colours) by writing to the
+PTY; replayed output contains the program's old queries, and answering them
+again would type escape sequences into the running program.
 
-- loads the snapshot;
-- prints a dim `[mtty]` note that output was truncated;
-- replays what the ring still holds after the next newline;
-- toggles the size so `SIGWINCH` makes full-screen programs, Claude Code
-  included, redraw.
+**Some state cannot be read back.** `alacritty_terminal` 0.25 keeps the
+scroll region, tab stops, the title stack and the depth of the kitty keyboard
+stack private. After every reattach the app therefore toggles the pane size
+once, so `SIGWINCH` makes full-screen programs and Claude Code redraw (which
+sets their scroll region again). Inline images that are not in the replayed
+range are not restored.
+
+If the ring no longer reaches the snapshot's offset (more than 8 MiB while
+detached, or a crash with an old snapshot), the app loads the snapshot,
+applies the private modes the host reports with `Truncated` (they may have
+changed in the lost bytes), prints a dim `[mtty]` note that output was
+truncated, replays the ring from its oldest frame, and nudges the size as
+above.
 
 While no client is attached, terminal queries (DA, OSC 10/11 colour, cursor
 position) get no reply. A program that waits for one sees its own timeout;
@@ -113,7 +144,7 @@ this only matters at program start-up, which rarely coincides with a restart.
 | Event | Panes |
 |---|---|
 | Close a pane or tab | The app sends `Kill`; the host hangs up the child (Unix: `SIGHUP` to its process group, then `SIGKILL` after 250 ms; Windows: the ADR 0027 tree kill moves into the host) and exits. |
-| Quit (menu, ⌘Q, Dock, logout) | `keep-sessions-on-quit = false` (default): as today, every pane is killed. `true`: every pane detaches (tmux-like). |
+| Quit (menu, ⌘Q, Dock, logout) | `keep-sessions-on-quit = false` (default): as today, every pane is killed. The app must send `Kill` to every host before `process::exit`, because exiting alone would now leave them running. `true`: every pane detaches (tmux-like). |
 | **Update and Relaunch** | Always detaches. The app saves state snapshots, sends `Detach` to every host, then runs the install helper; the relaunched app restores the session and reattaches. |
 | App crash | Hosts see the connection close and keep running detached; the next launch reattaches using the periodic snapshot (section 2's fallback covers the gap). |
 | Child exits while detached | The host keeps the exit status and the ring until a client collects them or the timeout expires; the app shows the final output and `[exited]`. |
@@ -127,6 +158,16 @@ attach or end, rather than adopted silently.
 
 Length-prefixed binary frames `type: u8, len: u32 LE, payload` over a Unix
 socket or a Windows named pipe.
+
+What to run (program, arguments, environment including `MTTY_PANE_ID`,
+working directory, initial size) is given to the host on its command line and
+environment when it is launched, not in the protocol, which keeps v1 to the
+running session.
+
+The host cuts `Output` frames only at sequence boundaries: its scanner holds
+back an incomplete escape sequence or UTF-8 character until it completes, and
+flushes it anyway after 5 ms or 4 KiB so a stray `ESC` cannot stall output.
+Offsets are `u64`.
 
 Client → host:
 
@@ -142,7 +183,7 @@ Host → client:
 
 - `Welcome{proto, host_version, child_pid, started_at, caps}`
 - `Output{offset, bytes}`
-- `Truncated{oldest_offset}`
+- `Truncated{oldest_offset, modes}` (the scanner's private-mode state)
 - `Exited{status, at_offset}`
 - `Answer(...)`
 - `Detached` (another client took over)
@@ -155,7 +196,9 @@ Hosts outlive app versions, so the compatibility rule is strict:
 - Golden-frame tests pin the encoding.
 
 The foreground-process and cwd probes the app runs today (`tcgetpgrp`,
-`process_cwd`) move into the host, which holds the master fd.
+`process_cwd`) move into the host, which holds the master fd. They become
+asynchronous: the app caches the last answer, and the session save at quit
+uses the cache instead of blocking on the host.
 
 ### 5. Identity, discovery and the environment
 
@@ -181,9 +224,12 @@ The foreground-process and cwd probes the app runs today (`tcgetpgrp`,
   - Unix: `setsid`, stdio on `/dev/null`, `SIGHUP` ignored.
   - Windows: `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP |
     CREATE_BREAKAWAY_FROM_JOB`, so it leaves the app's job object.
-- The host signals ready by accepting the first `Hello`. If that takes longer
-  than 500 ms, or the host fails, the pane falls back to the in-process PTY
-  with a notice. A pane is never lost to the feature.
+- Starting a host never blocks the UI thread: the pane appears at once,
+  input typed before the host's `Welcome` is queued, and the performance
+  gate's first-frame budget is unchanged.
+- If `Welcome` takes longer than 500 ms, or the host fails, the pane falls
+  back to the in-process PTY with a notice. A pane is never lost to the
+  feature.
 - `pty-host = false` turns hosting off entirely: today's behaviour.
 - Platform behaviour still to be confirmed in P1 on real desktops:
   - that a GNOME/KDE app scope does not take the host down when the app
@@ -217,7 +263,7 @@ input.
 
 | Phase | Content | Acceptance |
 |---|---|---|
-| P0 | State snapshot (modes, both screens, offset) replaces the ANSI copy for local restore | Round-trip tests: snapshot → fresh `ATerm` → identical grid and modes, vim/less/Claude Code captures on a macOS desktop |
+| P0 | State snapshot and restore in `term-core` (`ATerm::snapshot_state` / `restore_state`), non-destructive under the alternate screen, replies muted while restoring; the periodic save includes full-screen panes | Equivalence tests: for recorded streams *A* and *B* (shell, vim-like alternate screen, Ink-style redraws, wide characters, wrapped lines), restoring a snapshot taken after *A* and then feeding *B* yields the same cells, cursor and modes as feeding *A + B* without interruption; vim/less/Claude Code captures on a macOS desktop |
 | P1 | `term-ptyhost` crate, host binary, Unix client backend, `pty-host` setting (default off), versioned copy | Host integration tests (spawn, detach, reattach from offset, truncation, kill, timeout, peer check); kill -9 the app and reattach on a macOS and a Linux desktop |
 | P2 | Update path detaches and reattaches; pane ids preserved; recovered-sessions list; `mtty-cli --wait` | Real update from the previous release on a macOS desktop (.app) and a Linux desktop (AppImage) with Claude Code mid-turn: it keeps running and the pane shows its output after relaunch |
 | P3 | Windows host (ConPTY, named pipe, job breakaway, versioned copy outside `Program Files`) | Same update test with the MSI on a Windows desktop |
@@ -234,15 +280,41 @@ reboot is also out of scope.
   the panes either.
 - One extra process per local pane and a frozen wire protocol that must stay
   supported as long as an old host can be running.
-- The state snapshot (P0) improves today's restore even with hosting off:
-  full-screen programs and input modes come back correctly.
+- With hosting off, a restored pane runs a *new* shell, so only the snapshot's
+  content is shown there; its modes are never applied (a new shell is not in
+  vim's alternate screen or mouse mode). P0 still helps that path: the
+  snapshot no longer destroys the alternate screen, so the periodic save
+  covers panes running a full-screen program.
 - Packaging gains one binary on four targets (`release.yml`, MSI, AppImage,
   deb, `.app`).
 - `docs/ARCHITECTURE.md` gains the host process and its crate once this is
   accepted; D6's platform boundaries extend to `term-ptyhost`.
 
-## Open questions
+## Review findings (2026-10-03)
 
-1. Default for an ordinary quit: kill (as today) or keep (tmux-like)?
-2. `detached-timeout` default (24 h proposed).
-3. Ring size per pane (8 MiB proposed; total memory grows with pane count).
+The first draft was checked against `alacritty_terminal` 0.25.1, vte 0.15 and
+the restore code before any implementation. Changes made above:
+
+1. **Exact screens.** The draft reused the ANSI scrollback copy, which joins
+   wrapped rows, drops trailing blank rows and loses the cursor. Replayed
+   relative cursor moves would then corrupt the screen. The snapshot now keeps
+   visible rows as exact cells and the cursors, and restores at its own size.
+2. **Muted replies.** Replaying old output through the screen model would
+   answer old queries into the live program.
+3. **Sequence boundaries.** A snapshot offset in the middle of an escape
+   sequence or UTF-8 character would corrupt the replay, and the app cannot
+   see vte's parser state; the host frames output at boundaries.
+4. **Modes on a new shell.** The draft claimed the snapshot would restore
+   modes for today's (process-less) restore; that would leave a new shell in
+   a dead program's modes.
+5. **Unreadable state** (scroll region, tab stops, keyboard-stack depth):
+   documented, and covered by a size nudge after every reattach rather than
+   only after truncation.
+6. **Lost modes on truncation:** reported by the host's scanner.
+7. **Missing spawn description, blocking start-up, synchronous foreground
+   probe at quit, and quit leaving hosts alive:** specified above.
+
+## Settled questions
+
+The defaults were accepted: an ordinary quit ends the panes, `detached-timeout`
+is 24 h, and each host keeps an 8 MiB ring.
