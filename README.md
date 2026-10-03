@@ -55,23 +55,36 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 
 ## Screenshots
 
-Terminals, files, remote hosts and agents in one window. Three tabs, each
-badged with its agent's state, with the repository's own git log in the active
-pane and the details panel beside it:
+Terminals, files, remote hosts and agents in one window. A Markdown editor,
+Mermaid preview and terminal share the same tabs and recursive split layout:
 
-![Three session tabs with agent-state badges, a git log in the active pane, and the details panel](docs/images/mtty-workspace.png)
+![Current mtty workspace: session sidebar, Markdown editor, Mermaid preview and split terminal](docs/images/mtty.png?v=20261004)
+
+Captured on 2026-10-04 from the current v0.1.3 development build in an isolated
+example project. Agent-state events and edit proposals use the real MTP control
+plane; the host addresses and queued prompts are examples.
 
 | Agent state, live | Editor and live preview |
 |---|---|
-| ![A tab badge and the Agent panel following the pane through the four agent states](docs/images/mtty-states.gif) | ![A Markdown file in the editor with its rendered preview beside it](docs/images/mtty-editor.png) |
+| ![Control-plane events update the badge and Agent panel through processing, awaiting, error and idle](docs/images/mtty-states.gif?v=20261004) | ![A Markdown edit updates the adjacent preview, including Mermaid, tables and code blocks](docs/images/mtty-editor.gif?v=20261004) |
 
-| Command palette to a split | Details panels |
+| Inline edit review | Local and remote hosts |
 |---|---|
-| ![The command palette fuzzy-finding Split Right and laying out a second pane](docs/images/mtty-palette.gif) | ![Switching the details panel between agent, tasks, git, files and ports](docs/images/mtty-panels.gif) |
+| ![A proposed editor change appears inline, then is accepted through the palette](docs/images/mtty-review.gif?v=20261004) | ![Grouped SSH hosts with file access, jump-host settings and saved port forwards; example addresses](docs/images/mtty-hosts.png?v=20261004) |
 
-Recursive splits keep a git log and a running server side by side:
+| Follow-up prompt queue | Details panels |
+|---|---|
+| ![Two prompts queued for the active processing agent pane](docs/images/mtty-queue.png?v=20261004) | ![A sequence of current Info, Agent, Outline, Git, Files, Ports and Queue captures](docs/images/mtty-panels.gif?v=20261004) |
 
-![A tab split into two panes, a git log on the left and an HTTP server on the right](docs/images/mtty-splits.png)
+| Command palette | Tabs with agent badges |
+|---|---|
+| ![Opening the current command palette over the workspace](docs/images/mtty-palette.gif?v=20261004) | ![Processing, awaiting and idle session badges beside terminal output and Git details](docs/images/mtty-workspace.png?v=20261004) |
+
+Recursive splits keep Git changes and an actual local HTTP server side by side:
+
+![Git changes on the left and a running local HTTP server on the right](docs/images/mtty-splits.png?v=20261004)
+
+More short, controllable demos: **[mtty on mtty.dev](https://mtty.dev/mtty#screens)**.
 
 > **Project status — pre-release.** The version is `0.1.3` and the API is not yet
 > stable. macOS is the primary platform. Windows is built, tested and driven over
