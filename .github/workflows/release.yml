@@ -29,7 +29,7 @@ jobs:
           cache-on-failure: true
 
       - name: Build
-        run: cargo build --release -p mtty-app -p mtty-cli
+        run: cargo build --release -p mtty-app -p mtty-cli -p miao-term-ptyhost
 
       - name: Package (macOS)
         if: runner.os == 'macOS'
@@ -76,7 +76,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           mkdir -p dist
-          cp target/release/mtty target/release/mtty-cli dist/
+          cp target/release/mtty target/release/mtty-cli target/release/mtty-ptyhost dist/
           tar -C dist -czf mtty-linux-x86_64.tar.gz .
           cargo install cargo-deb --locked
           cargo deb -p mtty-app --no-build
@@ -89,7 +89,7 @@ jobs:
           AppDir=AppDir
           mkdir -p "$AppDir/usr/bin" "$AppDir/usr/share/applications" \
                    "$AppDir/usr/share/icons/hicolor/256x256/apps"
-          cp target/release/mtty target/release/mtty-cli "$AppDir/usr/bin/"
+          cp target/release/mtty target/release/mtty-cli target/release/mtty-ptyhost "$AppDir/usr/bin/"
           cp assets/AppRun "$AppDir/AppRun"
           chmod +x "$AppDir/AppRun"
           cp assets/mtty.desktop "$AppDir/mtty.desktop"
@@ -108,7 +108,7 @@ jobs:
           dpkg-deb --extract dist/*.deb "$RUNNER_TEMP/deb-check"
           chmod +x mtty-linux-x86_64.AppImage
           ./mtty-linux-x86_64.AppImage --appimage-extract
-          for binary in mtty mtty-cli; do
+          for binary in mtty mtty-cli mtty-ptyhost; do
             test -x "$RUNNER_TEMP/deb-check/usr/bin/$binary"
             test -x "squashfs-root/usr/bin/$binary"
           done

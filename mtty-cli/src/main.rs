@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use serde_json::{json, Value};
 
 fn usage_text() -> &'static str {
-    "usage: mtty-cli [--socket PATH|tcp://host:port] <command>\n\
+    "usage: mtty-cli [--socket PATH|tcp://host:port] [--wait SECS] <command>\n\
      commands: ping | health | wait [--since N] | events [--topic T[,T]] | \
      pane list|run|send|focus|close|output | \
      state <agent> --state S | state list | history add|list |\n     view|edit <path> |\n     file read --path P [--offset N] [--length N] [--base64] |\n     file write --path P [--data D | --data-b64 B]"
@@ -49,6 +49,22 @@ fn main() {
         }
     }
 
+    // `--wait SECS`: keep trying while mtty restarts (an update keeps the
+    // pane's programs running, ADR 0041). Inside a pane the default is 5 s,
+    // so agent hooks reach the relaunched app; outside, failing is immediate.
+    let mut wait = std::time::Duration::from_secs(if miao_term_mtp::env("PANE_ID").is_some() {
+        5
+    } else {
+        0
+    });
+    if let Some(i) = args.iter().position(|a| a == "--wait") {
+        if let Some(secs) = args.get(i + 1).and_then(|s| s.parse::<f64>().ok()) {
+            wait = std::time::Duration::from_secs_f64(secs.max(0.0));
+            args.remove(i + 1);
+        }
+        args.remove(i);
+    }
+
     let pane_default = || miao_term_mtp::env("PANE_ID");
     let cmd = args.first().map(String::as_str).unwrap_or("");
     if cmd == "--help" || cmd == "-h" {
@@ -56,11 +72,22 @@ fn main() {
         return;
     }
 
-    let mut client = match miao_term_mtp::client::connect_any(&socket.to_string_lossy()) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("mtty-cli: cannot connect to {}: {e}", socket.display());
-            std::process::exit(1);
+    let deadline = std::time::Instant::now() + wait;
+    let mut client = loop {
+        match miao_term_mtp::client::connect_any(&socket.to_string_lossy()) {
+            Ok(c) => break c,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                ) && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(e) => {
+                eprintln!("mtty-cli: cannot connect to {}: {e}", socket.display());
+                std::process::exit(1);
+            }
         }
     };
 

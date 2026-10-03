@@ -314,6 +314,28 @@ reboot is also out of scope.
   foreground known), and `kill -9` of the app on a macOS and a Linux desktop
   with output continuing without a gap and the pane id kept.
 
+## Addendum: P2 as built (2026-10-03)
+
+- **Update and Relaunch** quits keeping sessions: each hosted pane's state
+  and offset are saved (`<pane>.host.json`), its host is detached, and the
+  relaunched app reattaches. Panes without a host end as on any quit.
+- A palette command, *Relaunch, Keeping Programs Running* (shown when
+  `pty-host` is on), runs the same path without an update. It is how the
+  path is tested end to end: an update needs a release-signed artifact.
+- `mtty-ptyhost` ships in the macOS bundle, the Linux tarball, AppImage and
+  deb (`release.yml`, `scripts/package-macos.sh`, the deb assets).
+- Hosts running that no restored pane took back (a crash before the session
+  was saved) are announced at startup and listed in the palette as
+  *Reattach / End Running Program*.
+- `mtty-cli` retries a refused connection for 5 s when it runs inside a pane
+  (`MTTY_PANE_ID` is set), so agent hooks reach the relaunched app;
+  `--wait SECS` sets the time anywhere.
+- Verified on a macOS and a Linux desktop: the relaunch keeps a running loop
+  going without a gap, the old app exits, the snapshot is written and used,
+  the pane id is kept; a host orphaned by `kill -9` is reattached from the
+  palette. A real update from one release to the next is checked when the
+  next release ships.
+
 ## Review findings (2026-10-03)
 
 The first draft was checked against `alacritty_terminal` 0.25.1, vte 0.15 and

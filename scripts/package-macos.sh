@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build one native mtty.app, carrying mtty and mtty-cli.
+# Build one native mtty.app, carrying mtty, mtty-cli and mtty-ptyhost (ADR 0041).
 # PROFILE=debug scripts/package-macos.sh also supports a development bundle.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -8,9 +8,9 @@ version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
 profile="${PROFILE:-release}"
 target="${CARGO_TARGET_DIR:-target}"
 if [ "$profile" = release ]; then
-  cargo build --release -p mtty-app -p mtty-cli
+  cargo build --release -p mtty-app -p mtty-cli -p miao-term-ptyhost
 else
-  cargo build -p mtty-app -p mtty-cli
+  cargo build -p mtty-app -p mtty-cli -p miao-term-ptyhost
 fi
 built="$target/$profile"
 staging="$(mktemp -d)"
@@ -27,7 +27,7 @@ done
 iconutil -c icns "$iconset" -o "$staging/mtty.icns"
 app="$staging/mtty.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp "$built/mtty" "$built/mtty-cli" "$app/Contents/MacOS/"
+cp "$built/mtty" "$built/mtty-cli" "$built/mtty-ptyhost" "$app/Contents/MacOS/"
 cp "$staging/mtty.icns" "$app/Contents/Resources/"
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
