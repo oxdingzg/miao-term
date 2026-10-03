@@ -68,6 +68,8 @@ pub struct EditorDraw {
     pub selection: Vec<CellRect>,
     /// The current line's band (behind the selection).
     pub current_line: Option<usize>,
+    /// A line to flash after a jump to it (row in the text area).
+    pub flash_line: Option<usize>,
     /// Where carets go (row, col including the gutter); a caret is a bar.
     pub carets: Vec<(usize, usize)>,
     /// Width of the gutter in cells.
@@ -307,7 +309,12 @@ pub struct EditorPane {
     /// A pending agent edit (ADR 0040, A1), tinted until accepted or rejected.
     pub proposal: Option<Proposal>,
     last_click: Option<(Instant, usize, u8)>,
+    /// A line to flash after a jump to it, and when the flash started.
+    flash: Option<(usize, Instant)>,
 }
+
+/// How long a jump-to-line highlight stays.
+const FLASH: Duration = Duration::from_millis(1500);
 
 impl EditorPane {
     /// Open `path` (UTF-8 text) in a pane: in view mode above
@@ -420,6 +427,9 @@ impl EditorPane {
             large.pending_line = None;
         }
         let line = line.min(self.total_lines().saturating_sub(1));
+        // Land on the line with a brief highlight, so a jump from elsewhere
+        // (Go to Line, a symbol, an agent's `app.edit`) is visible.
+        self.flash = Some((line, Instant::now()));
         if let Some(large) = &self.large {
             let lines = self.doc.rope().len_lines();
             if line < large.base || line >= large.base + lines {
@@ -551,6 +561,7 @@ impl EditorPane {
             close_armed: false,
             proposal: None,
             last_click: None,
+            flash: None,
         }
     }
 
@@ -1510,6 +1521,11 @@ impl EditorPane {
         let current_line = (head_line >= self.scroll_line
             && head_line < self.scroll_line + self.rows)
             .then(|| head_line - self.scroll_line);
+        let flash_line = self
+            .flash
+            .as_ref()
+            .filter(|(_, at)| at.elapsed() < FLASH)
+            .and_then(|(line, _)| self.row_of_line(*line));
         // A pending agent proposal tints its changed lines.
         let mut proposal_cells = Vec::new();
         if let Some(p) = &self.proposal {
@@ -1527,6 +1543,7 @@ impl EditorPane {
             rows,
             selection: sel_cells,
             current_line,
+            flash_line,
             carets,
             gutter,
             underlines,
@@ -1821,6 +1838,14 @@ mod tests {
                 Some(Command::DeleteToLineStart)
             );
         }
+    }
+
+    #[test]
+    fn a_line_jump_flashes_the_target_line() {
+        let mut p = pane("a\nb\nc\nd\ne\n");
+        p.go_to_line(2);
+        let d = p.draw(palette(), true, true);
+        assert_eq!(d.flash_line, Some(2), "the jumped-to line's row");
     }
 
     #[test]
