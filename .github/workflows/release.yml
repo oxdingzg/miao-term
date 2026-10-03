@@ -166,6 +166,17 @@ jobs:
             $entry = Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' |
               Where-Object { $_.DisplayName -eq 'mtty' }
             if (-not $entry.DisplayIcon.Contains('mtty.ico')) { throw 'Missing installed application icon' }
+            $shortcuts = @(
+              (Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'mtty/mtty.lnk'),
+              (Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) 'mtty.lnk')
+            )
+            $shell = New-Object -ComObject WScript.Shell
+            foreach ($shortcut in $shortcuts) {
+              if (-not (Test-Path $shortcut)) { throw "Missing shortcut: $shortcut" }
+              $link = $shell.CreateShortcut($shortcut)
+              if ($link.TargetPath -ne (Join-Path $bin 'mtty.exe')) { throw "Wrong shortcut target: $shortcut" }
+              if (-not $link.IconLocation.Contains('mtty.ico')) { throw "Missing shortcut icon: $shortcut" }
+            }
             foreach ($scheme in @('mtty', 'miaotty')) {
               $command = (Get-Item "Registry::HKEY_CLASSES_ROOT\$scheme\shell\open\command").GetValue('')
               if (-not $command.Contains('mtty.exe')) { throw "Missing URL handler: $scheme" }
@@ -175,6 +186,9 @@ jobs:
             if ($uninstall.ExitCode -notin @(0, 3010)) { throw "MSI uninstall failed: $($uninstall.ExitCode)" }
           }
           if (Test-Path (Join-Path $env:ProgramFiles 'mtty/bin/mtty.exe')) { throw 'MSI left an installed binary behind' }
+          foreach ($shortcut in $shortcuts) {
+            if (Test-Path $shortcut) { throw "MSI left a shortcut behind: $shortcut" }
+          }
 
       - name: Sign MSI (Windows, optional)
         if: runner.os == 'Windows'

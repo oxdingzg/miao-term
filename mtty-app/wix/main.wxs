@@ -86,6 +86,11 @@
         <Property Id='DiskPrompt' Value='mtty Installation'/>
 
         <Directory Id='TARGETDIR' Name='SourceDir'>
+            <Directory Id='ProgramMenuFolder'>
+                <Directory Id='ApplicationProgramsFolder' Name='mtty'/>
+            </Directory>
+            <Directory Id='DesktopFolder'/>
+            <Directory Id='ProfileFolder'/>
             <Directory Id='$(var.PlatformProgramFilesFolder)' Name='PFiles'>
                 <Directory Id='APPLICATIONFOLDER' Name='mtty'>
                     <!--
@@ -134,6 +139,20 @@
             </Directory>
         </Directory>
 
+        <Component Id='StartMenuShortcut' Guid='*' Directory='ApplicationProgramsFolder'>
+            <Shortcut Id='StartMenuMtty' Name='mtty' Description='mtty terminal'
+                Target='[#exe0]' WorkingDirectory='ProfileFolder' Icon='mtty.ico' IconIndex='0'/>
+            <RemoveFolder Id='RemoveApplicationProgramsFolder' On='uninstall'/>
+            <RegistryValue Root='HKLM' Key='Software\mtty' Name='StartMenuShortcut'
+                Type='integer' Value='1' KeyPath='yes'/>
+        </Component>
+        <Component Id='DesktopShortcut' Guid='*' Directory='DesktopFolder'>
+            <Shortcut Id='DesktopMtty' Name='mtty' Description='mtty terminal'
+                Target='[#exe0]' WorkingDirectory='ProfileFolder' Icon='mtty.ico' IconIndex='0'/>
+            <RegistryValue Root='HKLM' Key='Software\mtty' Name='DesktopShortcut'
+                Type='integer' Value='1' KeyPath='yes'/>
+        </Component>
+
         <Component Id='ProtocolMtty' Guid='*' Directory='Bin'>
             <RegistryKey Root='HKCR' Key='mtty'>
                 <RegistryValue Type='string' Value='URL:mtty Protocol' KeyPath='yes'/>
@@ -172,6 +191,8 @@
             
             <ComponentRef Id='binary0'/>
             <ComponentRef Id='binary1'/>
+            <ComponentRef Id='StartMenuShortcut'/>
+            <ComponentRef Id='DesktopShortcut'/>
             <!-- `mtty://` (and `miaotty://`) deep links. `ssh://` and
                  `x-man-page://` are left to the user's choice on Windows rather
                  than hijacked per-machine. -->
