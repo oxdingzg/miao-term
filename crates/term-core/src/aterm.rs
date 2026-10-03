@@ -69,6 +69,11 @@ impl ATerm {
         self.processor.advance(&mut self.term, bytes);
     }
 
+    /// A cursor query must observe writes buffered by a synchronized update.
+    pub(crate) fn flush_synchronized_output(&mut self) {
+        self.processor.stop_sync(&mut self.term);
+    }
+
     pub fn size(&self) -> (u16, u16) {
         (self.rows as u16, self.cols as u16)
     }

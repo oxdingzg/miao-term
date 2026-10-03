@@ -798,6 +798,16 @@ pub trait Chrome {
     fn draws_menu_bar(&self) -> bool {
         true
     }
+    /// Windows places its menu and caption controls in the tab row.
+    fn window_controls(&self) -> bool {
+        false
+    }
+    fn window_maximized(&self) -> bool {
+        false
+    }
+    fn on_minimize_window(&mut self) {}
+    fn on_maximize_window(&mut self) {}
+
     /// The host's active theme (colours for the whole chrome).
     fn theme(&self) -> crate::theme::Theme {
         crate::theme::Theme::default()
@@ -987,6 +997,8 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
     let mut queue_input = host.take_queue_input();
 
     let mut menu: Option<MenuId> = None;
+    let mut minimize_window = false;
+    let mut maximize_window = false;
     let mut switch = None;
     let mut close = None;
     let mut rename = None;
@@ -1186,6 +1198,33 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
                     new_tab = ev.new_tab;
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if host.window_controls() {
+                        if ui
+                            .button("×")
+                            .on_hover_text(t(lang, "Close window", "关闭窗口"))
+                            .clicked()
+                        {
+                            menu = Some(MenuId::Quit);
+                        }
+                        if ui
+                            .button(if host.window_maximized() {
+                                "❐"
+                            } else {
+                                "□"
+                            })
+                            .on_hover_text(t(lang, "Maximize / restore", "最大化 / 还原"))
+                            .clicked()
+                        {
+                            maximize_window = true;
+                        }
+                        if ui
+                            .button("−")
+                            .on_hover_text(t(lang, "Minimize", "最小化"))
+                            .clicked()
+                        {
+                            minimize_window = true;
+                        }
+                    }
                     if ui.button("A+").clicked() {
                         font_delta = 1.0;
                     }
@@ -1205,10 +1244,45 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
                     {
                         toggle_sidebar = true;
                     }
+                    if host.window_controls() {
+                        ui.menu_button("≡", |ui| {
+                            for (title, entries) in crate::menu::menus(lang) {
+                                ui.menu_button(title, |ui| {
+                                    for entry in entries {
+                                        match entry {
+                                            crate::menu::Entry::Item { label, id, .. } => {
+                                                let label =
+                                                    if id == MenuId::ReadOnly && host_read_only {
+                                                        format!("{label}  \u{2713}")
+                                                    } else {
+                                                        label
+                                                    };
+                                                menu_item(ui, &label, id, &mut menu);
+                                            }
+                                            crate::menu::Entry::Separator => {
+                                                ui.separator();
+                                            }
+                                            crate::menu::Entry::Link { label, url } => {
+                                                ui.hyperlink_to(label, url);
+                                            }
+                                        }
+                                    }
+                                });
+                            }
+                        })
+                        .response
+                        .on_hover_text(t(lang, "Menu", "菜单"));
+                    }
                 });
             });
         });
     host.on_title_drag_hover(title_drag_hover);
+    if minimize_window {
+        host.on_minimize_window();
+    }
+    if maximize_window {
+        host.on_maximize_window();
+    }
 
     if show_details {
         let host = &mut *host;
@@ -1991,6 +2065,93 @@ mod tab_menu_tests {
             .copied()
             .unwrap();
         assert!(rects[1].bottom() <= divider && divider <= rects[2].top());
+    }
+
+    #[test]
+    fn compact_windows_caption_preserves_buttons_and_content_height() {
+        #[derive(Default)]
+        struct CaptionHost {
+            minimized: bool,
+            maximized: bool,
+            closed: bool,
+        }
+        impl Chrome for CaptionHost {
+            fn draws_menu_bar(&self) -> bool {
+                false
+            }
+            fn window_controls(&self) -> bool {
+                true
+            }
+            fn show_sidebar(&self) -> bool {
+                false
+            }
+            fn show_details(&self) -> bool {
+                false
+            }
+            fn on_minimize_window(&mut self) {
+                self.minimized = true;
+            }
+            fn on_maximize_window(&mut self) {
+                self.maximized = true;
+            }
+            fn on_menu(&mut self, id: MenuId) {
+                self.closed = id == MenuId::Quit;
+            }
+        }
+        let ctx = test_ctx();
+        let mut host = CaptionHost::default();
+        let mut run = |events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200.0, 700.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    render(ctx, &mut host);
+                    assert!((ctx.available_rect().top() - CHROME_TITLE_H).abs() < 0.5);
+                },
+            )
+        };
+        run(vec![]);
+        let output = run(vec![]);
+        let positions: Vec<_> = ["−", "□", "×"]
+            .into_iter()
+            .map(|label| {
+                output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.job.text == label => {
+                            Some(text.pos + text.galley.size() * 0.5)
+                        }
+                        _ => None,
+                    })
+                    .expect("caption button drawn")
+            })
+            .collect();
+        assert!(positions[0].x < positions[1].x && positions[1].x < positions[2].x);
+        for pos in positions {
+            run(vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::default(),
+                },
+            ]);
+            run(vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::default(),
+            }]);
+        }
+        assert!(host.minimized && host.maximized && host.closed);
     }
 
     struct FrameHost {

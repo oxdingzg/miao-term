@@ -362,6 +362,7 @@ impl Terminal {
                 miao_term_graphics::StreamEvent::CursorReport => {
                     // Respond at the query's position in the stream, after any
                     // preceding text has updated the cursor (including ConPTY).
+                    self.screen.flush_synchronized_output();
                     let (row, col) = self.screen.cursor();
                     self.write(format!("\x1b[{};{}R", row + 1, col + 1).as_bytes());
                 }
@@ -1126,7 +1127,7 @@ mod tests {
                 Ok(())
             }
         }
-        let stream = b"abc\x1b[6n\r\nxy\x1b[6n\x1b]2;new title\x1b\\\x1b]7;file://localhost/tmp/a%20b\x07done";
+        let stream = b"\x1b[?2026habc\x1b[6n\x1b[?2026l\r\n\x1b[?2026hxy\x1b[6n\x1b[?2026l\x1b]2;new title\x1b\\\x1b]7;file://localhost/tmp/a%20b\x07done";
         for chunk_size in [1, 2, 3, 4, 8, stream.len()] {
             let mut term = make();
             let replies = Arc::new(Mutex::new(Vec::new()));

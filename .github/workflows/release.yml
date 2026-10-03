@@ -163,9 +163,9 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Installed CLI failed' }
             python scripts/check-windows-icon.py (Join-Path $bin 'mtty.exe')
             if ($LASTEXITCODE -ne 0) { throw 'Installed executable icon check failed' }
-            $entry = Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' |
+            $entry = Get-ItemProperty @('HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*') |
               Where-Object { $_.DisplayName -eq 'mtty' }
-            if (-not $entry.DisplayIcon.Contains('mtty.ico')) { throw 'Missing installed application icon' }
+            if (-not $entry -or -not ([string]$entry.DisplayIcon).Contains('mtty.ico')) { throw 'Missing installed application icon' }
             $shortcuts = @(
               (Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'mtty/mtty.lnk'),
               (Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) 'mtty.lnk')

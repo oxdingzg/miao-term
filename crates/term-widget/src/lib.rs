@@ -103,14 +103,40 @@ fn menu_in_os() -> bool {
 
 /// Whether the window extends under a transparent title bar, Otty-style: the
 /// traffic lights float over the sidebar header and the title row takes the
-/// title bar's place. Only where the menu lives in the OS menu bar; otherwise
-/// the in-window menu would sit under the traffic lights.
+/// title bar's place. Windows uses a custom caption and compact menu in that
+/// same row; macOS does so only when the menu lives in the OS menu bar.
 fn unified_titlebar() -> bool {
-    cfg!(target_os = "macos") && menu_in_os()
+    cfg!(windows) || (cfg!(target_os = "macos") && menu_in_os())
 }
 
 /// Room the traffic lights take at the leading edge of a unified title bar.
 const TRAFFIC_LIGHTS_W: f32 = 76.0;
+
+/// Resize handles for the undecorated Windows frame, in physical pixels.
+#[cfg(any(windows, test))]
+fn window_resize_edge(
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    edge: f64,
+) -> Option<winit::window::ResizeDirection> {
+    use winit::window::ResizeDirection::*;
+    if x < 0.0 || y < 0.0 || x >= w || y >= h {
+        return None;
+    }
+    match (x < edge, x >= w - edge, y < edge, y >= h - edge) {
+        (true, _, true, _) => Some(NorthWest),
+        (_, true, true, _) => Some(NorthEast),
+        (true, _, _, true) => Some(SouthWest),
+        (_, true, _, true) => Some(SouthEast),
+        (true, _, _, _) => Some(West),
+        (_, true, _, _) => Some(East),
+        (_, _, true, _) => Some(North),
+        (_, _, _, true) => Some(South),
+        _ => None,
+    }
+}
 
 /// The OS menu bar, built from the shared menu table (ADR 0031).
 #[cfg(target_os = "macos")]
@@ -1819,7 +1845,7 @@ impl State {
         } else {
             0.0
         };
-        let top = chrome::content_top(!menu_in_os());
+        let top = chrome::content_top(!menu_in_os() && !cfg!(windows));
         Rect {
             x,
             y: top,
@@ -12787,7 +12813,11 @@ impl ApplicationHandler<HostEvent> for Host {
         let attrs = {
             use winit::platform::windows::{IconExtWindows, WindowAttributesExtWindows};
             let icon = winit::window::Icon::from_resource(1, None).ok();
-            attrs.with_window_icon(icon.clone()).with_taskbar_icon(icon)
+            attrs
+                .with_window_icon(icon.clone())
+                .with_taskbar_icon(icon)
+                .with_decorations(false)
+                .with_undecorated_shadow(true)
         };
         #[cfg(target_os = "macos")]
         let attrs = if unified_titlebar() {
@@ -13494,6 +13524,42 @@ impl ApplicationHandler<HostEvent> for Host {
         // Empty title-row space stands in for the title bar it covers: a press
         // moves the window, a second one soon after zooms it. The OS drag loop
         // swallows the release, so egui must not see the press either.
+        #[cfg(windows)]
+        if !state.window.is_maximized() {
+            let size = state.window.inner_size();
+            let edge = 5.0 * state.window.scale_factor();
+            let (x, y) = match &event {
+                WindowEvent::CursorMoved { position, .. } => (position.x, position.y),
+                _ => state.cursor,
+            };
+            if let Some(direction) =
+                window_resize_edge(x, y, f64::from(size.width), f64::from(size.height), edge)
+            {
+                use winit::window::{CursorIcon, ResizeDirection};
+                let icon = match direction {
+                    ResizeDirection::East | ResizeDirection::West => CursorIcon::EwResize,
+                    ResizeDirection::North | ResizeDirection::South => CursorIcon::NsResize,
+                    ResizeDirection::NorthEast | ResizeDirection::SouthWest => {
+                        CursorIcon::NeswResize
+                    }
+                    ResizeDirection::NorthWest | ResizeDirection::SouthEast => {
+                        CursorIcon::NwseResize
+                    }
+                };
+                state.window.set_cursor(icon);
+                if matches!(
+                    &event,
+                    WindowEvent::MouseInput {
+                        state: ElementState::Pressed,
+                        button: MouseButton::Left,
+                        ..
+                    }
+                ) {
+                    let _ = state.window.drag_resize_window(direction);
+                    return;
+                }
+            }
+        }
         if state.title_drag_hover && unified_titlebar() {
             if let WindowEvent::MouseInput {
                 state: ElementState::Pressed,
@@ -15374,11 +15440,24 @@ impl WindowState {
 impl chrome::Chrome for State {
     fn draws_menu_bar(&self) -> bool {
         // macOS inside an app bundle uses the system menu bar instead (ADR 0031).
-        !menu_in_os()
+        !menu_in_os() && !cfg!(windows)
+    }
+
+    fn window_controls(&self) -> bool {
+        cfg!(windows)
+    }
+    fn window_maximized(&self) -> bool {
+        self.window.is_maximized()
+    }
+    fn on_minimize_window(&mut self) {
+        self.window.set_minimized(true);
+    }
+    fn on_maximize_window(&mut self) {
+        self.window.set_maximized(!self.window.is_maximized());
     }
 
     fn titlebar_inset(&self) -> f32 {
-        if unified_titlebar() {
+        if cfg!(target_os = "macos") && unified_titlebar() {
             TRAFFIC_LIGHTS_W
         } else {
             0.0
@@ -15947,6 +16026,26 @@ impl chrome::Chrome for State {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn windows_frame_resize_handles_edges_and_corners() {
+        use winit::window::ResizeDirection::*;
+        for (x, y, expected) in [
+            (1.0, 1.0, Some(NorthWest)),
+            (799.0, 1.0, Some(NorthEast)),
+            (1.0, 599.0, Some(SouthWest)),
+            (799.0, 599.0, Some(SouthEast)),
+            (1.0, 200.0, Some(West)),
+            (799.0, 200.0, Some(East)),
+            (200.0, 1.0, Some(North)),
+            (200.0, 599.0, Some(South)),
+            (200.0, 200.0, None),
+            (-1.0, 1.0, None),
+            (800.0, 200.0, None),
+        ] {
+            assert_eq!(super::window_resize_edge(x, y, 800.0, 600.0, 5.0), expected);
+        }
+    }
+
     #[test]
     fn transport_targets_round_trip_through_json() {
         let serial = super::TransportTarget::Serial {
