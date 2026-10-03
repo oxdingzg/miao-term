@@ -1585,6 +1585,8 @@ struct State {
     alert_target: Option<(String, Instant)>,
     /// egui showed a resize cursor last frame (pointer on a panel edge).
     ui_resize_hover: bool,
+    #[cfg(windows)]
+    window_resize_hover: bool,
     /// Wheel/trackpad movement not yet amounting to a whole line.
     wheel_accum: f64,
     /// The pointer was on empty title-row space last frame: a press there
@@ -13138,6 +13140,8 @@ impl ApplicationHandler<HostEvent> for Host {
             jobs_rx,
             agents_detected: None,
             ui_resize_hover: false,
+            #[cfg(windows)]
+            window_resize_hover: false,
             wheel_accum: 0.0,
             title_drag_hover: false,
             title_pressed_at: None,
@@ -13547,6 +13551,7 @@ impl ApplicationHandler<HostEvent> for Host {
                     }
                 };
                 state.window.set_cursor(icon);
+                state.window_resize_hover = true;
                 if matches!(
                     &event,
                     WindowEvent::MouseInput {
@@ -13558,6 +13563,13 @@ impl ApplicationHandler<HostEvent> for Host {
                     let _ = state.window.drag_resize_window(direction);
                     return;
                 }
+            } else if state.window_resize_hover {
+                state.window_resize_hover = false;
+                state.window.set_cursor(if state.hover_pointer {
+                    winit::window::CursorIcon::Pointer
+                } else {
+                    winit::window::CursorIcon::Default
+                });
             }
         }
         if state.title_drag_hover && unified_titlebar() {
