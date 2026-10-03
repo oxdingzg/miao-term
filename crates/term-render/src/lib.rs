@@ -56,6 +56,7 @@ pub struct TermRenderer {
 const TEXT_SYMBOL_STANDINS: &[(char, char)] = &[
     ('\u{23FA}', '\u{25CF}'), // ⏺ -> ●
     ('\u{23F9}', '\u{25A0}'), // ⏹ -> ■
+    ('\u{23BF}', '\u{2514}'), // ⎿ -> └ (Claude Code's tool-result marker)
     ('\u{2B05}', '\u{2190}'), // ⬅ -> ←
     ('\u{2B06}', '\u{2191}'), // ⬆ -> ↑
     ('\u{2B07}', '\u{2193}'), // ⬇ -> ↓
@@ -146,6 +147,11 @@ impl TermRenderer {
         let mut font_system = FontSystem::new();
         load_bundled(&mut font_system);
         load_system_cjk(&mut font_system);
+        // The bundled JetBrains Mono is the intended default. fontdb's own
+        // fallback is "Courier New", which lacks box-drawing (U+2503 `┃`, used
+        // by miao's message border) and other glyphs, so a missing glyph was
+        // rendered as a stray `z` on Windows.
+        font_system.db_mut().set_monospace_family("JetBrains Mono");
         Self {
             font_system,
             swash_cache: SwashCache::new(),
@@ -919,7 +925,13 @@ mod symbol_tests {
             FontSystem::new_with_locale_and_db("en-US".into(), Default::default());
         load_bundled(&mut font_system);
         let standins = missing_standins(&mut font_system, Family::Name("JetBrains Mono"));
-        assert!(standins.is_empty(), "bundled font lacks {standins:?}");
+        // Every bundled text symbol is present except U+23BF, which miao's
+        // tool-result marker uses and `TEXT_SYMBOL_STANDINS` maps to `└`.
+        assert_eq!(
+            standins,
+            vec![('\u{23BF}', '\u{2514}')],
+            "unexpected stand-ins: {standins:?}"
+        );
     }
 
     #[test]
