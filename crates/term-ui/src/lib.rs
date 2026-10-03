@@ -37,7 +37,10 @@ use miao_term_core::ATerm;
 use miao_term_render::Span;
 use theme::{Rgb, Theme};
 
-pub use input::{encode_key, encode_paste, encode_text, EncodeOpts, KeyKind, Modifiers};
+pub use input::{
+    encode_key, encode_paste, encode_text, EncodeOpts, KeyKind, Modifiers, KITTY_DISAMBIGUATE,
+    KITTY_REPORT_ALL_KEYS, KITTY_REPORT_ALTERNATE, KITTY_REPORT_EVENTS, KITTY_REPORT_TEXT,
+};
 pub use layout::{Layout, Rect, SplitDir};
 pub use selection::Selection;
 pub use theme::{CursorStyle, Theme as UiTheme};

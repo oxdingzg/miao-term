@@ -100,7 +100,7 @@ point); problems fixed in M0–M3 are no longer listed.
 | Scrollback, selection, copy/paste, CJK wide characters and font fallback | Works | Wide-character copy has regressions |
 | Find `⌘F` (highlights + count) | Works | Fixed now: CJK queries never matched; highlights were misplaced on CJK lines |
 | Key encoding: Ctrl/Alt/modified navigation, F1–F12, Insert | Works | Fixed now: F1–F12 and Insert were not sent at all |
-| kitty keyboard protocol | Partial | Disambiguate level only |
+| kitty keyboard protocol | Partial | Disambiguate (flag 1), event types incl. release (2) and all keys as escape codes (8); alternate keys (4) and associated text (16) are not reported |
 | IME inline preedit | Works | Candidate window placed at the cursor (`set_ime_cursor_area`); its position on macOS awaits a desktop check |
 | Inline images: Sixel / Kitty / iTerm2 | Works | No Kitty z-index; session restore keeps no images |
 | Mouse reporting (SGR / X10) | Works | |
