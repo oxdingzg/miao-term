@@ -112,13 +112,19 @@
                          the binaries, which each require their notice to travel
                          with a distribution. Paths are relative to this crate,
                          as `wix\License.rtf` above is. -->
+                    <!-- One component per file: WiX only generates a component
+                         GUID automatically for a single-file component, or for a
+                         multi-file one whose keypath is a versioned file. Neither
+                         licence is versioned, so they are separate components. -->
                     <Directory Id='LicensesFolder' Name='licenses'>
-                        <Component Id='ThirdPartyLicenses' Guid='*'>
-                            <File Id='MttyLicense'
+                        <Component Id='MttyLicense' Guid='*'>
+                            <File Id='MttyLicenseFile'
                                 Name='LICENSE.txt'
                                 DiskId='1'
                                 Source='..\LICENSE'
-                                KeyPath='no'/>
+                                KeyPath='yes'/>
+                        </Component>
+                        <Component Id='ThirdPartyLicenses' Guid='*'>
                             <File Id='ThirdPartyLicensesFile'
                                 Name='THIRD-PARTY-LICENSES.md'
                                 DiskId='1'
@@ -218,6 +224,7 @@
               the license sidecar file from the installer.
             -->
             <ComponentRef Id='License'/>
+            <ComponentRef Id='MttyLicense'/>
             <ComponentRef Id='ThirdPartyLicenses'/>
 
             <ComponentRef Id='binary0'/>
