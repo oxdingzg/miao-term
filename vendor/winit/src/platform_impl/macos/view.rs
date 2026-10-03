@@ -408,15 +408,17 @@ declare_class!(
             let is_control = string.chars().next().is_some_and(|c| c.is_control());
 
             let marked = unsafe { self.hasMarkedText() };
-            // A CJK IME (macOS Pinyin, for example) commits punctuation without
-            // any marked text, so the old `hasMarkedText` check dropped the real
-            // commit and let the keyboard layout's own character through (a
-            // full-width `。` instead of the intended `.`). When the committed
+            // Whether the app asked for IME. `is_ime_enabled()` additionally
+            // requires a non-`Disabled` state, but macOS reports IME punctuation
+            // while the state is still `Disabled` (before any preedit), so gate
+            // on the request instead. A CJK IME (macOS Pinyin, for example)
+            // commits punctuation without any marked text; when the committed
             // string differs from the key event's characters, treat it as a
-            // commit and mark the event IME-related so the layout text is not
-            // sent as well. A regular layout commits the same string, so its
-            // behaviour is unchanged.
-            let differs = !marked && self.is_ime_enabled() && !is_control && {
+            // commit and mark the event IME-related so the layout's own
+            // character is not sent as well. A regular layout commits the same
+            // string, so its behaviour is unchanged.
+            let ime = self.ivars().ime_allowed.get();
+            let differs = !marked && ime && !is_control && {
                 let mtm = MainThreadMarker::from(self);
                 // SAFETY: called on the main thread while handling this key event.
                 unsafe {
@@ -428,7 +430,7 @@ declare_class!(
                 }
             };
 
-            if (marked || differs) && self.is_ime_enabled() && !is_control {
+            if (marked || differs) && ime && !is_control {
                 if marked {
                     self.queue_event(WindowEvent::Ime(Ime::Preedit(String::new(), None)));
                 }
