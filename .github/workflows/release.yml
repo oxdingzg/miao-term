@@ -152,7 +152,9 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $msi = (Get-ChildItem target/wix/*.msi | Select-Object -First 1).FullName
-          $install = Start-Process msiexec.exe -ArgumentList @('/i', "`"$msi`"", '/qn', '/norestart') -Wait -PassThru
+          $installLog = Join-Path $PWD 'mtty-msi-install.log'
+          $install = Start-Process msiexec.exe -ArgumentList @('/i', "`"$msi`"", '/qn', '/norestart', '/l*v', "`"$installLog`"") -Wait -PassThru
+          Select-String -Path $installLog -Pattern 'ARPPRODUCTICON|DisplayIcon|RegisterProduct|Return value 3|Icon:' | ForEach-Object { Write-Host $_.Line }
           if ($install.ExitCode -notin @(0, 3010)) { throw "MSI installation failed: $($install.ExitCode)" }
           try {
             $bin = Join-Path $env:ProgramFiles 'mtty/bin'
@@ -180,7 +182,7 @@ jobs:
               if (-not (Test-Path $shortcut)) { throw "Missing shortcut: $shortcut" }
               $link = $shell.CreateShortcut($shortcut)
               if ($link.TargetPath -ne (Join-Path $bin 'mtty.exe')) { throw "Wrong shortcut target: $shortcut" }
-              if (-not $link.IconLocation.Contains('mtty.ico')) { throw "Missing shortcut icon: $shortcut" }
+              if (-not $link.IconLocation.Contains('mtty.exe')) { throw "Missing shortcut icon: $shortcut" }
             }
             foreach ($scheme in @('mtty', 'miaotty')) {
               $command = (Get-Item "Registry::HKEY_CLASSES_ROOT\$scheme\shell\open\command").GetValue('')

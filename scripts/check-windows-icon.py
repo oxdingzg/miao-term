@@ -57,6 +57,17 @@ def main():
         return ctypes.string_at(pointer, size)
 
     try:
+        user = ctypes.WinDLL("user32", use_last_error=True)
+        user.LoadImageW.argtypes = [ctypes.c_void_p, ctypes.c_void_p, wintypes.UINT, ctypes.c_int, ctypes.c_int, wintypes.UINT]
+        user.LoadImageW.restype = ctypes.c_void_p
+        user.DestroyIcon.argtypes = [ctypes.c_void_p]
+        user.DestroyIcon.restype = wintypes.BOOL
+        for header, _image in expected:
+            size = header[0] or 256
+            handle = user.LoadImageW(module, 1, 1, size, size, 0)  # IMAGE_ICON
+            if not handle:
+                raise ctypes.WinError(ctypes.get_last_error())
+            assert user.DestroyIcon(handle)
         group = resource(1, 14)  # RT_GROUP_ICON
         assert struct.unpack_from("<HHH", group) == (0, 1, count)
         for index, (header, image) in enumerate(expected):
