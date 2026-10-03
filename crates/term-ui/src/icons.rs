@@ -21,6 +21,11 @@ pub enum Icon {
     Command,
     Search,
     Refresh,
+    /// An agent's state, by shape (drawn, not a glyph): nothing going on,
+    /// working, finished or waiting for you.
+    StateEmpty,
+    StateHalf,
+    StateFull,
 }
 
 /// The Tabler Icons glyph for an icon.
@@ -42,12 +47,20 @@ pub fn glyph(icon: Icon) -> char {
         Icon::Command => '\u{ea78}',
         Icon::Search => '\u{eb1c}',
         Icon::Refresh => '\u{eb13}',
+        // Drawn as shapes by `draw`; the plain circles stand in elsewhere.
+        Icon::StateEmpty => '\u{25cb}',
+        Icon::StateHalf => '\u{25d0}',
+        Icon::StateFull => '\u{25cf}',
     }
 }
 
 /// Draw `icon` centered in `rect`, filled with `color`.
 pub fn draw(p: &egui::Painter, rect: egui::Rect, icon: Icon, color: egui::Color32) {
     let size = rect.height().min(rect.width()).max(8.0);
+    if matches!(icon, Icon::StateEmpty | Icon::StateHalf | Icon::StateFull) {
+        draw_state(p, rect.center(), size * 0.36, icon, color);
+        return;
+    }
     if matches!(icon, Icon::Sidebar | Icon::Details) {
         // Matching left/right panels, rather than an equal-column layout glyph.
         let frame =
@@ -74,6 +87,43 @@ pub fn draw(p: &egui::Painter, rect: egui::Rect, icon: Icon, color: egui::Color3
         font,
         color,
     );
+}
+
+/// An agent-state circle of `radius` at `center`: a ring, a ring with its
+/// left half filled, or a disc.
+fn draw_state(
+    p: &egui::Painter,
+    center: egui::Pos2,
+    radius: f32,
+    icon: Icon,
+    color: egui::Color32,
+) {
+    let stroke = egui::Stroke::new((radius / 3.5).max(1.2), color);
+    match icon {
+        Icon::StateFull => {
+            p.circle_filled(center, radius, color);
+        }
+        Icon::StateHalf => {
+            // The left half as a filled polygon, under the ring.
+            let steps = 16;
+            let points: Vec<egui::Pos2> = (0..=steps)
+                .map(|i| {
+                    let a = std::f32::consts::FRAC_PI_2
+                        + std::f32::consts::PI * i as f32 / steps as f32;
+                    center + radius * egui::vec2(a.cos(), -a.sin())
+                })
+                .collect();
+            p.add(egui::Shape::convex_polygon(
+                points,
+                color,
+                egui::Stroke::NONE,
+            ));
+            p.circle_stroke(center, radius, stroke);
+        }
+        _ => {
+            p.circle_stroke(center, radius, stroke);
+        }
+    }
 }
 
 /// A small icon button (allocates space, draws the icon, hover highlight).
