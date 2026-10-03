@@ -29,6 +29,11 @@ app="$staging/mtty.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$built/mtty" "$built/mtty-cli" "$built/mtty-ptyhost" "$app/Contents/MacOS/"
 cp "$staging/mtty.icns" "$app/Contents/Resources/"
+# The bundle carries its own licence and the licences of everything in it.
+# Apache-2.0 asks for a copy of the licence with each distribution, and so does
+# every MIT, BSD and ISC crate compiled into these binaries.
+cp LICENSE "$app/Contents/Resources/LICENSE.txt"
+cp THIRD-PARTY-LICENSES.md "$app/Contents/Resources/THIRD-PARTY-LICENSES.md"
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

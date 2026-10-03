@@ -32,6 +32,8 @@ assets = [
     ["../assets/compat/miaotty", "usr/bin/miaotty", "755"],
     ["../assets/compat/miaotty-cli", "usr/bin/miaotty-cli", "755"],
     ["../assets/mtty.desktop", "usr/share/applications/mtty.desktop", "644"],
+    # licence-file above covers mtty itself; this covers everything it is built on.
+    ["../THIRD-PARTY-LICENSES.md", "usr/share/doc/mtty/THIRD-PARTY-LICENSES.md", "644"],
 ]
 
 [dependencies]

@@ -15,7 +15,30 @@ permissions:
   contents: write
 
 jobs:
+  # THIRD-PARTY-LICENSES.md travels inside every artifact, so it has to match
+  # the dependency graph that built them. Regenerating it costs a build of
+  # cargo-bundle-licenses, which is why this runs before a release rather than
+  # on every push — but it runs before the four platform builds, not after, so
+  # a stale file stops the release instead of being discovered in it.
+  licences:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Regenerate and compare
+        run: |
+          set -e
+          cargo install cargo-bundle-licenses --locked
+          cargo bundle-licenses --format toml --output third-party.toml
+          python3 scripts/render-third-party-licenses.py third-party.toml > regenerated.md
+          if ! diff -u THIRD-PARTY-LICENSES.md regenerated.md; then
+            echo "::error::THIRD-PARTY-LICENSES.md is out of date; regenerate it with scripts/render-third-party-licenses.py"
+            exit 1
+          fi
+
   build:
+    needs: licences
     strategy:
       fail-fast: false
       matrix:
@@ -77,6 +100,9 @@ jobs:
         run: |
           mkdir -p dist
           cp target/release/mtty target/release/mtty-cli target/release/mtty-ptyhost dist/
+          # Apache-2.0 and every MIT/BSD/ISC crate in the binaries ask for their
+          # licence to travel with a distribution.
+          cp LICENSE THIRD-PARTY-LICENSES.md dist/
           tar -C dist -czf mtty-linux-x86_64.tar.gz .
           cargo install cargo-deb --locked
           cargo deb -p mtty-app --no-build
@@ -88,8 +114,10 @@ jobs:
           set -e
           AppDir=AppDir
           mkdir -p "$AppDir/usr/bin" "$AppDir/usr/share/applications" \
-                   "$AppDir/usr/share/icons/hicolor/256x256/apps"
+                   "$AppDir/usr/share/icons/hicolor/256x256/apps" \
+                   "$AppDir/usr/share/doc/mtty"
           cp target/release/mtty target/release/mtty-cli target/release/mtty-ptyhost "$AppDir/usr/bin/"
+          cp LICENSE THIRD-PARTY-LICENSES.md "$AppDir/usr/share/doc/mtty/"
           cp assets/AppRun "$AppDir/AppRun"
           chmod +x "$AppDir/AppRun"
           cp assets/mtty.desktop "$AppDir/mtty.desktop"
@@ -132,6 +160,9 @@ jobs:
           Copy-Item target/release/mtty.exe dist/
           Copy-Item target/release/mtty-cli.exe dist/
           Copy-Item target/release/mtty-ptyhost.exe dist/
+          # Apache-2.0 and every MIT/BSD/ISC crate in the binaries ask for their
+          # licence to travel with a distribution.
+          Copy-Item LICENSE, THIRD-PARTY-LICENSES.md dist/
           Compress-Archive -Path dist/* -DestinationPath mtty-windows-x86_64.zip
 
       - name: MSI (Windows)
@@ -244,6 +275,12 @@ jobs:
       # Ship the minisign public key so users can verify the `.sig` files.
       - name: Add the signing public key
         run: cp minisign.pub artifacts/
+
+      # Every artifact already contains these (each platform's packaging step
+      # copies them in); carrying them here too means the licence set is on the
+      # release page itself, for anyone who reads it without downloading.
+      - name: Add the licence files
+        run: cp LICENSE THIRD-PARTY-LICENSES.md artifacts/
 
       # Detached signing is platform-independent. Sign once on Linux rather
       # than relying on the obsolete minisign 0.8 Chocolatey package.
