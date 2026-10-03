@@ -68,8 +68,10 @@ If no mtty configuration exists, ghostty's `config` and alacritty's
 
 ### Badges
 
-`[badges]` chooses which agent states show a tab badge. All four are on by
-default:
+`[badges]` chooses which agent states show on tabs: the state circle (half
+while working, full when finished or waiting, an empty ring when idle) and the
+`!` or finished mark. A state switched off shows the plain terminal icon and no
+mark. All four are on by default; system notifications are not affected:
 
 ```toml
 [badges]

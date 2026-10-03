@@ -1560,6 +1560,8 @@ struct State {
     pty_host: bool,
     /// An ordinary quit keeps hosted programs running (`keep-sessions-on-quit`).
     keep_sessions_on_quit: bool,
+    /// Which agent states show on tabs (`[badges]`).
+    badges: miao_term_config::Badges,
     /// How long a host waits for mtty (`detached-timeout`).
     detached_timeout: Duration,
     /// Hosts still running from an earlier mtty that no pane reattached to
@@ -4570,7 +4572,7 @@ impl State {
     ) -> Option<(miao_term_ui::icons::Icon, Option<miao_term_ui::theme::Rgb>)> {
         let a = self.mtp.agent_for(&tab.active)?;
         let state = a.get("state").and_then(|v| v.as_str())?;
-        Some(agent_icon(state, tab.attention))
+        shown_agent_icon(&self.badges, state, tab.attention)
     }
 
     fn details_rows(&self) -> Vec<(String, String)> {
@@ -6427,7 +6429,10 @@ impl State {
                 self.clear_done(&change.pane);
             }
             if let Some(level) = Attention::for_transition(prev.as_deref(), &change.state) {
-                self.raise_attention(&change.pane, level);
+                // A state switched off in `[badges]` marks nothing.
+                if !switched_off(&self.badges, &change.state) {
+                    self.raise_attention(&change.pane, level);
+                }
             }
             let changed = prev.as_deref() != Some(change.state.as_str());
             let wants = matches!(change.state.as_str(), "awaiting" | "error");
@@ -13313,6 +13318,22 @@ fn agent_icon(
     }
 }
 
+/// The agent icon a tab shows, unless `[badges]` switches its state off:
+/// then the tab looks like a plain terminal. States the switches do not name
+/// still show.
+fn shown_agent_icon(
+    badges: &miao_term_config::Badges,
+    state: &str,
+    attention: Option<Attention>,
+) -> Option<(miao_term_ui::icons::Icon, Option<miao_term_ui::theme::Rgb>)> {
+    (!switched_off(badges, state)).then(|| agent_icon(state, attention))
+}
+
+/// `[badges]` turns this state off.
+fn switched_off(badges: &miao_term_config::Badges, state: &str) -> bool {
+    matches!(state, "processing" | "idle" | "awaiting" | "error") && !badges.enabled(state)
+}
+
 /// A hosted pane's host, as the session records it.
 fn pane_host(term: &Terminal) -> serde_json::Value {
     if let Some((id, socket)) = term.host_id() {
@@ -13605,6 +13626,7 @@ impl ApplicationHandler<HostEvent> for Host {
             restore_scrollback: cfg.restore_scrollback,
             pty_host: cfg.pty_host,
             keep_sessions_on_quit: cfg.keep_sessions_on_quit,
+            badges: cfg.badges,
             detached_timeout: cfg.detached_timeout,
             recovered: Vec::new(),
             scrollback_saved_at: Instant::now(),
@@ -17745,6 +17767,35 @@ mod tests {
         assert_eq!(
             Some(Attention::Done).max(Some(Attention::Unread)),
             Some(Attention::Done)
+        );
+    }
+
+    #[test]
+    fn badges_switch_states_off_the_tabs() {
+        use miao_term_ui::icons::Icon;
+        let all = miao_term_config::Badges::default();
+        assert_eq!(
+            super::shown_agent_icon(&all, "processing", None).map(|i| i.0),
+            Some(Icon::StateHalf)
+        );
+        let quiet = miao_term_config::Badges {
+            processing: false,
+            idle: false,
+            ..Default::default()
+        };
+        assert_eq!(super::shown_agent_icon(&quiet, "processing", None), None);
+        assert_eq!(
+            super::shown_agent_icon(&quiet, "idle", Some(Attention::Done)),
+            None
+        );
+        assert_eq!(
+            super::shown_agent_icon(&quiet, "awaiting", None).map(|i| i.0),
+            Some(Icon::StateFull)
+        );
+        // A state the switches do not name still shows.
+        assert_eq!(
+            super::shown_agent_icon(&quiet, "busy", None).map(|i| i.0),
+            Some(Icon::StateEmpty)
         );
     }
 
