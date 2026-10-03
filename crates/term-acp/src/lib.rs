@@ -285,7 +285,7 @@ fn dispatch(line: &str, handler: &Arc<dyn Handler>, writer: &Writer) {
 mod tests {
     use super::*;
     use std::io::{BufRead, BufReader, Write};
-    use std::os::unix::net::UnixStream;
+    use std::net::{Ipv4Addr, TcpListener, TcpStream};
     use std::time::Duration;
 
     #[derive(Default)]
@@ -332,9 +332,17 @@ mod tests {
         }
     }
 
+    // Loopback TCP provides the same bidirectional byte stream on every OS.
+    fn streams() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (agent, _) = listener.accept().unwrap();
+        (client, agent)
+    }
+
     #[test]
     fn initialize_and_updates_round_trip() {
-        let (client_stream, agent_stream) = UnixStream::pair().unwrap();
+        let (client_stream, agent_stream) = streams();
         let (rec, rx) = Recorder::new();
         let client = Client::over(client_stream.try_clone().unwrap(), client_stream, rec);
         std::thread::spawn(move || {
@@ -379,7 +387,7 @@ mod tests {
 
     #[test]
     fn answers_an_fs_read_request() {
-        let (client_stream, agent_stream) = UnixStream::pair().unwrap();
+        let (client_stream, agent_stream) = streams();
         let (rec, _rx) = Recorder::new();
         let _client = Client::over(client_stream.try_clone().unwrap(), client_stream, rec);
         let mut writer = agent_stream.try_clone().unwrap();
