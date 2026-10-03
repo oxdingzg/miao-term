@@ -18,9 +18,10 @@ egui = "0.30"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 minisign-verify = "0.3.0"
-# Serial consoles (MIT). ADR 0037. libudev is left out: ports are opened by
-# path and the list falls back to a /dev scan where the crate cannot enumerate.
-serialport = { version = "4", default-features = false }
+# Serial consoles (BSD-2-Clause OR Apache-2.0). ADR 0037. Ports are opened by
+# path, and the list falls back to a /dev scan where the crate cannot enumerate.
+# serial2, not serialport: the latter is MPL-2.0, which ADR 0006 excludes.
+serial2 = "0.2"
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 # System-wide Quick Terminal hotkey (MIT). See ADR 0019.

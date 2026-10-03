@@ -66,12 +66,12 @@ impl SerialConfig {
 
 /// Open a serial port as a byte pipe.
 pub fn connect_serial(cfg: &SerialConfig) -> Result<Connection, String> {
-    use serialport::{DataBits, FlowControl, Parity, StopBits};
-    let data_bits = match cfg.data_bits {
-        5 => DataBits::Five,
-        6 => DataBits::Six,
-        7 => DataBits::Seven,
-        _ => DataBits::Eight,
+    use serial2::{CharSize, FlowControl, Parity, StopBits};
+    let char_size = match cfg.data_bits {
+        5 => CharSize::Bits5,
+        6 => CharSize::Bits6,
+        7 => CharSize::Bits7,
+        _ => CharSize::Bits8,
     };
     let parity = match cfg.parity.as_str() {
         "odd" => Parity::Odd,
@@ -84,17 +84,20 @@ pub fn connect_serial(cfg: &SerialConfig) -> Result<Connection, String> {
         StopBits::One
     };
     let flow = match cfg.flow.as_str() {
-        "software" => FlowControl::Software,
-        "hardware" => FlowControl::Hardware,
+        "software" => FlowControl::XonXoff,
+        "hardware" => FlowControl::RtsCts,
         _ => FlowControl::None,
     };
-    let port = serialport::new(&cfg.device, cfg.baud)
-        .data_bits(data_bits)
-        .parity(parity)
-        .stop_bits(stop_bits)
-        .flow_control(flow)
-        .open()
-        .map_err(|e| format!("{}: {e}", cfg.device))?;
+    let port = serial2::SerialPort::open(&cfg.device, |mut settings: serial2::Settings| {
+        settings.set_raw();
+        settings.set_baud_rate(cfg.baud)?;
+        settings.set_char_size(char_size);
+        settings.set_parity(parity);
+        settings.set_stop_bits(stop_bits);
+        settings.set_flow_control(flow);
+        Ok(settings)
+    })
+    .map_err(|e| format!("{}: {e}", cfg.device))?;
     let reader = port.try_clone().map_err(|e| e.to_string())?;
     Ok(Connection {
         reader: Box::new(reader),
@@ -103,13 +106,13 @@ pub fn connect_serial(cfg: &SerialConfig) -> Result<Connection, String> {
     })
 }
 
-/// Serial device names to offer in the profile form: the crate's enumeration
-/// when the platform has one, else a `/dev` scan (Linux without libudev).
+/// Serial device names to offer in the profile form: the platform's own
+/// enumeration where it has one, else a `/dev` scan.
 pub fn serial_ports() -> Vec<String> {
-    let mut out: Vec<String> = serialport::available_ports()
+    let mut out: Vec<String> = serial2::SerialPort::available_ports()
         .unwrap_or_default()
         .into_iter()
-        .map(|p| p.port_name)
+        .map(|p| p.to_string_lossy().into_owned())
         .collect();
     if out.is_empty() {
         if let Ok(dir) = std::fs::read_dir("/dev") {

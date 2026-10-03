@@ -66,3 +66,24 @@ without pretending there is a process behind it.
   these sessions, and the UI says so rather than failing silently.
 - Windows serial ports work through `serialport`; the profile form lists the
   system's COM ports and Unix device nodes.
+
+## Amendment — the serial crate
+
+This ADR, and the dependency comment it led to, recorded `serialport` as **MIT**.
+It is not. `serialport` 4.x declares **MPL-2.0** — a weak copyleft licence, and
+one ADR 0006 excludes from the engine. The crate was chosen on a licence claim
+that was never true, and nothing verified it: the claim was copied from the
+first place it was written down into every later place.
+
+The dependency is now **`serial2`**, a fork of the same project under
+**BSD-2-Clause OR Apache-2.0**, both on ADR 0006's allow-list. It is used the
+same way: a port is opened by path with the saved profile's settings, and the
+reader is a `try_clone()` of the writer. The one behavioural difference is
+enumeration — `serialport::available_ports()` returned records carrying a
+`port_name`, while `serial2` returns paths — and the `/dev` scan fallback for
+platforms that cannot enumerate is unchanged.
+
+Nothing else in this decision changes. The two licence claims above are
+corrected by this note rather than edited in place, so that what was decided,
+and what was got wrong, both stay readable. The gate that found this is recorded
+in [ADR 0006](0006-license-policy.md).
