@@ -64,7 +64,7 @@ pub fn build_rows(screen: &ATerm, theme: &Theme, cursor: Option<(u16, u16)>) -> 
             } else if cell.inverse {
                 rgb(theme.color(cell.bg, false))
             } else {
-                rgb(theme.foreground(cell.fg, cell.bg))
+                rgb(cell_foreground(theme, &cell))
             };
             if width >= 2 {
                 if let Some(rc) = run_col.take() {
@@ -105,9 +105,20 @@ pub fn build_rows(screen: &ATerm, theme: &Theme, cursor: Option<(u16, u16)>) -> 
 /// background colour on the background.
 pub fn cell_background(theme: &Theme, cell: &miao_term_core::aterm::CellView) -> Rgb {
     if cell.inverse {
-        theme.foreground(cell.fg, cell.bg)
+        cell_foreground(theme, cell)
     } else {
         theme.color(cell.bg, false)
+    }
+}
+
+/// Box drawing and block elements paint TUI surfaces, including half-cell
+/// edges whose foreground intentionally matches the adjacent background.
+/// Raising their contrast turns those edges into unwanted bright borders.
+fn cell_foreground(theme: &Theme, cell: &miao_term_core::aterm::CellView) -> Rgb {
+    if matches!(cell.ch, '\u{2500}'..='\u{259f}') {
+        theme.color(cell.fg, false)
+    } else {
+        theme.foreground(cell.fg, cell.bg)
     }
 }
 
@@ -138,6 +149,23 @@ pub fn width_of(c: char) -> u16 {
 #[cfg(test)]
 mod row_tests {
     use super::*;
+
+    #[test]
+    fn tui_drawing_preserves_low_contrast_colors_while_text_is_lifted() {
+        let mut screen = ATerm::new(20, 3, 100);
+        screen.process("\x1b[38;2;29;33;31;48;2;12;15;14m▀━█X".as_bytes());
+        let theme = Theme::nord();
+        let rows = build_rows(&screen, &theme, None);
+        assert_eq!(rows[0][0].text, "▀━█");
+        assert_eq!(rows[0][0].color, (29, 33, 31));
+        assert_eq!(rows[0][1].text, "X");
+        assert_ne!(rows[0][1].color, (29, 33, 31));
+
+        screen.process("\r\n\x1b[7m▀".as_bytes());
+        let cell = screen.cell(1, 0).unwrap();
+        assert_eq!(cell_background(&theme, &cell), Rgb(29, 33, 31));
+        assert_eq!(rows[0][0].color, rgb(cell_background(&theme, &cell)));
+    }
 
     #[test]
     fn inverse_video_uses_the_cells_background_for_text() {
