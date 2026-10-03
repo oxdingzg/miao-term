@@ -92,6 +92,7 @@ mtty 与 miao 是两个独立项目,任意一个都可以单独使用。在 mtty
 - 基于 PTY 的 shell,经 `alacritty_terminal` 做 VT 解析。
 - GPU 字形网格渲染(`wgpu` + `glyphon`),复用 egui 的 device、queue 与 surface。
 - 回滚缓冲与滚动条指示、拖拽/双击选区、复制粘贴,以及宽字符 / 中日韩排版与系统 CJK 字体回退。
+- 把文件拖到终端上会插入转义好的路径;拖到终端底部的条带上(或按住 Option/Alt)则改为打开:文件在编辑器中打开,文件夹在该目录开一个新终端。拖动时两个落点都会显示出来。
 - 查找(`⌘F`),带匹配高亮与结果计数,支持中文。
 - 当程序请求时,支持
   [kitty keyboard 协议](https://sw.kovidgoyal.net/kitty/keyboard-protocol/)(CSI-u)

@@ -234,7 +234,13 @@ pub fn relaunch() -> Result<(), String> {
 
 /// QA settings that run once per launch (`AGENTS.md`), never again in the
 /// app a helper starts.
-const ONE_LAUNCH_ENV: &[&str] = &["MTTY_QA_COMMAND", "MTTY_QA_AFTER", "MTTY_QA_SCROLL"];
+const ONE_LAUNCH_ENV: &[&str] = &[
+    "MTTY_QA_COMMAND",
+    "MTTY_QA_AFTER",
+    "MTTY_QA_SCROLL",
+    "MTTY_QA_DRAG",
+    "MTTY_QA_DROP",
+];
 
 /// Start a staged helper detached from us, so it outlives our exit.
 pub fn launch(script: &Path) -> std::io::Result<()> {

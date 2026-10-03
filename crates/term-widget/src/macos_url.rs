@@ -165,6 +165,18 @@ pub fn pointer_on_screen() -> Option<(f64, f64)> {
     }
 }
 
+/// Whether ⌥ is held now. A file drag sends the window no key events, so a
+/// drop asks the system.
+pub fn option_key_down() -> bool {
+    const OPTION: usize = 1 << 19; // NSEventModifierFlagOption
+    let Some(event) = AnyClass::get(c"NSEvent") else {
+        return false;
+    };
+    // SAFETY: `+[NSEvent modifierFlags]` returns an NSUInteger.
+    let flags: usize = unsafe { msg_send![event, modifierFlags] };
+    flags & OPTION != 0
+}
+
 /// URLs received since the last call.
 pub fn take() -> Vec<String> {
     std::mem::take(&mut *PENDING.lock().unwrap_or_else(|e| e.into_inner()))
