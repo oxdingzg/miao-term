@@ -7,6 +7,7 @@
 //! never edit an agent's config for it.
 
 use std::path::{Path, PathBuf};
+#[cfg(all(test, unix))]
 use std::process::Command;
 
 /// A supported agent.
