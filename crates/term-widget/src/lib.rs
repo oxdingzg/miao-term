@@ -699,6 +699,7 @@ fn localize_detail(lang: miao_term_ui::i18n::Lang, text: &str) -> &str {
         "lsof unavailable" => "lsof 不可用",
         "state" => "状态",
         "session_id" => "会话 ID",
+        "quota" => "配额",
         "agent" => "Agent",
         "tty" => "终端设备",
         "File" => "文件",
@@ -727,6 +728,47 @@ fn agent_state_label(lang: miao_term_ui::i18n::Lang, state: &str) -> &str {
         "error" => "出错",
         _ => state,
     }
+}
+
+/// One compact line for an agent-reported quota object (ADR 0042, A4):
+/// `used/limit unit (window)`. Missing parts are dropped.
+fn quota_line(q: &serde_json::Value) -> Option<String> {
+    let num = |k: &str| {
+        q.get(k).map(|v| match v {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        })
+    };
+    let used = num("used")?;
+    let mut line = match num("limit") {
+        Some(limit) => format!("{used}/{limit}"),
+        None => used,
+    };
+    if let Some(unit) = q
+        .get("unit")
+        .and_then(|v| v.as_str())
+        .filter(|u| !u.is_empty())
+    {
+        line.push(' ');
+        line.push_str(unit);
+    }
+    if let Some(window) = q
+        .get("window")
+        .and_then(|v| v.as_str())
+        .filter(|w| !w.is_empty())
+    {
+        line.push_str(&format!(" ({window})"));
+    }
+    // A fixed 80% threshold marks a nearly spent window; a configurable
+    // `agent-quota-warn` is a follow-up.
+    let warn = match (
+        q.get("used").and_then(serde_json::Value::as_f64),
+        q.get("limit").and_then(serde_json::Value::as_f64),
+    ) {
+        (Some(used), Some(limit)) if limit > 0.0 && used / limit >= 0.8 => "⚠ ",
+        _ => "",
+    };
+    Some(format!("{warn}{line}"))
 }
 
 /// The host part of an ssh target as typed (`deploy@work:2200` → `work`).
@@ -1597,6 +1639,8 @@ struct State {
     goto_line: Option<String>,
     /// The Go to Symbol picker's query and highlighted row, while it is open.
     goto_symbol: Option<(String, usize)>,
+    /// The Resume Agent Session picker's query and highlighted row (ADR 0042).
+    resume_picker: Option<(String, usize)>,
     /// The vim `:` command line's text, while it is open.
     vim_command: Option<String>,
     /// Language servers for editor panes (ADR 0034, E5).
@@ -3155,6 +3199,13 @@ impl State {
                         self.go_active_editor_to(line, column);
                     }
                 }
+                miao_term_mtp::Command::ResumeAgent {
+                    agent,
+                    session,
+                    cwd,
+                } => {
+                    self.resume_agent(&agent, &session, cwd.as_deref());
+                }
                 miao_term_mtp::Command::Propose {
                     pane,
                     path,
@@ -3910,6 +3961,7 @@ impl State {
         self.search_window(ctx);
         self.goto_line_window(ctx);
         self.go_to_symbol_window(ctx);
+        self.resume_picker_window(ctx);
         self.vim_command_window(ctx);
         self.large_edit_window(ctx);
         self.reload_dialog_window(ctx);
@@ -4490,6 +4542,9 @@ impl State {
                             rows.push((k.to_string(), v.to_string()));
                         }
                     }
+                    if let Some(line) = a.get("quota").and_then(quota_line) {
+                        rows.push(("quota".into(), line));
+                    }
                     if rows.is_empty() {
                         rows.push(("state".into(), a.to_string()));
                     }
@@ -4678,6 +4733,8 @@ enum Cmd {
     NewTab,
     /// Launch `integration::AGENTS[i]` in a new tab (B2.1).
     LaunchAgent(usize),
+    /// Resume a reported agent session, from a picker (ADR 0042, A4).
+    ResumeAgent,
     /// Reattach / end a host left running by an earlier mtty (ADR 0041).
     AttachRecovered(usize),
     EndRecovered(usize),
@@ -4970,6 +5027,10 @@ impl State {
                 Cmd::OpenExternally,
                 t(l, "Open Externally", "用系统默认程序打开"),
             ),
+            (
+                Cmd::ResumeAgent,
+                t(l, "Resume Agent Session…", "恢复 Agent 会话…"),
+            ),
             (Cmd::Settings, t(l, "Settings", "设置")),
             (Cmd::Quit, t(l, "Quit", "退出")),
         ]
@@ -5141,9 +5202,36 @@ impl State {
         self.publish_panes();
     }
 
+    /// Open a tab in the session's directory and type the agent's resume
+    /// command (ADR 0042, A4).
+    fn resume_agent(&mut self, agent_name: &str, session: &str, cwd: Option<&str>) {
+        let Some(agent) = miao_term_ui::integration::AGENTS
+            .iter()
+            .find(|a| a.name == agent_name)
+        else {
+            return;
+        };
+        let Some(cmd) = miao_term_ui::integration::resume_command(agent, session) else {
+            return;
+        };
+        let dir = cwd
+            .filter(|d| !d.is_empty())
+            .map(std::path::PathBuf::from)
+            .filter(|d| d.is_dir());
+        self.new_tab_in(dir.or_else(|| self.active_cwd_for_new()));
+        if let Some(tab) = self.tabs.last_mut() {
+            let active = tab.active.clone();
+            if let Some(pane) = tab.panes.iter_mut().find(|p| p.id == active) {
+                pane.term.write(format!("{cmd}\r").as_bytes());
+            }
+        }
+        self.publish_panes();
+    }
+
     fn run_command(&mut self, cmd: Cmd) {
         match cmd {
             Cmd::LaunchAgent(i) => self.launch_agent(i),
+            Cmd::ResumeAgent => self.resume_picker = Some((String::new(), 0)),
             Cmd::AttachRecovered(i) => {
                 self.take_recovered(i, true);
             }
@@ -7991,6 +8079,119 @@ impl State {
             selected
         };
         self.goto_symbol = Some((new_text, selected));
+    }
+
+    /// Resume Agent Session… (ADR 0042, A4): pick a session an agent reported
+    /// and relaunch it in its recorded directory.
+    fn resume_picker_window(&mut self, ctx: &egui::Context) {
+        let Some((query, selected)) = self.resume_picker.clone() else {
+            return;
+        };
+        use miao_term_ui::i18n::t;
+        let lang = self.lang;
+        // Newest first, from the states agents reported over MTP.
+        let sessions = self.mtp.agent_sessions();
+        let field = |v: &serde_json::Value, k: &str| {
+            v.get(k)
+                .and_then(|x| x.as_str())
+                .unwrap_or_default()
+                .to_string()
+        };
+        let rows: Vec<(String, String, String, String)> = sessions
+            .iter()
+            .map(|s| {
+                (
+                    field(s, "agent"),
+                    field(s, "session_id"),
+                    field(s, "cwd"),
+                    field(s, "pane"),
+                )
+            })
+            .collect();
+        let needle = query.trim().to_lowercase();
+        let shown: Vec<usize> = rows
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| {
+                needle.is_empty()
+                    || r.0.to_lowercase().contains(&needle)
+                    || r.1.to_lowercase().contains(&needle)
+                    || r.2.to_lowercase().contains(&needle)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        let selected = selected.min(shown.len().saturating_sub(1));
+        let mut new_text = query.clone();
+        let mut chosen: Option<usize> = None;
+        let mut move_up = false;
+        let mut move_down = false;
+        let mut cancel = false;
+        egui::Window::new(t(lang, "Resume Agent Session", "恢复 Agent 会话"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_TOP, [0.0, 40.0])
+            .show(ctx, |ui| {
+                let r = ui.add(
+                    egui::TextEdit::singleline(&mut new_text)
+                        .hint_text(t(lang, "Type to filter sessions…", "输入以过滤会话…"))
+                        .desired_width(420.0),
+                );
+                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if enter {
+                    chosen = shown.get(selected).copied();
+                } else {
+                    r.request_focus();
+                }
+                move_up = ui.input(|i| i.key_pressed(egui::Key::ArrowUp));
+                move_down = ui.input(|i| i.key_pressed(egui::Key::ArrowDown));
+                cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                ui.separator();
+                if rows.is_empty() {
+                    ui.label(t(
+                        lang,
+                        "No agent has reported a session id yet.",
+                        "还没有 agent 上报会话 id。",
+                    ));
+                }
+                egui::ScrollArea::vertical()
+                    .max_height(320.0)
+                    .show(ui, |ui| {
+                        for (row, &i) in shown.iter().enumerate() {
+                            let (agent, session, cwd, pane) = &rows[i];
+                            let label = if cwd.is_empty() {
+                                format!("{agent}  {session}  ({pane})")
+                            } else {
+                                format!("{agent}  {session}  {cwd}")
+                            };
+                            let r = ui.selectable_label(row == selected, label);
+                            if r.clicked() {
+                                chosen = Some(i);
+                            }
+                        }
+                    });
+            });
+        if let Some(i) = chosen {
+            let (agent, session, cwd, _) = rows[i].clone();
+            self.resume_picker = None;
+            self.resume_agent(&agent, &session, Some(cwd.as_str()));
+            self.window.request_redraw();
+            return;
+        }
+        if cancel {
+            self.resume_picker = None;
+            self.window.request_redraw();
+            return;
+        }
+        let selected = if new_text != query {
+            0
+        } else if move_down {
+            (selected + 1).min(shown.len().saturating_sub(1))
+        } else if move_up {
+            selected.saturating_sub(1)
+        } else {
+            selected
+        };
+        self.resume_picker = Some((new_text, selected));
     }
 
     /// The vim `:` command line (see [`Self::run_vim_command`]).
@@ -13670,6 +13871,7 @@ impl ApplicationHandler<HostEvent> for Host {
             find_rejump: false,
             goto_line: None,
             goto_symbol: None,
+            resume_picker: None,
             vim_command: None,
             lsp: {
                 let proxy = self.proxy.clone();

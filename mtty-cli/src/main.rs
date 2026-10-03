@@ -18,7 +18,20 @@ fn usage_text() -> &'static str {
     "usage: mtty-cli [--socket PATH|tcp://host:port] [--wait SECS] <command>\n\
      commands: ping | health | wait [--since N] | events [--topic T[,T]] | \
      pane list|run|send|focus|close|output | \
-     state <agent> --state S | state list | history add|list |\n     view|edit <path> |\n     file read --path P [--offset N] [--length N] [--base64] |\n     file write --path P [--data D | --data-b64 B]"
+     state <agent> --state S [--session ID] [--cwd DIR] [--quota FILE|-] | state list | \
+     agent sessions | agent resume [--pane ID | --session ID] | history add|list |\n     view|edit <path> |\n     file read --path P [--offset N] [--length N] [--base64] |\n     file write --path P [--data D | --data-b64 B]"
+}
+
+/// Read a JSON value from `FILE` or `-` (stdin), for `state --quota`.
+fn read_json_arg(spec: &str) -> Option<Value> {
+    let text = if spec == "-" {
+        let mut buf = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf).ok()?;
+        buf
+    } else {
+        std::fs::read_to_string(spec).ok()?
+    };
+    serde_json::from_str(&text).ok()
 }
 
 fn usage() -> ! {
@@ -173,10 +186,34 @@ fn main() {
                 .map(str::to_string)
                 .or_else(pane_default);
             let session = flag(&args, "--session");
+            let cwd = flag(&args, "--cwd");
+            let quota = flag(&args, "--quota").and_then(read_json_arg);
+            let mut params = json!({
+                "agent": agent,
+                "state": state,
+                "pane_id": pane,
+                "session_id": session,
+            });
+            if let Some(cwd) = cwd {
+                params["cwd"] = json!(cwd);
+            }
+            if let Some(quota) = quota {
+                params["quota"] = quota;
+            }
+            client.call("agent", "state.set", params)
+        }
+        ("agent", Some("sessions")) => client.call("agent", "sessions", json!({})),
+        ("agent", Some("resume")) => {
+            let pane = flag(&args, "--pane")
+                .map(str::to_string)
+                .or_else(pane_default);
+            let session = flag(&args, "--session")
+                .map(str::to_string)
+                .or_else(|| args.get(2).filter(|a| !a.starts_with("--")).cloned());
             client.call(
                 "agent",
-                "state.set",
-                json!({ "agent": agent, "state": state, "pane_id": pane, "session_id": session }),
+                "resume",
+                json!({ "pane_id": pane, "session_id": session }),
             )
         }
         ("history", Some("list")) => {

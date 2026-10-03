@@ -118,7 +118,7 @@
 | agent 空闲时自动投递队列 | 可用 | 队列项绑定目标 pane;旧版本保存的无 pane 项只能手动发送 |
 | 从界面启动 agent | 可用 | 设置与命令面板 |
 | 显示 hook 上报的会话 id | 可用 | Agent 面板显示 agent、状态、会话 id、tty |
-| Resume、配额显示 | 计划中 | [ADR 0042](decisions/0042-agent-resume-quota.zh-CN.md);作为 M7/A4 实现 |
+| Resume、配额显示 | 可用 | [ADR 0042](decisions/0042-agent-resume-quota.zh-CN.md);恢复模板随 agent 而定,配额仅在 agent 上报时显示 |
 
 ### 3.5 远程与运维
 
@@ -251,7 +251,7 @@
 - [x] **A1** agent 的修改以编辑器事务的形式进入,行内显示为 diff,可接受或拒绝,也可撤销。(ADR 0040。MTP `editor.propose` 接受 `pane_id`/`path` 以及 `edits`(`{start,end,text}` 字符范围)或整文件 `text`;宿主把它们作为**一个事务**应用到编辑器 pane 的 `Document`(`apply_external`),把改动行标成绿色,并在状态栏显示。输入、保存或出现新修改即视为接受;*拒绝 Agent 修改* 是一步撤销回到原样。依据:编辑器 pane 的单事务应用/撤销、输入即接受与接受测试,以及该请求的 MTP 测试。)
 - [x] **A2** ACP(Agent Client Protocol)客户端,任何 ACP agent 都能与编辑器 pane 协作。(ADR 0040。不依赖 GPU 的 `miao-term-acp` crate 启动 agent,在其 stdio 上讲按行分隔的 JSON-RPC 2.0:`initialize`/`session/new`/`session/prompt`/`session/cancel`,应答 `fs/read_text_file`、`fs/write_text_file` 与 `session/request_permission`,并把 `session/update` 通知与响应交给 `Handler`。宿主可从 `config.toml` 的 `[acp]`(`[[acp.agent]]` 带 `name`/`command`)或通过 *ACP Agent…* 输入命令启动;ACP 窗口显示流式转写、发送 prompt、取消当前回合,把 agent diff 变成 A1 提案,并用“允许/拒绝”应答权限请求。依据:`term-acp` 对假 agent 的测试(initialize + 流式 update、fs 读取)、config 解析测试,以及工作区构建与测试。)
 - [x] **A3** 一步把选区、诊断或命令输出交给 agent;agent 经 MTP 打开文件并定位到行。(ADR 0040。MTP `app.edit`/`app.view` 增加可选的 1 基 `line` 与 `column`;宿主打开文件并把编辑器 pane 移到该处。命令面板新增 *把选区发给 Agent*、*把诊断发给 Agent*、*把上一条命令的输出发给 Agent*:各自找到本标签的 agent pane,输入一段带围栏的简短 prompt 并回车。依据:`app.edit` 携带 `line`/`column` 的 MTP 测试,以及工作区构建与测试。)
-- [ ] **A4** Agent 会话恢复与配额显示([ADR 0042](decisions/0042-agent-resume-quota.zh-CN.md))。*恢复 Agent 会话…* 命令按各 agent 的命令模板,把它重新拉回曾上报的会话;有配额上报时 Agent 面板显示一行。MTP/`mtty-cli` 新增 `agent.sessions` 与 `agent.resume`。
+- [x] **A4** Agent 会话恢复与配额显示([ADR 0042](decisions/0042-agent-resume-quota.zh-CN.md))。*恢复 Agent 会话…* 选择器列出 agent 经 MTP 上报的会话,并在其记录的 cwd 里重启所选会话;MTP/`mtty-cli` 新增 `agent.sessions` 与 `agent.resume`(新增 `agent.resume` 能力),hook 上报 `--cwd`,Agent 面板显示 agent 上报的配额行。依据:恢复模板的 token/转义测试、`agent.sessions` 排序与 `agent.resume` 入队的 MTP 测试、hook `--cwd` 测试,以及工作区测试与 clippy。
 
 ## 5. 不做的事
 
