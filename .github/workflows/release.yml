@@ -167,9 +167,12 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Installed executable icon check failed' }
             $entry = Get-ItemProperty @('HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*') -ErrorAction SilentlyContinue |
               Where-Object { $_.DisplayName -eq 'mtty' }
-            $entry | Select-Object DisplayName, DisplayIcon | ConvertTo-Json -Compress | Write-Host
-            if (-not $entry -or -not $entry.DisplayIcon) { throw 'Missing installed application icon' }
-            $registeredIcon = ([string]$entry.DisplayIcon -replace ',[0-9]+$', '').Trim('"')
+            if (-not $entry) { throw 'Missing installed application registration' }
+            $installer = New-Object -ComObject WindowsInstaller.Installer
+            # MSI exposes its primary icon through ProductInfo, not necessarily
+            # through the ordinary Uninstall key's DisplayIcon value.
+            $registeredIcon = [string]$installer.ProductInfo($entry.PSChildName, 'ProductIcon')
+            if (-not $registeredIcon) { throw 'Missing installed application icon' }
             if (-not (Test-Path $registeredIcon)) { throw 'Registered application icon does not exist' }
             python scripts/check-windows-icon.py $registeredIcon
             if ($LASTEXITCODE -ne 0) { throw 'Registered application icon check failed' }
