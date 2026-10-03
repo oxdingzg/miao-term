@@ -1451,25 +1451,7 @@ fn edge_point(c: egui::Pos2, s: egui::Vec2, toward: egui::Pos2) -> egui::Pos2 {
 
 /// Whether `cmd` can be found on `PATH` (or as an absolute path).
 pub fn on_path(cmd: &str) -> bool {
-    if cmd.contains('/') || cmd.contains('\\') {
-        return std::path::Path::new(cmd).is_file();
-    }
-    let Some(path) = std::env::var_os("PATH") else {
-        return false;
-    };
-    let exts: &[&str] = if cfg!(windows) {
-        &["", ".exe", ".cmd", ".bat"]
-    } else {
-        &[""]
-    };
-    for dir in std::env::split_paths(&path) {
-        for ext in exts {
-            if dir.join(format!("{cmd}{ext}")).is_file() {
-                return true;
-            }
-        }
-    }
-    false
+    miao_term_platform::find_executable(cmd).is_some()
 }
 
 fn hash_str(s: &str) -> u64 {
