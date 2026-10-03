@@ -46,22 +46,35 @@
 
 ## 截图
 
-终端、文件、远程主机与代理，同在一个窗口。三个标签各自标注代理状态，活动窗格里是仓库自己的
-git 日志，右侧是详情面板：
+终端、文件、远程主机与代理，同在一个窗口。Markdown 编辑器、Mermaid 预览与终端
+共用同一套标签和递归分屏布局：
 
-![三个会话标签带代理状态徽章，活动窗格是 git 日志，右侧为详情面板](docs/images/mtty-workspace.png)
+![当前 mtty 工作区：会话侧栏、Markdown 编辑器、Mermaid 预览和分屏终端](docs/images/mtty.png?v=20261004)
+
+采集于 2026-10-04，使用当前 v0.1.3 开发构建与独立示例项目。代理状态事件与修改提案
+通过真实 MTP 控制面驱动；主机地址与排队提示均为示例。
 
 | 代理状态，实时变化 | 编辑器与实时预览 |
 |---|---|
-| ![标签徽章与 Agent 面板实时跟随窗格在四种状态间切换](docs/images/mtty-states.gif) | ![Markdown 文件在编辑器中打开，右侧是渲染后的预览](docs/images/mtty-editor.png) |
+| ![控制面事件让徽章和 Agent 面板依次显示 processing、awaiting、error 与 idle](docs/images/mtty-states.gif?v=20261004) | ![Markdown 改动实时更新旁边的预览，包含 Mermaid、表格和代码块](docs/images/mtty-editor.gif?v=20261004) |
 
-| 命令面板到分屏 | 详情面板 |
+| 命令面板 | 详情面板 |
 |---|---|
-| ![命令面板模糊查找“向右分屏”并分出第二个窗格](docs/images/mtty-palette.gif) | ![在代理、任务、git、文件与端口之间切换详情面板](docs/images/mtty-panels.gif) |
+| ![在工作区中打开当前命令面板](docs/images/mtty-palette.gif?v=20261004) | ![当前信息、Agent、大纲、Git、文件、端口和队列面板的截图序列](docs/images/mtty-panels.gif?v=20261004) |
 
-递归分屏把 git 日志与运行中的服务并排放在同一个标签里：
+| 行内改动审阅 | 本地与远程主机 |
+|---|---|
+| ![拟议改动在编辑器中行内展示，再通过命令面板接受](docs/images/mtty-review.gif?v=20261004) | ![分组 SSH 主机库，提供文件入口、跳板配置与端口转发；地址为示例](docs/images/mtty-hosts.png?v=20261004) |
 
-![一个标签分成两个窗格，左侧 git 日志，右侧 HTTP 服务](docs/images/mtty-splits.png)
+| 后续提示队列 | 代理状态徽章 |
+|---|---|
+| ![处于 processing 的代理窗格保留两条后续提示](docs/images/mtty-queue.png?v=20261004) | ![processing、awaiting 与 idle 会话徽章，旁边是终端输出与 Git 详情](docs/images/mtty-workspace.png?v=20261004) |
+
+递归分屏把 Git 改动与实际运行的本地 HTTP 服务并排放在同一个标签里：
+
+![左侧是 Git 改动，右侧是实际运行的本地 HTTP 服务](docs/images/mtty-splits.png?v=20261004)
+
+更多可暂停的短演示：**[mtty.dev 上的 mtty](https://mtty.dev/zh/mtty#screens)**。
 
 > **项目状态 —— 预发布。** 当前版本为 `0.1.3`,API 尚未稳定。macOS 是主要平台;
 > Windows 已在真实硬件上构建、测试并经 MTP 驱动(见 [`docs/WINDOWS-DEV.zh-CN.md`](docs/WINDOWS-DEV.zh-CN.md));
