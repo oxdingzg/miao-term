@@ -52,6 +52,11 @@ _mtty_osc7
 "#;
 
 const BASH_RC: &str = r#"# mtty shell integration (bash) — auto-generated, do not edit.
+# A ConPTY console starts on the system locale's code page; make it UTF-8 so
+# programs that write UTF-8 bytes (Bun, native renderers) are not mojibake.
+case "$(uname -s 2>/dev/null)" in
+  MINGW*|MSYS*|CYGWIN*) chcp.com 65001 >/dev/null 2>&1 ;;
+esac
 # bash reads this instead of ~/.bashrc (--rcfile), so load that first.
 [[ -r ~/.bashrc ]] && source ~/.bashrc
 [[ $- == *i* ]] || return 0
