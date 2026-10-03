@@ -363,6 +363,10 @@ app bundle, a Linux `.deb`/AppImage and a Windows MSI.
 [cargo-dist](https://opensource.axo.dev/cargo-dist/) scaffold. See
 [`docs/INSTALL.md`](docs/INSTALL.md) and [`docs/RELEASE.md`](docs/RELEASE.md).
 
+Windows packages are code-signed under the [SignPath Foundation](https://signpath.org)
+program: free code signing provided by [SignPath.io](https://signpath.io), certificate
+by [SignPath Foundation](https://signpath.org).
+
 ---
 
 ## Configuration

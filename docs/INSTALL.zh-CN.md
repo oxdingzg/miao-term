@@ -41,6 +41,10 @@ Apple Developer ID 签名/公证、Windows MSI 签名和 minisign 产物签名�
 [RELEASE.zh-CN.md](RELEASE.zh-CN.md) 说明的可选 secrets。
 `dist-workspace.toml` 仍为 cargo-dist 脚手架，不是当前发布流水线。
 
+Windows 安装包通过 [SignPath Foundation](https://signpath.org) 项目进行代码签名:
+free code signing provided by [SignPath.io](https://signpath.io), certificate by
+[SignPath Foundation](https://signpath.org)。
+
 ## 配置与深链接
 
 配置位于 `~/.config/mtty/config.toml` 或 `$XDG_CONFIG_HOME/mtty/config.toml`;Windows 上为 `%APPDATA%\mtty\config.toml`(保存的状态在 `%LOCALAPPDATA%\mtty`;若在 Git Bash 设置的 `HOME` 下已有 `~/.config/mtty`,则继续使用它)。
