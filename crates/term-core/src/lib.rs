@@ -20,7 +20,7 @@ mod term;
 pub use term::{plain_text, CommandOutput, Terminal};
 
 /// The screen model the app renders, backed by `alacritty_terminal` (ADR 0001).
-pub use aterm::ATerm;
+pub use aterm::{ATerm, ScreenState};
 
 /// Engine crate version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

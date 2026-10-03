@@ -3996,8 +3996,8 @@ impl State {
 
     /// Save each terminal's contents every minute, so a crash loses at most
     /// that much (a clean quit saves everything in `save_session_on_exit`).
-    /// Panes under a full-screen program are left as they were: reading the
-    /// shell output beneath would mean switching screens.
+    /// Panes under a full-screen program are saved too: the snapshot reads
+    /// the shell output beneath without disturbing the program's screen.
     fn save_scrollback_periodically(&mut self) {
         if !self.restore_scrollback || self.scrollback_saved_at.elapsed() < SCROLLBACK_SAVE_EVERY {
             return;
@@ -4007,9 +4007,6 @@ impl State {
             return;
         };
         for pane in self.tabs.iter_mut().flat_map(|t| t.panes.iter_mut()) {
-            if pane.term.screen().alternate_screen() {
-                continue;
-            }
             let text = pane.term.screen_mut().snapshot_ansi(SCROLLBACK_LINES);
             if !text.is_empty() {
                 let _ = write_private(&dir, &format!("{}.ansi", pane.id), text.as_bytes());

@@ -2812,6 +2812,7 @@ dependencies = [
  "libc",
  "miao-term-graphics",
  "portable-pty",
+ "serde",
  "serde_json",
  "winreg",
 ]

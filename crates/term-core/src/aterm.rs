@@ -11,6 +11,9 @@ use alacritty_terminal::vte::ansi::Processor;
 
 pub use alacritty_terminal::vte::ansi::{Color, NamedColor};
 
+mod state;
+pub use state::ScreenState;
+
 #[derive(Clone, Default)]
 struct ResponseListener(std::sync::Arc<std::sync::Mutex<Vec<Event>>>);
 
@@ -273,17 +276,18 @@ impl ATerm {
     /// are joined, so the text reflows at whatever width it is replayed at.
     ///
     /// With a full-screen program on the alternate screen (vim, less), the
-    /// shell output underneath is read; the alternate screen is cleared in
-    /// the process, so call this only as the session ends.
+    /// shell output underneath is read; the alternate screen is kept as it
+    /// was, so this can run while the program is still drawing.
     pub fn snapshot_ansi(&mut self, max_lines: usize) -> String {
-        let alt = self.term.mode().contains(TermMode::ALT_SCREEN);
-        if alt {
-            self.term.swap_alt();
+        if !self.term.mode().contains(TermMode::ALT_SCREEN) {
+            return self.main_screen_ansi(max_lines);
         }
+        let alt = self.read_screen();
+        self.term.swap_alt();
         let out = self.main_screen_ansi(max_lines);
-        if alt {
-            self.term.swap_alt();
-        }
+        // Switching back clears the alternate screen: write it back.
+        self.term.swap_alt();
+        self.write_screen(&alt);
         out
     }
 
@@ -548,13 +552,18 @@ mod tests {
     #[test]
     fn snapshots_read_the_shell_output_under_a_full_screen_program() {
         let mut term = ATerm::new(20, 3, 100);
-        term.process(b"$ vim notes\r\n\x1b[?1049h\x1b[2Jvim screen");
+        term.process(b"$ vim notes\r\n\x1b[?1049h\x1b[H\x1b[2Jvim screen");
         let snap = term.snapshot_ansi(100);
         assert!(
             snap.contains("$ vim notes") && !snap.contains("vim screen"),
             "{snap:?}"
         );
         assert!(term.alternate_scroll(), "still on the alternate screen");
+        // The program's screen and cursor are left as they were.
+        assert_eq!(term.line_text(0), "vim screen");
+        assert_eq!(term.cursor_position(), (0, 10));
+        term.process(b"!");
+        assert_eq!(term.line_text(0), "vim screen!");
     }
 
     #[test]
