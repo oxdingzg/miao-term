@@ -1,11 +1,11 @@
 //! Connecting to a host (ADR 0041 §4).
 
 use std::io;
-use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use crate::proto::{FromHost, ToHost, PROTO};
+use crate::sys::Stream as UnixStream;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Welcome {
@@ -23,12 +23,9 @@ pub fn connect(socket: &Path, wait: Duration) -> io::Result<(UnixStream, Welcome
     let mut stream = loop {
         match UnixStream::connect(socket) {
             Ok(stream) => break stream,
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
-                ) && Instant::now() < deadline =>
-            {
+            // Not there yet, or not listening yet (Windows reports these as
+            // assorted socket errors): retry until the deadline.
+            Err(_) if Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(5));
             }
             Err(e) => return Err(e),

@@ -1543,12 +1543,10 @@ struct State {
     prevent_sleep: bool,
     restore_scrollback: bool,
     /// Local shells run in PTY host processes and survive restarts
-    /// (`pty-host`, ADR 0041). Unix only for now.
-    #[cfg_attr(not(unix), allow(dead_code))]
+    /// (`pty-host`, ADR 0041).
     pty_host: bool,
     /// Hosts still running from an earlier mtty that no pane reattached to
     /// (a crash before the session was saved), offered in the palette.
-    #[cfg(unix)]
     recovered: Vec<miao_term_ptyhost::launch::HostInfo>,
     scrollback_saved_at: Instant,
     sleep: miao_term_ui::agentloop::SleepGuard,
@@ -1963,7 +1961,6 @@ impl State {
     }
 
     /// The installed PTY host, when `pty-host` is on (ADR 0041).
-    #[cfg(unix)]
     fn host_config(&self) -> Option<miao_term_core::HostConfig> {
         use miao_term_ptyhost::launch;
         if !self.pty_host {
@@ -2010,7 +2007,6 @@ impl State {
             ("MTTY_PANE_ID".to_string(), id.clone()),
             ("MIAOTTY_PANE_ID".to_string(), id.clone()),
         ];
-        #[cfg(unix)]
         if let Some(config) = self.host_config() {
             match Terminal::new_hosted(
                 &config,
@@ -2033,7 +2029,6 @@ impl State {
 
     /// Attach to the host a saved pane was running in, keeping its id (its
     /// shell's environment names it). `None` when the host is gone.
-    #[cfg(unix)]
     fn reattach_pane(&self, saved: &serde_json::Value) -> Option<Pane> {
         let host = saved.get("host")?;
         let id = saved.get("id")?.as_str()?;
@@ -4118,7 +4113,6 @@ impl State {
             self.persist_settings();
         }
         self.save_session_on_exit();
-        #[cfg(unix)]
         {
             let dir = scrollback_dir();
             for pane in self.tabs.iter_mut().flat_map(|t| t.panes.iter_mut()) {
@@ -4139,7 +4133,6 @@ impl State {
     /// The app is quitting without keeping sessions: end every hosted
     /// program (exiting skips the terminals' destructors).
     fn end_hosts(&mut self) {
-        #[cfg(unix)]
         for pane in self.tabs.iter_mut().flat_map(|t| t.panes.iter_mut()) {
             pane.term.end_host();
         }
@@ -4164,7 +4157,6 @@ impl State {
             }
             // A hosted pane also keeps its exact screen and output offset, so
             // after a crash it reattaches replaying only what came after.
-            #[cfg(unix)]
             if let Some(snapshot) = pane.term.host_snapshot(SCROLLBACK_LINES) {
                 if let Ok(json) = serde_json::to_vec(&snapshot) {
                     let _ = write_private(&dir, &format!("{}.host.json", pane.id), &json);
@@ -4250,7 +4242,6 @@ impl State {
                         .get("cwd")
                         .and_then(|x| x.as_str())
                         .map(std::path::PathBuf::from);
-                    #[cfg(unix)]
                     if let Some(pane) = self.reattach_pane(p) {
                         map.insert(pane.id.clone(), pane.id.clone());
                         panes.push(pane);
@@ -4974,7 +4965,7 @@ impl State {
             (Cmd::Quit, t(l, "Quit", "退出")),
         ]
         .into_iter()
-        .chain((cfg!(unix) && self.pty_host).then(|| {
+        .chain(self.pty_host.then(|| {
             (
                 Cmd::Relaunch,
                 t(
@@ -5003,7 +4994,6 @@ impl State {
 
     /// Palette entries for hosts left running by an earlier mtty.
     fn recovered_commands(&self) -> Vec<(Cmd, std::borrow::Cow<'static, str>)> {
-        #[cfg(unix)]
         {
             use miao_term_ui::i18n::t;
             let l = self.lang;
@@ -5040,14 +5030,11 @@ impl State {
             }
             out
         }
-        #[cfg(not(unix))]
-        Vec::new()
     }
 
     /// Hosts that kept running but that no restored pane took back: a crash
     /// before the session file was written. Offer them rather than adopt them
     /// unasked; also drop host binaries nothing uses any more.
-    #[cfg(unix)]
     fn find_recovered(&mut self) {
         use miao_term_ptyhost::launch;
         let Ok(dir) = launch::hosts_dir() else {
@@ -5081,7 +5068,6 @@ impl State {
     }
 
     /// Reattach a recovered host in a new tab, or end it.
-    #[cfg(unix)]
     fn take_recovered(&mut self, i: usize, attach: bool) {
         if i >= self.recovered.len() {
             return;
@@ -5149,13 +5135,11 @@ impl State {
     fn run_command(&mut self, cmd: Cmd) {
         match cmd {
             Cmd::LaunchAgent(i) => self.launch_agent(i),
-            Cmd::AttachRecovered(_i) => {
-                #[cfg(unix)]
-                self.take_recovered(_i, true);
+            Cmd::AttachRecovered(i) => {
+                self.take_recovered(i, true);
             }
-            Cmd::EndRecovered(_i) => {
-                #[cfg(unix)]
-                self.take_recovered(_i, false);
+            Cmd::EndRecovered(i) => {
+                self.take_recovered(i, false);
             }
             Cmd::SftpCurrent => {
                 let tab = self.tabs.get(self.active_tab);
@@ -5738,14 +5722,10 @@ impl State {
                 }
             }
             Cmd::Settings => self.show_settings = true,
-            Cmd::Relaunch =>
-            {
-                #[cfg(unix)]
-                match miao_term_ui::install::relaunch() {
-                    Ok(()) => self.quit_keeping_sessions(),
-                    Err(e) => self.show_notice(e),
-                }
-            }
+            Cmd::Relaunch => match miao_term_ui::install::relaunch() {
+                Ok(()) => self.quit_keeping_sessions(),
+                Err(e) => self.show_notice(e),
+            },
             Cmd::Quit => {
                 let all: Vec<usize> = (0..self.tabs.len()).collect();
                 if !self.confirm_close_tabs(&all) {
@@ -13186,11 +13166,9 @@ fn agent_icon(
 
 /// A hosted pane's host, as the session records it.
 fn pane_host(term: &Terminal) -> serde_json::Value {
-    #[cfg(unix)]
     if let Some((id, socket)) = term.host_id() {
         return serde_json::json!({ "id": id, "socket": socket });
     }
-    let _ = term;
     serde_json::Value::Null
 }
 
@@ -13473,7 +13451,6 @@ impl ApplicationHandler<HostEvent> for Host {
             prevent_sleep: cfg.prevent_sleep,
             restore_scrollback: cfg.restore_scrollback,
             pty_host: cfg.pty_host,
-            #[cfg(unix)]
             recovered: Vec::new(),
             scrollback_saved_at: Instant::now(),
             sleep: miao_term_ui::agentloop::SleepGuard::new(),
@@ -13581,7 +13558,6 @@ impl ApplicationHandler<HostEvent> for Host {
         if !state.restore_session() {
             state.new_tab();
         }
-        #[cfg(unix)]
         state.find_recovered();
         // Restored splits start their shells at their own size, in every tab,
         // before the shells print a prompt.
@@ -15690,11 +15666,9 @@ fn scrollback_dir() -> Option<std::path::PathBuf> {
 const SCROLLBACK_LINES: usize = 5000;
 
 /// Output a PTY host keeps for reattaching (ADR 0041).
-#[cfg(unix)]
 const PTY_HOST_RING: usize = 8 << 20;
 
 /// How long a PTY host waits for mtty to come back (ADR 0041).
-#[cfg(unix)]
 const PTY_HOST_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// How often terminal contents are saved while mtty runs.

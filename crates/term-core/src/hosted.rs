@@ -8,9 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::aterm::ScreenState;
 
-#[cfg(unix)]
 mod link;
-#[cfg(unix)]
 pub(crate) use link::{connect_existing, start, HostLink};
 
 /// How hosted panes are started.
@@ -37,7 +35,6 @@ pub struct HostSnapshot {
 }
 
 /// What the reader thread hands the UI thread.
-#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) enum Incoming {
     /// Output from a local PTY or a byte pipe.
     Bytes(Vec<u8>),

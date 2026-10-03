@@ -37,7 +37,7 @@ gh workflow run release.yml --ref main -f tag=v0.0.1
 
 配置签名后,每个产物旁边会生成 `.sig`。
 分离签名在平台代码签名完成后,由 Linux 汇总作业统一生成,并用已提交的公钥校验。
-所有 app bundle、主应用压缩包与安装包均包含一个 native mtty 主程序和 CLI;macOS 与 Linux 的包还带有 `mtty-ptyhost`(让 shell 跨重启继续运行的 PTY 宿主,ADR 0041;Windows 暂不包含);
+所有 app bundle、主应用压缩包与安装包均包含一个 native mtty 主程序和 CLI;以及 `mtty-ptyhost`(让 shell 跨重启继续运行的 PTY 宿主,ADR 0041);
 不再发布独立的 native 应用压缩包。
 四个 runner 的构建与 AppImage/MSI 打包均必须成功。
 

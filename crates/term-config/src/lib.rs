@@ -362,8 +362,8 @@ pub struct Config {
     /// in the restored panes (kept in the data directory, owner-only).
     pub restore_scrollback: bool,
     /// Run each local shell in its own PTY host process, so it keeps
-    /// running while mtty restarts and is reattached (ADR 0041). Unix only;
-    /// off by default while it is being proven.
+    /// running while mtty restarts and is reattached (ADR 0041). Off by
+    /// default while it is being proven.
     pub pty_host: bool,
     /// Which agent states show a tab badge.
     pub badges: Badges,

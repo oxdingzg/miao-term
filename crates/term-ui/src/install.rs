@@ -112,7 +112,7 @@ pub fn windows_script(pid: u32, artifact: &Path, exe: &Path) -> String {
          \x20 rmdir /s /q \"%TEMP%\\mtty-update\" 2>nul\r\n\
          \x20 mkdir \"%TEMP%\\mtty-update\"\r\n\
          \x20 tar -xf \"{artifact}\" -C \"%TEMP%\\mtty-update\"\r\n\
-         \x20 for /r \"%TEMP%\\mtty-update\" %%f in (mtty.exe mtty-cli.exe) do copy /y \"%%f\" \"{dir}\\%%~nxf\" >nul\r\n\
+         \x20 for /r \"%TEMP%\\mtty-update\" %%f in (mtty.exe mtty-cli.exe mtty-ptyhost.exe) do copy /y \"%%f\" \"{dir}\\%%~nxf\" >nul\r\n\
          \x20 start \"\" \"{exe}\"\r\n\
          )\r\n"
     )
@@ -199,39 +199,42 @@ pub fn relaunch_script(pid: u32, exe: &Path, appimage: Option<&Path>) -> String 
     format!("#!/bin/sh\nwhile kill -0 {pid} 2>/dev/null; do sleep 0.1; done\n{start}\n")
 }
 
+/// Windows: start `exe` again once `pid` exits (see [`relaunch_script`]).
+pub fn windows_relaunch_script(pid: u32, exe: &Path) -> String {
+    format!(
+        "@echo off\r\n\
+         :wait\r\n\
+         tasklist /FI \"PID eq {pid}\" 2>nul | find \"{pid}\" >nul && (timeout /t 1 /nobreak >nul & goto wait)\r\n\
+         start \"\" \"{}\"\r\n",
+        exe.display()
+    )
+}
+
 /// Stage and start the relaunch helper; the caller quits right after.
-#[cfg(unix)]
 pub fn relaunch() -> Result<(), String> {
     let pid = std::process::id();
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let stage = std::env::temp_dir().join(format!("mtty-relaunch-{pid}"));
     std::fs::create_dir_all(&stage).map_err(|e| e.to_string())?;
-    let script = stage.join("relaunch.sh");
-    let appimage = std::env::var_os("APPIMAGE").map(PathBuf::from);
-    std::fs::write(&script, relaunch_script(pid, &exe, appimage.as_deref()))
-        .map_err(|e| e.to_string())?;
-    // A QA command runs once per launch, not again in the relaunched app.
-    let detach = if cfg!(target_os = "linux") {
-        "setsid "
+    let (script, text) = if cfg!(windows) {
+        (
+            stage.join("relaunch.cmd"),
+            windows_relaunch_script(pid, &exe),
+        )
     } else {
-        ""
+        let appimage = std::env::var_os("APPIMAGE").map(PathBuf::from);
+        (
+            stage.join("relaunch.sh"),
+            relaunch_script(pid, &exe, appimage.as_deref()),
+        )
     };
-    std::process::Command::new("sh")
-        .arg("-c")
-        .arg(format!(
-            "{detach}nohup sh {} >/dev/null 2>&1 &",
-            sh_quote(&script)
-        ))
-        .env_remove("MTTY_QA_COMMAND")
-        .env_remove("MTTY_QA_AFTER")
-        .env_remove("MTTY_QA_SCROLL")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    std::fs::write(&script, text).map_err(|e| e.to_string())?;
+    launch(&script).map_err(|e| e.to_string())
 }
+
+/// QA settings that run once per launch (`AGENTS.md`), never again in the
+/// app a helper starts.
+const ONE_LAUNCH_ENV: &[&str] = &["MTTY_QA_COMMAND", "MTTY_QA_AFTER", "MTTY_QA_SCROLL"];
 
 /// Start a staged helper detached from us, so it outlives our exit.
 pub fn launch(script: &Path) -> std::io::Result<()> {
@@ -239,8 +242,11 @@ pub fn launch(script: &Path) -> std::io::Result<()> {
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        std::process::Command::new("cmd")
-            .args(["/c", "start", "", "/b"])
+        let mut cmd = std::process::Command::new("cmd");
+        for name in ONE_LAUNCH_ENV {
+            cmd.env_remove(name);
+        }
+        cmd.args(["/c", "start", "", "/b"])
             .arg(script)
             .creation_flags(CREATE_NO_WINDOW)
             .spawn()
@@ -253,8 +259,11 @@ pub fn launch(script: &Path) -> std::io::Result<()> {
         } else {
             ""
         };
-        std::process::Command::new("sh")
-            .arg("-c")
+        let mut cmd = std::process::Command::new("sh");
+        for name in ONE_LAUNCH_ENV {
+            cmd.env_remove(name);
+        }
+        cmd.arg("-c")
             .arg(format!(
                 "{detach}nohup sh {} >/dev/null 2>&1 &",
                 sh_quote(script)
@@ -270,6 +279,16 @@ pub fn launch(script: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_relaunch_waits_then_starts_the_exe() {
+        let script = windows_relaunch_script(7, Path::new(r"C:\Program Files\mtty\bin\mtty.exe"));
+        assert!(script.contains("PID eq 7"), "{script}");
+        assert!(
+            script.ends_with("start \"\" \"C:\\Program Files\\mtty\\bin\\mtty.exe\"\r\n"),
+            "{script}"
+        );
+    }
 
     #[test]
     fn relaunch_starts_what_is_running_once_it_has_quit() {

@@ -9,7 +9,7 @@ font-size = 13                   # default
 # notifications = true             # system notification when an agent needs attention
 # prevent-sleep = true             # keep the machine awake while an agent is processing
 # restore-scrollback = true        # save terminals' contents at quit and show them on relaunch
-# pty-host = false                # keep shells running across restarts (Unix, experimental)
+# pty-host = false                # keep shells running across restarts (experimental)
 
 # quick-terminal-hotkey = "cmd+shift+t"  # system-wide Quick Terminal toggle
 # editor-vim = true                # minimal vim mode in the built-in editor
@@ -18,6 +18,9 @@ font-size = 13                   # default
 # graphics = true                  # inline terminal graphics (Sixel / Kitty / iTerm2)
 # remote-listen = "127.0.0.1:7273"   # serve the MTP control plane over TCP (needs MTTY_MTP_TOKEN)
 # language = "zh"                  # UI language ("en" default; also reads $LANG)
+# The update check runs only from the menu's "Check for Updates" — never at
+# startup. update-check-url already points at this project's release manifest,
+# so set it only to use a mirror or an internal host.
 # update-pubkey = "RW…"            # minisign public key; enables signature checks
 # update-check-url = "https://example.com/mtty/latest.json"
 #   JSON manifest: {"version":"0.2.0","artifacts":{"macos-aarch64":{"url":"…","sha256":"…"}}}

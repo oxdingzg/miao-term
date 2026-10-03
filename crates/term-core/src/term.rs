@@ -41,7 +41,6 @@ pub struct Terminal {
     child: Option<Box<dyn Child + Send + Sync>>,
     rx: Receiver<Incoming>,
     /// The PTY host, for a pane whose program outlives the app (ADR 0041).
-    #[cfg(unix)]
     host: Option<crate::hosted::HostLink>,
     waker: std::sync::Arc<dyn Fn() + Send + Sync>,
     rows: u16,
@@ -101,7 +100,6 @@ impl Drop for Terminal {
             let _ = child.wait();
         }
         // A hosted program ends with its pane, unless it was detached.
-        #[cfg(unix)]
         if let Some(host) = &self.host {
             use miao_term_ptyhost::proto::ToHost;
             host.send(if host.end_on_drop {
@@ -159,7 +157,6 @@ impl Terminal {
     /// Spawn a shell whose PTY lives in a host process (ADR 0041), so it
     /// outlives the app. Fails only when the host cannot be started at all;
     /// a host that never answers turns the pane into a local one.
-    #[cfg(unix)]
     #[allow(clippy::too_many_arguments)]
     pub fn new_hosted(
         config: &crate::hosted::HostConfig,
@@ -208,7 +205,6 @@ impl Terminal {
     /// Attach to a host that kept running while the app was away. With a
     /// snapshot, the screen is rebuilt exactly as it was and only the output
     /// since is replayed; without one, everything the host kept is.
-    #[cfg(unix)]
     pub fn reattach(
         id: &str,
         socket: &std::path::Path,
@@ -368,7 +364,6 @@ fn terminal_group(pid: u32) -> Option<u32> {
 }
 
 /// Hosted panes (ADR 0041).
-#[cfg(unix)]
 impl Terminal {
     pub fn is_hosted(&self) -> bool {
         self.host.is_some()
@@ -565,7 +560,6 @@ impl Terminal {
             writer,
             child,
             rx,
-            #[cfg(unix)]
             host: None,
             waker,
             rows,
@@ -632,7 +626,6 @@ impl Terminal {
                 Ok(incoming) => {
                     let bytes = match incoming {
                         Incoming::Bytes(bytes) => bytes,
-                        #[cfg(unix)]
                         Incoming::Hosted {
                             bytes,
                             end,
@@ -647,26 +640,21 @@ impl Terminal {
                             drained += bytes.len();
                             Vec::new()
                         }
-                        #[cfg(unix)]
                         Incoming::Truncated(modes) => {
                             self.apply_host_modes(&modes);
                             changed = true;
                             Vec::new()
                         }
-                        #[cfg(unix)]
                         Incoming::Live => {
                             self.host_live();
                             changed = true;
                             Vec::new()
                         }
-                        #[cfg(unix)]
                         Incoming::HostFailed(reason) => {
                             changed |= self.host_failed(&reason);
                             // The channel may have been replaced.
                             break;
                         }
-                        #[cfg(not(unix))]
-                        _ => Vec::new(),
                     };
                     drained += bytes.len();
                     if !bytes.is_empty() {
@@ -759,7 +747,6 @@ impl Terminal {
     /// answered when it first ran: answering again would type the reply into
     /// the program.
     fn reply(&mut self, bytes: &[u8]) {
-        #[cfg(unix)]
         if self.host.as_ref().is_some_and(|h| h.replaying) {
             return;
         }
@@ -881,7 +868,6 @@ impl Terminal {
             return;
         }
         // While replaying, the screen keeps the size the output was made for.
-        #[cfg(unix)]
         if let Some(host) = self.host.as_mut().filter(|h| h.replaying) {
             host.pending_resize = Some((rows, cols));
             return;
@@ -904,7 +890,6 @@ impl Terminal {
                 pixel_height: ph,
             })
         });
-        #[cfg(unix)]
         if let Some(host) = &self.host {
             host.send(miao_term_ptyhost::proto::ToHost::Resize {
                 cols,
@@ -938,7 +923,6 @@ impl Terminal {
 
     /// The child process id, if the platform exposes one.
     pub fn pid(&self) -> Option<u32> {
-        #[cfg(unix)]
         if let Some(host) = &self.host {
             return host.child_pid();
         }
