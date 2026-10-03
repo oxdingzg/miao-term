@@ -4,11 +4,12 @@
 //! crate owns the font system, glyph atlas, and the glyphon text pipeline. It
 //! draws into the same `wgpu` device/queue/surface as egui.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use glyphon::{
-    Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache,
-    TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
+    fontdb, Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping,
+    SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
 };
 
 /// A run of same-colored text within a row, pinned to a starting cell column.
@@ -42,7 +43,62 @@ pub struct TermRenderer {
     viewport: Viewport,
     buffers: HashMap<String, Buffer>,
     layout: Option<(f32, f32, Option<String>)>,
+    /// Stand-ins for symbols the current font lacks (see `TEXT_SYMBOL_STANDINS`).
+    standins: Vec<(char, char)>,
     frames: u64,
+}
+
+/// Text-presentation emoji that macOS font fallback would otherwise draw from
+/// Apple Color Emoji, whose bitmaps ignore the cell colour (Claude Code's
+/// `⏺` marker loses its green/red status). The bundled JetBrains Mono carries
+/// monochrome glyphs for them (`scripts/merge-symbol-glyphs.py`); for any other
+/// font that lacks them, draw a common monochrome stand-in instead.
+const TEXT_SYMBOL_STANDINS: &[(char, char)] = &[
+    ('\u{23FA}', '\u{25CF}'), // ⏺ -> ●
+    ('\u{23F9}', '\u{25A0}'), // ⏹ -> ■
+    ('\u{2B05}', '\u{2190}'), // ⬅ -> ←
+    ('\u{2B06}', '\u{2191}'), // ⬆ -> ↑
+    ('\u{2B07}', '\u{2193}'), // ⬇ -> ↓
+];
+
+/// The stand-ins `family` needs: symbols its primary face lacks, replaced by
+/// characters it has.
+fn missing_standins(font_system: &mut FontSystem, family: Family) -> Vec<(char, char)> {
+    let query = fontdb::Query {
+        families: &[family],
+        ..Default::default()
+    };
+    let Some(font) = font_system
+        .db()
+        .query(&query)
+        .and_then(|id| font_system.get_font(id))
+    else {
+        return Vec::new();
+    };
+    let charmap = font.as_swash().charmap();
+    TEXT_SYMBOL_STANDINS
+        .iter()
+        .copied()
+        .filter(|&(symbol, standin)| charmap.map(symbol) == 0 && charmap.map(standin) != 0)
+        .collect()
+}
+
+/// Applies `standins` unless the symbol explicitly asks for emoji presentation
+/// (followed by VS16).
+fn with_standins<'a>(text: &'a str, standins: &[(char, char)]) -> Cow<'a, str> {
+    if standins.is_empty() || !text.chars().any(|c| standins.iter().any(|&(s, _)| s == c)) {
+        return Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        let emoji = chars.peek() == Some(&'\u{FE0F}');
+        match standins.iter().find(|&&(s, _)| s == c) {
+            Some(&(_, standin)) if !emoji => out.push(standin),
+            _ => out.push(c),
+        }
+    }
+    Cow::Owned(out)
 }
 
 /// Candidate system CJK fonts (macOS / Linux / Windows).
@@ -99,6 +155,7 @@ impl TermRenderer {
             viewport,
             buffers: HashMap::new(),
             layout: None,
+            standins: Vec::new(),
             frames: 0,
         }
     }
@@ -163,6 +220,7 @@ impl TermRenderer {
         if self.layout.as_ref() != Some(&layout) {
             self.buffers.clear();
             self.layout = Some(layout);
+            self.standins = missing_standins(&mut self.font_system, fam);
         }
         for span in rows.iter().flatten() {
             if !self.buffers.contains_key(&span.text) {
@@ -171,7 +229,7 @@ impl TermRenderer {
                 // Advanced shaping retains fallback for CJK and symbols.
                 buffer.set_text(
                     &mut self.font_system,
-                    &span.text,
+                    &with_standins(&span.text, &self.standins),
                     Attrs::new().family(fam),
                     Shaping::Advanced,
                 );
@@ -850,6 +908,35 @@ fn bytemuck_cast<T: Copy>(data: &[T]) -> &[u8] {
 
 /// Renderer crate version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[cfg(test)]
+mod symbol_tests {
+    use super::*;
+
+    #[test]
+    fn bundled_font_draws_text_symbols_itself() {
+        let mut font_system =
+            FontSystem::new_with_locale_and_db("en-US".into(), Default::default());
+        load_bundled(&mut font_system);
+        let standins = missing_standins(&mut font_system, Family::Name("JetBrains Mono"));
+        assert!(standins.is_empty(), "bundled font lacks {standins:?}");
+    }
+
+    #[test]
+    fn standins_keep_explicit_emoji_presentation() {
+        let standins = [('\u{23FA}', '\u{25CF}')];
+        assert_eq!(with_standins("\u{23FA} Bash", &standins), "\u{25CF} Bash");
+        assert_eq!(
+            with_standins("\u{23FA}\u{FE0F}", &standins),
+            "\u{23FA}\u{FE0F}"
+        );
+        assert!(matches!(
+            with_standins("plain", &standins),
+            Cow::Borrowed(_)
+        ));
+        assert!(matches!(with_standins("\u{23FA}", &[]), Cow::Borrowed(_)));
+    }
+}
 
 #[cfg(test)]
 mod gpu_tests {
