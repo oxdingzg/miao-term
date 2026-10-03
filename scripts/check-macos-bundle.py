@@ -18,7 +18,7 @@ schemes = {s for t in info.get("CFBundleURLTypes", []) for s in t.get("CFBundleU
 # The former scheme stays registered during the rename transition (ADR 0032).
 assert {"mtty", "miaotty", "ssh", "x-man-page"} <= schemes, schemes
 executables = bundle / "Contents/MacOS"
-assert {p.name for p in executables.iterdir()} == {"mtty", "mtty-cli"}
+assert {p.name for p in executables.iterdir()} == {"mtty", "mtty-cli", "mtty-ptyhost"}
 version = subprocess.check_output([str(executables / "mtty"), "--version"], text=True).strip()
 assert version == f"mtty {info['CFBundleShortVersionString']} (native)", version
 subprocess.run(["codesign", "--verify", "--deep", "--strict", str(bundle)], check=True)

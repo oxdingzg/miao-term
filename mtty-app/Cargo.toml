@@ -28,6 +28,7 @@ provides = "miaotty"
 assets = [
     ["target/release/mtty", "usr/bin/mtty", "755"],
     ["target/release/mtty-cli", "usr/bin/mtty-cli", "755"],
+    ["target/release/mtty-ptyhost", "usr/bin/mtty-ptyhost", "755"],
     ["../assets/compat/miaotty", "usr/bin/miaotty", "755"],
     ["../assets/compat/miaotty-cli", "usr/bin/miaotty-cli", "755"],
     ["../assets/mtty.desktop", "usr/share/applications/mtty.desktop", "644"],

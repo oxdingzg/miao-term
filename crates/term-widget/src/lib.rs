@@ -1546,6 +1546,10 @@ struct State {
     /// (`pty-host`, ADR 0041). Unix only for now.
     #[cfg_attr(not(unix), allow(dead_code))]
     pty_host: bool,
+    /// Hosts still running from an earlier mtty that no pane reattached to
+    /// (a crash before the session was saved), offered in the palette.
+    #[cfg(unix)]
+    recovered: Vec<miao_term_ptyhost::launch::HostInfo>,
     scrollback_saved_at: Instant,
     sleep: miao_term_ui::agentloop::SleepGuard,
     agent_states: HashMap<String, String>,
@@ -2113,6 +2117,11 @@ impl State {
         let Some(pane) = self.spawn_pane(cwd) else {
             return;
         };
+        self.push_tab(pane);
+    }
+
+    /// Open `pane` in a new tab after the others and focus it.
+    fn push_tab(&mut self, pane: Pane) {
         let id = pane.id.clone();
         let n = self.tabs.len() + 1;
         self.tabs.push(Tab {
@@ -4095,6 +4104,38 @@ impl State {
         }
     }
 
+    /// Quit leaving hosted programs running for the next launch to reattach
+    /// (an update, a relaunch; ADR 0041): each hosted pane's exact screen and
+    /// output offset are saved, then its host is detached. Panes without a
+    /// host end as on any quit.
+    fn quit_keeping_sessions(&mut self) {
+        let all: Vec<usize> = (0..self.tabs.len()).collect();
+        if !self.confirm_close_tabs(&all) {
+            return;
+        }
+        self.save_window_state();
+        if self.show_settings {
+            self.persist_settings();
+        }
+        self.save_session_on_exit();
+        #[cfg(unix)]
+        {
+            let dir = scrollback_dir();
+            for pane in self.tabs.iter_mut().flat_map(|t| t.panes.iter_mut()) {
+                if let (Some(dir), Some(snapshot)) =
+                    (dir.as_deref(), pane.term.host_snapshot(SCROLLBACK_LINES))
+                {
+                    if let Ok(json) = serde_json::to_vec(&snapshot) {
+                        let _ = write_private(dir, &format!("{}.host.json", pane.id), &json);
+                    }
+                }
+                pane.term.detach_host();
+            }
+        }
+        self.sleep.set_awake(false);
+        std::process::exit(0);
+    }
+
     /// The app is quitting without keeping sessions: end every hosted
     /// program (exiting skips the terminals' destructors).
     fn end_hosts(&mut self) {
@@ -4642,6 +4683,9 @@ enum Cmd {
     NewTab,
     /// Launch `integration::AGENTS[i]` in a new tab (B2.1).
     LaunchAgent(usize),
+    /// Reattach / end a host left running by an earlier mtty (ADR 0041).
+    AttachRecovered(usize),
+    EndRecovered(usize),
     /// The host library (B3.1).
     Hosts,
     /// SFTP for the active ssh tab (B3.4).
@@ -4737,6 +4781,8 @@ enum Cmd {
     CopyPath,
     RevealCwd,
     Settings,
+    /// Quit and start again, keeping hosted programs running (ADR 0041).
+    Relaunch,
     Quit,
 }
 
@@ -4748,7 +4794,7 @@ impl State {
             .unwrap_or_default()
     }
 
-    fn commands(&self) -> Vec<(Cmd, &'static str)> {
+    fn commands(&self) -> Vec<(Cmd, std::borrow::Cow<'static, str>)> {
         use miao_term_ui::i18n::t;
         let l = self.lang;
         vec![
@@ -4928,6 +4974,16 @@ impl State {
             (Cmd::Quit, t(l, "Quit", "退出")),
         ]
         .into_iter()
+        .chain((cfg!(unix) && self.pty_host).then(|| {
+            (
+                Cmd::Relaunch,
+                t(
+                    l,
+                    "Relaunch, Keeping Programs Running",
+                    "重启 mtty(保留运行中的程序)",
+                ),
+            )
+        }))
         .chain(
             // Agents found on PATH (the Settings check, refreshed every 5 s).
             miao_term_ui::integration::AGENTS
@@ -4940,7 +4996,121 @@ impl State {
                 })
                 .map(|(i, a)| (Cmd::LaunchAgent(i), launch_label(l, a.name))),
         )
+        .map(|(cmd, label)| (cmd, std::borrow::Cow::Borrowed(label)))
+        .chain(self.recovered_commands())
         .collect()
+    }
+
+    /// Palette entries for hosts left running by an earlier mtty.
+    fn recovered_commands(&self) -> Vec<(Cmd, std::borrow::Cow<'static, str>)> {
+        #[cfg(unix)]
+        {
+            use miao_term_ui::i18n::t;
+            let l = self.lang;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            let mut out = Vec::new();
+            for (i, host) in self.recovered.iter().enumerate() {
+                let program = std::path::Path::new(&host.program).file_name().map_or_else(
+                    || host.program.clone(),
+                    |n| n.to_string_lossy().into_owned(),
+                );
+                let minutes = now.saturating_sub(host.started_at) / 60;
+                let what = match l {
+                    miao_term_ui::i18n::Lang::Zh => format!("{program}(已运行 {minutes} 分钟)"),
+                    _ => format!("{program} (running {minutes} min)"),
+                };
+                out.push((
+                    Cmd::AttachRecovered(i),
+                    format!(
+                        "{} {what}",
+                        t(l, "Reattach Running Program:", "接回运行中的程序:")
+                    )
+                    .into(),
+                ));
+                out.push((
+                    Cmd::EndRecovered(i),
+                    format!(
+                        "{} {what}",
+                        t(l, "End Running Program:", "结束运行中的程序:")
+                    )
+                    .into(),
+                ));
+            }
+            out
+        }
+        #[cfg(not(unix))]
+        Vec::new()
+    }
+
+    /// Hosts that kept running but that no restored pane took back: a crash
+    /// before the session file was written. Offer them rather than adopt them
+    /// unasked; also drop host binaries nothing uses any more.
+    #[cfg(unix)]
+    fn find_recovered(&mut self) {
+        use miao_term_ptyhost::launch;
+        let Ok(dir) = launch::hosts_dir() else {
+            return;
+        };
+        if let Some(data) = miao_term_config::data_dir() {
+            launch::remove_unused_versions(&data, &dir);
+        }
+        let attached: Vec<String> = self
+            .tabs
+            .iter()
+            .flat_map(|t| t.panes.iter())
+            .filter_map(|p| p.term.host_id().map(|(id, _)| id.to_string()))
+            .collect();
+        self.recovered = launch::running_hosts(&dir)
+            .into_iter()
+            .filter(|h| !attached.contains(&h.id))
+            .collect();
+        if !self.recovered.is_empty() {
+            let n = self.recovered.len();
+            let msg = match self.lang {
+                miao_term_ui::i18n::Lang::Zh => {
+                    format!("还有 {n} 个程序在上次的 mtty 中运行:在命令面板中接回或结束它们。")
+                }
+                _ => format!(
+                    "{n} program(s) from an earlier mtty are still running: reattach or end them from the command palette."
+                ),
+            };
+            self.show_notice(msg);
+        }
+    }
+
+    /// Reattach a recovered host in a new tab, or end it.
+    #[cfg(unix)]
+    fn take_recovered(&mut self, i: usize, attach: bool) {
+        if i >= self.recovered.len() {
+            return;
+        }
+        let host = self.recovered.remove(i);
+        if !attach {
+            if let Ok((mut stream, _)) =
+                miao_term_ptyhost::client::connect(&host.socket, Duration::from_millis(500))
+            {
+                let _ = miao_term_ptyhost::proto::ToHost::Kill.write(&mut stream);
+            }
+            return;
+        }
+        let (cols, rows) = self.new_pane_size();
+        match Terminal::reattach(
+            &host.id,
+            &host.socket,
+            None,
+            cols,
+            rows,
+            10_000,
+            self.pane_waker(),
+        ) {
+            Ok(term) => {
+                let pane = self.make_pane(gen_id(), term);
+                self.push_tab(pane);
+            }
+            Err(e) => self.show_notice(e.to_string()),
+        }
     }
 
     /// Scanning PATH is file-system work: refresh it at most every 5 s, not on
@@ -4979,6 +5149,14 @@ impl State {
     fn run_command(&mut self, cmd: Cmd) {
         match cmd {
             Cmd::LaunchAgent(i) => self.launch_agent(i),
+            Cmd::AttachRecovered(_i) => {
+                #[cfg(unix)]
+                self.take_recovered(_i, true);
+            }
+            Cmd::EndRecovered(_i) => {
+                #[cfg(unix)]
+                self.take_recovered(_i, false);
+            }
             Cmd::SftpCurrent => {
                 let tab = self.tabs.get(self.active_tab);
                 let saved = tab.filter(|t| t.ssh).and_then(|t| {
@@ -5560,6 +5738,14 @@ impl State {
                 }
             }
             Cmd::Settings => self.show_settings = true,
+            Cmd::Relaunch =>
+            {
+                #[cfg(unix)]
+                match miao_term_ui::install::relaunch() {
+                    Ok(()) => self.quit_keeping_sessions(),
+                    Err(e) => self.show_notice(e),
+                }
+            }
             Cmd::Quit => {
                 let all: Vec<usize> = (0..self.tabs.len()).collect();
                 if !self.confirm_close_tabs(&all) {
@@ -5617,10 +5803,10 @@ impl State {
                 resp.request_focus();
             }
             let q = query.to_lowercase();
-            let mut rows: Vec<(usize, Cmd, &'static str)> = cmds
+            let mut rows: Vec<(usize, Cmd, &str)> = cmds
                 .iter()
                 .filter_map(|(c, l)| {
-                    miao_term_ui::palette::score(l, "command", &q).map(|s| (s, *c, *l))
+                    miao_term_ui::palette::score(l, "command", &q).map(|s| (s, *c, l.as_ref()))
                 })
                 .collect();
             rows.sort_by_key(|(s, _, _)| *s);
@@ -8482,7 +8668,8 @@ impl State {
         match miao_term_ui::install::prepare(path) {
             Ok(miao_term_ui::install::Plan::Helper(script)) => {
                 match miao_term_ui::install::launch(&script) {
-                    Ok(()) => self.run_command(Cmd::Quit),
+                    // Hosted programs keep running through the update.
+                    Ok(()) => self.quit_keeping_sessions(),
                     Err(e) => self.update_install = UpdateInstall::Failed(e.to_string()),
                 }
             }
@@ -13286,6 +13473,8 @@ impl ApplicationHandler<HostEvent> for Host {
             prevent_sleep: cfg.prevent_sleep,
             restore_scrollback: cfg.restore_scrollback,
             pty_host: cfg.pty_host,
+            #[cfg(unix)]
+            recovered: Vec::new(),
             scrollback_saved_at: Instant::now(),
             sleep: miao_term_ui::agentloop::SleepGuard::new(),
             agent_states: HashMap::new(),
@@ -13392,6 +13581,8 @@ impl ApplicationHandler<HostEvent> for Host {
         if !state.restore_session() {
             state.new_tab();
         }
+        #[cfg(unix)]
+        state.find_recovered();
         // Restored splits start their shells at their own size, in every tab,
         // before the shells print a prompt.
         state.fit_all_panes();

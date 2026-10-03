@@ -128,6 +128,47 @@ pub fn remove_unused_versions(data_dir: &Path, hosts_dir: &Path) {
     }
 }
 
+/// A running host, from its metadata file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostInfo {
+    pub id: String,
+    pub socket: PathBuf,
+    pub child_pid: u64,
+    /// Seconds since the Unix epoch.
+    pub started_at: u64,
+    /// The program it was started with (the shell).
+    pub program: String,
+}
+
+/// The hosts in `dir` whose process is still alive, oldest first.
+pub fn running_hosts(dir: &Path) -> Vec<HostInfo> {
+    let mut hosts: Vec<HostInfo> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            let id = path.file_stem()?.to_str()?.to_string();
+            if path.extension()? != "json" || !valid_id(&id) {
+                return None;
+            }
+            let meta = std::fs::read_to_string(&path).ok()?;
+            if !json_number(&meta, "pid").is_some_and(alive_pid) {
+                return None;
+            }
+            Some(HostInfo {
+                socket: socket_path(dir, &id),
+                id,
+                child_pid: json_number(&meta, "child_pid").unwrap_or(0),
+                started_at: json_number(&meta, "started_at").unwrap_or(0),
+                program: json_string(&meta, "program").unwrap_or_default(),
+            })
+        })
+        .collect();
+    hosts.sort_by_key(|h| h.started_at);
+    hosts
+}
+
 fn alive_pid(pid: u64) -> bool {
     let Ok(pid) = libc::pid_t::try_from(pid) else {
         return false;
@@ -192,6 +233,33 @@ mod tests {
         assert_ne!(id, new_id().unwrap());
         assert!(!valid_id("../../etc/passwd0000000000000000000"));
         assert!(!valid_id("abc"));
+    }
+
+    #[test]
+    fn running_hosts_are_listed_from_their_metadata() {
+        let dir = std::env::temp_dir().join(format!("mtty-hosts-list-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let alive = "0123456789abcdef0123456789abcdef";
+        let gone = "fedcba9876543210fedcba9876543210";
+        let me = std::process::id();
+        std::fs::write(
+            meta_path(&dir, alive),
+            format!(
+                r#"{{"version":"x","pid":{me},"child_pid":7,"started_at":5,"program":"/bin/zsh"}}"#
+            ),
+        )
+        .unwrap();
+        // A pid that cannot exist.
+        std::fs::write(meta_path(&dir, gone), r#"{"version":"x","pid":999999999}"#).unwrap();
+        std::fs::write(dir.join("not-an-id.json"), format!(r#"{{"pid":{me}}}"#)).unwrap();
+        let hosts = running_hosts(&dir);
+        assert_eq!(hosts.len(), 1, "{hosts:?}");
+        assert_eq!(hosts[0].id, alive);
+        assert_eq!(hosts[0].program, "/bin/zsh");
+        assert_eq!(hosts[0].child_pid, 7);
+        assert_eq!(hosts[0].socket, socket_path(&dir, alive));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

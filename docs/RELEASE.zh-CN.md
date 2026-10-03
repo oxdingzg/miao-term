@@ -37,7 +37,7 @@ gh workflow run release.yml --ref main -f tag=v0.0.1
 
 配置签名后,每个产物旁边会生成 `.sig`。
 分离签名在平台代码签名完成后,由 Linux 汇总作业统一生成,并用已提交的公钥校验。
-所有 app bundle、主应用压缩包与安装包均包含一个 native mtty 主程序和 CLI;
+所有 app bundle、主应用压缩包与安装包均包含一个 native mtty 主程序和 CLI;macOS 与 Linux 的包还带有 `mtty-ptyhost`(让 shell 跨重启继续运行的 PTY 宿主,ADR 0041;Windows 暂不包含);
 不再发布独立的 native 应用压缩包。
 四个 runner 的构建与 AppImage/MSI 打包均必须成功。
 
@@ -135,15 +135,15 @@ WiX 模板已入库:[`mtty-app/wix/main.wxs`](../mtty-app/wix/main.wxs)(把 `mtt
 **Linux `.deb` 与 AppImage**(Ubuntu 24.04):
 
 ```sh
-cargo build --release -p mtty-app -p mtty-cli
+cargo build --release -p mtty-app -p mtty-cli -p miao-term-ptyhost
 cargo install cargo-deb --locked && cargo deb -p mtty-app --no-build
-sudo dpkg -i target/debian/mtty_*_amd64.deb     # /usr/bin/mtty{,-cli}
+sudo dpkg -i target/debian/mtty_*_amd64.deb     # /usr/bin/mtty{,-cli,-ptyhost}
 mtty-cli ping                                   # 可运行;报错仅因无 host
 ```
 
 AppImage 需要**真正的 256x256 图标** —— `appimagetool` 拒绝 1x1 占位图,且桌面文件必须带
 `Icon=` 键 —— 因此流水线用 `scripts/make-icon.py`(仅标准库)生成图标。结果:
-`mtty-linux-x86_64.AppImage` 内含 `mtty` 与 `mtty-cli`,并可正常提取
+`mtty-linux-x86_64.AppImage` 内含 `mtty`、`mtty-cli` 与 `mtty-ptyhost`,并可正常提取
 (`--appimage-extract`)。
 
 **未验证**:GUI 本体。该机器的 X 显示属于登录界面(无授权 cookie),而在 `xvfb` + 软件

@@ -187,6 +187,52 @@ pub fn prepare(artifact: &Path) -> Result<Plan, String> {
     }
 }
 
+/// Start the running app again once `pid` exits: a relaunch that keeps the
+/// panes' programs running in their PTY hosts (ADR 0041). The bundle on
+/// macOS, the AppImage when running from one, else the executable itself.
+pub fn relaunch_script(pid: u32, exe: &Path, appimage: Option<&Path>) -> String {
+    let start = match (bundle_root(exe), appimage) {
+        (Some(bundle), _) => format!("open {}", sh_quote(&bundle)),
+        (None, Some(image)) => format!("{} >/dev/null 2>&1 &", sh_quote(image)),
+        (None, None) => format!("{} >/dev/null 2>&1 &", sh_quote(exe)),
+    };
+    format!("#!/bin/sh\nwhile kill -0 {pid} 2>/dev/null; do sleep 0.1; done\n{start}\n")
+}
+
+/// Stage and start the relaunch helper; the caller quits right after.
+#[cfg(unix)]
+pub fn relaunch() -> Result<(), String> {
+    let pid = std::process::id();
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let stage = std::env::temp_dir().join(format!("mtty-relaunch-{pid}"));
+    std::fs::create_dir_all(&stage).map_err(|e| e.to_string())?;
+    let script = stage.join("relaunch.sh");
+    let appimage = std::env::var_os("APPIMAGE").map(PathBuf::from);
+    std::fs::write(&script, relaunch_script(pid, &exe, appimage.as_deref()))
+        .map_err(|e| e.to_string())?;
+    // A QA command runs once per launch, not again in the relaunched app.
+    let detach = if cfg!(target_os = "linux") {
+        "setsid "
+    } else {
+        ""
+    };
+    std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "{detach}nohup sh {} >/dev/null 2>&1 &",
+            sh_quote(&script)
+        ))
+        .env_remove("MTTY_QA_COMMAND")
+        .env_remove("MTTY_QA_AFTER")
+        .env_remove("MTTY_QA_SCROLL")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 /// Start a staged helper detached from us, so it outlives our exit.
 pub fn launch(script: &Path) -> std::io::Result<()> {
     #[cfg(windows)]
@@ -224,6 +270,35 @@ pub fn launch(script: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relaunch_starts_what_is_running_once_it_has_quit() {
+        let wait = "while kill -0 42 2>/dev/null; do sleep 0.1; done\n";
+        let bundle = relaunch_script(
+            42,
+            Path::new("/Applications/mtty.app/Contents/MacOS/mtty"),
+            None,
+        );
+        assert!(bundle.contains(wait), "{bundle}");
+        assert!(
+            bundle.ends_with("open '/Applications/mtty.app'\n"),
+            "{bundle}"
+        );
+        let image = relaunch_script(
+            42,
+            Path::new("/tmp/.mount_x/usr/bin/mtty"),
+            Some(Path::new("/opt/apps/mtty.AppImage")),
+        );
+        assert!(
+            image.ends_with("'/opt/apps/mtty.AppImage' >/dev/null 2>&1 &\n"),
+            "{image}"
+        );
+        let plain = relaunch_script(42, Path::new("/opt/it's/mtty"), None);
+        assert!(
+            plain.ends_with("'/opt/it'\\''s/mtty' >/dev/null 2>&1 &\n"),
+            "{plain}"
+        );
+    }
 
     #[test]
     fn bundles_and_apps_are_found() {

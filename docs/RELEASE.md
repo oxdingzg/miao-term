@@ -42,7 +42,8 @@ Every artifact gets a `.sig` next to it when signing is configured.
 Detached signatures are generated once in the Linux assembly job, after platform
 codesigning, and verified there against the committed public key.
 All app bundles, archives and installers contain one native mtty application
-and mtty-cli. No separate native application archive is published.
+and mtty-cli; the macOS and Linux ones also carry `mtty-ptyhost`, the PTY host
+that keeps shells running across restarts (ADR 0041; not yet on Windows). No separate native application archive is published.
 All four runner builds and AppImage/MSI packaging are required to succeed.
 
 ## Secrets (all optional)
@@ -152,16 +153,16 @@ Both installers were checked on real hardware (2026-09-29).
 **Linux `.deb` and AppImage** (Ubuntu 24.04):
 
 ```sh
-cargo build --release -p mtty-app -p mtty-cli
+cargo build --release -p mtty-app -p mtty-cli -p miao-term-ptyhost
 cargo install cargo-deb --locked && cargo deb -p mtty-app --no-build
-sudo dpkg -i target/debian/mtty_*_amd64.deb     # /usr/bin/mtty{,-cli}
+sudo dpkg -i target/debian/mtty_*_amd64.deb     # /usr/bin/mtty{,-cli,-ptyhost}
 mtty-cli ping                                   # runs; errors only because no host
 ```
 
 The AppImage needs a **real 256x256 icon** — `appimagetool` refuses a 1x1
 placeholder, and the desktop file must carry an `Icon=` key — so the pipeline
 generates one with `scripts/make-icon.py` (standard library only). Result:
-`mtty-linux-x86_64.AppImage` containing `mtty` and `mtty-cli`, and it
+`mtty-linux-x86_64.AppImage` containing `mtty`, `mtty-cli` and `mtty-ptyhost`, and it
 extracts cleanly (`--appimage-extract`).
 
 **Not verified**: the GUI itself. The machine's X displays belong to the login
