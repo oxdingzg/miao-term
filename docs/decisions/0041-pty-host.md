@@ -368,6 +368,25 @@ reboot is also out of scope.
   the app a running `ping` was reattached, interrupted with Ctrl+C and the
   pane took input again with its id kept.
 
+## Addendum: P4 as built (2026-10-03)
+
+- `keep-sessions-on-quit` (default `false`): an ordinary quit (menu, ⌘Q,
+  closing the window) saves each hosted pane's state and detaches its host,
+  as an update does, instead of ending it. `detached-timeout` (default
+  `24h`; `90s`, `30m`, `24h`, `7d` or seconds) is passed to each new host.
+- Performance gate: `crates/term-ptyhost/tests/perf.rs` measures a
+  keystroke's echo through a host (`hosted_echo_p95_ms`, budget 4 ms) and
+  output through a host (`hosted_output_mbps`, budget 25 MB/s, the screen's
+  parse budget), each against the same work on a PTY the test owns.
+- The first measurement found output through a host at 37–79% of a direct
+  PTY on Linux: its PTY hands out a few hundred bytes per read, and the host
+  sent a frame per read. The host now reads into a bounded queue on one
+  thread and frames everything queued at once on another (up to 256 KiB),
+  so a flood collects into large frames while idle output still goes out at
+  once. Output through a host is now 89–112% of direct on Linux and above
+  direct on macOS; the echo's p95 went from about 0.025 to 0.07 ms, against
+  a 16 ms key-to-glyph budget.
+
 ## Review findings (2026-10-03)
 
 The first draft was checked against `alacritty_terminal` 0.25.1, vte 0.15 and

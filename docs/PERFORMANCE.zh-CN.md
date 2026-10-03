@@ -7,7 +7,7 @@
 ## 门
 
 ```sh
-cargo test --release -p miao-term-core -p miao-term-graphics -p mtty-app -- --ignored
+cargo test --release -p miao-term-core -p miao-term-graphics -p miao-term-ptyhost -p mtty-app -- --ignored
 ```
 
 性能测试标记为 `#[ignore]`,故常规测试保持快速;`perf` CI 作业在 `ubuntu-latest` 上以
@@ -26,6 +26,8 @@ release 运行它们。预算是绝对值且留出宽裕余量(数量级退化�
 | 屏幕快照(30 行) | ≤ 2 ms | 0.012 ms | `crates/term-core/tests/perf.rs` |
 | 每帧行构建 | ≤ 4 ms | 0.12 ms | `mtty-app/tests/perf.rs` |
 | 面板排名(10k 条目) | ≤ 100 ms | 2.0 ms | `mtty-app/tests/perf.rs` |
+| 托管回显往返(p95) | ≤ 4 ms | 0.04 ms | `crates/term-ptyhost/tests/perf.rs` |
+| 托管输出吞吐 | ≥ 25 MB/s | 180 MB/s | `crates/term-ptyhost/tests/perf.rs` |
 | IPC 空闲开销 | ≈ 0(无轮询) | — | 设计如此 |
 | agent 突发 | 100 事件 → 1 重绘 | — | 设计如此 |
 
@@ -147,7 +149,7 @@ CPU 场景工作时间约减少 95%；大量图片的 RSS 增量减少约 32 MiB
 ### 复现与门禁
 
 ```sh
-cargo test --release -p miao-term-core -p miao-term-graphics -p mtty-app -- --ignored --nocapture
+cargo test --release -p miao-term-core -p miao-term-graphics -p miao-term-ptyhost -p mtty-app -- --ignored --nocapture
 cargo build --release -p mtty-app -p mtty-cli
 python3 scripts/profile-input.py --mode fragments
 python3 scripts/profile-input.py --mode images

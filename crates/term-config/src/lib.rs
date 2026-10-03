@@ -176,6 +176,29 @@ fn default_font_size() -> f32 {
     13.0
 }
 
+/// How long a PTY host waits for mtty to come back (ADR 0041).
+pub const DEFAULT_DETACHED_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(24 * 60 * 60);
+
+/// A duration as `90s`, `30m`, `24h`, `7d` or plain seconds; `None` for
+/// anything else, including zero.
+pub fn parse_duration(text: &str) -> Option<std::time::Duration> {
+    let text = text.trim();
+    let (number, unit) = match text.char_indices().find(|(_, c)| !c.is_ascii_digit()) {
+        Some((i, _)) => text.split_at(i),
+        None => (text, "s"),
+    };
+    let n: u64 = number.parse().ok()?;
+    let secs = match unit.trim() {
+        "s" => n,
+        "m" => n.checked_mul(60)?,
+        "h" => n.checked_mul(3600)?,
+        "d" => n.checked_mul(86_400)?,
+        _ => return None,
+    };
+    (secs > 0).then(|| std::time::Duration::from_secs(secs))
+}
+
 /// Default terminal font, bundled with the app (see `assets/fonts/`).
 fn default_font_family() -> Option<String> {
     Some("JetBrains Mono".to_string())
@@ -261,6 +284,10 @@ struct RawConfig {
     restore_scrollback: Option<bool>,
     #[serde(rename = "pty-host")]
     pty_host: Option<bool>,
+    #[serde(rename = "keep-sessions-on-quit")]
+    keep_sessions_on_quit: Option<bool>,
+    #[serde(rename = "detached-timeout")]
+    detached_timeout: Option<toml::Value>,
     badges: Option<RawBadges>,
     language: Option<String>,
     #[serde(rename = "update-check-url")]
@@ -365,6 +392,11 @@ pub struct Config {
     /// running while mtty restarts and is reattached (ADR 0041). Off by
     /// default while it is being proven.
     pub pty_host: bool,
+    /// An ordinary quit leaves hosted programs running for the next launch
+    /// (tmux-like) instead of ending them.
+    pub keep_sessions_on_quit: bool,
+    /// How long a PTY host keeps its program with no mtty attached.
+    pub detached_timeout: std::time::Duration,
     /// Which agent states show a tab badge.
     pub badges: Badges,
     /// UI language tag (`en`, `zh`, …); `None` detects from `$LANG`.
@@ -545,6 +577,8 @@ impl Default for Config {
             prevent_sleep: true,
             restore_scrollback: true,
             pty_host: false,
+            keep_sessions_on_quit: false,
+            detached_timeout: DEFAULT_DETACHED_TIMEOUT,
             badges: Badges::default(),
             language: None,
             update_check_url: Some(
@@ -881,6 +915,16 @@ impl Config {
                         cfg.pty_host = v;
                     }
                 }
+                "keep-sessions-on-quit" => {
+                    if let Ok(v) = value.parse::<bool>() {
+                        cfg.keep_sessions_on_quit = v;
+                    }
+                }
+                "detached-timeout" => {
+                    if let Some(v) = parse_duration(value) {
+                        cfg.detached_timeout = v;
+                    }
+                }
                 "palette" => {
                     if let Some((idx, hex)) = value.split_once('=') {
                         if let (Ok(i), Some(c)) = (idx.trim().parse::<usize>(), Rgb::parse(hex)) {
@@ -928,6 +972,19 @@ impl Config {
         }
         if let Some(v) = raw.pty_host {
             cfg.pty_host = v;
+        }
+        if let Some(v) = raw.keep_sessions_on_quit {
+            cfg.keep_sessions_on_quit = v;
+        }
+        let timeout = match &raw.detached_timeout {
+            Some(toml::Value::Integer(secs)) => u64::try_from(*secs)
+                .ok()
+                .map(std::time::Duration::from_secs),
+            Some(toml::Value::String(text)) => parse_duration(text),
+            _ => None,
+        };
+        if let Some(v) = timeout {
+            cfg.detached_timeout = v;
         }
         if let Some(lang) = raw.language {
             let lang = lang.trim();
@@ -1328,5 +1385,41 @@ mod tests {
         assert!(!Config::from_toml("").unwrap().pty_host);
         assert!(Config::from_toml("pty-host = true\n").unwrap().pty_host);
         assert!(Config::from_ghostty_text("pty-host = true\n").pty_host);
+    }
+
+    #[test]
+    fn pty_host_sessions_and_timeout() {
+        let default = Config::from_toml("").unwrap();
+        assert!(!default.keep_sessions_on_quit);
+        assert_eq!(default.detached_timeout, DEFAULT_DETACHED_TIMEOUT);
+        let cfg =
+            Config::from_toml("keep-sessions-on-quit = true\ndetached-timeout = \"7d\"\n").unwrap();
+        assert!(cfg.keep_sessions_on_quit);
+        assert_eq!(cfg.detached_timeout.as_secs(), 7 * 86_400);
+        let secs = Config::from_toml("detached-timeout = 90\n").unwrap();
+        assert_eq!(secs.detached_timeout.as_secs(), 90);
+        let bad = Config::from_toml("detached-timeout = \"soon\"\n").unwrap();
+        assert_eq!(
+            bad.detached_timeout, DEFAULT_DETACHED_TIMEOUT,
+            "kept on a bad value"
+        );
+        let ghostty = Config::from_ghostty_text("detached-timeout = 30m\n");
+        assert_eq!(ghostty.detached_timeout.as_secs(), 1800);
+        for (text, secs) in [
+            ("90s", 90),
+            ("30m", 1800),
+            ("24h", 86_400),
+            ("2d", 172_800),
+            ("45", 45),
+        ] {
+            assert_eq!(
+                parse_duration(text).map(|d| d.as_secs()),
+                Some(secs),
+                "{text}"
+            );
+        }
+        for text in ["", "0", "0h", "1w", "h", "-5", "1.5h"] {
+            assert_eq!(parse_duration(text), None, "{text}");
+        }
     }
 }

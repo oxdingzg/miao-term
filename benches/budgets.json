@@ -31,6 +31,20 @@
     "note": "roadmap 'Open Quickly first results < 100 ms'",
     "regression_pct": 25
   },
+  "hosted_echo_p95_ms": {
+    "budget": 4.0,
+    "baseline": 0.04,
+    "hard": true,
+    "note": "a keystroke's echo through a PTY host (ADR 0041); its share of the 16 ms key-to-glyph budget",
+    "regression_pct": 25
+  },
+  "hosted_output_mbps": {
+    "budget": 25,
+    "baseline": 180.0,
+    "hard": true,
+    "note": "output through a PTY host (ADR 0041); must stay above what the screen parses (vt_parse_mbps budget)",
+    "regression_pct": 25
+  },
   "cold_start_ms": {
     "budget": 300,
     "baseline": null,

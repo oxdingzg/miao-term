@@ -1545,6 +1545,10 @@ struct State {
     /// Local shells run in PTY host processes and survive restarts
     /// (`pty-host`, ADR 0041).
     pty_host: bool,
+    /// An ordinary quit keeps hosted programs running (`keep-sessions-on-quit`).
+    keep_sessions_on_quit: bool,
+    /// How long a host waits for mtty (`detached-timeout`).
+    detached_timeout: Duration,
     /// Hosts still running from an earlier mtty that no pane reattached to
     /// (a crash before the session was saved), offered in the palette.
     recovered: Vec<miao_term_ptyhost::launch::HostInfo>,
@@ -1973,7 +1977,7 @@ impl State {
             Some(Ok(binary)) => Some(miao_term_core::HostConfig {
                 binary,
                 ring: PTY_HOST_RING,
-                timeout: PTY_HOST_TIMEOUT,
+                timeout: self.detached_timeout,
             }),
             Some(Err(e)) => {
                 eprintln!("mtty: cannot install the PTY host: {e}");
@@ -4113,21 +4117,36 @@ impl State {
             self.persist_settings();
         }
         self.save_session_on_exit();
-        {
-            let dir = scrollback_dir();
-            for pane in self.tabs.iter_mut().flat_map(|t| t.panes.iter_mut()) {
-                if let (Some(dir), Some(snapshot)) =
-                    (dir.as_deref(), pane.term.host_snapshot(SCROLLBACK_LINES))
-                {
-                    if let Ok(json) = serde_json::to_vec(&snapshot) {
-                        let _ = write_private(dir, &format!("{}.host.json", pane.id), &json);
-                    }
-                }
-                pane.term.detach_host();
-            }
-        }
+        self.keep_hosts();
         self.sleep.set_awake(false);
         std::process::exit(0);
+    }
+
+    /// Save each hosted pane's exact screen and output offset and detach its
+    /// host, so the next launch reattaches (ADR 0041). Call after
+    /// `save_session_on_exit`, which clears the folder these go to.
+    fn keep_hosts(&mut self) {
+        let dir = scrollback_dir();
+        for pane in self.tabs.iter_mut().flat_map(|t| t.panes.iter_mut()) {
+            if let (Some(dir), Some(snapshot)) =
+                (dir.as_deref(), pane.term.host_snapshot(SCROLLBACK_LINES))
+            {
+                if let Ok(json) = serde_json::to_vec(&snapshot) {
+                    let _ = write_private(dir, &format!("{}.host.json", pane.id), &json);
+                }
+            }
+            pane.term.detach_host();
+        }
+    }
+
+    /// How an ordinary quit leaves hosted programs: running for the next
+    /// launch with `keep-sessions-on-quit`, ended otherwise.
+    fn leave_hosts(&mut self) {
+        if self.keep_sessions_on_quit {
+            self.keep_hosts();
+        } else {
+            self.end_hosts();
+        }
     }
 
     /// The app is quitting without keeping sessions: end every hosted
@@ -5738,7 +5757,7 @@ impl State {
                     self.persist_settings();
                 }
                 self.save_session_on_exit();
-                self.end_hosts();
+                self.leave_hosts();
                 self.sleep.set_awake(false);
                 std::process::exit(0);
             }
@@ -13451,6 +13470,8 @@ impl ApplicationHandler<HostEvent> for Host {
             prevent_sleep: cfg.prevent_sleep,
             restore_scrollback: cfg.restore_scrollback,
             pty_host: cfg.pty_host,
+            keep_sessions_on_quit: cfg.keep_sessions_on_quit,
+            detached_timeout: cfg.detached_timeout,
             recovered: Vec::new(),
             scrollback_saved_at: Instant::now(),
             sleep: miao_term_ui::agentloop::SleepGuard::new(),
@@ -14022,7 +14043,7 @@ impl ApplicationHandler<HostEvent> for Host {
                     state.persist_settings();
                 }
                 state.save_session_on_exit();
-                state.end_hosts();
+                state.leave_hosts();
                 event_loop.exit();
             }
             WindowEvent::Focused(f) => {
@@ -15667,9 +15688,6 @@ const SCROLLBACK_LINES: usize = 5000;
 
 /// Output a PTY host keeps for reattaching (ADR 0041).
 const PTY_HOST_RING: usize = 8 << 20;
-
-/// How long a PTY host waits for mtty to come back (ADR 0041).
-const PTY_HOST_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// How often terminal contents are saved while mtty runs.
 const SCROLLBACK_SAVE_EVERY: Duration = Duration::from_secs(60);
