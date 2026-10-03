@@ -145,17 +145,39 @@ fn attach_type_detach_and_resume_from_an_offset() {
 
 #[test]
 fn a_short_ring_reports_truncation_with_the_modes() {
+    // Output beyond one frame (`MAX_BATCH`, 256 KiB), so the host splits it and
+    // the 128-byte ring must evict the oldest. The final line stays short so
+    // the replay's tail still names it; a shorter burst can arrive as a single
+    // frame, which the ring always keeps whole, and used to make this race the
+    // reader's chunking (it failed on a loaded macOS runner).
     let host = start(
-        "printf '\\033[?2004h'; i=0; while [ $i -lt 60 ]; do echo line-$i; i=$((i+1)); done; exec cat",
+        "printf '\\033[?2004h'; i=0; while [ $i -lt 59 ]; do \
+         printf 'line-%s %05000d\\n' \"$i\" 0; i=$((i+1)); done; \
+         echo line-59; exec cat",
         128,
         60,
     );
-    std::thread::sleep(Duration::from_millis(500));
-    let (mut s, _) = connect(&host);
-    ToHost::Attach { from: 0 }.write(&mut s).unwrap();
-    let frames = read_until(&mut s, |f| live(f).is_some());
+    // Attach from 0 until the ring has evicted; then it reports the truncation
+    // first and the replay still reaches `line-59`.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let frames = loop {
+        let (mut s, _) = connect(&host);
+        ToHost::Attach { from: 0 }.write(&mut s).unwrap();
+        let frames = read_until(&mut s, |f| live(f).is_some());
+        if matches!(frames.first(), Some(FromHost::Truncated { .. }))
+            && output(&frames).contains("line-59")
+        {
+            break frames;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no truncation reaching line-59 within the deadline; first frame: {:?}",
+            frames.first()
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
     let FromHost::Truncated { oldest, modes } = &frames[0] else {
-        panic!("expected truncation first: {:?}", frames[0]);
+        unreachable!("checked above")
     };
     assert!(*oldest > 0);
     assert_eq!(Modes::decode(modes).unwrap().get(2004), Some(true));
@@ -163,7 +185,6 @@ fn a_short_ring_reports_truncation_with_the_modes() {
         FromHost::Output { offset, .. } => assert_eq!(offset, oldest),
         other => panic!("{other:?}"),
     }
-    assert!(output(&frames).contains("line-59"));
 }
 
 #[test]
