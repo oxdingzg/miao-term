@@ -412,14 +412,37 @@ impl ATerm {
         self.term.mode().contains(TermMode::BRACKETED_PASTE)
     }
 
+    /// Kitty keyboard protocol flags: bit 0 disambiguate, bit 1 event types,
+    /// bit 2 alternate keys, bit 3 all keys, bit 4 associated text.
+    pub fn kitty_flags(&self) -> u8 {
+        let mode = self.term.mode();
+        let mut flags = 0;
+        if mode.contains(TermMode::DISAMBIGUATE_ESC_CODES) {
+            flags |= 1;
+        }
+        if mode.contains(TermMode::REPORT_EVENT_TYPES) {
+            flags |= 2;
+        }
+        if mode.contains(TermMode::REPORT_ALTERNATE_KEYS) {
+            flags |= 4;
+        }
+        if mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC) {
+            flags |= 8;
+        }
+        if mode.contains(TermMode::REPORT_ASSOCIATED_TEXT) {
+            flags |= 16;
+        }
+        flags
+    }
+
     /// Kitty keyboard protocol: disambiguate escape codes (CSI-u).
     pub fn kitty_disambiguate(&self) -> bool {
-        self.term.mode().contains(TermMode::DISAMBIGUATE_ESC_CODES)
+        self.kitty_flags() & 1 != 0
     }
 
     /// Kitty keyboard protocol: report key event types (press/repeat/release).
     pub fn kitty_report_event_types(&self) -> bool {
-        self.term.mode().contains(TermMode::REPORT_EVENT_TYPES)
+        self.kitty_flags() & 2 != 0
     }
 
     /// Mouse reporting mode the application asked for, if any.

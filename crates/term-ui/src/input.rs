@@ -69,13 +69,86 @@ fn function_key(f: u8, n: u8) -> Option<String> {
     })
 }
 
+/// Kitty keyboard protocol flags, as `CSI > flags u` sets them.
+pub const KITTY_DISAMBIGUATE: u8 = 1;
+pub const KITTY_REPORT_EVENTS: u8 = 2;
+pub const KITTY_REPORT_ALTERNATE: u8 = 4;
+pub const KITTY_REPORT_ALL_KEYS: u8 = 8;
+pub const KITTY_REPORT_TEXT: u8 = 16;
+
 /// Escape sequence options for a key press.
 #[derive(Clone, Copy, Default)]
 pub struct EncodeOpts {
     pub app_cursor: bool,
     pub bracketed: bool,
-    pub kitty: bool,
+    /// Kitty keyboard protocol flags; 0 is off.
+    pub kitty: u8,
+    /// Event type when [`KITTY_REPORT_EVENTS`] is requested: 1 press,
+    /// 2 repeat, 3 release (0 is treated as 1).
+    pub event: u8,
     pub has_selection: bool,
+}
+
+/// The kitty `;modifiers[:event]` field; empty when both are the defaults.
+fn kitty_mods(n: u8, event: u8, report_events: bool) -> String {
+    if report_events {
+        format!(";{n}:{}", if event == 0 { 1 } else { event })
+    } else if n > 1 {
+        format!(";{n}")
+    } else {
+        String::new()
+    }
+}
+
+/// `CSI codepoint ; modifiers u`.
+fn kitty_csi_u(cp: u32, n: u8, event: u8, report_events: bool) -> Vec<u8> {
+    format!("\x1b[{cp}{}u", kitty_mods(n, event, report_events)).into_bytes()
+}
+
+/// `CSI code ; modifiers letter`; the leading `1` goes with no modifiers.
+fn kitty_letter(code: u8, letter: char, n: u8, event: u8, report_events: bool) -> Vec<u8> {
+    let m = kitty_mods(n, event, report_events);
+    if m.is_empty() {
+        format!("\x1b[{letter}").into_bytes()
+    } else {
+        format!("\x1b[{code}{m}{letter}").into_bytes()
+    }
+}
+
+/// `CSI code ; modifiers ~`.
+fn kitty_tilde(code: u8, n: u8, event: u8, report_events: bool) -> Vec<u8> {
+    format!("\x1b[{code}{}~", kitty_mods(n, event, report_events)).into_bytes()
+}
+
+/// The kitty form of a functional key. Bare Enter, Tab and Backspace keep
+/// their C0 bytes, so the caller handles those.
+fn kitty_functional(kind: KeyKind, n: u8, event: u8, report_events: bool) -> Option<Vec<u8>> {
+    let seq = match kind {
+        KeyKind::Escape => kitty_csi_u(27, n, event, report_events),
+        KeyKind::Enter => kitty_csi_u(13, n, event, report_events),
+        KeyKind::Tab => kitty_csi_u(9, n, event, report_events),
+        KeyKind::Backspace => kitty_csi_u(127, n, event, report_events),
+        KeyKind::Up => kitty_letter(1, 'A', n, event, report_events),
+        KeyKind::Down => kitty_letter(1, 'B', n, event, report_events),
+        KeyKind::Right => kitty_letter(1, 'C', n, event, report_events),
+        KeyKind::Left => kitty_letter(1, 'D', n, event, report_events),
+        KeyKind::Home => kitty_letter(1, 'H', n, event, report_events),
+        KeyKind::End => kitty_letter(1, 'F', n, event, report_events),
+        KeyKind::Insert => kitty_tilde(2, n, event, report_events),
+        KeyKind::Delete => kitty_tilde(3, n, event, report_events),
+        KeyKind::PageUp => kitty_tilde(5, n, event, report_events),
+        KeyKind::PageDown => kitty_tilde(6, n, event, report_events),
+        // F3 is `13 ~` here; `CSI R` would clash with the cursor report.
+        KeyKind::F(3) => kitty_tilde(13, n, event, report_events),
+        KeyKind::F(f) if (1..=4).contains(&f) => {
+            kitty_letter(1, (b'P' + f - 1) as char, n, event, report_events)
+        }
+        KeyKind::F(5) => kitty_tilde(15, n, event, report_events),
+        KeyKind::F(f) if (6..=10).contains(&f) => kitty_tilde(f + 11, n, event, report_events),
+        KeyKind::F(f) if f == 11 || f == 12 => kitty_tilde(f + 12, n, event, report_events),
+        _ => return None,
+    };
+    Some(seq)
 }
 
 /// Plain text (a typed character / IME commit).
@@ -102,24 +175,41 @@ pub fn encode_key(kind: KeyKind, mods: Modifiers, opts: EncodeOpts) -> Vec<u8> {
     }
     let mut out = Vec::new();
 
-    // Kitty keyboard protocol: disambiguate special keys and Ctrl+keys as CSI-u.
-    if opts.kitty {
+    // Kitty keyboard protocol: disambiguate escape codes, report every key as
+    // an escape code, and carry event types, as the requested flags ask.
+    let flags = opts.kitty;
+    if flags != 0 {
         let n = mods.number();
-        let special = match kind {
-            KeyKind::Escape => Some(27u32),
-            KeyKind::Enter => Some(13),
-            KeyKind::Tab => Some(9),
-            KeyKind::Backspace => Some(127),
-            _ => None,
-        };
-        if let Some(cp) = special {
-            if n > 1 {
-                return format!("\x1b[{cp};{n}u").into_bytes();
+        let report_events = (flags & KITTY_REPORT_EVENTS) != 0;
+        let disambiguate = (flags & KITTY_DISAMBIGUATE) != 0;
+        let all_keys = (flags & KITTY_REPORT_ALL_KEYS) != 0;
+        if all_keys {
+            if let KeyKind::Char(c) = kind {
+                return kitty_csi_u(c.to_ascii_lowercase() as u32, n, opts.event, report_events);
             }
         }
-        if mods.ctrl {
+        if disambiguate {
+            if kind == KeyKind::Escape {
+                return kitty_csi_u(27, n, opts.event, report_events);
+            }
             if let KeyKind::Char(c) = kind {
-                return format!("\x1b[{};{n}u", c as u32).into_bytes();
+                if mods.ctrl {
+                    return kitty_csi_u(
+                        c.to_ascii_lowercase() as u32,
+                        n,
+                        opts.event,
+                        report_events,
+                    );
+                }
+            }
+        }
+        // Functional keys take the kitty forms, but bare Enter, Tab and
+        // Backspace keep their C0 bytes.
+        let bare = !(mods.shift || mods.alt || mods.ctrl);
+        let c0 = matches!(kind, KeyKind::Enter | KeyKind::Tab | KeyKind::Backspace);
+        if (disambiguate || all_keys) && !(c0 && bare) {
+            if let Some(seq) = kitty_functional(kind, n, opts.event, report_events) {
+                return seq;
             }
         }
     }
@@ -285,6 +375,76 @@ mod tests {
     fn paste_normalizes_newlines() {
         assert_eq!(encode_paste("a\nb", false), b"a\rb");
         assert_eq!(encode_paste("a", true), b"\x1b[200~a\x1b[201~");
+    }
+
+    fn kitty(flags: u8) -> EncodeOpts {
+        EncodeOpts {
+            kitty: flags,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn kitty_disambiguates_escape_ctrl_and_function_keys() {
+        let opts = kitty(KITTY_DISAMBIGUATE);
+        assert_eq!(
+            encode_key(KeyKind::Escape, Modifiers::default(), opts),
+            b"\x1b[27u"
+        );
+        assert_eq!(
+            encode_key(KeyKind::F(3), Modifiers::default(), opts),
+            b"\x1b[13~"
+        );
+        assert_eq!(
+            encode_key(KeyKind::F(1), Modifiers::default(), opts),
+            b"\x1b[P"
+        );
+        let ctrl = Modifiers {
+            ctrl: true,
+            ..Default::default()
+        };
+        assert_eq!(encode_key(KeyKind::Char('a'), ctrl, opts), b"\x1b[97;5u");
+        let shift = Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        assert_eq!(encode_key(KeyKind::Tab, shift, opts), b"\x1b[9;2u");
+        // Bare Enter, Tab and Backspace keep their C0 bytes.
+        assert_eq!(
+            encode_key(KeyKind::Enter, Modifiers::default(), opts),
+            b"\r"
+        );
+        assert_eq!(encode_key(KeyKind::Tab, Modifiers::default(), opts), b"\t");
+    }
+
+    #[test]
+    fn kitty_reports_event_types_when_asked() {
+        let ctrl = Modifiers {
+            ctrl: true,
+            ..Default::default()
+        };
+        let opts = EncodeOpts {
+            kitty: KITTY_DISAMBIGUATE | KITTY_REPORT_EVENTS,
+            event: 2,
+            ..Default::default()
+        };
+        assert_eq!(encode_key(KeyKind::Char('a'), ctrl, opts), b"\x1b[97;5:2u");
+        let opts = EncodeOpts { event: 3, ..opts };
+        assert_eq!(encode_key(KeyKind::Char('a'), ctrl, opts), b"\x1b[97;5:3u");
+    }
+
+    #[test]
+    fn kitty_all_keys_encodes_text_keys() {
+        let opts = kitty(KITTY_REPORT_ALL_KEYS);
+        assert_eq!(
+            encode_key(KeyKind::Char('a'), Modifiers::default(), opts),
+            b"\x1b[97u"
+        );
+        let shift = Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        assert_eq!(encode_key(KeyKind::Char('A'), shift, opts), b"\x1b[97;2u");
     }
 
     #[test]

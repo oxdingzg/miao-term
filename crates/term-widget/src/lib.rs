@@ -14676,18 +14676,19 @@ impl ApplicationHandler<HostEvent> for Host {
                     state.window.request_redraw();
                 } else {
                     // winit emits a `KeyboardInput` for key-up as well as key-down
-                    // (macOS always does). `encode_key` returns an escape sequence
-                    // for Enter/Tab/Backspace/arrows no matter the state, so acting
-                    // on releases sent every special key twice — one Return became
-                    // a blank line. Characters were unaffected because `Char`
-                    // encodes to nothing there. Only presses carry input.
-                    if event.state != ElementState::Pressed {
-                        return;
-                    }
+                    // (macOS always does). `encode_key` returns a sequence for
+                    // special keys no matter the state, so acting on releases sent
+                    // every key twice — one Return became a blank line. Releases
+                    // are input only when the app asked for kitty event types.
                     let active = state
                         .tabs
                         .get(state.active_tab)
                         .and_then(|t| t.panes.iter().find(|p| p.id == t.active));
+                    let kitty = active.map(|p| p.term.screen().kitty_flags()).unwrap_or(0);
+                    let pressed = event.state == ElementState::Pressed;
+                    if !pressed && (kitty & input::KITTY_REPORT_EVENTS) == 0 {
+                        return;
+                    }
                     let mods = input::Modifiers {
                         ctrl: state.mods.control_key(),
                         alt: state.mods.alt_key(),
@@ -14701,9 +14702,14 @@ impl ApplicationHandler<HostEvent> for Host {
                         bracketed: active
                             .map(|p| p.term.screen().bracketed_paste())
                             .unwrap_or(false),
-                        kitty: active
-                            .map(|p| p.term.screen().kitty_disambiguate())
-                            .unwrap_or(false),
+                        kitty,
+                        event: if !pressed {
+                            3
+                        } else if event.repeat {
+                            2
+                        } else {
+                            1
+                        },
                         has_selection: state.selection.is_some(),
                     };
                     let kind = winit_key_kind(&event);
@@ -14719,10 +14725,11 @@ impl ApplicationHandler<HostEvent> for Host {
                     }
                     // Special keys are encoded below; only plain text keys (letters,
                     // space, symbols) carry a `text` payload to send here — otherwise
-                    // Enter/Tab/etc. would be sent twice.
+                    // Enter/Tab/etc. would be sent twice. With kitty's "all keys as
+                    // escape codes" the key is encoded below instead.
                     let special = !matches!(kind, input::KeyKind::Char(_) | input::KeyKind::Other);
                     let mut bytes = Vec::new();
-                    if !special {
+                    if !special && pressed && (kitty & input::KITTY_REPORT_ALL_KEYS) == 0 {
                         if let Some(text) = &event.text {
                             if !mods.ctrl && !mods.sup && !text.is_empty() {
                                 bytes.extend_from_slice(&input::encode_text(text));
