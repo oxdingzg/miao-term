@@ -136,6 +136,7 @@ impl Terminal {
 
         let shell_path = shell.unwrap_or_else(default_shell);
         let mut cmd = CommandBuilder::new(&shell_path);
+        cmd.args(crate::shell::startup_args(&shell_path));
         // Inherit the current environment (PATH, MTTY_SOCKET, …), then override.
         for (k, v) in std::env::vars() {
             cmd.env(k, v);
