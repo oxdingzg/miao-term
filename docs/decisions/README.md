@@ -50,3 +50,4 @@ Docs are English by default; keep a Simplified Chinese version in sync
 | [0040](./0040-ai-native-workspace.md) | AI-native workspace: agent edits, ACP and context hand-off | accepted |
 | [0041](./0041-pty-host.md) | Panes survive an app restart (per-pane PTY host) | accepted |
 | [0042](./0042-agent-resume-quota.md) | Agent session resume and quota display | accepted |
+| [0043](./0043-windows-update-transaction.md) | Transactional Windows update helper | accepted |

@@ -20,7 +20,8 @@ fn screen_text(term: &Terminal) -> String {
 fn conpty_spawns_shell_and_echoes() {
     let mut term = Terminal::new(
         Some("cmd.exe".to_string()),
-        100,
+        // Keep the checkout prompt and command on one ConPTY input line.
+        240,
         30,
         2000,
         None,
@@ -36,7 +37,7 @@ fn conpty_spawns_shell_and_echoes() {
     while Instant::now() < deadline {
         term.process_pending();
         text = screen_text(&term);
-        if text.contains("CONPTY_OK") {
+        if text.lines().any(|line| line.trim() == "CONPTY_OK") {
             break;
         }
         if last_send.elapsed() >= Duration::from_millis(800) {
@@ -49,7 +50,7 @@ fn conpty_spawns_shell_and_echoes() {
     term.write(b"exit\r\n");
 
     assert!(
-        text.contains("CONPTY_OK"),
+        text.lines().any(|line| line.trim() == "CONPTY_OK"),
         "expected echo output; screen was:\n{text}"
     );
 }
@@ -118,7 +119,8 @@ fn conpty_uses_current_user_environment_and_explicit_overrides() {
     ] {
         let mut term = Terminal::new(
             Some("cmd.exe".into()),
-            100,
+            // Long checkout paths must not wrap the echoed command.
+            240,
             30,
             2000,
             None,

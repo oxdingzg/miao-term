@@ -110,6 +110,20 @@ error = true
 # command = ["gemini", "--experimental-acp"]
 ```
 
+
+可选 `env` 会传给 Agent 进程。`auth-method` 指定 Agent 公布的认证方式 ID，ACP 窗口也提供认证选择器。
+`session-id` 在 Agent 声明支持 `loadSession` 时恢复已有会话；不支持时会显示错误。
+启动对话框也可以输入会话 ID。
+
+```toml
+# env = { EXAMPLE_SETTING = "value" }
+# auth-method = "<agent-auth-method-id>"
+# session-id = "<agent-session-id>"
+```
+
+ACP 读文件会优先读取编辑器中的未保存内容。写文件会打开修改提案：“接受并保存”实际写入文件后才向 Agent
+报告成功；“拒绝”保留磁盘原文。终端命令需要权限确认，输出在 ACP 窗口显示。
+
 ### 更新检查
 
 **你不主动查，它就一个请求都不发。** mtty 启动时不做任何请求;检查由菜单里的「Check for Updates」

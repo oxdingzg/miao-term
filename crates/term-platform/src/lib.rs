@@ -182,10 +182,38 @@ pub fn clipboard_image() -> Option<Vec<u8>> {
     {
         macos::clipboard_image()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    {
+        // Windows uses the native clipboard; Linux uses X11. Wayland images
+        // are read by the host's existing data device on its own connection.
+        let image = arboard::Clipboard::new().ok()?.get_image().ok()?;
+        rgba_png(image.width, image.height, &image.bytes)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         None
     }
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows", test))]
+fn rgba_png(width: usize, height: usize, bytes: &[u8]) -> Option<Vec<u8>> {
+    use image::ImageEncoder;
+    let width = u32::try_from(width).ok()?;
+    let height = u32::try_from(height).ok()?;
+    if width == 0
+        || height == 0
+        || bytes.len()
+            != (width as usize)
+                .checked_mul(height as usize)?
+                .checked_mul(4)?
+    {
+        return None;
+    }
+    let mut png = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut png)
+        .write_image(bytes, width, height, image::ExtendedColorType::Rgba8)
+        .ok()?;
+    Some(png)
 }
 
 /// Escape a string for an AppleScript double-quoted literal.
@@ -265,5 +293,17 @@ exit 7
     #[test]
     fn escapes_applescript_strings() {
         assert_eq!(escape("a\"b\\c"), "a\\\"b\\\\c");
+    }
+
+    #[test]
+    fn clipboard_rgba_encodes_exact_pixels_and_rejects_invalid_dimensions() {
+        let pixels = [255, 0, 0, 255, 0, 255, 0, 128];
+        let png = rgba_png(2, 1, &pixels).unwrap();
+        let decoded = image::load_from_memory(&png).unwrap().to_rgba8();
+        assert_eq!(decoded.dimensions(), (2, 1));
+        assert_eq!(decoded.as_raw(), &pixels);
+        assert!(rgba_png(0, 1, &[]).is_none());
+        assert!(rgba_png(2, 1, &pixels[..4]).is_none());
+        assert!(rgba_png(usize::MAX, 1, &pixels).is_none());
     }
 }

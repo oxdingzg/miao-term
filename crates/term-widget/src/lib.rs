@@ -43,6 +43,7 @@ mod drag;
 mod editor_pane;
 #[cfg(target_os = "macos")]
 mod macos_url;
+pub mod resource_metrics;
 mod session;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod wayland_dnd;
@@ -281,6 +282,22 @@ mod appmenu {
 /// (ADR 0036). The clipboard is global, so every pane shares one path.
 fn clipboard_image_path() -> std::path::PathBuf {
     std::env::temp_dir().join(format!("mtty-clipboard-{}.png", std::process::id()))
+}
+
+fn same_file_path(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let resolve = |path: &std::path::Path| {
+        std::fs::canonicalize(path)
+            .ok()
+            .or_else(|| {
+                Some(
+                    std::fs::canonicalize(path.parent()?)
+                        .ok()?
+                        .join(path.file_name()?),
+                )
+            })
+            .or_else(|| std::path::absolute(path).ok())
+    };
+    a == b || matches!((resolve(a), resolve(b)), (Some(a), Some(b)) if a == b)
 }
 
 fn export_pane_environment() {
@@ -1071,6 +1088,19 @@ enum JobDone {
         path: String,
         text: String,
     },
+    AcpRead {
+        path: String,
+        reply: std::sync::mpsc::Sender<Option<String>>,
+    },
+    AcpWrite {
+        path: String,
+        text: String,
+        reply: std::sync::mpsc::Sender<bool>,
+    },
+    AcpTerminal {
+        id: String,
+        output: String,
+    },
     /// A response to one of our ACP requests.
     AcpResponse {
         id: u64,
@@ -1140,6 +1170,14 @@ struct AcpSession {
     transcript: String,
     prompt: String,
     status: String,
+    initialize_id: u64,
+    authenticate_id: Option<u64>,
+    connect_id: Option<u64>,
+    auth_method: Option<String>,
+    auth_methods: Vec<(String, String)>,
+    resume_id: Option<String>,
+    load_supported: bool,
+    terminals: std::collections::BTreeMap<String, String>,
 }
 
 /// The ACP start form: a configured agent, or a typed command.
@@ -1147,6 +1185,7 @@ struct AcpSession {
 struct AcpStart {
     index: usize,
     command: String,
+    session_id: String,
     error: Option<String>,
 }
 
@@ -1193,10 +1232,32 @@ impl miao_term_acp::Handler for AcpBridge {
         self.send(JobDone::AcpUpdate(format!("\n[error] {message}\n")));
     }
     fn read_text_file(&self, path: &str) -> Option<String> {
-        std::fs::read_to_string(path).ok()
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.send(JobDone::AcpRead {
+            path: path.into(),
+            reply: tx,
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(30))
+            .ok()
+            .flatten()
+            .or_else(|| std::fs::read_to_string(path).ok())
     }
     fn write_text_file(&self, path: &str, content: &str) -> bool {
-        std::fs::write(path, content).is_ok()
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.send(JobDone::AcpWrite {
+            path: path.into(),
+            text: content.into(),
+            reply: tx,
+        });
+        // Success means the user accepted and the file actually reached disk.
+        // The UI owns the sender, so closing the pane/app also ends the wait.
+        rx.recv().unwrap_or(false)
+    }
+    fn on_terminal_output(&self, _session: &str, id: &str, output: &str) {
+        self.send(JobDone::AcpTerminal {
+            id: id.into(),
+            output: output.into(),
+        });
     }
     fn request_permission(&self, request: &serde_json::Value) -> bool {
         let question = acp_permission_text(request);
@@ -1557,6 +1618,7 @@ struct State {
     key_import: Option<KeyImportDialog>,
     /// A running ACP agent session (ADR 0040, A2).
     acp: Option<AcpSession>,
+    acp_writes: HashMap<String, (u64, std::sync::mpsc::Sender<bool>)>,
     /// The ACP start form, if open.
     acp_start: Option<AcpStart>,
     /// A permission request the agent is waiting on.
@@ -2560,6 +2622,7 @@ impl State {
 
     /// Render the active pane into the PiP window.
     fn render_pip(&mut self) {
+        let _render_timer = resource_metrics::RenderTimer::start();
         let Some(pip) = self.pip.as_mut() else {
             return;
         };
@@ -3023,7 +3086,14 @@ impl State {
         // clears any earlier image, so a later empty paste cannot read a stale
         // one.
         let path = clipboard_image_path();
-        if let Some(image) = miao_term_platform::clipboard_image() {
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let image = match self.dnd.as_mut() {
+            Some(dnd) => dnd.selection_image(),
+            None => miao_term_platform::clipboard_image(),
+        };
+        #[cfg(not(all(unix, not(target_os = "macos"))))]
+        let image = miao_term_platform::clipboard_image();
+        if let Some(image) = image {
             if std::fs::write(&path, image).is_ok() {
                 self.paste("");
                 return;
@@ -3168,6 +3238,7 @@ impl State {
     }
 
     fn render(&mut self) {
+        let _render_timer = resource_metrics::RenderTimer::start();
         self.save_scrollback_periodically();
         if self.focused {
             if let Some(tab) = self.tabs.get_mut(self.active_tab) {
@@ -5500,6 +5571,15 @@ impl State {
                 self.acp_start = Some(AcpStart::default());
             }
             Cmd::AcceptAgentEdit => {
+                if self
+                    .active_editor()
+                    .is_some_and(|ed| self.acp_writes.contains_key(&ed.id))
+                {
+                    self.save_active_editor();
+                    self.poll_acp_writes();
+                    self.window.request_redraw();
+                    return;
+                }
                 if let Some(ed) = self.active_editor_mut() {
                     ed.accept_proposal();
                 }
@@ -8592,6 +8672,7 @@ impl State {
             return;
         };
         let (tx, rx) = std::sync::mpsc::channel();
+        let proxy = self.proxy.clone();
         std::thread::spawn(move || {
             let out = miao_term_platform::background_command("curl")
                 .args(["-fsSL", "--max-time", "8", &url])
@@ -8618,6 +8699,9 @@ impl State {
                 Err(error) => UpdateResult::Failed(error.to_string()),
             };
             let _ = tx.send(result);
+            // An unfocused window can be waiting without redraws or PTY
+            // output. Deliver the result even while its shell is idle.
+            let _ = proxy.send_event(HostEvent::Wake);
         });
         self.update_rx = Some(rx);
     }
@@ -11719,6 +11803,10 @@ impl State {
     /// Open `path` in an editor pane in a new tab, or switch to the pane
     /// that already has it.
     fn open_editor_pane(&mut self, path: &std::path::Path) -> bool {
+        self.open_editor_pane_impl(path, false)
+    }
+
+    fn open_editor_pane_impl(&mut self, path: &std::path::Path, create: bool) -> bool {
         let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
         // The same file by another name (a symlinked /tmp, as a language
         // server may report it) is the same pane.
@@ -11740,7 +11828,18 @@ impl State {
             return true;
         }
         let id = gen_id();
-        match editor_pane::EditorPane::open(id.clone(), &path) {
+        let opened = if create
+            && std::fs::metadata(&path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+        {
+            Ok(editor_pane::EditorPane::with_doc(
+                id.clone(),
+                path.clone(),
+                miao_term_editor::Document::from_text(""),
+            ))
+        } else {
+            editor_pane::EditorPane::open(id.clone(), &path)
+        };
+        match opened {
             Ok(mut ed) => {
                 ed.set_vim(self.editor_vim);
                 let title = ed.title();
@@ -11960,15 +12059,15 @@ impl State {
         edits: Vec<miao_term_mtp::ProposedEdit>,
         text: Option<String>,
         label: Option<String>,
-    ) {
+    ) -> bool {
         if let Some(p) = &path {
             let open = self.tabs.iter().any(|t| {
                 t.editors
                     .iter()
-                    .any(|e| e.path.to_string_lossy() == p.as_str())
+                    .any(|e| e.remote.is_none() && same_file_path(&e.path, std::path::Path::new(p)))
             });
             if !open {
-                self.open_editor(std::path::PathBuf::from(p));
+                self.open_editor_pane_impl(std::path::Path::new(p), text.is_some());
             }
         }
         let target = pane.or_else(|| match &path {
@@ -11976,24 +12075,46 @@ impl State {
                 .tabs
                 .iter()
                 .flat_map(|t| t.editors.iter())
-                .find(|e| e.path.to_string_lossy() == p.as_str())
+                .find(|e| e.remote.is_none() && same_file_path(&e.path, std::path::Path::new(p)))
                 .map(|e| e.id.clone()),
             None => self.tabs.get(self.active_tab).map(|t| t.active.clone()),
         });
         let Some(target) = target else {
-            return;
+            return false;
         };
         let mut applied = false;
         for tab in &mut self.tabs {
             if let Some(ed) = tab.editors.iter_mut().find(|e| e.id == target) {
-                let changes: Vec<(usize, usize, String)> = match text {
-                    Some(t) => vec![(0, ed.doc.rope().len_chars(), t)],
-                    None => edits
-                        .iter()
-                        .map(|e| (e.start, e.end, e.text.clone()))
-                        .collect(),
-                };
-                ed.propose(changes, label.clone());
+                if text.is_none() {
+                    let mut ranges: Vec<_> = edits.iter().map(|e| (e.start, e.end)).collect();
+                    ranges.sort_unstable();
+                    let len = ed.doc.rope().len_chars();
+                    let mut end = 0;
+                    for (from, to) in ranges {
+                        if from < end || from > to || to > len {
+                            self.show_notice(
+                                miao_term_ui::i18n::t(
+                                    self.lang,
+                                    "Agent edit rejected: invalid or overlapping character ranges.",
+                                    "已拒绝 Agent 修改：字符范围无效或相互重叠。",
+                                )
+                                .into(),
+                            );
+                            return false;
+                        }
+                        end = to;
+                    }
+                }
+                match text {
+                    Some(t) => ed.propose_text(t, label.clone()),
+                    None => ed.propose(
+                        edits
+                            .iter()
+                            .map(|e| (e.start, e.end, e.text.clone()))
+                            .collect(),
+                        label.clone(),
+                    ),
+                }
                 applied = true;
                 break;
             }
@@ -12008,13 +12129,30 @@ impl State {
             self.show_notice(msg);
             self.window.request_redraw();
         }
+        applied
+    }
+
+    fn connect_acp_session(acp: &mut AcpSession) {
+        acp.session = None;
+        acp.connect_id = if let Some(session) = &acp.resume_id {
+            if !acp.load_supported {
+                acp.status = "session resume unsupported".into();
+                acp.transcript
+                    .push_str("\n[error] This agent does not support session/load.\n");
+                return;
+            }
+            Some(acp.client.load_session(session, &acp.cwd))
+        } else {
+            Some(acp.client.new_session(&acp.cwd))
+        };
+        acp.status = "starting session".into();
     }
 
     /// Handle an ACP response: start a session after `initialize`, remember
     /// the session id, and note a finished turn (ADR 0040, A2).
     fn acp_response(
         &mut self,
-        _id: u64,
+        id: u64,
         result: serde_json::Value,
         error: Option<serde_json::Value>,
     ) {
@@ -12027,13 +12165,62 @@ impl State {
                 .and_then(|v| v.as_str())
                 .unwrap_or("error");
             acp.transcript.push_str(&format!("\n[error] {msg}\n"));
+            acp.status = msg.to_string();
             self.window.request_redraw();
             return;
         }
-        if result.get("protocolVersion").is_some() {
-            let cwd = acp.cwd.clone();
-            acp.client.new_session(&cwd);
-            acp.status = "starting session".into();
+        if id == acp.initialize_id {
+            acp.load_supported = result
+                .pointer("/agentCapabilities/loadSession")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            acp.auth_methods = result
+                .get("authMethods")
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|v| {
+                    Some((
+                        v.get("id")?.as_str()?.into(),
+                        v.get("name")?.as_str()?.into(),
+                    ))
+                })
+                .collect();
+            if let Some(method) = &acp.auth_method {
+                if acp.auth_methods.iter().any(|(id, _)| id == method) {
+                    acp.authenticate_id = Some(acp.client.authenticate(method));
+                    acp.status = "authenticating".into();
+                } else {
+                    acp.status = "unknown authentication method".into();
+                    acp.transcript.push_str(
+                        "\n[error] Configured auth-method was not advertised by this agent.\n",
+                    );
+                }
+            } else {
+                Self::connect_acp_session(acp);
+            }
+            self.window.request_redraw();
+            return;
+        }
+        if acp.authenticate_id == Some(id) {
+            acp.authenticate_id = None;
+            Self::connect_acp_session(acp);
+            self.window.request_redraw();
+            return;
+        }
+        if acp.connect_id == Some(id) {
+            acp.connect_id = None;
+            acp.session = result
+                .get("sessionId")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+                .or_else(|| acp.resume_id.clone());
+            acp.status = if acp.session.is_some() {
+                "ready"
+            } else {
+                "missing session id"
+            }
+            .into();
             self.window.request_redraw();
             return;
         }
@@ -12062,9 +12249,17 @@ impl State {
         let program = program.clone();
         let args = args.to_vec();
         let bridge = Arc::new(AcpBridge::new(self.jobs_tx.clone(), self.proxy.clone()));
-        match miao_term_acp::Client::spawn(&program, &args, Some(cwd.as_path()), &[], bridge) {
+        let env: Vec<_> = agent.env.into_iter().collect();
+        let resume_id = self
+            .acp_start
+            .as_ref()
+            .map(|s| s.session_id.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .or(agent.session_id);
+        match miao_term_acp::Client::spawn(&program, &args, Some(cwd.as_path()), &env, bridge) {
             Ok(client) => {
-                client.initialize("mtty", env!("CARGO_PKG_VERSION"));
+                client.enable_terminals(&cwd);
+                let initialize_id = client.initialize("mtty", env!("CARGO_PKG_VERSION"));
                 self.acp = Some(AcpSession {
                     client,
                     cwd: cwd.to_string_lossy().into_owned(),
@@ -12072,6 +12267,14 @@ impl State {
                     transcript: format!("[starting {}…]\n", agent.name),
                     prompt: String::new(),
                     status: "initializing".into(),
+                    initialize_id,
+                    authenticate_id: None,
+                    connect_id: None,
+                    auth_method: agent.auth_method,
+                    auth_methods: Vec::new(),
+                    resume_id,
+                    load_supported: false,
+                    terminals: Default::default(),
                 });
                 self.acp_start = None;
                 self.window.set_visible(true);
@@ -12129,6 +12332,15 @@ impl State {
                             }
                         });
                 }
+                ui.add(
+                    egui::TextEdit::singleline(&mut start.session_id)
+                        .hint_text(t(
+                            lang,
+                            "Session ID to resume (optional)",
+                            "要恢复的会话 ID(可选)",
+                        ))
+                        .desired_width(260.0),
+                );
                 if let Some(err) = &start.error {
                     ui.colored_label(egui::Color32::from_rgb(0xbf, 0x61, 0x6a), err);
                 }
@@ -12150,6 +12362,7 @@ impl State {
                 miao_term_config::AcpAgent {
                     name: command[0].clone(),
                     command,
+                    ..Default::default()
                 }
             } else {
                 agents[start.index.min(agents.len() - 1)].clone()
@@ -12164,10 +12377,46 @@ impl State {
     fn acp_window(&mut self, ctx: &egui::Context) {
         use miao_term_ui::i18n::t;
         let lang = self.lang;
+        if let Some(id) = self.acp_writes.keys().next().cloned() {
+            let mut choice = None;
+            egui::Window::new(t(lang, "Review Agent Edit", "审阅 Agent 修改"))
+                .collapsible(false)
+                .show(ctx, |ui| {
+                    ui.label(t(
+                        lang,
+                        "Deleted text is red; proposed text is green in the editor.",
+                        "编辑器中，红色为删除内容，绿色为提议的新内容。",
+                    ));
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button(t(lang, "Accept and Save", "接受并保存"))
+                            .clicked()
+                        {
+                            choice = Some(Cmd::AcceptAgentEdit);
+                        }
+                        if ui.button(t(lang, "Reject", "拒绝")).clicked() {
+                            choice = Some(Cmd::RejectAgentEdit);
+                        }
+                    });
+                });
+            if let Some(command) = choice {
+                if let Some((ti, _)) = self
+                    .tabs
+                    .iter()
+                    .enumerate()
+                    .find(|(_, t)| t.editors.iter().any(|e| e.id == id))
+                {
+                    self.active_tab = ti;
+                    self.tabs[ti].active = id;
+                    self.run_command(command);
+                }
+            }
+        }
         // A permission request is answered first; the agent is waiting.
         if let Some((question, _)) = self.acp_permission.as_ref() {
             let question = question.clone();
             let mut answer = None;
+            let mut cancel = false;
             egui::Window::new(t(lang, "Agent Permission", "Agent 权限"))
                 .collapsible(false)
                 .resizable(false)
@@ -12181,11 +12430,25 @@ impl State {
                         if ui.button(t(lang, "Deny", "拒绝")).clicked() {
                             answer = Some(false);
                         }
+                        if ui.button(t(lang, "Cancel Turn", "取消本轮")).clicked() {
+                            cancel = true;
+                            answer = Some(false);
+                        }
                     });
                 });
             if let Some(allow) = answer {
                 if let Some((_, reply)) = self.acp_permission.take() {
                     let _ = reply.send(allow);
+                }
+            }
+            if cancel {
+                for (_, (_, reply)) in self.acp_writes.drain() {
+                    let _ = reply.send(false);
+                }
+                if let Some(acp) = &self.acp {
+                    if let Some(session) = &acp.session {
+                        acp.client.cancel(session);
+                    }
                 }
             }
             return;
@@ -12194,7 +12457,7 @@ impl State {
             return;
         };
         let mut open = true;
-        let (mut send, mut stop, mut close) = (false, false, false);
+        let (mut send, mut stop, mut close, mut authenticate) = (false, false, false, false);
         egui::Window::new(t(lang, "ACP Agent", "ACP Agent"))
             .collapsible(false)
             .open(&mut open)
@@ -12209,6 +12472,34 @@ impl State {
                         close = true;
                     }
                 });
+                if !acp.auth_methods.is_empty() {
+                    ui.horizontal(|ui| {
+                        egui::ComboBox::from_id_salt("acp-auth-method")
+                            .selected_text(acp.auth_method.as_deref().unwrap_or(t(
+                                lang,
+                                "Authentication",
+                                "认证方式",
+                            )))
+                            .show_ui(ui, |ui| {
+                                for (id, name) in &acp.auth_methods {
+                                    ui.selectable_value(
+                                        &mut acp.auth_method,
+                                        Some(id.clone()),
+                                        name,
+                                    );
+                                }
+                            });
+                        if ui
+                            .add_enabled(
+                                acp.auth_method.is_some(),
+                                egui::Button::new(t(lang, "Authenticate", "认证")),
+                            )
+                            .clicked()
+                        {
+                            authenticate = true;
+                        }
+                    });
+                }
                 egui::ScrollArea::vertical()
                     .max_height(320.0)
                     .stick_to_bottom(true)
@@ -12216,6 +12507,11 @@ impl State {
                         ui.add(egui::Label::new(
                             egui::RichText::new(&acp.transcript).monospace(),
                         ));
+                        for (id, output) in &acp.terminals {
+                            ui.collapsing(format!("Terminal {id}"), |ui| {
+                                ui.label(egui::RichText::new(output).monospace());
+                            });
+                        }
                     });
                 let r = ui.add(
                     egui::TextEdit::singleline(&mut acp.prompt)
@@ -12227,6 +12523,12 @@ impl State {
                     send = true;
                 }
             });
+        if authenticate {
+            if let Some(method) = &acp.auth_method {
+                acp.authenticate_id = Some(acp.client.authenticate(method));
+                acp.status = "authenticating".into();
+            }
+        }
         if send && !acp.prompt.trim().is_empty() {
             if let Some(session) = acp.session.clone() {
                 let text = std::mem::take(&mut acp.prompt);
@@ -12237,11 +12539,15 @@ impl State {
             }
         }
         if stop {
+            for (_, (_, reply)) in self.acp_writes.drain() {
+                let _ = reply.send(false);
+            }
             if let Some(session) = acp.session.clone() {
                 acp.client.cancel(&session);
             }
         }
         if close || !open {
+            self.acp_writes.clear();
             self.acp = None;
         }
     }
@@ -12816,6 +13122,32 @@ impl State {
             self.finish_job(done);
             self.window.request_redraw();
         }
+        self.poll_acp_writes();
+    }
+
+    fn poll_acp_writes(&mut self) {
+        let mut finished = Vec::new();
+        for (id, (revision, _)) in &self.acp_writes {
+            let ed = self
+                .tabs
+                .iter()
+                .flat_map(|t| &t.editors)
+                .find(|ed| &ed.id == id);
+            let result = match ed {
+                None => Some(false),
+                Some(ed) if ed.doc.revision() != *revision => Some(false),
+                Some(ed) if ed.disk.is_some() && !ed.doc.is_modified() => Some(true),
+                Some(_) => None,
+            };
+            if let Some(result) = result {
+                finished.push((id.clone(), result));
+            }
+        }
+        for (id, result) in finished {
+            if let Some((_, reply)) = self.acp_writes.remove(&id) {
+                let _ = reply.send(result);
+            }
+        }
     }
 
     fn finish_job(&mut self, done: JobDone) {
@@ -13084,6 +13416,57 @@ impl State {
             }
             JobDone::AcpDiff { path, text } => {
                 self.apply_proposal(None, Some(path), Vec::new(), Some(text), Some("acp".into()));
+            }
+            JobDone::AcpRead { path, reply } => {
+                let text = self
+                    .tabs
+                    .iter()
+                    .flat_map(|t| &t.editors)
+                    .find(|e| {
+                        e.remote.is_none() && same_file_path(&e.path, std::path::Path::new(&path))
+                    })
+                    .filter(|e| !e.is_view_only())
+                    .map(|e| e.doc.rope().to_string());
+                let _ = reply.send(text);
+            }
+            JobDone::AcpWrite { path, text, reply } => {
+                let wanted = text.clone();
+                let applied = self.apply_proposal(
+                    None,
+                    Some(path.clone()),
+                    Vec::new(),
+                    Some(text),
+                    Some("acp".into()),
+                );
+                let ed = self.tabs.iter().flat_map(|t| &t.editors).find(|e| {
+                    e.remote.is_none() && same_file_path(&e.path, std::path::Path::new(&path))
+                });
+                if applied {
+                    if let Some(ed) = ed {
+                        if ed.disk.is_some()
+                            && !ed.doc.is_modified()
+                            && ed.doc.rope() == wanted.as_str()
+                        {
+                            let _ = reply.send(true);
+                        } else {
+                            self.acp_writes
+                                .insert(ed.id.clone(), (ed.doc.revision(), reply));
+                            self.show_notice(t(self.lang,
+                                "Review the agent edit. Accept saves it; Reject leaves the file unchanged.",
+                                "请审阅 Agent 修改。接受会保存文件；拒绝则保留磁盘原文。").into());
+                        }
+                    } else {
+                        let _ = reply.send(false);
+                    }
+                } else {
+                    let _ = reply.send(false);
+                }
+            }
+            JobDone::AcpTerminal { id, output } => {
+                if let Some(acp) = &mut self.acp {
+                    acp.terminals.insert(id, output);
+                }
+                self.window.request_redraw();
             }
             JobDone::AcpResponse { id, result, error } => self.acp_response(id, result, error),
             JobDone::AcpPermission { question, reply } => {
@@ -13812,6 +14195,7 @@ impl ApplicationHandler<HostEvent> for Host {
             transport_dialog: None,
             key_import: None,
             acp: None,
+            acp_writes: HashMap::new(),
             acp_start: None,
             acp_permission: None,
             acp_agents: cfg.acp.agents.clone(),
@@ -15589,6 +15973,15 @@ fn draw_editor(
     // A pending agent proposal: its changed lines tinted green.
     for c in &d.proposal {
         quads.push(cell(c.row, c.col, c.width, (0x2f, 0x5d, 0x3a, 90)));
+    }
+    for c in &d.deletions {
+        quads.push(cell(c.row, c.col, c.width, (0x6b, 0x2f, 0x3a, 90)));
+        let y = oy + (c.row as f32 + 0.5) * ch;
+        quads.push(Quad::new(
+            (ox + c.col as f32 * cw, y),
+            (ox + (c.col + c.width) as f32 * cw, y + f.scale.max(1.0)),
+            (0xbf, 0x61, 0x6a, 200),
+        ));
     }
     // Find matches under the selection, in the terminal's match colours.
     for (c, current) in ed.match_cells(f.matches, f.current_match) {
@@ -18150,6 +18543,32 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn agent_paths_match_editor_buffers_through_directory_symlinks() {
+        let root = std::env::temp_dir().join(format!("mtty-agent-path-{}", std::process::id()));
+        let actual = root.join("actual");
+        let alias = root.join("alias");
+        std::fs::create_dir_all(&actual).unwrap();
+        std::os::unix::fs::symlink(&actual, &alias).unwrap();
+        // New files must match too, before either spelling exists on disk.
+        assert!(same_file_path(
+            &actual.join("new.txt"),
+            &alias.join("new.txt")
+        ));
+        std::fs::write(actual.join("new.txt"), "unsaved buffer fixture").unwrap();
+        assert!(same_file_path(
+            &actual.join("new.txt"),
+            &alias.join("new.txt")
+        ));
+        assert!(!same_file_path(
+            &actual.join("new.txt"),
+            &alias.join("other.txt")
+        ));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
     fn snippets_run_on_hosts_through_one_quoted_ssh_command() {
         let command = "df -h | grep '/dev' && echo \"$HOME\"";
         let cmd = super::remote_run_command_with(

@@ -4,6 +4,7 @@
 //! hidden behind this type so the app never depends on the parser crate.
 
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
@@ -40,6 +41,8 @@ pub struct Terminal {
     #[allow(dead_code)]
     child: Option<Box<dyn Child + Send + Sync>>,
     rx: Receiver<Incoming>,
+    /// Stop an idle byte-pipe reader when its pane closes or replaces it.
+    reader_stop: Option<std::sync::Arc<AtomicBool>>,
     /// The PTY host, for a pane whose program outlives the app (ADR 0041).
     host: Option<crate::hosted::HostLink>,
     waker: std::sync::Arc<dyn Fn() + Send + Sync>,
@@ -80,24 +83,49 @@ const MAX_CAPTURE: usize = 2 * 1024 * 1024;
 /// master is dropped.
 impl Drop for Terminal {
     fn drop(&mut self) {
+        if let Some(stop) = &self.reader_stop {
+            stop.store(true, Ordering::Release);
+        }
         // Teardown must not block: closing a ConPTY (`ClosePseudoConsole`) waits
         // for the client process to exit, which can stall for minutes on Windows
         // when a shell was running — and closing a tab or quitting the app must
         // never hang. Kill the tree, reap, drain, then close off-thread.
-        #[cfg(windows)]
-        if let Some(pid) = self.child.as_ref().and_then(|c| c.process_id()) {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            let _ = std::process::Command::new("taskkill")
-                .args(["/T", "/F", "/PID", &pid.to_string()])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .creation_flags(CREATE_NO_WINDOW)
-                .status();
-        }
-        if let Some(child) = self.child.as_mut() {
-            let _ = child.kill();
-            let _ = child.wait();
+        // A signal handler or a failed kill must never turn pane teardown into
+        // a blocking wait on the UI thread. Keep the master alive until the
+        // child is reaped, especially for ConPTY.
+        let child = self.child.take();
+        let master = self.master.take();
+        if child.is_some() || master.is_some() {
+            std::thread::spawn(move || {
+                if let Some(mut child) = child {
+                    #[cfg(windows)]
+                    if let Some(pid) = child.process_id() {
+                        use std::os::windows::process::CommandExt;
+                        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+                        let _ = std::process::Command::new("taskkill")
+                            .args(["/T", "/F", "/PID", &pid.to_string()])
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .creation_flags(CREATE_NO_WINDOW)
+                            .status();
+                    }
+                    // portable-pty's graceful Unix kill starts with SIGHUP.
+                    // Closing a pane is final: use the native forceful kill
+                    // for its std child, including shells that trap SIGHUP.
+                    #[cfg(unix)]
+                    if let Some(native) =
+                        (&mut *child as &mut dyn Child).downcast_mut::<std::process::Child>()
+                    {
+                        let _ = std::process::Child::kill(native);
+                    } else {
+                        let _ = child.kill();
+                    }
+                    #[cfg(not(unix))]
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+                drop(master);
+            });
         }
         // A hosted program ends with its pane, unless it was detached.
         if let Some(host) = &self.host {
@@ -111,9 +139,6 @@ impl Drop for Terminal {
         // Drain output the shell already produced (bounded).
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
         while std::time::Instant::now() < deadline && self.rx.try_recv().is_ok() {}
-        if let Some(master) = self.master.take() {
-            std::thread::spawn(move || drop(master));
-        }
     }
 }
 
@@ -310,12 +335,26 @@ fn shell_command(
 fn read_into_channel(
     mut reader: Box<dyn Read + Send>,
     waker: std::sync::Arc<dyn Fn() + Send + Sync>,
-) -> Receiver<Incoming> {
+) -> (Receiver<Incoming>, std::sync::Arc<AtomicBool>) {
     let (tx, rx) = mpsc::sync_channel::<Incoming>(PTY_QUEUE_CHUNKS);
+    let stop = std::sync::Arc::new(AtomicBool::new(false));
+    let reader_stop = stop.clone();
     thread::spawn(move || {
         let mut buf = [0u8; PTY_READ_BYTES];
-        loop {
+        while !reader_stop.load(Ordering::Acquire) {
             match reader.read(&mut buf) {
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    // Serial reads time out while the device is idle. Keep the
+                    // connection alive and avoid spinning for nonblocking pipes.
+                    thread::sleep(std::time::Duration::from_millis(10));
+                    continue;
+                }
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
                     if tx.send(Incoming::Bytes(buf[..n].to_vec())).is_err() {
@@ -326,7 +365,7 @@ fn read_into_channel(
             }
         }
     });
-    rx
+    (rx, stop)
 }
 
 /// The process group that owns `pid`'s controlling terminal (`tpgid`).
@@ -474,7 +513,12 @@ impl Terminal {
                     host.send(miao_term_ptyhost::proto::ToHost::Kill);
                 }
                 self.host = None;
-                self.rx = read_into_channel(reader, self.waker.clone());
+                if let Some(stop) = self.reader_stop.take() {
+                    stop.store(true, Ordering::Release);
+                }
+                let (rx, stop) = read_into_channel(reader, self.waker.clone());
+                self.rx = rx;
+                self.reader_stop = Some(stop);
                 self.writer = writer;
                 self.master = Some(master);
                 self.child = Some(child);
@@ -528,8 +572,8 @@ impl Terminal {
         child: Option<Box<dyn Child + Send + Sync>>,
         cwd: Option<String>,
     ) -> Self {
-        let rx = read_into_channel(reader, waker.clone());
-        Self::assemble(
+        let (rx, stop) = read_into_channel(reader, waker.clone());
+        let mut term = Self::assemble(
             ATerm::new(cols, rows, scrollback),
             scrollback,
             rx,
@@ -538,7 +582,9 @@ impl Terminal {
             master,
             child,
             cwd,
-        )
+        );
+        term.reader_stop = Some(stop);
+        term
     }
 
     // A private constructor: the arguments are the terminal's own fields.
@@ -560,6 +606,7 @@ impl Terminal {
             writer,
             child,
             rx,
+            reader_stop: None,
             host: None,
             waker,
             rows,
@@ -1347,6 +1394,71 @@ mod tests {
     use super::*;
 
     #[test]
+    fn pipe_keeps_reading_after_idle_and_interrupted_reads() {
+        struct IntermittentReader(usize);
+        impl Read for IntermittentReader {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                self.0 += 1;
+                match self.0 {
+                    1 => Err(std::io::ErrorKind::Interrupted.into()),
+                    2 => Err(std::io::ErrorKind::TimedOut.into()),
+                    3 => Err(std::io::ErrorKind::WouldBlock.into()),
+                    4 => {
+                        buf[..5].copy_from_slice(b"ready");
+                        Ok(5)
+                    }
+                    _ => Ok(0),
+                }
+            }
+        }
+        let (rx, _stop) =
+            read_into_channel(Box::new(IntermittentReader(0)), std::sync::Arc::new(|| {}));
+        match rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap() {
+            Incoming::Bytes(bytes) => assert_eq!(bytes, b"ready"),
+            _ => panic!("expected pipe bytes"),
+        }
+        assert!(matches!(
+            rx.recv_timeout(std::time::Duration::from_secs(2)),
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        ));
+    }
+
+    #[test]
+    fn closing_idle_pipe_releases_reader_without_waking_ui() {
+        struct IdleReader(mpsc::Sender<()>);
+        impl Read for IdleReader {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::TimedOut.into())
+            }
+        }
+        impl Drop for IdleReader {
+            fn drop(&mut self) {
+                let _ = self.0.send(());
+            }
+        }
+        let (dropped_tx, dropped_rx) = mpsc::channel();
+        let wakes = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = wakes.clone();
+        let term = Terminal::from_pipe(
+            10,
+            5,
+            10,
+            IdleReader(dropped_tx),
+            Box::new(std::io::sink()),
+            std::sync::Arc::new(move || {
+                count.fetch_add(1, Ordering::Relaxed);
+            }),
+        );
+        thread::sleep(std::time::Duration::from_millis(30));
+        assert_eq!(wakes.load(Ordering::Relaxed), 0);
+        drop(term);
+        dropped_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("idle reader closes with its pane");
+        assert_eq!(wakes.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
     fn colour_is_on_by_default_unless_the_user_chose() {
         let set = |names: &'static [&'static str]| move |n: &str| names.contains(&n);
         assert_eq!(default_colour_env(set(&[])), Some(("CLICOLOR", "1")));
@@ -1708,6 +1820,51 @@ mod tests {
         let got = got.map(|g| std::fs::canonicalize(g).unwrap());
         assert_eq!(got, Some(want));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn closing_a_shell_that_ignores_hup_is_prompt_and_reaps_it() {
+        let mut term = Terminal::new(
+            Some("/bin/sh".into()),
+            80,
+            24,
+            100,
+            None,
+            &[],
+            std::sync::Arc::new(|| {}),
+        )
+        .unwrap();
+        let pid = term.child.as_ref().unwrap().process_id().unwrap();
+        term.write(b"trap '' HUP; printf '%s%s\\n' close- ready\r");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let ready = |t: &Terminal| (0..24).any(|r| t.screen().line_text(r).contains("close-ready"));
+        while !ready(&term) && std::time::Instant::now() < deadline {
+            term.process_pending();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(ready(&term), "shell installed its SIGHUP handler");
+        let started = std::time::Instant::now();
+        drop(term);
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(200),
+            "pane teardown waited on its child"
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let alive = std::process::Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap()
+                .success();
+            if !alive {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "shell was not reaped");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 
     /// Run `shell` through its integration in an empty HOME (the user's own

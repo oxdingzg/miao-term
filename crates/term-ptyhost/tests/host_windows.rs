@@ -85,6 +85,12 @@ fn output(frames: &[FromHost]) -> String {
         .collect()
 }
 
+fn printed(frames: &[FromHost], marker: &str) -> bool {
+    miao_term_core::plain_text(output(frames).as_bytes())
+        .lines()
+        .any(|line| line.trim() == marker)
+}
+
 fn live(frames: &[FromHost]) -> Option<u64> {
     frames.iter().find_map(|f| match f {
         FromHost::Live { offset } => Some(*offset),
@@ -127,7 +133,7 @@ fn cmd_keeps_running_and_resumes_from_an_offset() {
     ToHost::Input(b"echo typed-one\r".to_vec())
         .write(&mut s)
         .unwrap();
-    let more = read_until(&mut s, |f| output(f).contains("\r\ntyped-one"));
+    let more = read_until(&mut s, |f| printed(f, "typed-one"));
     seen = seen.max(end(&more));
     ToHost::Detach.write(&mut s).unwrap();
     drop(s);
@@ -143,7 +149,7 @@ fn cmd_keeps_running_and_resumes_from_an_offset() {
     ToHost::Input(b"echo typed-two\r".to_vec())
         .write(&mut s)
         .unwrap();
-    read_until(&mut s, |f| output(f).contains("\r\ntyped-two"));
+    read_until(&mut s, |f| printed(f, "typed-two"));
     ToHost::Kill.write(&mut s).unwrap();
     assert!(gone(&host.socket), "the host ends after Kill");
 }
@@ -157,11 +163,14 @@ fn ctrl_c_reaches_the_program() {
     ToHost::Input(b"ping -n 30 127.0.0.1\r".to_vec())
         .write(&mut s)
         .unwrap();
-    // Two replies in, interrupt it: ping prints its summary and
-    // "Control-C" (in every language) when Ctrl+C reaches it.
+    // Two replies in, interrupt it and require a following shell command to
+    // finish promptly. The ping summary and Ctrl+C text depend on the locale.
     read_until(&mut s, |f| output(f).matches("127.0.0.1").count() >= 3);
     ToHost::Input(vec![3]).write(&mut s).unwrap();
-    read_until(&mut s, |f| output(f).contains("Control-C"));
+    ToHost::Input(b"echo interrupted-host\r".to_vec())
+        .write(&mut s)
+        .unwrap();
+    read_until(&mut s, |f| printed(f, "interrupted-host"));
 }
 
 #[test]

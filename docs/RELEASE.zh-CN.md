@@ -1,8 +1,8 @@
 # 发布
 
 > 当前应用身份见 [APP-IDENTITY.zh-CN.md](APP-IDENTITY.zh-CN.md)：native 实现只以 mtty 发布。
-> 下文早期双 host 演练属于历史记录；当前 native 只提供版本检查，通过平台安装包升级，
-> 不包含已移除的 eframe 自动更新安装界面。
+> 下文早期双 host 演练属于历史记录。当前原生应用支持签名下载及“安装并重启”；
+> 本轮各平台验收结果见 [ACCEPTANCE.zh-CN.md](ACCEPTANCE.zh-CN.md)。
 
 发布流水线如何工作、需要配置什么,以及更新链如何衔接。英文为默认;请保持
 [`RELEASE.md`](RELEASE.md) 同步。

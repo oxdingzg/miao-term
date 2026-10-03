@@ -88,33 +88,71 @@ pub fn appimage_script(pid: u32, appimage: &Path, downloaded: &Path) -> String {
     )
 }
 
-/// Windows: a `.cmd` that waits for `pid`, then runs the MSI (or unpacks a
-/// zip over the install directory) and starts the app again.
+/// Windows: wait for the app, install, and relaunch. ZIP replacements are
+/// staged beside the install and rolled back together on any copy failure.
 pub fn windows_script(pid: u32, artifact: &Path, exe: &Path) -> String {
-    let artifact = artifact.display();
-    // Split on either separator: the script is also built (and tested) off
-    // Windows, where `Path` does not know `\\`.
-    let exe_text = exe.to_string_lossy();
-    let dir = exe_text
-        .rfind(['\\', '/'])
-        .map(|i| exe_text[..i].to_string())
-        .unwrap_or_default();
-    let exe = exe.display();
+    fn quote(path: &Path) -> String {
+        format!("'{}'", path.to_string_lossy().replace('\'', "''"))
+    }
+    let artifact = quote(artifact);
+    let exe = quote(exe);
     format!(
-        "@echo off\r\n\
-         :wait\r\n\
-         tasklist /FI \"PID eq {pid}\" 2>nul | find \"{pid}\" >nul && (timeout /t 1 /nobreak >nul & goto wait)\r\n\
-         echo \"{artifact}\" | find /I \".msi\" >nul\r\n\
-         if not errorlevel 1 (\r\n\
-         \x20 msiexec /i \"{artifact}\" /passive /norestart\r\n\
-         \x20 if exist \"%ProgramFiles%\\mtty\\bin\\mtty.exe\" (start \"\" \"%ProgramFiles%\\mtty\\bin\\mtty.exe\") else (start \"\" \"{exe}\")\r\n\
-         ) else (\r\n\
-         \x20 rmdir /s /q \"%TEMP%\\mtty-update\" 2>nul\r\n\
-         \x20 mkdir \"%TEMP%\\mtty-update\"\r\n\
-         \x20 tar -xf \"{artifact}\" -C \"%TEMP%\\mtty-update\"\r\n\
-         \x20 for /r \"%TEMP%\\mtty-update\" %%f in (mtty.exe mtty-cli.exe mtty-ptyhost.exe) do copy /y \"%%f\" \"{dir}\\%%~nxf\" >nul\r\n\
-         \x20 start \"\" \"{exe}\"\r\n\
-         )\r\n"
+        r#"$ErrorActionPreference = 'Stop'
+$artifact = {artifact}
+$exe = {exe}
+while (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 300 }}
+if ([IO.Path]::GetExtension($artifact) -ieq '.msi') {{
+    $installer = Start-Process msiexec.exe -ArgumentList @('/i', ('"' + $artifact + '"'), '/passive', '/norestart') -Wait -PassThru
+    if ($installer.ExitCode -notin @(0, 1641, 3010)) {{
+        if (Test-Path $exe) {{ Start-Process -FilePath $exe }}
+        throw "MSI failed: $($installer.ExitCode)"
+    }}
+    $installed = Join-Path $env:ProgramFiles 'mtty\bin\mtty.exe'
+    if (Test-Path $installed) {{ $exe = $installed }}
+}} else {{
+    $dir = Split-Path -Parent $exe
+    $stage = Join-Path $dir ('.mtty-update-' + [Guid]::NewGuid().ToString('N'))
+    $unpack = Join-Path $stage 'unpack'
+    $backup = Join-Path $stage 'backup'
+    $changed = @()
+    $keepBackup = $false
+    New-Item -ItemType Directory -Path $unpack, $backup | Out-Null
+    try {{
+        & tar.exe -xf $artifact -C $unpack
+        if ($LASTEXITCODE -ne 0) {{ throw 'Could not unpack the update' }}
+        $files = @()
+        foreach ($name in @('mtty.exe', 'mtty-cli.exe', 'mtty-ptyhost.exe')) {{
+            $found = @(Get-ChildItem $unpack -Recurse -File -Filter $name)
+            if ($found.Count -ne 1) {{ throw "Update must contain exactly one $name" }}
+            $files += $found[0]
+        }}
+        foreach ($file in $files) {{
+            $target = Join-Path $dir $file.Name
+            $saved = Join-Path $backup $file.Name
+            $existed = Test-Path $target
+            if ($existed) {{ Copy-Item -LiteralPath $target -Destination $saved }}
+            $pending = Join-Path $stage $file.Name
+            Copy-Item -LiteralPath $file.FullName -Destination $pending
+            Move-Item -LiteralPath $pending -Destination $target -Force
+            $changed += @{{ Target = $target; Saved = $saved; Existed = $existed }}
+        }}
+    }} catch {{
+        $failure = $_
+        foreach ($entry in $changed) {{
+            try {{
+                if ($entry.Existed) {{ Copy-Item -LiteralPath $entry.Saved -Destination $entry.Target -Force }}
+                elseif (Test-Path $entry.Target) {{ Remove-Item -LiteralPath $entry.Target -Force }}
+            }} catch {{ $keepBackup = $true }}
+        }}
+        if ($keepBackup) {{ throw "Update failed; recovery files retained at $backup : $failure" }}
+        Start-Process -FilePath $exe
+        throw $failure
+    }} finally {{
+        if (-not $keepBackup) {{ Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue }}
+    }}
+}}
+Start-Process -FilePath $exe
+"#
     )
 }
 
@@ -176,8 +214,14 @@ pub fn prepare(artifact: &Path) -> Result<Plan, String> {
     }
     #[cfg(target_os = "windows")]
     {
-        let script = stage.join("install.cmd");
-        std::fs::write(&script, windows_script(pid, artifact, &exe)).map_err(|e| e.to_string())?;
+        let script = stage.join("install.ps1");
+        // Windows PowerShell 5.1 treats a UTF-8 file without a BOM as the
+        // legacy code page, corrupting non-ASCII installation paths.
+        std::fs::write(
+            &script,
+            format!("\u{feff}{}", windows_script(pid, artifact, &exe)),
+        )
+        .map_err(|e| e.to_string())?;
         Ok(Plan::Helper(script))
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
@@ -248,12 +292,26 @@ pub fn launch(script: &Path) -> std::io::Result<()> {
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let mut cmd = std::process::Command::new("cmd");
+        let powershell = script.extension().is_some_and(|e| e == "ps1");
+        let mut cmd = std::process::Command::new(if powershell { "powershell.exe" } else { "cmd" });
         for name in ONE_LAUNCH_ENV {
             cmd.env_remove(name);
         }
-        cmd.args(["/c", "start", "", "/b"])
-            .arg(script)
+        if powershell {
+            cmd.args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+            ]);
+        } else {
+            cmd.args(["/c", "start", "", "/b"]);
+        }
+        cmd.arg(script)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .creation_flags(CREATE_NO_WINDOW)
             .spawn()
             .map(|_| ())
@@ -353,8 +411,11 @@ mod tests {
             Path::new(r"C:\Users\me\Downloads\mtty-0.1.0-x86_64.msi"),
             Path::new(r"C:\Program Files\mtty\bin\mtty.exe"),
         );
-        assert!(win.contains("PID eq 4242") && win.contains("msiexec /i"));
-        assert!(win.contains(r"C:\Program Files\mtty\bin\%%~nxf"), "{win}");
+        assert!(win.contains("Get-Process -Id 4242") && win.contains("msiexec.exe"));
+        assert!(
+            win.contains("$changed") && win.contains("throw $failure"),
+            "{win}"
+        );
         let lin = appimage_script(
             4242,
             Path::new("/opt/it's mtty.AppImage"),
@@ -362,6 +423,79 @@ mod tests {
         );
         assert!(lin.contains("kill -0 4242"));
         assert!(lin.contains(r"exec '/opt/it'\''s mtty.AppImage'"), "{lin}");
+    }
+
+    /// Exercise extraction, the complete replacement, and rollback after the
+    /// second executable is locked. Only the final GUI launch is substituted.
+    #[test]
+    #[cfg(windows)]
+    fn windows_zip_replaces_all_files_or_restores_them() {
+        let root = std::env::temp_dir().join(format!("mtty-win-update-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let ps_quote = |p: &Path| format!("'{}'", p.display().to_string().replace('\'', "''"));
+        for case in ["success", "corrupt", "locked"] {
+            let dir = root.join(format!("{case} user's 终端"));
+            let payload = dir.join("payload");
+            std::fs::create_dir_all(&payload).unwrap();
+            for name in ["mtty.exe", "mtty-cli.exe", "mtty-ptyhost.exe"] {
+                std::fs::write(dir.join(name), "old").unwrap();
+                std::fs::write(payload.join(name), "new").unwrap();
+            }
+            let artifact = dir.join("update.zip");
+            let exe = dir.join("mtty.exe");
+            let setup = if case == "corrupt" {
+                std::fs::write(&artifact, "broken archive").unwrap();
+                String::new()
+            } else {
+                format!(
+                    "Compress-Archive -Path {} -DestinationPath {}\n",
+                    ps_quote(&payload.join("*")),
+                    ps_quote(&artifact)
+                )
+            };
+            let lock = if case == "locked" {
+                format!(
+                    "$lock = [IO.File]::Open({}, 'Open', 'Read', 'Read')\n",
+                    ps_quote(&dir.join("mtty-cli.exe"))
+                )
+            } else {
+                String::new()
+            };
+            let script = dir.join("test.ps1");
+            std::fs::write(
+                &script,
+                format!(
+                    "\u{feff}{setup}{lock}function Start-Process {{ 'relaunched' }}\n{}",
+                    windows_script(i32::MAX as u32, &artifact, &exe)
+                ),
+            )
+            .unwrap();
+            let out = std::process::Command::new("powershell.exe")
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                ])
+                .arg(&script)
+                .output()
+                .unwrap();
+            assert_eq!(
+                out.status.success(),
+                case == "success",
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert!(String::from_utf8_lossy(&out.stdout).contains("relaunched"));
+            for name in ["mtty.exe", "mtty-cli.exe", "mtty-ptyhost.exe"] {
+                assert_eq!(
+                    std::fs::read_to_string(dir.join(name)).unwrap(),
+                    if case == "success" { "new" } else { "old" }
+                );
+            }
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// The real helpers run under sh: the macOS swap (and its rollback) and

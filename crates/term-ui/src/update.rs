@@ -507,7 +507,7 @@ t+gWHfmlkGM5SoMqXUkBvKwxms2sV0uR79Q4Xsnk42jdyFJ1AS1RuLQKXe0dIrQgW0flxW8/q6jndgI3
         }
         let url = "https://github.com/oxdingzg/miao-term/releases/latest/download/latest.json";
         let out = miao_term_platform::background_command("curl")
-            .args(["-fsSL", url])
+            .args(["-fsSL", "--connect-timeout", "10", "--max-time", "60", url])
             .output()
             .unwrap();
         let manifest = parse_checked(&String::from_utf8_lossy(&out.stdout)).unwrap();
