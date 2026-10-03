@@ -126,6 +126,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          python scripts/check-windows-icon.py target/release/mtty.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows executable icon check failed' }
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item target/release/mtty.exe dist/
           Copy-Item target/release/mtty-cli.exe dist/
@@ -159,6 +161,11 @@ jobs:
             }
             & (Join-Path $bin 'mtty-cli.exe') --help
             if ($LASTEXITCODE -ne 0) { throw 'Installed CLI failed' }
+            python scripts/check-windows-icon.py (Join-Path $bin 'mtty.exe')
+            if ($LASTEXITCODE -ne 0) { throw 'Installed executable icon check failed' }
+            $entry = Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' |
+              Where-Object { $_.DisplayName -eq 'mtty' }
+            if (-not $entry.DisplayIcon.Contains('mtty.ico')) { throw 'Missing installed application icon' }
             foreach ($scheme in @('mtty', 'miaotty')) {
               $command = (Get-Item "Registry::HKEY_CLASSES_ROOT\$scheme\shell\open\command").GetValue('')
               if (-not $command.Contains('mtty.exe')) { throw "Missing URL handler: $scheme" }

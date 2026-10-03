@@ -12783,6 +12783,12 @@ impl ApplicationHandler<HostEvent> for Host {
             // themes its whole frame the same way).
             .with_theme(Some(winit::window::Theme::Dark))
             .with_transparent(opacity < 1.0);
+        #[cfg(windows)]
+        let attrs = {
+            use winit::platform::windows::{IconExtWindows, WindowAttributesExtWindows};
+            let icon = winit::window::Icon::from_resource(1, None).ok();
+            attrs.with_window_icon(icon.clone()).with_taskbar_icon(icon)
+        };
         #[cfg(target_os = "macos")]
         let attrs = if unified_titlebar() {
             use winit::platform::macos::WindowAttributesExtMacOS;
