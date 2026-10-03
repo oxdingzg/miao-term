@@ -2758,7 +2758,7 @@ dependencies = [
 
 [[package]]
 name = "miao-term-acp"
-version = "0.0.26"
+version = "0.1.0"
 dependencies = [
  "miao-term-platform",
  "serde",
@@ -2767,7 +2767,7 @@ dependencies = [
 
 [[package]]
 name = "miao-term-config"
-version = "0.0.26"
+version = "0.1.0"
 dependencies = [
  "chacha20poly1305",
  "serde",
@@ -2777,7 +2777,7 @@ dependencies = [
 
 [[package]]
 name = "miao-term-core"
-version = "0.0.26"
+version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
  "libc",
@@ -2791,7 +2791,7 @@ dependencies = [
 
 [[package]]
 name = "miao-term-editor"
-version = "0.0.26"
+version = "0.1.0"
 dependencies = [
  "arborium-ada",
  "arborium-asciidoc",
@@ -2883,7 +2883,7 @@ dependencies = [
 
 [[package]]
 name = "miao-term-graphics"
-version = "0.0.26"
+version = "0.1.0"
 dependencies = [
  "base64",
  "flate2",
@@ -2893,7 +2893,7 @@ dependencies = [
 
 [[package]]
 name = "miao-term-keys"
-version = "0.0.26"
+version = "0.1.0"
 dependencies = [
  "aes",
  "argon2",
@@ -2908,7 +2908,7 @@ dependencies = [
 
 [[package]]
 name = "miao-term-lsp"
-version = "0.0.26"
+version = "0.1.0"
 dependencies = [
  "miao-term-editor",
  "miao-term-platform",
@@ -2917,7 +2917,7 @@ dependencies = [
 
 [[package]]
 name = "miao-term-mtp"
-version = "0.0.26"
+version = "0.1.0"
 dependencies = [
  "interprocess",
  "serde",
@@ -2926,7 +2926,7 @@ dependencies = [
 
 [[package]]
 name = "miao-term-platform"
-version = "0.0.26"
+version = "0.1.0"
 dependencies = [
  "block2 0.6.2",
  "objc2 0.6.4",
@@ -2938,7 +2938,7 @@ dependencies = [
 
 [[package]]
 name = "miao-term-ptyhost"
-version = "0.0.26"
+version = "0.1.0"
 dependencies = [
  "libc",
  "miao-term-core",
@@ -2950,7 +2950,7 @@ dependencies = [
 
 [[package]]
 name = "miao-term-render"
-version = "0.0.26"
+version = "0.1.0"
 dependencies = [
  "glyphon",
  "miao-term-core",
@@ -2960,7 +2960,7 @@ dependencies = [
 
 [[package]]
 name = "miao-term-ui"
-version = "0.0.26"
+version = "0.1.0"
 dependencies = [
  "ashpd",
  "egui",
@@ -2979,7 +2979,7 @@ dependencies = [
 
 [[package]]
 name = "miao-term-widget"
-version = "0.0.26"
+version = "0.1.0"
 dependencies = [
  "egui",
  "egui-wgpu",
@@ -3086,7 +3086,7 @@ dependencies = [
 
 [[package]]
 name = "mtty-app"
-version = "0.0.26"
+version = "0.1.0"
 dependencies = [
  "find-msvc-tools",
  "miao-term-core",
@@ -3098,7 +3098,7 @@ dependencies = [
 
 [[package]]
 name = "mtty-cli"
-version = "0.0.26"
+version = "0.1.0"
 dependencies = [
  "miao-term-mtp",
  "serde_json",
