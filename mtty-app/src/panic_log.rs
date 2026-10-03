@@ -5,13 +5,14 @@
 //! appends a record to a per-user log file and then runs the previous hook, so
 //! stderr output and the default behavior stay unchanged.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Install the hook writing to the platform log location (if one resolves).
 pub fn install() {
     if let Some(path) = default_path() {
+        // Bound legacy crash logs even if this run never panics.
+        let _ = append(&path, "");
         install_at(path);
     }
 }
@@ -100,14 +101,7 @@ pub fn format_record(
 
 /// Append `record`, creating the parent directory when missing.
 pub fn append(path: &Path, record: &str) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?
-        .write_all(record.as_bytes())
+    crate::resource_monitor::append_record(path, record.as_bytes(), 1024 * 1024, 2 * 1024 * 1024)
 }
 
 /// `YYYY-MM-DD HH:MM:SS` for a unix timestamp (Howard Hinnant's civil_from_days).

@@ -2,6 +2,46 @@
 
 [简体中文](TROUBLESHOOTING.zh-CN.md)
 
+## Investigating high CPU or memory usage
+
+mtty records process resource samples by default, at startup and every 30 seconds,
+without blocking the UI. Set `MTTY_MONITOR=0` before launching to disable recording.
+New builds must be launched before they can record; older installations do not gain
+this feature automatically.
+
+| Platform | Recorder directory |
+|---|---|
+| macOS | `~/Library/Logs/mtty/monitor/` |
+| Linux | `$XDG_STATE_HOME/mtty/monitor/`, or `~/.local/state/mtty/monitor/` |
+| Windows | `%LOCALAPPDATA%\\mtty\\logs\\monitor\\` |
+
+Each run writes `process-<timestamp>-<pid>.jsonl`. Records include version,
+platform, uptime, RSS bytes, cumulative process CPU microseconds, interval CPU
+percentage (100% = one logical core), and cumulative render calls and wall time.
+Render counters cover the main and picture-in-picture windows, including
+render calls that return early; they are not GPU execution times. Thread counts
+are available on macOS/Linux, and file-descriptor counts on Linux. Unsupported
+or failed probes are `null`, not zero. These samples describe mtty itself,
+not its PTY hosts or shell/agent child processes. RSS is not the same metric as
+macOS Activity Monitor's memory footprint.
+
+Compare consecutive records: rising CPU time with unchanged render counters
+points toward non-render work; rising render counts during an otherwise idle
+period points toward unwanted refreshes. Observe memory across repeated similar
+tasks and idle periods rather than treating one high sample as a leak.
+
+Files rotate before exceeding 4 MiB with one `.previous.jsonl` backup. The latest
+16 exited-process logs and their backups are retained, subject to a **64 MiB total
+resource-log budget**. Startup removes excess historical runs; each write also
+removes older backups or exited-process logs when space is needed. Active-process
+primary logs are preserved: if these fill the budget, new samples are dropped
+rather than letting disk use grow. A cross-process lease serializes quota checks
+and writes. Sampling failures are best-effort and do not terminate the application.
+The adjacent `panic.log` is separately limited to **1 MiB plus one backup**, with
+**2 MiB total**, including cleanup of oversized legacy crash logs at startup. No terminal contents, command arguments,
+or working directories are included. For Rust panics, consult the adjacent
+`panic.log`; the resource recorder preserves the preceding samples.
+
 ## The build fails, or the first build takes minutes
 
 | Requirement | Detail |

@@ -55,3 +55,4 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 # winit uses, sharing its connection through the system libwayland.
 wayland-client = "0.31"
 wayland-backend = { version = "0.3", features = ["client_system"] }
+image = { version = "0.25", default-features = false, features = ["png"] }

@@ -2,8 +2,8 @@
 
 > Current application identity: [APP-IDENTITY.md](APP-IDENTITY.md). The native
 > implementation now ships only as mtty. Earlier dual-host rehearsals below
-> are historical; the native app currently checks versions, with upgrades via
-> platform installers rather than the removed eframe update-install UI.
+> are historical. The native app supports signed downloads and Install and
+> Relaunch; current platform results are in [ACCEPTANCE.md](ACCEPTANCE.md).
 
 How the release pipeline works, what to configure, and how the update chain fits
 together. English default; keep [`RELEASE.zh-CN.md`](RELEASE.zh-CN.md) in sync.

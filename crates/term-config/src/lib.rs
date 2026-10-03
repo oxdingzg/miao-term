@@ -504,6 +504,12 @@ pub struct AcpAgent {
     pub name: String,
     /// The program and its arguments (`["codex", "acp"]`).
     pub command: Vec<String>,
+    /// Environment passed to the agent subprocess (keep credentials private).
+    pub env: std::collections::BTreeMap<String, String>,
+    /// Optional authentication method advertised by the agent.
+    pub auth_method: Option<String>,
+    /// Optional existing conversation to resume when supported by the agent.
+    pub session_id: Option<String>,
 }
 
 impl AcpConfig {
@@ -530,7 +536,30 @@ impl AcpConfig {
                 let Some(command) = a.get("command").and_then(strings) else {
                     continue;
                 };
-                cfg.agents.push(AcpAgent { name, command });
+                let env = a
+                    .get("env")
+                    .and_then(toml::Value::as_table)
+                    .map(|env| {
+                        env.iter()
+                            .filter_map(|(name, value)| {
+                                value.as_str().map(|v| (name.clone(), v.to_owned()))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let optional_string = |key| {
+                    a.get(key)
+                        .and_then(toml::Value::as_str)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_owned)
+                };
+                cfg.agents.push(AcpAgent {
+                    name,
+                    command,
+                    env,
+                    auth_method: optional_string("auth_method"),
+                    session_id: optional_string("session_id"),
+                });
             }
         }
         cfg
@@ -1138,6 +1167,27 @@ mod tests {
             vec!["gemini".to_string(), "--experimental-acp".to_string()]
         );
         assert!(Config::from_toml("").unwrap().acp.agents.is_empty());
+        assert!(cfg.acp.agents[0].env.is_empty());
+        assert_eq!(cfg.acp.agents[0].auth_method, None);
+        assert_eq!(cfg.acp.agents[0].session_id, None);
+        let cfg = Config::from_toml(
+            r#"
+[[acp.agent]]
+command = ["agent", "--acp"]
+auth_method = "oauth"
+session_id = "existing-session"
+env = { AGENT_MODE = "test", IGNORED_NONSTRING = 5 }
+"#,
+        )
+        .unwrap();
+        let agent = &cfg.acp.agents[0];
+        assert_eq!(agent.auth_method.as_deref(), Some("oauth"));
+        assert_eq!(agent.session_id.as_deref(), Some("existing-session"));
+        assert_eq!(
+            agent.env.get("AGENT_MODE").map(String::as_str),
+            Some("test")
+        );
+        assert_eq!(agent.env.len(), 1);
     }
 
     #[test]

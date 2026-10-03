@@ -1,5 +1,29 @@
 # AGENTS.md — working agreement for this repo
 
+## Mandatory: never compile Rust on the local development machine
+
+**This is a mandatory execution constraint, not a recommendation. Before running
+any command that may compile Rust, ensure it runs on an approved remote build
+host. Never compile Rust on the local development machine.**
+
+- This applies to `rustc`, `cargo build`, `cargo check`, `cargo test`,
+  `cargo clippy`, `cargo bench`, `cargo run`, `cargo install`, and any script,
+  IDE task, packaging step, or temporary test harness that invokes Rust
+  compilation, including dependency compilation and debug builds.
+- Use the approved macOS, Windows, or Linux build hosts identified in the
+  private global agent instructions. Host addresses, aliases, and credentials
+  must stay in private configuration, outside this public repository.
+- Sync the required source to a remote build host, execute compilation and
+  compilation-dependent checks there over SSH, and copy artifacts back when
+  local runtime or UI verification is needed.
+- If no approved build host is reachable, report the blocker. Do not fall back
+  to local compilation, even for a small crate or a quick check.
+- Formatting (`cargo fmt --all --check`), source inspection, and running
+  already-built binaries may be performed locally because they do not compile
+  Rust.
+- The verification requirements below must respect this constraint: Clippy,
+  tests, performance gates, and Rust packaging builds run remotely.
+
 ## Privacy: keep machine specifics out of the repository
 
 This repository is public. **Never** commit host aliases, user names, absolute

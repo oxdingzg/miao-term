@@ -2,7 +2,7 @@
 
 [English](PRODUCT.md)
 
-> 基线:`v0.0.5` 加提交 `689cbce`(稳定性修复),日期 2026-10-01。
+> 基线:`v0.1.3` 加 [验收记录](ACCEPTANCE.zh-CN.md) 中的后续修复，日期 2026-10-04。
 > 本文是功能需求的唯一出处:README 只描述"现在能用的",本文还记录"要做什么、按什么顺序、怎样算完成"。
 
 ## 1. 定位
@@ -76,7 +76,7 @@
 | 回滚、选区、复制粘贴、中日韩宽字符与字体回退 | 可用 | 宽字符复制有回归测试 |
 | 查找 `⌘F`(高亮 + 计数) | 可用 | 本次修复:中文查询不匹配、含中文行高亮错位 |
 | 键盘编码:Ctrl/Alt/修饰键导航、F1–F12、Insert | 可用 | 本次修复:F1–F12 与 Insert 此前完全不发送 |
-| kitty keyboard 协议 | 部分 | 只支持 disambiguate 级别 |
+| kitty keyboard 协议 | 部分 | 支持消歧义、按键事件类型及全键转义；尚未报告替代键和关联文本 |
 | 输入法(IME)内联预编辑 | 可用 | 候选窗定位到光标(`set_ime_cursor_area`);macOS 上的位置待桌面人工确认 |
 | 终端内联图片 Sixel / Kitty / iTerm2 | 可用 | 不模拟 Kitty z-index;会话恢复不保留图片 |
 | 鼠标上报(SGR / X10) | 可用 | |
@@ -106,7 +106,7 @@
 | 只读查看、编辑、行号、语法高亮、极简 vim 模式 | 可用 | 本次修复:保存失败被吞掉且显示为已保存;关闭时不确认未保存修改 |
 | Markdown 渲染 + Mermaid 子集 | 可用 | 相对路径图片按文档目录解析,表格单元格自动换行;外部 `mermaid-command` 在后台执行 |
 | Edit in Tab | 可用 | 本地文件;运行配置项 `editor`,否则 `$EDITOR`,否则 `vi`(Windows 为记事本);有未保存修改时不可用 |
-| 跳转行高亮、Open Externally | 未提供 | |
+| 跳转行高亮、Open Externally | 可用 | 编辑器 pane 行定位及命令面板外部打开入口 |
 
 ### 3.4 Agent
 
@@ -126,7 +126,7 @@
 |---|---|---|
 | 新建 SSH 会话(遵循 `~/.ssh/config`、ControlMaster 复用、零安装 terminfo) | 可用 | 不在 UI 线程执行 `ssh -G`;恢复的 SSH 标签提示已断开,按回车重新连接 |
 | 远端文件查看/编辑(经 ssh) | 可用 | 主机取自当前 SSH 标签(其他情况手填);读写在后台执行,失败会提示 |
-| 主机库、分组、密钥管理、SFTP、FTP、端口转发、Snippets | 可用 | 见 M3;mosh 只验证了命令构造 |
+| 主机库、分组、密钥管理、SFTP、FTP、端口转发、Snippets | 可用 | 见 M3；真实 mosh SSH 引导及 UDP 会话已验收 |
 
 ### 3.6 系统集成与自动化
 
@@ -136,7 +136,7 @@
 | shell 集成(OSC 7、OSC 133、命令历史) | 可用 | zsh、bash、fish、PowerShell |
 | URL scheme 与单实例转发 | 可用 | 命令行与 macOS 浏览器/Finder 发来的 URL 事件均可 |
 | MTP 控制面与 `mtty-cli` | 可用 | 真实窗口冒烟覆盖 |
-| 版本检查与更新 | 可用 | 下载后程序内校验 SHA-256 与 minisign 签名(必需),macOS 安装并重启已端到端验证;AppImage/Windows 仅单元测试 |
+| 版本检查与更新 | 可用 | 下载后程序内校验 SHA-256 与 minisign 签名(必需),macOS 安装并重启已端到端验证;Linux AppImage 签名更新已在实际窗口验证；Windows 桌面验收见 ACCEPTANCE |
 | 中英界面 | 可用 | 少量示例/agent 串刻意保留英文 |
 
 ## 4. 路线图与执行批次
@@ -207,7 +207,7 @@
 - [x] **B3.2 安全连接**(交互式 ssh 由 ssh 自身确认主机密钥;主机库提供后台检查:已知/未知(显示指纹,核对后信任)/已变化(拒绝);真实主机验证"已知";密钥生成与 ssh-copy-id 在终端标签中进行,mtty 不经手口令):known_hosts 首次连接/指纹变化确认界面;ssh-agent 状态与密钥生成;不保存明文密码。
 - [x] **B3.3 端口转发**:L/R/D 规则随主机保存;每条规则一个由 mtty 管理的 `ssh -N`(`ExitOnForwardFailure`),状态可见、随 mtty 退出而结束(不复用 ControlMaster:其 60 秒 ControlPersist 会让转发随之消失)。真实主机端到端:经本地端口读到远端 sshd 握手,停止后端口关闭。
 - [x] **B3.4 SFTP**(用系统 OpenSSH sftp 批处理,保留 ssh 配置/跳板/agent/ControlMaster;真实主机往返测试;Linux Wayland 真实桌面截图核对;下载进度读取本地文件大小,上传为无进度百分比的忙碌状态):双栏文件浏览、上传下载、拖放、进度、重命名/权限;远端编辑复用 pane 连接。
-- [x] **B3.5 Snippets 与广播**(片段在多台主机上各开一个标签执行 `ssh -t 主机 '命令'`,引号经 sh 实际拆分验证;广播输入走键盘路径,无法经 MTP 驱动,待桌面人工确认):命令片段库,在当前 pane 或多台主机执行;多 pane 广播输入。
+- [x] **B3.5 Snippets 与广播**(片段在多台主机上各开一个标签执行 `ssh -t 主机 '命令'`,引号经 sh 实际拆分验证;广播输入已通过 Linux 实际键盘事件验收，两个 pane 的命令输出一致):命令片段库,在当前 pane 或多台主机执行;多 pane 广播输入。
 - [x] **B3.6 FTP/FTPS 与持久会话**:FTP/FTPS 共用文件浏览(明文提示);可选 tmux/mosh 重连。(FTP 经系统 curl,口令仅在内存并经 stdin 传入,明文 FTP 与显式 FTPS 均对真实服务器做往返测试;FTP 不支持整个文件夹上传/下载。tmux 经真实 ssh 验证 detach 后重连回到同一 shell;mosh 只验证了命令构造,未对真实 mosh-server 测试。)
   验收(M3 整体):对测试主机的自动化冒烟;凭证不进日志、会话文件或 MTP 响应。
 
@@ -227,7 +227,7 @@
   会话都被忽略(Windows 没有 `HOME`;现为 `%APPDATA%\mtty`);启动时多出控制台窗口;聚焦时仍按着的键(热键的 Y)被输入
   到 pane;拖放路径用了单引号。
 - [ ] **B4.2** Apple 公证、Windows MSI 签名 **[所有者 + 凭证]**。
-- [x] **B4.3** 自动更新:下载、`update-pubkey` 签名校验、替换安装。(内置发布公钥;Mac mini 上用打包 app + 测试密钥签名的发布包验证安装并重启,并验证篡改的包因校验和或签名被拒;已发布的 v0.0.5 包用仓库公钥验签通过。AppImage 与 Windows 辅助脚本尚未在真实桌面运行。)
+- [x] **B4.3** 自动更新:下载、`update-pubkey` 签名校验、替换安装。(内置发布公钥;Mac mini 上用打包 app + 测试密钥签名的发布包验证安装并重启,并验证篡改的包因校验和或签名被拒;已发布的 v0.0.5 包用仓库公钥验签通过。2026-10-04 已验证 Linux AppImage 签名下载、替换、重启、错误摘要/签名拒绝及缺失下载回退；Windows 结果见 ACCEPTANCE。)
 - [x] **B4.4** bash / fish / PowerShell 的 shell 集成。(真实 PTY 端到端测试:macOS 上的 zsh、bash 3.2/5.3,Linux 上的 bash 5.2、fish 3.7、PowerShell 7.5;Windows 上的 PowerShell 由 CI 运行。Windows PowerShell 5.1 不记录历史。)
 - [x] **B4.5** 可选的端到端加密同步,默认关闭。(ADR 0033:主机与片段经用户已在同步的文件夹传递,XChaCha20-Poly1305 加密,密钥不进入该文件夹,每台设备一个文件,按条目合并并记录删除。在 Mac mini 上用两个应用实例经共享文件夹完成汇合,文件夹中无明文。)
 

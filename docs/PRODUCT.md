@@ -2,7 +2,7 @@
 
 [简体中文](PRODUCT.zh-CN.md)
 
-> Baseline: `v0.0.5` plus commit `689cbce` (reliability fixes), 2026-10-01.
+> Baseline: `v0.1.3` plus the acceptance fixes recorded in [ACCEPTANCE.md](ACCEPTANCE.md), 2026-10-04.
 > This is the single source for feature requirements. The README describes what
 > works today; this document also records what comes next, in which order, and
 > what counts as done.
@@ -130,7 +130,7 @@ point); problems fixed in M0–M3 are no longer listed.
 | Read-only view, edit, line numbers, syntax colouring, minimal vim mode | Works | Fixed now: failed saves were swallowed and shown as saved; closing did not confirm unsaved changes |
 | Markdown + Mermaid subset | Works | Relative images resolve against the document's folder; table cells wrap; external `mermaid-command` runs in the background |
 | Edit in Tab | Works | Local files; runs the `editor` setting, else `$EDITOR`, else `vi` (Notepad on Windows); disabled while there are unsaved changes |
-| Jump-to-line highlight, Open Externally | Not available | |
+| Jump-to-line highlight, Open Externally | Works | Editor pane line navigation and command-palette external opener |
 
 ### 3.4 Agents
 
@@ -150,7 +150,7 @@ point); problems fixed in M0–M3 are no longer listed.
 |---|---|---|
 | New SSH session (`~/.ssh/config`, ControlMaster reuse, zero-install terminfo) | Works | No `ssh -G` on the UI thread; a restored SSH tab says it is disconnected and reconnects on Enter |
 | Remote file view/edit over ssh | Works | Host taken from the active SSH tab (typed otherwise); reads and writes run in the background and failures are shown |
-| Host library, groups, key management, SFTP, FTP, port forwarding, snippets | Works | See M3; mosh is tested only as command construction |
+| Host library, groups, key management, SFTP, FTP, port forwarding, snippets | Works | See M3; real mosh SSH bootstrap and UDP verified in ACCEPTANCE |
 
 ### 3.6 System integration and automation
 
@@ -160,7 +160,7 @@ point); problems fixed in M0–M3 are no longer listed.
 | Shell integration (OSC 7, OSC 133, history) | Works | zsh, bash, fish, PowerShell |
 | URL schemes and single-instance forwarding | Works | From the command line and from a macOS browser/Finder |
 | MTP control plane and `mtty-cli` | Works | Covered by the real-window smoke |
-| Version check and update | Works | SHA-256 and a required minisign signature are checked in process; macOS install-and-relaunch checked end to end; AppImage/Windows unit-tested only |
+| Version check and update | Works | SHA-256 and a required minisign signature are checked in process; macOS install-and-relaunch checked end to end; AppImage signed update verified in a real Linux window; Windows desktop checks are recorded in ACCEPTANCE |
 | English / Chinese UI | Works | A few sample/agent strings stay English on purpose |
 
 ## 4. Roadmap and execution batches
@@ -280,7 +280,7 @@ verified on its own:
   through the local port, the port closed after Stop.
 - [x] **B3.4 SFTP** (OpenSSH sftp in batch mode, keeping ssh config, jump hosts, the agent and ControlMaster; real round-trip test; checked on a real Linux Wayland desktop; download progress is read off the local file, uploads show a busy state without a percentage): two-pane browser, upload/download, drag and drop, progress,
   rename/permissions; remote editing reuses the pane's connection.
-- [x] **B3.5 Snippets and broadcast** (on several hosts a snippet runs as `ssh -t host 'command'` in a tab each, quoting checked by letting sh split it; broadcast goes through the keyboard path, which MTP cannot drive, so it awaits a desktop check): a command library run in the current pane
+- [x] **B3.5 Snippets and broadcast** (on several hosts a snippet runs as `ssh -t host 'command'` in a tab each, quoting checked by letting sh split it; broadcast verified by real keyboard input in two Linux panes, with identical finished-command output): a command library run in the current pane
   or on several hosts; broadcast input to several panes.
 - [x] **B3.6 FTP/FTPS and persistent sessions**: FTP/FTPS in the same browser
   (plaintext flagged); optional tmux/mosh reconnect. (FTP runs through the
@@ -324,7 +324,7 @@ verified on its own:
   (Release key built in. On the Mac mini a packaged app installed and relaunched
   a test-signed release, and tampered packages were refused by checksum and by
   signature; the published v0.0.5 package verifies against the repository key.
-  The AppImage and Windows helpers have not run on real desktops yet.)
+  Linux AppImage signed download/replace/relaunch, bad hashes/signatures and a missing-download fallback were verified on 2026-10-04; Windows results are in ACCEPTANCE.)
 - [x] **B4.4** Shell integration for bash / fish / PowerShell. (End-to-end PTY tests
   for zsh, bash 3.2/5.3 on macOS, bash 5.2, fish 3.7 and PowerShell 7.5 on Linux;
   Windows PowerShell runs in CI. Windows PowerShell 5.1 records no history.)

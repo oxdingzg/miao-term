@@ -4,6 +4,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod panic_log;
+mod resource_monitor;
 
 /// `--version` / `--help` from cmd or PowerShell: a GUI program has no console,
 /// so print into the parent's (redirected output works without this).
@@ -39,6 +40,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             println!("mtty — native terminal\nusage: mtty [--quick | --focus PANE | URL]\nURLs: mtty:// (or miaotty://), ssh://, x-man-page://");
             Ok(())
         }
-        _ => miao_term_widget::run("mtty"),
+        _ => {
+            resource_monitor::start();
+            miao_term_widget::run("mtty")
+        }
     }
 }

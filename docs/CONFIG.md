@@ -118,6 +118,24 @@ drives a transcript window. `command` is a string split at spaces, or a list.
 # command = ["gemini", "--experimental-acp"]
 ```
 
+
+Optional `env` values are passed to the agent process. `auth-method` selects an
+ID advertised by that agent; the ACP window also offers an authentication
+picker. `session-id` loads an existing conversation when the agent advertises
+`loadSession`; an unsupported resume shows an error. The start dialog can
+supply a session ID too.
+
+```toml
+# env = { EXAMPLE_SETTING = "value" }
+# auth-method = "<agent-auth-method-id>"
+# session-id = "<agent-session-id>"
+```
+
+ACP file reads include unsaved editor text. Writes open a proposal in the editor:
+**Accept and Save** writes the file before acknowledging the agent; **Reject**
+leaves the disk unchanged. Terminal commands require permission and their output
+appears in the ACP window.
+
 ### Update checks
 
 **Nothing is fetched until you ask.** mtty makes no request at startup; the

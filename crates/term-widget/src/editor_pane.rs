@@ -78,6 +78,8 @@ pub struct EditorDraw {
     pub underlines: Vec<(CellRect, u8)>,
     /// Changed lines of a pending agent proposal (ADR 0040, A1).
     pub proposal: Vec<CellRect>,
+    /// Deleted text is drawn in ghost rows, outside the document and selection.
+    pub deletions: Vec<CellRect>,
 }
 
 /// A pending agent edit (ADR 0040, A1): applied as one undoable transaction
@@ -88,6 +90,10 @@ pub struct Proposal {
     pub label: Option<String>,
     /// Changed file lines (0-based).
     pub lines: Vec<usize>,
+    /// Old text, anchored before a line in the resulting document.
+    pub deleted: Vec<(usize, String)>,
+    /// Ghost rows skipped before the current top document line.
+    scroll_offset: usize,
     /// The document revision right after it was applied; any change ends it.
     revision: u64,
 }
@@ -678,21 +684,63 @@ impl EditorPane {
     /// Apply an agent's edits as one undoable transaction and mark the changed
     /// lines (ADR 0040, A1). The edits are `(start, end, text)` in character
     /// offsets of the current document and may be given in any order.
+    pub fn propose_text(&mut self, text: String, label: Option<String>) {
+        // Whole-file ACP writes should retain unchanged context rather than
+        // displaying every line as both deleted and added.
+        let old = self.doc.rope();
+        let new = miao_term_editor::Rope::from_str(&text);
+        let prefix = old
+            .chars()
+            .zip(new.chars())
+            .take_while(|(a, b)| a == b)
+            .count();
+        let suffix = old
+            .chars_at(old.len_chars())
+            .reversed()
+            .zip(new.chars_at(new.len_chars()).reversed())
+            .take(old.len_chars().min(new.len_chars()) - prefix)
+            .take_while(|(a, b)| a == b)
+            .count();
+        if prefix == old.len_chars() && prefix == new.len_chars() {
+            return;
+        }
+        let replacement = new.slice(prefix..new.len_chars() - suffix).to_string();
+        self.propose(vec![(prefix, old.len_chars() - suffix, replacement)], label);
+    }
+
     pub fn propose(&mut self, edits: Vec<(usize, usize, String)>, label: Option<String>) {
         if edits.is_empty() {
             return;
         }
-        let mut sorted: Vec<(usize, usize, usize)> = edits
+        let mut sorted: Vec<_> = edits
             .iter()
-            .map(|(s, e, t)| (*s, *e, t.chars().count()))
+            .map(|(s, e, t)| {
+                let rope = self.doc.rope();
+                let removed = if s == e {
+                    Vec::new()
+                } else {
+                    (rope.char_to_line(*s)..=rope.char_to_line(e - 1))
+                        .map(|line| {
+                            (
+                                line,
+                                rope.line(line)
+                                    .to_string()
+                                    .trim_end_matches(['\r', '\n'])
+                                    .to_owned(),
+                            )
+                        })
+                        .collect()
+                };
+                (*s, *e, t.chars().count(), removed)
+            })
             .collect();
         sorted.sort_by_key(|c| (c.0, c.1));
         // Ranges in the document as it will be after the transaction.
         let mut ranges = Vec::with_capacity(sorted.len());
         let mut delta: isize = 0;
-        for (start, end, added) in sorted {
+        for (start, end, added, removed) in sorted {
             let from = (start as isize + delta).max(0) as usize;
-            ranges.push((from, from + added));
+            ranges.push((from, from + added, removed));
             delta += added as isize - (end as isize - start as isize);
         }
         let changes = edits
@@ -703,20 +751,38 @@ impl EditorPane {
             .apply_external(miao_term_editor::Transaction::new(changes));
         let rope = self.doc.rope();
         let mut lines = Vec::new();
-        for (from, to) in ranges {
+        let mut deleted = Vec::new();
+        let mut deleted_seen = std::collections::HashSet::new();
+        for (from, to, removed) in ranges {
             let len = rope.len_chars();
             let a = rope.char_to_line(from.min(len));
             let b = rope.char_to_line(to.min(len));
             lines.extend(a..=b);
+            deleted.extend(
+                removed.into_iter().filter_map(|(old_line, text)| {
+                    deleted_seen.insert(old_line).then_some((a, text))
+                }),
+            );
         }
         lines.sort_unstable();
         lines.dedup();
         self.proposal = Some(Proposal {
             label,
             lines,
+            deleted,
+            scroll_offset: 0,
             revision: self.doc.revision(),
         });
-        self.reveal_cursor();
+        // Start at the first change, including its deleted pre-image.
+        if let Some(line) = self
+            .proposal
+            .as_ref()
+            .and_then(|p| p.lines.first())
+            .copied()
+        {
+            self.scroll_line = line.saturating_sub(2);
+            self.folded.clear();
+        }
     }
 
     pub fn proposal(&self) -> Option<&Proposal> {
@@ -808,36 +874,57 @@ impl EditorPane {
             .map(|(start, _)| *start)
     }
 
-    /// The logical line shown at text-area `row`, skipping collapsed folds.
-    fn line_at_row(&self, row: usize) -> Option<usize> {
+    fn deleted_range(&self, line: usize) -> std::ops::Range<usize> {
+        let Some(p) = &self.proposal else {
+            return 0..0;
+        };
+        let first = p.deleted.partition_point(|(at, _)| *at < line);
+        let end = p.deleted.partition_point(|(at, _)| *at <= line);
+        first..end
+    }
+
+    /// The document line and optional deleted pre-image in a visual row.
+    fn view_row(&self, row: usize) -> Option<(usize, Option<&str>)> {
         let last = motion::last_line(self.doc.rope());
         let mut line = self.scroll_line;
-        let mut r = 0;
-        loop {
-            if line > last {
-                return None;
+        let mut offset = row + self.proposal.as_ref().map_or(0, |p| p.scroll_offset);
+        while line <= last {
+            let deleted = self.deleted_range(line);
+            if offset < deleted.len() {
+                return Some((
+                    line,
+                    Some(&self.proposal.as_ref()?.deleted[deleted.start + offset].1),
+                ));
             }
-            if r == row {
-                return Some(line);
+            if offset == deleted.len() {
+                return Some((line, None));
             }
-            r += 1;
+            offset -= deleted.len() + 1;
             line = self.next_visible(line);
         }
+        None
+    }
+
+    /// The logical line shown at text-area `row`, skipping collapsed folds.
+    fn line_at_row(&self, row: usize) -> Option<usize> {
+        self.view_row(row).map(|(line, _)| line)
     }
 
     /// The screen row of `line`, or `None` when it is off-screen or hidden.
     fn row_of_line(&self, line: usize) -> Option<usize> {
         let mut l = self.scroll_line;
-        let mut r = 0;
-        while r < self.rows {
+        let mut r = 0usize;
+        let offset = self.proposal.as_ref().map_or(0, |p| p.scroll_offset);
+        while r < self.rows + offset {
             if l > line {
                 return None;
             }
             if l == line {
-                return Some(r);
+                let row = (r + self.deleted_range(l).len()).checked_sub(offset)?;
+                return (row < self.rows).then_some(row);
             }
+            r += 1 + self.deleted_range(l).len();
             l = self.next_visible(l);
-            r += 1;
         }
         None
     }
@@ -967,6 +1054,9 @@ impl EditorPane {
             self.folded.remove(&start);
         }
         if self.row_of_line(line).is_none() {
+            if let Some(p) = self.proposal.as_mut() {
+                p.scroll_offset = 0;
+            }
             if line < self.scroll_line {
                 self.scroll_line = line;
             } else {
@@ -981,6 +1071,13 @@ impl EditorPane {
                     top = prev;
                 }
                 self.scroll_line = top;
+            }
+            if self.row_of_line(line).is_none() {
+                self.scroll_line = line;
+                let skipped = self.deleted_range(line).len();
+                if let Some(p) = self.proposal.as_mut() {
+                    p.scroll_offset = skipped;
+                }
             }
         }
         self.normalize_scroll();
@@ -1018,19 +1115,39 @@ impl EditorPane {
         let last = motion::last_line(self.doc.rope());
         if lines > 0 {
             for _ in 0..lines {
+                let count = self.deleted_range(self.scroll_line).len();
+                if let Some(p) = self.proposal.as_mut() {
+                    if p.scroll_offset < count {
+                        p.scroll_offset += 1;
+                        continue;
+                    }
+                }
                 let next = self.next_visible(self.scroll_line).min(last);
                 if next == self.scroll_line {
                     break;
                 }
                 self.scroll_line = next;
+                if let Some(p) = self.proposal.as_mut() {
+                    p.scroll_offset = 0;
+                }
             }
         } else {
             for _ in 0..(-lines) {
+                if let Some(p) = self.proposal.as_mut() {
+                    if p.scroll_offset > 0 {
+                        p.scroll_offset -= 1;
+                        continue;
+                    }
+                }
                 let prev = self.prev_visible(self.scroll_line);
                 if prev == self.scroll_line {
                     break;
                 }
                 self.scroll_line = prev;
+                let count = self.deleted_range(prev).len();
+                if let Some(p) = self.proposal.as_mut() {
+                    p.scroll_offset = count;
+                }
             }
         }
         self.normalize_scroll();
@@ -1212,6 +1329,9 @@ impl EditorPane {
     /// top-left, gutter excluded); past a line's end lands on its end.
     pub fn hit(&self, row: usize, col: usize) -> usize {
         let rope = self.doc.rope();
+        if let Some((line, Some(_))) = self.view_row(row) {
+            return rope.line_to_char(line);
+        }
         let line = self
             .line_at_row(row)
             .unwrap_or_else(|| motion::last_line(rope));
@@ -1223,6 +1343,9 @@ impl EditorPane {
     /// The char drawn in a text-area cell, if the cell holds one (not past
     /// a line's end or the last line).
     pub fn char_under(&self, row: usize, col: usize) -> Option<usize> {
+        if self.view_row(row)?.1.is_some() {
+            return None;
+        }
         let rope = self.doc.rope();
         let line = self.line_at_row(row)?;
         let slice = rope.line(line);
@@ -1397,7 +1520,36 @@ impl EditorPane {
         let mut rows = Vec::with_capacity(self.rows);
         let mut sel_cells = Vec::new();
         let mut carets = Vec::new();
+        let mut deletion_cells = Vec::new();
         for row in 0..self.rows {
+            if let Some((_, Some(text))) = self.view_row(row) {
+                let old = miao_term_editor::Rope::from_str(text);
+                let mut spans = vec![Span::new(0, "−", (0xbf, 0x61, 0x6a))];
+                for g in layout::glyphs(old.slice(..), tab, self.scroll_col + self.cols) {
+                    if g.col + g.width <= self.scroll_col || g.ch.is_control() {
+                        continue;
+                    }
+                    let col = g.col.saturating_sub(self.scroll_col);
+                    if col + g.width > self.cols {
+                        break;
+                    }
+                    spans.push(Span::new(
+                        (gutter + col) as u16,
+                        g.ch.to_string(),
+                        (0xbf, 0x61, 0x6a),
+                    ));
+                }
+                deletion_cells.push(CellRect {
+                    row,
+                    col: gutter,
+                    width: layout::visual_col(old.slice(..), old.len_chars(), tab)
+                        .saturating_sub(self.scroll_col)
+                        .min(self.cols)
+                        .max(1),
+                });
+                rows.push(spans);
+                continue;
+            }
             let Some(line) = self.line_at_row(row) else {
                 rows.push(Vec::new());
                 continue;
@@ -1518,9 +1670,7 @@ impl EditorPane {
             self.span_cells(d.from, to, &mut cells);
             underlines.extend(cells.into_iter().map(|c| (c, d.severity)));
         }
-        let current_line = (head_line >= self.scroll_line
-            && head_line < self.scroll_line + self.rows)
-            .then(|| head_line - self.scroll_line);
+        let current_line = self.row_of_line(head_line);
         let flash_line = self
             .flash
             .as_ref()
@@ -1548,6 +1698,7 @@ impl EditorPane {
             gutter,
             underlines,
             proposal: proposal_cells,
+            deletions: deletion_cells,
         }
     }
 
@@ -2463,5 +2614,63 @@ mod tests {
         p.accept_proposal();
         assert!(p.proposal().is_none());
         assert!(p.doc.rope().to_string().starts_with('X'));
+    }
+
+    #[test]
+    fn deleted_rows_are_reviewable_scrollable_and_not_selectable_text() {
+        let original = "old one\n旧的第二行\nold three\nkept\n";
+        let mut p = pane(original);
+        p.resize(50, 2);
+        let end = original.find("kept").unwrap();
+        let end = original[..end].chars().count();
+        p.propose(vec![(0, end, "new\n".into())], None);
+        assert_eq!(p.view_row(0), Some((0, Some("old one"))));
+        assert_eq!(p.view_row(1), Some((0, Some("旧的第二行"))));
+        assert_eq!(p.hit(0, 20), 0);
+        assert_eq!(p.char_under(0, 0), None);
+        assert_eq!(p.row_of_line(0), None);
+        p.scroll_by(2);
+        assert_eq!(p.view_row(0), Some((0, Some("old three"))));
+        assert_eq!(p.row_of_line(0), Some(1));
+        p.scroll_by(2);
+        assert_eq!(p.view_row(0), Some((1, None)));
+        p.scroll_by(-3);
+        assert_eq!(p.view_row(0), Some((0, Some("旧的第二行"))));
+        assert!(p.reject_proposal());
+        assert_eq!(p.doc.rope().to_string(), original);
+        assert_eq!(p.view_row(0), Some((0, None)));
+    }
+
+    #[test]
+    fn whole_file_proposals_keep_unchanged_unicode_context_and_one_undo() {
+        let mut p = pane("开头\nold\n结尾\n");
+        p.propose_text("开头\nnew\n结尾\n".into(), None);
+        assert_eq!(p.proposal().unwrap().deleted, vec![(1, "old".into())]);
+        assert_eq!(p.proposal().unwrap().lines, vec![1]);
+        assert!(p.reject_proposal());
+        assert_eq!(p.doc.rope().to_string(), "开头\nold\n结尾\n");
+        p.propose_text("开头\nold\n结尾\n".into(), None);
+        assert!(p.proposal().is_none());
+    }
+
+    #[test]
+    fn an_agent_write_only_reaches_disk_when_saved_including_new_files() {
+        let root = std::env::temp_dir().join(format!("mtty-agent-save-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("new.txt");
+        let mut p = EditorPane::with_doc("e1".into(), path.clone(), Document::from_text(""));
+        p.propose_text("新增\n".into(), None);
+        assert!(!path.exists());
+        assert!(p.reject_proposal());
+        assert!(!path.exists());
+        p.propose_text("accepted\n".into(), None);
+        p.save().unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "accepted\n");
+        assert!(!p.doc.is_modified());
+        assert!(p.proposal().is_none());
+        p.propose_text("rejected\n".into(), None);
+        assert!(p.reject_proposal());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "accepted\n");
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

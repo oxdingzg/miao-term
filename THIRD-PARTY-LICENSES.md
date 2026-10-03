@@ -1,7 +1,7 @@
 # Third-party licences
 
 mtty itself is Apache-2.0 — see [`LICENSE`](../LICENSE). It is built on the
-crates below, 643 of them, each under its own licence. The licence
+crates below, 651 of them, each under its own licence. The licence
 texts follow the table, once per distinct text.
 
 *Generated from `Cargo.lock` by [`scripts/render-third-party-licenses.py`](../scripts/render-third-party-licenses.py),*
@@ -121,6 +121,7 @@ texts follow the table, once per distinct text.
 | crossbeam-deque 0.8.8 | MIT OR Apache-2.0 | [github.com/crossbeam-rs/crossbeam](https://github.com/crossbeam-rs/crossbeam) |
 | crossbeam-epoch 0.9.21 | MIT OR Apache-2.0 | [github.com/crossbeam-rs/crossbeam](https://github.com/crossbeam-rs/crossbeam) |
 | crossbeam-utils 0.8.23 | MIT OR Apache-2.0 | [github.com/crossbeam-rs/crossbeam](https://github.com/crossbeam-rs/crossbeam) |
+| crunchy 0.2.4 | MIT | [github.com/eira-fransham/crunchy](https://github.com/eira-fransham/crunchy) |
 | crypto-bigint 0.5.5 | Apache-2.0 OR MIT | [github.com/RustCrypto/crypto-bigint](https://github.com/RustCrypto/crypto-bigint) |
 | crypto-common 0.1.7 | MIT OR Apache-2.0 | [github.com/RustCrypto/traits](https://github.com/RustCrypto/traits) |
 | ctr 0.9.2 | MIT OR Apache-2.0 | [github.com/RustCrypto/block-modes](https://github.com/RustCrypto/block-modes) |
@@ -169,6 +170,7 @@ texts follow the table, once per distinct text.
 | event-listener-strategy 0.5.4 | Apache-2.0 OR MIT | [github.com/smol-rs/event-listener-strategy](https://github.com/smol-rs/event-listener-strategy) |
 | fancy-regex 0.16.2 | MIT | [github.com/fancy-regex/fancy-regex](https://github.com/fancy-regex/fancy-regex) |
 | fastrand 2.5.0 | Apache-2.0 OR MIT | [github.com/smol-rs/fastrand](https://github.com/smol-rs/fastrand) |
+| fax 0.2.7 | MIT | [github.com/pdf-rs/fax](https://github.com/pdf-rs/fax) |
 | fdeflate 0.3.7 | MIT OR Apache-2.0 | [github.com/image-rs/fdeflate](https://github.com/image-rs/fdeflate) |
 | ff 0.13.1 | MIT/Apache-2.0 | [github.com/zkcrypto/ff](https://github.com/zkcrypto/ff) |
 | fiat-crypto 0.2.9 | MIT OR Apache-2.0 OR BSD-1-Clause | [github.com/mit-plv/fiat-crypto](https://github.com/mit-plv/fiat-crypto) |
@@ -221,6 +223,7 @@ texts follow the table, once per distinct text.
 | gtk 0.18.2 | MIT | [github.com/gtk-rs/gtk3-rs](https://github.com/gtk-rs/gtk3-rs) |
 | gtk-sys 0.18.2 | MIT | [github.com/gtk-rs/gtk3-rs](https://github.com/gtk-rs/gtk3-rs) |
 | gtk3-macros 0.18.2 | MIT | [github.com/gtk-rs/gtk3-rs](https://github.com/gtk-rs/gtk3-rs) |
+| half 2.7.1 | MIT OR Apache-2.0 | [github.com/VoidStarKat/half-rs](https://github.com/VoidStarKat/half-rs) |
 | hashbrown 0.15.5 | MIT OR Apache-2.0 | [github.com/rust-lang/hashbrown](https://github.com/rust-lang/hashbrown) |
 | hashbrown 0.17.1 | MIT OR Apache-2.0 | [github.com/rust-lang/hashbrown](https://github.com/rust-lang/hashbrown) |
 | heck 0.4.1 | MIT OR Apache-2.0 | [github.com/withoutboats/heck](https://github.com/withoutboats/heck) |
@@ -361,6 +364,7 @@ texts follow the table, once per distinct text.
 | profiling 1.0.18 | MIT OR Apache-2.0 | [github.com/aclysma/profiling](https://github.com/aclysma/profiling) |
 | pulldown-cmark 0.12.2 | MIT | [github.com/raphlinus/pulldown-cmark](https://github.com/raphlinus/pulldown-cmark) |
 | pxfm 0.1.30 | BSD-3-Clause OR Apache-2.0 | [github.com/awxkee/pxfm](https://github.com/awxkee/pxfm) |
+| quick-error 2.0.1 | MIT/Apache-2.0 | [github.com/tailhook/quick-error](http://github.com/tailhook/quick-error) |
 | quick-xml 0.41.0 | MIT | [github.com/tafia/quick-xml](https://github.com/tafia/quick-xml) |
 | quote 1.0.47 | MIT OR Apache-2.0 | [github.com/dtolnay/quote](https://github.com/dtolnay/quote) |
 | r-efi 5.3.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later | [github.com/r-efi/r-efi](https://github.com/r-efi/r-efi) |
@@ -459,6 +463,7 @@ texts follow the table, once per distinct text.
 | thiserror 2.0.21 | MIT OR Apache-2.0 | [github.com/dtolnay/thiserror](https://github.com/dtolnay/thiserror) |
 | thiserror-impl 1.0.69 | MIT OR Apache-2.0 | [github.com/dtolnay/thiserror](https://github.com/dtolnay/thiserror) |
 | thiserror-impl 2.0.21 | MIT OR Apache-2.0 | [github.com/dtolnay/thiserror](https://github.com/dtolnay/thiserror) |
+| tiff 0.11.3 | MIT | [github.com/image-rs/image-tiff](https://github.com/image-rs/image-tiff) |
 | tiny-skia 0.11.4 | BSD-3-Clause | [github.com/RazrFalcon/tiny-skia](https://github.com/RazrFalcon/tiny-skia) |
 | tiny-skia-path 0.11.4 | BSD-3-Clause | [github.com/RazrFalcon/tiny-skia/tree/master/path](https://github.com/RazrFalcon/tiny-skia/tree/master/path) |
 | tinystr 0.8.4 | Unicode-3.0 | [github.com/unicode-org/icu4x](https://github.com/unicode-org/icu4x) |
@@ -583,6 +588,7 @@ texts follow the table, once per distinct text.
 | webbrowser 1.2.4 | MIT OR Apache-2.0 | [github.com/amodm/webbrowser-rs](https://github.com/amodm/webbrowser-rs) |
 | webpki-roots 0.26.11 | CDLA-Permissive-2.0 | [github.com/rustls/webpki-roots](https://github.com/rustls/webpki-roots) |
 | webpki-roots 1.0.9 | CDLA-Permissive-2.0 | [github.com/rustls/webpki-roots](https://github.com/rustls/webpki-roots) |
+| weezl 0.1.12 | MIT OR Apache-2.0 | [github.com/image-rs/weezl](https://github.com/image-rs/weezl) |
 | wgpu 23.0.1 | MIT OR Apache-2.0 | [github.com/gfx-rs/wgpu](https://github.com/gfx-rs/wgpu) |
 | wgpu-core 23.0.1 | MIT OR Apache-2.0 | [github.com/gfx-rs/wgpu](https://github.com/gfx-rs/wgpu) |
 | wgpu-hal 23.0.1 | MIT OR Apache-2.0 | [github.com/gfx-rs/wgpu](https://github.com/gfx-rs/wgpu) |
@@ -652,6 +658,8 @@ texts follow the table, once per distinct text.
 | zerovec-derive 0.11.6 | Unicode-3.0 | [github.com/unicode-org/icu4x](https://github.com/unicode-org/icu4x) |
 | zlib-rs 0.6.8 | Zlib | [github.com/trifectatechfoundation/zlib-rs](https://github.com/trifectatechfoundation/zlib-rs) |
 | zmij 1.0.23 | MIT | [github.com/dtolnay/zmij](https://github.com/dtolnay/zmij) |
+| zune-core 0.5.3 | MIT OR Apache-2.0 OR Zlib | [github.com/etemesi254/zune-image](https://github.com/etemesi254/zune-image) |
+| zune-jpeg 0.5.15 | MIT OR Apache-2.0 OR Zlib | [github.com/etemesi254/zune-image/tree/dev/crates/zune-jpeg](https://github.com/etemesi254/zune-image/tree/dev/crates/zune-jpeg) |
 | zvariant 5.15.0 | MIT | [github.com/z-galaxy/zbus/](https://github.com/z-galaxy/zbus/) |
 | zvariant_derive 5.15.0 | MIT | [github.com/z-galaxy/zbus/](https://github.com/z-galaxy/zbus/) |
 | zvariant_utils 4.2.0 | MIT | [github.com/z-galaxy/zbus/](https://github.com/z-galaxy/zbus/) |
@@ -736,7 +744,7 @@ PERFORMANCE OF THIS SOFTWARE.
 
 ### Apache-2.0
 
-This exact text is filed by 22 crates, among them ab_glyph 0.2.32, ab_glyph_rasterizer 0.1.10, android-activity 0.6.1, arboard 3.6.1, … widestring 1.2.1.
+This exact text is filed by 23 crates, among them ab_glyph 0.2.32, ab_glyph_rasterizer 0.1.10, android-activity 0.6.1, arboard 3.6.1, … widestring 1.2.1.
 
 ```text
 Apache License
@@ -1329,7 +1337,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
-This exact text is filed by 134 crates, among them ahash 0.8.12, arrayvec 0.7.8, async-channel 2.5.0, async-executor 1.14.0, … zeno 0.2.3.
+This exact text is filed by 135 crates, among them ahash 0.8.12, arrayvec 0.7.8, async-channel 2.5.0, async-executor 1.14.0, … zeno 0.2.3.
 
 ```text
 Apache License
@@ -1946,7 +1954,7 @@ This exact text is filed by 41 crates, among them arborium-asciidoc 2.18.2, arbo
 NOT FOUND
 ```
 
-This exact text is filed by 16 crates, among them as-raw-xcb-connection 1.0.1, dekobon-tree-sitter-groovy 0.3.0, egui_commonmark 0.19.0, egui_commonmark_backend 0.19.0, … zeroize 1.9.0.
+This exact text is filed by 18 crates, among them as-raw-xcb-connection 1.0.1, dekobon-tree-sitter-groovy 0.3.0, egui_commonmark 0.19.0, egui_commonmark_backend 0.19.0, … zune-jpeg 0.5.15.
 
 ```text
 Apache License
@@ -2897,7 +2905,7 @@ Apache License
    limitations under the License.
 ```
 
-This exact text is filed by 20 crates, among them crc32fast 1.5.2, dpi 0.1.2, foreign-types 0.5.0, foreign-types-macros 0.2.4, … winit 0.30.13.
+This exact text is filed by 21 crates, among them crc32fast 1.5.2, dpi 0.1.2, foreign-types 0.5.0, foreign-types-macros 0.2.4, … winit 0.30.13.
 
 ```text
 Apache License
@@ -9839,7 +9847,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-This exact text is filed by android-activity 0.6.1, simdutf8 0.1.5, str_indices 0.4.4, widestring 1.2.1.
+This exact text is filed by android-activity 0.6.1, half 2.7.1, simdutf8 0.1.5, str_indices 0.4.4, widestring 1.2.1.
 
 ```text
 MIT License
@@ -10880,6 +10888,32 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
+This exact text is filed by crunchy 0.2.4.
+
+```text
+The MIT License (MIT)
+
+Copyright 2017-2023 Eira Fransham.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 This exact text is filed by crypto-bigint 0.5.5, pem-rfc7468 0.7.0.
 
 ```text
@@ -11653,6 +11687,18 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+```
+
+This exact text is filed by fax 0.2.7.
+
+```text
+Copyright © 2021 The pdf-rs contributers.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the “Software”), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
 This exact text is filed by fdeflate 0.3.7, image 0.25.10.
@@ -13628,6 +13674,30 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
+This exact text is filed by quick-error 2.0.1.
+
+```text
+Copyright (c) 2015 The quick-error Developers
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 This exact text is filed by quick-xml 0.41.0.
 
 ```text
@@ -14601,6 +14671,32 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+```
+
+This exact text is filed by tiff 0.11.3.
+
+```text
+MIT License
+
+Copyright (c) 2018 PistonDevelopers
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ```
 
 This exact text is filed by tinyvec 1.13.3.
@@ -15826,6 +15922,32 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
+This exact text is filed by weezl 0.1.12.
+
+```text
+The MIT License (MIT)
+
+Copyright (c) HeroicKatora 2020
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 This exact text is filed by wgpu 23.0.1, wgpu-core 23.0.1, wgpu-hal 23.0.1, wgpu-types 23.0.0.
 
 ```text
@@ -16225,6 +16347,32 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
+This exact text is filed by zune-core 0.5.3, zune-jpeg 0.5.15.
+
+```text
+MIT License
+
+Copyright (c) zune-image developers
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ### OFL-1.1
 
 Every crate above that names this licence is covered by this text.
@@ -16541,5 +16689,29 @@ freely, subject to the following restrictions:
 2. Altered source versions must be plainly marked as such, and must not be
    misrepresented as being the original software.
 
+3. This notice may not be removed or altered from any source distribution.
+```
+
+This exact text is filed by zune-core 0.5.3, zune-jpeg 0.5.15.
+
+```text
+zlib License
+
+(C) zune-image developers
+
+This software is provided 'as-is', without any express or implied
+warranty. In no event will the authors be held liable for any damages
+arising from the use of this software.
+
+Permission is granted to anyone to use this software for any purpose,
+including commercial applications, and to alter it and redistribute it
+freely, subject to the following restrictions:
+
+1. The origin of this software must not be misrepresented; you must not
+   claim that you wrote the original software. If you use this software
+   in a product, an acknowledgment in the product documentation would be
+   appreciated but is not required.
+2. Altered source versions must be plainly marked as such, and must not be
+   misrepresented as being the original software.
 3. This notice may not be removed or altered from any source distribution.
 ```

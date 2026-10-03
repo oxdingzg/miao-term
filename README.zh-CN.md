@@ -367,13 +367,12 @@ mtty-cli state claude --state processing --pane ID
 **mtty** 的产品方向、
 已验证的功能基线与里程碑计划见 [`docs/PRODUCT.zh-CN.md`](docs/PRODUCT.zh-CN.md)。
 
-接下来的里程碑:
+已完成的里程碑:
 
-- **M5 编辑器 pane**([ADR 0034](docs/decisions/0034-editor-pane.zh-CN.md)):E1 `term-editor` 内核已完成;接下来是
-  pane 本身,然后是 tree-sitter 高亮、多光标与查找替换、LSP 和 vim 模式。
-- **M6 远程(PuTTY 式)**:串口、Telnet 与原始 TCP 会话,导入 `.ppk` 密钥;是否把 SSH 换成 Rust 原生实现,是一个待定的
-  设计问题。
-- **M7 AI 原生工作台**:agent 的修改以可撤销的 diff 在行内审阅,ACP 客户端,一步把选区、诊断与终端输出交给 agent。
+- **M5 编辑器 pane**：rope 文档、tree-sitter 高亮、多光标、查找替换、LSP、vim、折叠与 Markdown 预览。
+- **M6 远程(PuTTY 式)**：串口、Telnet、原始 TCP 与加密 `.ppk` 导入；SSH 按 ADR 0039 继续使用系统 OpenSSH。
+- **M7 Agent 工作台**：可撤销的修改提案、ACP 会话和上下文交接。ACP 支持认证、加载会话及终端请求；
+  文件写入在用户审阅并保存后才报告成功。
 
 近期已完成:Windows 命名管道传输与 ConPTY 路径(真实硬件验证)、会话恢复、View 规则、
 Open Quickly、details 面板、agent 闭环(通知、防休眠、提示队列)、Recipes、经 ssh 的远端
@@ -384,16 +383,11 @@ CI 性能基线已持久化于 `benches/perf-baseline.json`,由 nightly/手动�
 
 仍待完成:
 
-- **发布验收**:正式版本由四个 runner 构建、经 minisign 签名并附带更新清单发布(最新为 v0.1.3)。
-  通过"软件更新"升级已安装的应用,仍需在各类桌面上端到端验证;**Apple 公证**与 **Windows MSI 签名**
-  需要凭证。见 `docs/RELEASE.zh-CN.md`。
-- **平台验证(需要硬件)**:Linux 的 wgpu 渲染路径已在 CI 中通过 Mesa 软件 Vulkan(lavapipe)
-  覆盖,Windows 也在真机上经 MTP 驱动;真实 Linux 桌面会话、Wayland 门户热键、Windows 的
-  IME/GUI 路径仍需一台交互机器。
-- **更新安装**:macOS 替换流程已用打包后的 app 与测试签名的发布包做过端到端验证(篡改的包会被拒绝);
-  AppImage 与 Windows 辅助脚本有单元测试,尚未在这两类桌面上实际运行。
-- **单一原生应用**:原 native 实现统一以 mtty 发布；配置和会话保留迁移兼容，
-  见 [APP-IDENTITY.zh-CN.md](docs/APP-IDENTITY.zh-CN.md)。
+- **发布签名**：Apple 公证与 Windows MSI 签名仍需要所有者提供凭证；发布包已有 minisign 签名和更新清单。
+- **验收记录**：本轮桌面更新、输入法、剪贴板、传输与 Agent 验收结果及边界见
+  [ACCEPTANCE.zh-CN.md](docs/ACCEPTANCE.zh-CN.md)。
+- **Kitty 键盘协议**：尚未报告替代键和关联文本。
+
 - **终端内联图片**:不模拟 Kitty 的 z-index(图片绘制在网格之上);回滚容量内锚定精确,超出后
   为近似(alacritty 不暴露滚动计数,除非打补丁);会话恢复不保留图像(会与恢复的内容不一致)。
 - **Mermaid**:内置子集覆盖 `graph`/`flowchart`、`sequenceDiagram`、`stateDiagram`、

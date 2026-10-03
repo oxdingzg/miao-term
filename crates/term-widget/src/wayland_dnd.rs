@@ -125,24 +125,57 @@ impl Dnd {
     /// The clipboard as text, or `None` when it holds no text (or the owner
     /// does not answer within a second). Blocks briefly: call it for a paste.
     pub fn selection_text(&mut self) -> Option<String> {
+        let buf = self.selection_bytes(&TEXT_MIMES)?;
+        Some(String::from_utf8_lossy(&buf).into_owned())
+    }
+
+    /// PNG data from the same selection as text pastes. Using our existing
+    /// device is essential on compositors which notify only one per client.
+    pub fn selection_image(&mut self) -> Option<Vec<u8>> {
+        let bytes = self.selection_bytes(&["image/png"])?;
+        png_selection(bytes)
+    }
+
+    fn selection_bytes(&mut self, accepted: &[&str]) -> Option<Vec<u8>> {
         let _ = self.queue.dispatch_pending(&mut self.inner);
         let (offer, mimes) = self.inner.selection.as_ref()?;
-        let mime = TEXT_MIMES
+        let mime = accepted
             .iter()
             .find(|m| mimes.iter().any(|have| have == *m))?;
         let (mut read, write) = std::os::unix::net::UnixStream::pair().ok()?;
+        read.set_read_timeout(Some(std::time::Duration::from_secs(1)))
+            .ok()?;
         offer.receive(mime.to_string(), write.as_fd());
         drop(write);
         self.conn.flush().ok()?;
         let (tx, rx) = channel();
         std::thread::spawn(move || {
             let mut buf = Vec::new();
-            let _ = read.read_to_end(&mut buf);
-            let _ = tx.send(buf);
+            // Cap untrusted clipboard data and stop stalled owners, including
+            // the helper thread after the caller's timeout.
+            const LIMIT: u64 = 64 << 20;
+            if (&mut read).take(LIMIT + 1).read_to_end(&mut buf).is_ok()
+                && buf.len() <= LIMIT as usize
+            {
+                let _ = tx.send(buf);
+            }
         });
         let buf = rx.recv_timeout(std::time::Duration::from_secs(1)).ok()?;
-        Some(String::from_utf8_lossy(&buf).into_owned())
+        Some(buf)
     }
+}
+
+/// An owner can advertise PNG but return empty or unrelated data after its
+/// selection expires. Do not turn that response into a clipboard image file.
+fn png_selection(bytes: Vec<u8>) -> Option<Vec<u8>> {
+    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return None;
+    }
+    let (width, height) =
+        image::ImageReader::with_format(std::io::Cursor::new(&bytes), image::ImageFormat::Png)
+            .into_dimensions()
+            .ok()?;
+    (width > 0 && height > 0).then_some(bytes)
 }
 
 /// Local paths from a `text/uri-list` (RFC 2483): `file://` URIs only,
@@ -325,6 +358,19 @@ impl Dispatch<WlDataDevice, ()> for Inner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn png_selection_rejects_expired_and_mislabeled_offers() {
+        use image::ImageEncoder;
+        assert!(png_selection(Vec::new()).is_none());
+        assert!(png_selection(b"text instead of an image".to_vec()).is_none());
+        assert!(png_selection(b"\x89PNG\r\n\x1a\n".to_vec()).is_none());
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(&[255, 0, 0, 128], 1, 1, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        assert_eq!(png_selection(png.clone()), Some(png));
+    }
 
     #[test]
     fn uri_lists_become_local_paths() {

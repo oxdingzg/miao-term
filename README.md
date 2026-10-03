@@ -463,17 +463,15 @@ The product direction for **mtty**, the
 verified feature baseline and the milestone plan live in
 [`docs/PRODUCT.md`](docs/PRODUCT.md).
 
-Next milestones:
+Completed milestones:
 
-- **M5 Editor pane** ([ADR 0034](docs/decisions/0034-editor-pane.md)): E1, the
-  `term-editor` core, is done; next the pane itself, then tree-sitter
-  highlighting, multi-cursor and find/replace, LSP, and a vim mode.
-- **M6 Remote, PuTTY-style**: serial, Telnet and raw TCP sessions, `.ppk` key
-  import; whether to move SSH to a Rust-native stack is an open design
-  question.
-- **M7 AI-native workspace**: agents' edits reviewed inline as undoable diffs,
-  an ACP client, and selections, diagnostics and terminal output sent to an
-  agent in one step.
+- **M5 Editor pane**: rope documents, tree-sitter highlighting, multi-cursor,
+  find/replace, LSP, vim, folds and Markdown previews.
+- **M6 Remote, PuTTY-style**: serial, Telnet, raw TCP and encrypted `.ppk`
+  import. System OpenSSH remains the selected SSH backend (ADR 0039).
+- **M7 Agent workspace**: undoable edit proposals, ACP sessions and context
+  handoff. ACP supports authentication, loading sessions and terminal requests;
+  file writes wait for review and saving before reporting success.
 
 Done recently: the Windows named-pipe transport and ConPTY path (verified on
 real hardware), session restore, View rules, Open Quickly, the details panels,
@@ -486,20 +484,11 @@ report-only, with absolute budgets enforced.
 
 Still open:
 
-- **Release acceptance**: releases are built on four runners, signed with
-  minisign and published with an update manifest (latest: v0.1.3). Updating an
-  installed app through Software Update still needs an end-to-end check on each
-  desktop; **Apple notarization** and **Windows MSI signing** require
-  credentials. See [`docs/RELEASE.md`](docs/RELEASE.md).
-- **Platform verification (needs hardware)**: the Linux wgpu render path runs in
-  CI via Mesa software Vulkan (lavapipe) and Windows is driven over MTP on real
-  hardware; a real Linux desktop session, the Wayland portal hotkey and the
-  Windows IME/GUI paths still need an interactive machine.
-- **Update install**: the macOS swap is checked end to end with a packaged app
-  and a test-signed release (and tampered packages are refused); the AppImage and
-  Windows helpers are unit-tested, not yet run on those desktops.
-- **Single native application**: mtty replaces the former dual-host release;
-  see [APP-IDENTITY.md](docs/APP-IDENTITY.md).
+- **Release signing**: Apple notarization and Windows MSI signing need owner
+  credentials. Releases already carry minisign signatures and update manifests.
+- **Acceptance**: current desktop update, IME, clipboard, transport and agent
+  results, including their limits, are in [ACCEPTANCE.md](docs/ACCEPTANCE.md).
+- **Kitty keyboard**: alternate keys and associated text are not reported yet.
 
 - **Inline graphics**: Kitty z-index is not modelled (images paint over the
   grid); anchors are exact up to the scrollback cap and approximate past it
