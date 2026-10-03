@@ -122,6 +122,14 @@ __mtty_osc7
 "#;
 
 const PWSH_SCRIPT: &str = r#"# mtty shell integration (PowerShell) — auto-generated, do not edit.
+# Make the pane's console UTF-8. A ConPTY starts on the system locale's code
+# page, so native programs that write UTF-8 bytes (instead of going through
+# WriteConsoleW) would otherwise show non-ASCII text as mojibake.
+try {
+    [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
+    [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+} catch {}
 if (Test-Path variable:global:__mttyLoaded) { return }
 $global:__mttyLoaded = $true
 $global:__mttyRan = $false
@@ -178,6 +186,7 @@ pub enum Kind {
     Bash,
     Fish,
     PowerShell,
+    CommandPrompt,
 }
 
 /// The shell kind from its path (`/bin/zsh`, `C:\…\pwsh.exe`, …).
@@ -192,6 +201,7 @@ pub fn kind(shell: &str) -> Option<Kind> {
         "bash" => Some(Kind::Bash),
         "fish" => Some(Kind::Fish),
         "pwsh" | "powershell" => Some(Kind::PowerShell),
+        "cmd" => Some(Kind::CommandPrompt),
         _ => None,
     }
 }
@@ -200,10 +210,16 @@ pub fn kind(shell: &str) -> Option<Kind> {
 /// and the user's login profile before the interactive configuration.
 pub fn startup_args(shell: &str) -> &'static [&'static str] {
     if cfg!(target_os = "macos") && kind(shell) == Some(Kind::Zsh) {
-        &["-l"]
-    } else {
-        &[]
+        return &["-l"];
     }
+    // A ConPTY console starts on the system locale's code page (936, 932, …),
+    // and a program that writes UTF-8 bytes without going through
+    // `WriteConsoleW` — Bun and the native TUI renderers do — is shown there as
+    // mojibake. Turn the pane's console into UTF-8 before the first prompt.
+    if cfg!(windows) && kind(shell) == Some(Kind::CommandPrompt) {
+        return &["/k", "chcp 65001>nul"];
+    }
+    &[]
 }
 
 /// What to add to a shell's command line and environment.
@@ -338,6 +354,9 @@ pub fn integration(shell: &str, env: &dyn Fn(&str) -> Option<String>) -> Integra
             },
             None => Integration::default(),
         },
+        // cmd.exe has no integration, but it does get the UTF-8 console code
+        // page through `startup_args`.
+        Kind::CommandPrompt => Integration::default(),
     }
 }
 
@@ -384,6 +403,16 @@ mod tests {
         assert!(
             String::from_utf8_lossy(&output.stdout).contains(executable.to_string_lossy().as_ref())
         );
+    }
+
+    #[test]
+    fn recognises_cmd_for_the_code_page() {
+        assert_eq!(
+            kind(r"C:\Windows\System32\cmd.exe"),
+            Some(Kind::CommandPrompt)
+        );
+        // A non-cmd shell keeps an empty argument line on every platform.
+        assert!(startup_args("/bin/fish").is_empty());
     }
 
     #[test]
