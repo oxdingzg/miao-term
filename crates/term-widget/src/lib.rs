@@ -3025,11 +3025,15 @@ impl State {
                 }
             }
         }
-        // Drain every pane.
+        // Drain every pane. Output keeps a scrolled-back viewport on the same
+        // lines (the emulator grows its display offset as lines enter history),
+        // so agents that redraw a spinner every second do not yank the reader
+        // back to the bottom; input, paste and clears still return there.
         for tab in &mut self.tabs {
             for pane in &mut tab.panes {
+                pane.term.screen_mut().set_scrollback(pane.scroll);
                 if pane.term.process_pending() {
-                    pane.scroll = 0;
+                    pane.scroll = pane.term.screen().scroll_offset();
                 }
             }
         }

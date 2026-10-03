@@ -662,6 +662,24 @@ mod tests {
     }
 
     #[test]
+    fn output_keeps_a_scrolled_back_viewport_anchored() {
+        let mut t = ATerm::new(10, 3, 100);
+        t.process(b"a\r\nb\r\nc\r\nd\r\ne");
+        t.set_scrollback(2);
+        // A redraw in place (spinner) moves no line into history.
+        t.process(b"\re*");
+        assert_eq!(t.scroll_offset(), 2);
+        assert_eq!(t.line_text(0), "a");
+        // New lines push into history; the offset grows to keep "a" on top.
+        t.process(b"\r\nf\r\ng");
+        assert_eq!(t.scroll_offset(), 4);
+        assert_eq!(t.line_text(0), "a");
+        // The pane re-applies that offset next frame without moving the view.
+        t.set_scrollback(t.scroll_offset());
+        assert_eq!(t.line_text(0), "a");
+    }
+
+    #[test]
     fn absolute_line_text_skips_wide_spacers() {
         let mut t = ATerm::new(20, 3, 100);
         t.process("ab目录c".as_bytes());
