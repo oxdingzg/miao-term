@@ -57,7 +57,7 @@ palette    = ["#3b4252", "#bf616a", "#a3be8c", "#ebcb8b",
 | `remote-listen` | — | 用 TCP 暴露 MTP 控制面，如 `127.0.0.1:7273`(需 `MTTY_MTP_TOKEN`) |
 | `language` | — | 界面语言，`en` 或 `zh`;也会读取 `$LANG` |
 | `update-pubkey` | — | minisign 公钥;启用签名校验 |
-| `update-check-url` | — | 更新清单地址，见下文 |
+| `update-check-url` | 项目自己的清单 | 更新检查去哪里取；见下文 |
 | `theme` | — | 内置命名主题，会被显式的 `[colors]` 覆盖 |
 
 ### 标签徽章
@@ -110,11 +110,26 @@ error = true
 
 ### 更新检查
 
+**你不主动查，它就一个请求都不发。** mtty 启动时不做任何请求;检查由菜单里的「Check for Updates」
+发起，以及更新对话框在失败后提供的重试按钮。发起时就是一条普通的 `curl`:
+
+```sh
+curl -fsSL --max-time 8 <update-check-url>
+```
+
+`update-check-url` 已经指向项目自己的发布清单，所以这个键只用于改到别处 —— 镜像站或内部主机:
+
 ```toml
-# update-pubkey = "RW…"            # minisign 公钥;启用签名校验
 # update-check-url = "https://example.com/mtty/latest.json"
 #   JSON 清单: {"version":"0.2.0","artifacts":{"macos-aarch64":{"url":"…","sha256":"…"}}}
 #   首行为版本号的纯文本文件同样可用。
+```
+
+下载下来的产物会与清单里声明的 `sha256` 核对。把 `update-pubkey` 设为 minisign 公钥可以额外要求
+签名校验:
+
+```toml
+# update-pubkey = "RW…"
 ```
 
 ## Shell 集成
