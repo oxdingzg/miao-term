@@ -368,7 +368,7 @@ pub fn download_verified(
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let path = dir.join(&name);
     let curl = |args: &[&str]| {
-        std::process::Command::new("curl")
+        miao_term_platform::background_command("curl")
             .args(["-fsSL", "--proto", "=https,file"])
             .args(args)
             .output()
@@ -506,7 +506,7 @@ t+gWHfmlkGM5SoMqXUkBvKwxms2sV0uR79Q4Xsnk42jdyFJ1AS1RuLQKXe0dIrQgW0flxW8/q6jndgI3
             return;
         }
         let url = "https://github.com/oxdingzg/miao-term/releases/latest/download/latest.json";
-        let out = std::process::Command::new("curl")
+        let out = miao_term_platform::background_command("curl")
             .args(["-fsSL", url])
             .output()
             .unwrap();

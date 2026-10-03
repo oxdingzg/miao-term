@@ -8002,7 +8002,7 @@ impl State {
         };
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let out = std::process::Command::new("curl")
+            let out = miao_term_platform::background_command("curl")
                 .args(["-fsSL", "--max-time", "8", &url])
                 .output();
             let result = match out {
@@ -12773,7 +12773,9 @@ fn open_external(target: &str) {
     let cmd = ("cmd", vec!["/C", "start", "", target]);
     #[cfg(all(unix, not(target_os = "macos")))]
     let cmd = ("xdg-open", vec![target]);
-    let _ = std::process::Command::new(cmd.0).args(cmd.1).spawn();
+    let _ = miao_term_platform::background_command(cmd.0)
+        .args(cmd.1)
+        .spawn();
 }
 
 fn quad(ox: f32, oy: f32, row: u16, col: u16, cw: f32, ch: f32, color: (u8, u8, u8)) -> Quad {

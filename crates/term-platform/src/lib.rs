@@ -9,6 +9,21 @@
 
 use std::process::Command;
 
+/// Build a background command without creating a Windows console window.
+/// Output can still be captured with `Command::output`; GUI tools retain
+/// their own windows. Use ordinary commands for interactive terminal shells.
+pub fn background_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let command = Command::new(program);
+    #[cfg(windows)]
+    let command = {
+        use std::os::windows::process::CommandExt;
+        let mut command = command;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        command
+    };
+    command
+}
+
 #[cfg(target_os = "macos")]
 mod macos;
 
@@ -137,6 +152,25 @@ fn escape_ps(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(windows)]
+    fn background_process_has_no_console_and_captures_output() {
+        // Query the actual child process, rather than just checking its flags.
+        let script = r#"
+Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class ConsoleProbe { [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow(); }'
+[Console]::Out.WriteLine([ConsoleProbe]::GetConsoleWindow().ToInt64())
+[Console]::Error.WriteLine('probe stderr')
+exit 7
+"#;
+        let out = background_command("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", script])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(7));
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "0");
+        assert_eq!(String::from_utf8_lossy(&out.stderr).trim(), "probe stderr");
+    }
 
     #[test]
     fn escapes_applescript_strings() {
