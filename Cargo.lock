@@ -2811,6 +2811,7 @@ dependencies = [
  "alacritty_terminal",
  "libc",
  "miao-term-graphics",
+ "miao-term-ptyhost",
  "portable-pty",
  "serde",
  "serde_json",
@@ -2965,6 +2966,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "miao-term-ptyhost"
+version = "0.0.20"
+dependencies = [
+ "libc",
+ "miao-term-core",
+ "portable-pty",
+ "serde_json",
+]
+
+[[package]]
 name = "miao-term-render"
 version = "0.0.20"
 dependencies = [
@@ -3010,6 +3021,7 @@ dependencies = [
  "miao-term-lsp",
  "miao-term-mtp",
  "miao-term-platform",
+ "miao-term-ptyhost",
  "miao-term-render",
  "miao-term-ui",
  "muda",

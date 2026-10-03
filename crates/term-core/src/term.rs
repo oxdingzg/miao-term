@@ -10,6 +10,7 @@ use std::thread;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
 use crate::aterm::ATerm;
+use crate::hosted::Incoming;
 
 type Fallible<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -38,7 +39,10 @@ pub struct Terminal {
     /// The child shell, for a PTY session; `None` for a byte pipe.
     #[allow(dead_code)]
     child: Option<Box<dyn Child + Send + Sync>>,
-    rx: Receiver<Vec<u8>>,
+    rx: Receiver<Incoming>,
+    /// The PTY host, for a pane whose program outlives the app (ADR 0041).
+    #[cfg(unix)]
+    host: Option<crate::hosted::HostLink>,
     waker: std::sync::Arc<dyn Fn() + Send + Sync>,
     rows: u16,
     cols: u16,
@@ -96,6 +100,16 @@ impl Drop for Terminal {
             let _ = child.kill();
             let _ = child.wait();
         }
+        // A hosted program ends with its pane, unless it was detached.
+        #[cfg(unix)]
+        if let Some(host) = &self.host {
+            use miao_term_ptyhost::proto::ToHost;
+            host.send(if host.end_on_drop {
+                ToHost::Kill
+            } else {
+                ToHost::Detach
+            });
+        }
         // Drain output the shell already produced (bounded).
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
         while std::time::Instant::now() < deadline && self.rx.try_recv().is_ok() {}
@@ -127,72 +141,8 @@ impl Terminal {
         extra_env: &[(String, String)],
         waker: std::sync::Arc<dyn Fn() + Send + Sync>,
     ) -> Fallible<Self> {
-        let pty_system = native_pty_system();
-        let pair = pty_system.openpty(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })?;
-
-        let shell_path = shell.unwrap_or_else(default_shell);
-        let mut cmd = CommandBuilder::new(&shell_path);
-        cmd.args(crate::shell::startup_args(&shell_path));
-        // CommandBuilder already inherits the environment and, on Windows,
-        // refreshes machine/user variables from the registry. Reapplying the
-        // host's startup snapshot here would undo updated PATH/proxy values.
-        cmd.env("TERM", "xterm-256color");
-        cmd.env("COLORTERM", "truecolor");
-        if let Some((k, v)) = default_colour_env(|name| cmd.get_env(name).is_some()) {
-            cmd.env(k, v);
-        }
-        #[cfg(unix)]
-        if ["LC_ALL", "LC_CTYPE", "LANG"]
-            .iter()
-            .all(|name| std::env::var(name).map_or(true, |value| value.is_empty()))
-        {
-            // Finder and minimal launch environments omit the locale. Bash
-            // otherwise interprets UTF-8 bytes as Meta keys (including Tab).
-            cmd.env(
-                "LC_CTYPE",
-                if cfg!(target_os = "macos") {
-                    "UTF-8"
-                } else {
-                    "C.UTF-8"
-                },
-            );
-        }
-        for (k, v) in extra_env {
-            cmd.env(k, v);
-        }
-        // The environment the shell will see, for values the shim restores.
-        let seen = |name: &str| {
-            extra_env
-                .iter()
-                .rev()
-                .find(|(k, _)| k == name)
-                .map(|(_, v)| v.clone())
-                .or_else(|| {
-                    cmd.get_env(name)
-                        .map(|value| value.to_string_lossy().into_owned())
-                })
-        };
-        let integration = crate::shell::integration(&shell_path, &seen);
-        cmd.args(&integration.args);
-        for (k, v) in integration.env {
-            cmd.env(k, v);
-        }
-        let cwd = cwd.or_else(|| std::env::current_dir().ok());
-        if let Some(dir) = &cwd {
-            cmd.cwd(dir);
-        }
-
-        let child = pair.slave.spawn_command(cmd)?;
-        drop(pair.slave);
-
-        let reader = pair.master.try_clone_reader()?;
-        let writer = pair.master.take_writer()?;
-
+        let (cmd, cwd) = shell_command(shell, cwd, extra_env);
+        let (master, child, reader, writer) = spawn_local(cmd, cols, rows)?;
         Ok(Self::pipe(
             cols,
             rows,
@@ -200,12 +150,373 @@ impl Terminal {
             reader,
             writer,
             waker,
-            Some(pair.master),
+            Some(master),
             Some(child),
-            cwd.map(|p| p.to_string_lossy().into_owned()),
+            cwd,
         ))
     }
 
+    /// Spawn a shell whose PTY lives in a host process (ADR 0041), so it
+    /// outlives the app. Fails only when the host cannot be started at all;
+    /// a host that never answers turns the pane into a local one.
+    #[cfg(unix)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_hosted(
+        config: &crate::hosted::HostConfig,
+        shell: Option<String>,
+        cols: u16,
+        rows: u16,
+        scrollback: usize,
+        cwd: Option<std::path::PathBuf>,
+        extra_env: &[(String, String)],
+        waker: std::sync::Arc<dyn Fn() + Send + Sync>,
+    ) -> Fallible<Self> {
+        use miao_term_ptyhost::launch;
+        let (cmd, cwd) = shell_command(shell, cwd, extra_env);
+        let dir = launch::hosts_dir()?;
+        let id = launch::new_id()?;
+        let socket = launch::socket_path(&dir, &id);
+        let args = miao_term_ptyhost::host::HostArgs {
+            socket: socket.clone(),
+            meta: Some(launch::meta_path(&dir, &id)),
+            cols,
+            rows,
+            ring: config.ring,
+            timeout: config.timeout,
+            cwd: cmd.get_cwd().map(std::path::PathBuf::from),
+            argv: cmd.get_argv().clone(),
+        };
+        launch::spawn(&config.binary, &args, cmd.iter_full_env_as_str())?;
+        let (tx, rx) = mpsc::sync_channel::<Incoming>(PTY_QUEUE_CHUNKS);
+        let mut host = crate::hosted::start(socket, id, None, 0, tx, waker.clone());
+        host.fallback = Some(cmd);
+        let writer = host.writer();
+        let mut term = Self::assemble(
+            ATerm::new(cols, rows, scrollback),
+            scrollback,
+            rx,
+            writer,
+            waker,
+            None,
+            None,
+            cwd,
+        );
+        term.host = Some(host);
+        Ok(term)
+    }
+
+    /// Attach to a host that kept running while the app was away. With a
+    /// snapshot, the screen is rebuilt exactly as it was and only the output
+    /// since is replayed; without one, everything the host kept is.
+    #[cfg(unix)]
+    pub fn reattach(
+        id: &str,
+        socket: &std::path::Path,
+        snapshot: Option<crate::hosted::HostSnapshot>,
+        cols: u16,
+        rows: u16,
+        scrollback: usize,
+        waker: std::sync::Arc<dyn Fn() + Send + Sync>,
+    ) -> Fallible<Self> {
+        if !miao_term_ptyhost::launch::valid_id(id) {
+            return Err("not a host id".into());
+        }
+        let (stream, child_pid) = crate::hosted::connect_existing(socket)?;
+        let snapshot = snapshot.filter(|s| s.id == id);
+        let (screen, from) = match &snapshot {
+            Some(s) => (ATerm::restore_state(&s.state, scrollback), s.offset),
+            None => (ATerm::new(cols, rows, scrollback), 0),
+        };
+        let (tx, rx) = mpsc::sync_channel::<Incoming>(PTY_QUEUE_CHUNKS);
+        let mut host = crate::hosted::start(
+            socket.to_path_buf(),
+            id.to_string(),
+            Some(stream),
+            from,
+            tx,
+            waker.clone(),
+        );
+        host.set_child_pid(child_pid);
+        host.boundary = snapshot.as_ref().map_or(true, |s| s.boundary);
+        host.replaying = true;
+        host.reattached = true;
+        host.pending_resize = Some((rows, cols));
+        let writer = host.writer();
+        let mut term = Self::assemble(screen, scrollback, rx, writer, waker, None, None, None);
+        term.host = Some(host);
+        Ok(term)
+    }
+}
+
+/// The shell to run in a pane, with mtty's environment and integration, and
+/// the directory it starts in.
+fn shell_command(
+    shell: Option<String>,
+    cwd: Option<std::path::PathBuf>,
+    extra_env: &[(String, String)],
+) -> (CommandBuilder, Option<String>) {
+    let shell_path = shell.unwrap_or_else(default_shell);
+    let mut cmd = CommandBuilder::new(&shell_path);
+    cmd.args(crate::shell::startup_args(&shell_path));
+    // CommandBuilder already inherits the environment and, on Windows,
+    // refreshes machine/user variables from the registry. Reapplying the
+    // host's startup snapshot here would undo updated PATH/proxy values.
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("COLORTERM", "truecolor");
+    if let Some((k, v)) = default_colour_env(|name| cmd.get_env(name).is_some()) {
+        cmd.env(k, v);
+    }
+    #[cfg(unix)]
+    if ["LC_ALL", "LC_CTYPE", "LANG"]
+        .iter()
+        .all(|name| std::env::var(name).map_or(true, |value| value.is_empty()))
+    {
+        // Finder and minimal launch environments omit the locale. Bash
+        // otherwise interprets UTF-8 bytes as Meta keys (including Tab).
+        cmd.env(
+            "LC_CTYPE",
+            if cfg!(target_os = "macos") {
+                "UTF-8"
+            } else {
+                "C.UTF-8"
+            },
+        );
+    }
+    for (k, v) in extra_env {
+        cmd.env(k, v);
+    }
+    // The environment the shell will see, for values the shim restores.
+    let seen = |name: &str| {
+        extra_env
+            .iter()
+            .rev()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.clone())
+            .or_else(|| {
+                cmd.get_env(name)
+                    .map(|value| value.to_string_lossy().into_owned())
+            })
+    };
+    let integration = crate::shell::integration(&shell_path, &seen);
+    cmd.args(&integration.args);
+    for (k, v) in integration.env {
+        cmd.env(k, v);
+    }
+    let cwd = cwd.or_else(|| std::env::current_dir().ok());
+    if let Some(dir) = &cwd {
+        cmd.cwd(dir);
+    }
+    (cmd, cwd.map(|p| p.to_string_lossy().into_owned()))
+}
+
+/// Forward what `reader` yields to a channel, waking the UI each time so
+/// output (the echo of a keystroke, say) is drawn promptly.
+fn read_into_channel(
+    mut reader: Box<dyn Read + Send>,
+    waker: std::sync::Arc<dyn Fn() + Send + Sync>,
+) -> Receiver<Incoming> {
+    let (tx, rx) = mpsc::sync_channel::<Incoming>(PTY_QUEUE_CHUNKS);
+    thread::spawn(move || {
+        let mut buf = [0u8; PTY_READ_BYTES];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if tx.send(Incoming::Bytes(buf[..n].to_vec())).is_err() {
+                        break;
+                    }
+                    waker();
+                }
+            }
+        }
+    });
+    rx
+}
+
+/// The process group that owns `pid`'s controlling terminal (`tpgid`).
+#[cfg(unix)]
+fn terminal_group(pid: u32) -> Option<u32> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+        let size = std::mem::size_of::<libc::proc_bsdinfo>();
+        // proc_pidinfo writes this fixed-size structure only on success.
+        let n = unsafe {
+            libc::proc_pidinfo(
+                pid as libc::c_int,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                info.as_mut_ptr().cast(),
+                size as libc::c_int,
+            )
+        };
+        if n as usize != size {
+            return None;
+        }
+        let group = unsafe { info.assume_init() }.e_tpgid;
+        (group != 0).then_some(group)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // `pid (comm) state ppid pgrp session tty_nr tpgid …`; comm may hold
+        // spaces and parentheses, so count from the last ')'.
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let fields = &stat[stat.rfind(')')? + 1..];
+        let group: i64 = fields.split_whitespace().nth(5)?.parse().ok()?;
+        u32::try_from(group).ok().filter(|&g| g != 0)
+    }
+}
+
+/// Hosted panes (ADR 0041).
+#[cfg(unix)]
+impl Terminal {
+    pub fn is_hosted(&self) -> bool {
+        self.host.is_some()
+    }
+
+    /// The host's id and socket, to find it again after a restart.
+    pub fn host_id(&self) -> Option<(&str, &std::path::Path)> {
+        self.host
+            .as_ref()
+            .map(|h| (h.id.as_str(), h.socket.as_path()))
+    }
+
+    /// The screen as it stands and the output offset it covers, for
+    /// reattaching later; `None` for a pane that is not hosted, or while a
+    /// replay is still arriving.
+    pub fn host_snapshot(&mut self, max_history: usize) -> Option<crate::hosted::HostSnapshot> {
+        let host = self.host.as_ref().filter(|h| !h.replaying)?;
+        let (id, socket, offset, boundary) = (
+            host.id.clone(),
+            host.socket.clone(),
+            host.offset,
+            host.boundary,
+        );
+        Some(crate::hosted::HostSnapshot {
+            id,
+            socket,
+            offset,
+            boundary,
+            state: self.screen.snapshot_state(max_history),
+        })
+    }
+
+    /// Leave the program running when this terminal goes away (the app is
+    /// updating or quitting with its sessions kept).
+    pub fn detach_host(&mut self) {
+        if let Some(host) = self.host.as_mut() {
+            host.end_on_drop = false;
+            host.send(miao_term_ptyhost::proto::ToHost::Detach);
+        }
+    }
+
+    /// End the hosted program now (the app quits without keeping sessions;
+    /// `process::exit` would skip `Drop`).
+    pub fn end_host(&mut self) {
+        if let Some(host) = &self.host {
+            host.send(miao_term_ptyhost::proto::ToHost::Kill);
+        }
+    }
+
+    /// Output was lost while detached: take on the modes the host saw.
+    fn apply_host_modes(&mut self, modes: &[u8]) {
+        let Some(modes) = miao_term_ptyhost::scanner::Modes::decode(modes) else {
+            return;
+        };
+        if modes.alt_screen() != self.screen.alternate_screen() {
+            let switch: &[u8] = if modes.alt_screen() {
+                b"\x1b[?1049h"
+            } else {
+                b"\x1b[?1049l"
+            };
+            self.screen.process(switch);
+        }
+        self.screen.process(modes.sequences().as_bytes());
+        // Nothing here was asked by the program.
+        self.screen.take_responses(0, 0);
+    }
+
+    /// The replay is in: replies go out again, the screen takes the pane's
+    /// size, and a reattached program is made to redraw (`SIGWINCH`), which
+    /// also restores what no snapshot holds (its scroll region, say).
+    fn host_live(&mut self) {
+        let Some(host) = self.host.as_mut() else {
+            return;
+        };
+        host.replaying = false;
+        let size = host.pending_resize.take();
+        let reattached = std::mem::take(&mut host.reattached);
+        if let Some((rows, cols)) = size {
+            self.resize(rows, cols);
+        }
+        if reattached {
+            if let Some(host) = &self.host {
+                use miao_term_ptyhost::proto::ToHost;
+                let (rows, cols) = (self.rows, self.cols);
+                for rows in [rows.saturating_sub(1).max(1), rows] {
+                    host.send(ToHost::Resize {
+                        cols,
+                        rows,
+                        px_w: 0,
+                        px_h: 0,
+                    });
+                }
+            }
+        }
+    }
+
+    /// The host never answered. Before any output, run the shell in the app
+    /// instead, so a pane is never lost; after, the pane has ended.
+    fn host_failed(&mut self, reason: &str) -> bool {
+        let fallback = self.host.as_mut().and_then(|h| h.fallback.take());
+        let Some(cmd) = fallback else {
+            self.exited = true;
+            return true;
+        };
+        match spawn_local(cmd, self.cols, self.rows) {
+            Ok((master, child, reader, writer)) => {
+                if let Some(host) = &self.host {
+                    host.send(miao_term_ptyhost::proto::ToHost::Kill);
+                }
+                self.host = None;
+                self.rx = read_into_channel(reader, self.waker.clone());
+                self.writer = writer;
+                self.master = Some(master);
+                self.child = Some(child);
+                let note = format!(
+                    "\x1b[2m[mtty] The PTY host did not start ({reason}); this pane runs inside mtty.\x1b[0m\r\n"
+                );
+                self.screen.process(note.as_bytes());
+            }
+            Err(_) => self.exited = true,
+        }
+        true
+    }
+}
+
+type LocalPty = (
+    Box<dyn MasterPty + Send>,
+    Box<dyn Child + Send + Sync>,
+    Box<dyn Read + Send>,
+    Box<dyn Write + Send>,
+);
+
+/// Run `cmd` on a new PTY in this process.
+fn spawn_local(cmd: CommandBuilder, cols: u16, rows: u16) -> Fallible<LocalPty> {
+    let pair = native_pty_system().openpty(PtySize {
+        rows,
+        cols,
+        pixel_width: 0,
+        pixel_height: 0,
+    })?;
+    let child = pair.slave.spawn_command(cmd)?;
+    drop(pair.slave);
+    let reader = pair.master.try_clone_reader()?;
+    let writer = pair.master.take_writer()?;
+    Ok((pair.master, child, reader, writer))
+}
+
+impl Terminal {
     /// Build a terminal over a byte stream: a reader thread forwards chunks
     /// into `rx` and wakes the UI, exactly as for a PTY. `master`/`child` are
     /// `None` for serial, Telnet and raw TCP sessions (ADR 0037).
@@ -215,38 +526,47 @@ impl Terminal {
         cols: u16,
         rows: u16,
         scrollback: usize,
-        mut reader: Box<dyn Read + Send>,
+        reader: Box<dyn Read + Send>,
         writer: Box<dyn Write + Send>,
         waker: std::sync::Arc<dyn Fn() + Send + Sync>,
         master: Option<Box<dyn MasterPty + Send>>,
         child: Option<Box<dyn Child + Send + Sync>>,
         cwd: Option<String>,
     ) -> Self {
-        let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(PTY_QUEUE_CHUNKS);
-        let waker_thread = waker.clone();
-        thread::spawn(move || {
-            let mut buf = [0u8; PTY_READ_BYTES];
-            loop {
-                match reader.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        if tx.send(buf[..n].to_vec()).is_err() {
-                            break;
-                        }
-                        // Wake the UI so output (e.g. echo of a keystroke) is
-                        // drawn promptly instead of on the next blink tick.
-                        waker_thread();
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
+        let rx = read_into_channel(reader, waker.clone());
+        Self::assemble(
+            ATerm::new(cols, rows, scrollback),
+            scrollback,
+            rx,
+            writer,
+            waker,
+            master,
+            child,
+            cwd,
+        )
+    }
+
+    // A private constructor: the arguments are the terminal's own fields.
+    #[allow(clippy::too_many_arguments)]
+    fn assemble(
+        screen: ATerm,
+        scrollback: usize,
+        rx: Receiver<Incoming>,
+        writer: Box<dyn Write + Send>,
+        waker: std::sync::Arc<dyn Fn() + Send + Sync>,
+        master: Option<Box<dyn MasterPty + Send>>,
+        child: Option<Box<dyn Child + Send + Sync>>,
+        cwd: Option<String>,
+    ) -> Self {
+        let (rows, cols) = screen.size();
         Self {
-            screen: ATerm::new(cols, rows, scrollback),
+            screen,
             master,
             writer,
             child,
             rx,
+            #[cfg(unix)]
+            host: None,
             waker,
             rows,
             cols,
@@ -309,9 +629,49 @@ impl Terminal {
         let mut drained = 0;
         loop {
             match self.rx.try_recv() {
-                Ok(bytes) => {
+                Ok(incoming) => {
+                    let bytes = match incoming {
+                        Incoming::Bytes(bytes) => bytes,
+                        #[cfg(unix)]
+                        Incoming::Hosted {
+                            bytes,
+                            end,
+                            boundary,
+                        } => {
+                            changed |= self.feed(&bytes);
+                            if let Some(host) = self.host.as_mut() {
+                                host.offset = end;
+                                host.boundary = boundary;
+                                host.fallback = None;
+                            }
+                            drained += bytes.len();
+                            Vec::new()
+                        }
+                        #[cfg(unix)]
+                        Incoming::Truncated(modes) => {
+                            self.apply_host_modes(&modes);
+                            changed = true;
+                            Vec::new()
+                        }
+                        #[cfg(unix)]
+                        Incoming::Live => {
+                            self.host_live();
+                            changed = true;
+                            Vec::new()
+                        }
+                        #[cfg(unix)]
+                        Incoming::HostFailed(reason) => {
+                            changed |= self.host_failed(&reason);
+                            // The channel may have been replaced.
+                            break;
+                        }
+                        #[cfg(not(unix))]
+                        _ => Vec::new(),
+                    };
                     drained += bytes.len();
-                    changed |= self.feed(&bytes);
+                    if !bytes.is_empty() {
+                        changed |= self.feed(&bytes);
+                    }
                     if drained >= PTY_DRAIN_BYTES || std::time::Instant::now() >= deadline {
                         // A queued continuation is essential: the reader can be
                         // blocked on a full queue and unable to send a new wake.
@@ -368,7 +728,7 @@ impl Terminal {
                     self.screen.flush_synchronized_output();
                     self.send_screen_responses();
                     let (row, col) = self.screen.cursor();
-                    self.write(format!("\x1b[{};{}R", row + 1, col + 1).as_bytes());
+                    self.reply(format!("\x1b[{};{}R", row + 1, col + 1).as_bytes());
                 }
             }
         });
@@ -391,8 +751,19 @@ impl Terminal {
 
     fn send_screen_responses(&mut self) {
         for response in self.screen.take_responses(self.cell_px.0, self.cell_px.1) {
-            self.write(response.as_bytes());
+            self.reply(response.as_bytes());
         }
+    }
+
+    /// Answer a query in the output. Output replayed on reattaching was
+    /// answered when it first ran: answering again would type the reply into
+    /// the program.
+    fn reply(&mut self, bytes: &[u8]) {
+        #[cfg(unix)]
+        if self.host.as_ref().is_some_and(|h| h.replaying) {
+            return;
+        }
+        self.write(bytes);
     }
 
     fn handle_graphic(&mut self, g: miao_term_graphics::Graphic) -> bool {
@@ -506,7 +877,16 @@ impl Terminal {
 
     /// Resize both the screen model and the PTY if the size changed.
     pub fn resize(&mut self, rows: u16, cols: u16) {
-        if rows == 0 || cols == 0 || (rows == self.rows && cols == self.cols) {
+        if rows == 0 || cols == 0 {
+            return;
+        }
+        // While replaying, the screen keeps the size the output was made for.
+        #[cfg(unix)]
+        if let Some(host) = self.host.as_mut().filter(|h| h.replaying) {
+            host.pending_resize = Some((rows, cols));
+            return;
+        }
+        if rows == self.rows && cols == self.cols {
             return;
         }
         self.rows = rows;
@@ -524,6 +904,15 @@ impl Terminal {
                 pixel_height: ph,
             })
         });
+        #[cfg(unix)]
+        if let Some(host) = &self.host {
+            host.send(miao_term_ptyhost::proto::ToHost::Resize {
+                cols,
+                rows,
+                px_w: pw,
+                px_h: ph,
+            });
+        }
     }
 
     pub fn screen(&self) -> &ATerm {
@@ -549,7 +938,23 @@ impl Terminal {
 
     /// The child process id, if the platform exposes one.
     pub fn pid(&self) -> Option<u32> {
+        #[cfg(unix)]
+        if let Some(host) = &self.host {
+            return host.child_pid();
+        }
         self.child.as_ref().and_then(|c| c.process_id())
+    }
+
+    /// The foreground process group's leader, unless it is the shell.
+    #[cfg(unix)]
+    fn foreground_leader(&self) -> Option<u32> {
+        let leader = match &self.master {
+            Some(master) => u32::try_from(master.process_group_leader()?).ok()?,
+            // A hosted PTY's master is in the host: ask the kernel which
+            // group owns the shell's terminal.
+            None => terminal_group(self.pid()?)?,
+        };
+        (Some(leader) != self.pid()).then_some(leader)
     }
 
     /// The program running in the foreground of this pane (`vim`, `cargo`),
@@ -557,11 +962,7 @@ impl Terminal {
     pub fn foreground_command(&self) -> Option<String> {
         #[cfg(unix)]
         {
-            let leader = self.master.as_ref()?.process_group_leader()?;
-            let leader = u32::try_from(leader).ok()?;
-            if Some(leader) == self.pid() {
-                return None;
-            }
+            let leader = self.foreground_leader()?;
             process_name(leader)
         }
         #[cfg(not(unix))]
@@ -576,11 +977,7 @@ impl Terminal {
     pub fn foreground_args(&self) -> Option<Vec<String>> {
         #[cfg(unix)]
         {
-            let leader = self.master.as_ref()?.process_group_leader()?;
-            let leader = u32::try_from(leader).ok()?;
-            if Some(leader) == self.pid() {
-                return None;
-            }
+            let leader = self.foreground_leader()?;
             process_args(leader).filter(|args| !args.is_empty())
         }
         #[cfg(not(unix))]
@@ -596,11 +993,7 @@ impl Terminal {
     pub fn foreground_file(&self) -> Option<String> {
         #[cfg(unix)]
         {
-            let leader = self.master.as_ref()?.process_group_leader()?;
-            let leader = u32::try_from(leader).ok()?;
-            if Some(leader) == self.pid() {
-                return None;
-            }
+            let leader = self.foreground_leader()?;
             let args = process_args(leader)?;
             file_argument(args.get(1..)?, process_cwd(leader).as_deref())
         }
@@ -663,7 +1056,7 @@ impl Terminal {
                 for (slot, value) in (start..=11).zip(bytes[semi + 1..].split(|&b| b == b';')) {
                     if value == b"?" {
                         let [r, g, b] = if slot == 10 { fg } else { bg };
-                        self.write(
+                        self.reply(
                             format!(
                                 "\x1b]{slot};rgb:{:04x}/{:04x}/{:04x}\x1b\\",
                                 u16::from(r) * 257,
@@ -1124,10 +1517,11 @@ mod tests {
         let (tx, rx) = mpsc::sync_channel(PTY_QUEUE_CHUNKS);
         term.rx = rx;
         for _ in 0..PTY_QUEUE_CHUNKS {
-            tx.try_send(vec![b'x'; PTY_READ_BYTES]).unwrap();
+            tx.try_send(Incoming::Bytes(vec![b'x'; PTY_READ_BYTES]))
+                .unwrap();
         }
         assert!(matches!(
-            tx.try_send(b"\r\ndrain complete".to_vec()),
+            tx.try_send(Incoming::Bytes(b"\r\ndrain complete".to_vec())),
             Err(mpsc::TrySendError::Full(_))
         ));
         assert!(term.process_pending());
@@ -1136,7 +1530,8 @@ mod tests {
             "yield must schedule continuation"
         );
         assert!(!term.exited());
-        tx.try_send(b"\r\ndrain complete".to_vec()).unwrap();
+        tx.try_send(Incoming::Bytes(b"\r\ndrain complete".to_vec()))
+            .unwrap();
         drop(tx);
         // Even with no further producer wakes, the queued continuation drains
         // all output in order and eventually observes EOF.

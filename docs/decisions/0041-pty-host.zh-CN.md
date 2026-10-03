@@ -182,6 +182,14 @@ SSH、串口、Telnet、TCP pane 不在范围内。它们的状态在远端,SSH 
 - 打包在四个目标上多一个二进制(`release.yml`、MSI、AppImage、deb、`.app`)。
 - 本 ADR 接受后,`docs/ARCHITECTURE.md` 补充宿主进程及其 crate;D6 的平台边界扩展到 `term-ptyhost`。
 
+## 补充:P1 的实际实现(2026-10-03)
+
+- **协议 v1** 以 `crates/term-ptyhost/src/proto.rs` 为准(有固定帧测试):发往宿主的有 `Hello`、`Attach`、`Input`、`Resize`、`Kill`、`Detach`;宿主发出的有 `Welcome`、`Output{offset, boundary}`、`Truncated{oldest, modes}`、`Live{offset}`、`Exited`、`Detached`。`Live` 标记回放结束,应用据此恢复回复查询并调整尺寸。没有 `Query`/`Answer`:应用用 `Welcome` 里的子进程 pid 直接向内核读取前台进程组(macOS 用 `proc_pidinfo` 的 `tpgid`,Linux 读 `/proc/<pid>/stat`),不需要往返。
+- 在 `config.toml` 里写 `pty-host = true` 开启(默认关闭)。宿主二进制 `mtty-ptyhost` 需放在 `mtty` 旁边,使用前复制到 `<data dir>/ptyhost/<version>/`。打进安装包属于 P2。
+- 宿主 2 秒内无响应时,该 pane 在应用内运行 shell 并显示一行暗色提示;宿主根本无法启动时静默回退。
+- 恢复会话时先尝试重连,并保留 pane id;每分钟一次的保存会在 ANSI 副本旁写出 `<pane>.host.json`(状态加偏移量)。没有快照时回放宿主的整个环形缓冲。
+- 已验证:宿主测试(连接、从偏移量续接、带模式的截断、断开期间退出、超时、接管、序列边界);托管 `Terminal` 跨模拟重启(输出不重复、回放的查询不被回答、能识别前台进程);在 macOS 和 Linux 桌面上 `kill -9` 应用后,输出无缝衔接,pane id 不变。
+
 ## 评审发现(2026-10-03)
 
 初稿在动手实现前,对照 `alacritty_terminal` 0.25.1、vte 0.15 和恢复代码做了核对。上文已做的修改:
