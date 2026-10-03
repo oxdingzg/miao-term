@@ -115,11 +115,24 @@ pub fn cell_background(theme: &Theme, cell: &miao_term_core::aterm::CellView) ->
 /// edges whose foreground intentionally matches the adjacent background.
 /// Raising their contrast turns those edges into unwanted bright borders.
 fn cell_foreground(theme: &Theme, cell: &miao_term_core::aterm::CellView) -> Rgb {
-    if matches!(cell.ch, '\u{2500}'..='\u{259f}') {
+    let color = if matches!(cell.ch, '\u{2500}'..='\u{259f}') {
         theme.color(cell.fg, false)
     } else {
         theme.foreground(cell.fg, cell.bg)
+    };
+    if cell.dim {
+        // Faint is meant to read as secondary: dim after the contrast lift,
+        // which would otherwise undo it.
+        faint(color, theme.color(cell.bg, false))
+    } else {
+        color
     }
+}
+
+/// SGR 2: the colour two thirds of the way from the background to `color`.
+fn faint(color: Rgb, bg: Rgb) -> Rgb {
+    let mix = |c: u8, b: u8| ((u16::from(c) * 2 + u16::from(b)) / 3) as u8;
+    Rgb(mix(color.0, bg.0), mix(color.1, bg.1), mix(color.2, bg.2))
 }
 
 pub fn rgb(c: Rgb) -> (u8, u8, u8) {
@@ -149,6 +162,31 @@ pub fn width_of(c: char) -> u16 {
 #[cfg(test)]
 mod row_tests {
     use super::*;
+
+    #[test]
+    fn faint_text_reads_dimmer_than_normal_text() {
+        let mut screen = ATerm::new(20, 3, 100);
+        screen.process(b"ab\x1b[2mcd\x1b[0mef");
+        let theme = Theme::nord();
+        let rows = build_rows(&screen, &theme, None);
+        let colors: Vec<_> = rows[0].iter().map(|s| (s.text.as_str(), s.color)).collect();
+        assert_eq!(colors.len(), 3, "{colors:?}");
+        let rgb_of = |c: (u8, u8, u8)| Rgb(c.0, c.1, c.2);
+        let (normal, faint) = (rgb_of(colors[0].1), rgb_of(colors[1].1));
+        assert_eq!(colors[1].0, "cd");
+        assert_eq!(colors[2].1, colors[0].1, "back to normal after SGR 0");
+        // Faint sits between the text and the background, and is not lifted
+        // back to full contrast.
+        let bg = theme.color(
+            miao_term_core::aterm::Color::Named(miao_term_core::aterm::NamedColor::Background),
+            false,
+        );
+        assert!(
+            faint.0 < normal.0 && faint.0 > bg.0,
+            "{faint:?} vs {normal:?}"
+        );
+        assert_eq!(faint, super::faint(normal, bg));
+    }
 
     #[test]
     fn tui_drawing_preserves_low_contrast_colors_while_text_is_lifted() {
