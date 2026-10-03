@@ -193,6 +193,14 @@ jobs:
             foreach ($name in @('mtty.exe', 'mtty-cli.exe', 'mtty-ptyhost.exe')) {
               if (-not (Test-Path (Join-Path $bin $name))) { throw "Missing installed binary: $name" }
             }
+            # Apache-2.0 and every MIT/BSD/ISC crate in the binaries ask for
+            # their licence to travel with a distribution, so an installed copy
+            # has to be on disk, and not an empty stub.
+            foreach ($name in @('LICENSE.txt', 'THIRD-PARTY-LICENSES.md')) {
+              $licence = Join-Path $env:ProgramFiles "mtty/licenses/$name"
+              if (-not (Test-Path $licence)) { throw "Missing installed licence: $name" }
+              if ((Get-Item $licence).Length -lt 1024) { throw "Installed licence looks empty: $name" }
+            }
             & (Join-Path $bin 'mtty-cli.exe') --help
             if ($LASTEXITCODE -ne 0) { throw 'Installed CLI failed' }
             python scripts/check-windows-icon.py (Join-Path $bin 'mtty.exe')
