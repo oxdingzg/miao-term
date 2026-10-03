@@ -63,10 +63,19 @@ class ManifestTests(unittest.TestCase):
         root = Path(__file__).parent.parent
         cargo = tomllib.loads((root / "mtty-app/Cargo.toml").read_text())
         executables = [asset[0] for asset in cargo["package"]["metadata"]["deb"]["assets"] if asset[0].startswith("target/release/")]
-        self.assertEqual(executables, ["target/release/mtty", "target/release/mtty-cli"])
+        # One GUI; the CLI and the PTY host (ADR 0041) are not applications.
+        self.assertEqual(
+            executables,
+            ["target/release/mtty", "target/release/mtty-cli", "target/release/mtty-ptyhost"],
+        )
         wix = ET.parse(root / "mtty-app/wix/main.wxs")
-        names = {file.get("Name") for file in wix.findall(".//{http://schemas.microsoft.com/wix/2006/wi}File") if file.get("Name")}
-        self.assertEqual(names, {"mtty.exe", "mtty-cli.exe"})
+        # Executables only: the MSI also carries licence files.
+        names = {
+            file.get("Name")
+            for file in wix.findall(".//{http://schemas.microsoft.com/wix/2006/wi}File")
+            if (file.get("Name") or "").endswith(".exe")
+        }
+        self.assertEqual(names, {"mtty.exe", "mtty-cli.exe", "mtty-ptyhost.exe"})
 
     def test_missing_platform_rejected(self):
         (self.directory / "mtty-macos-x86_64.zip").unlink()
