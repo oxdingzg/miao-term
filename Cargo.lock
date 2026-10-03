@@ -2789,6 +2789,7 @@ dependencies = [
 name = "miao-term-acp"
 version = "0.0.20"
 dependencies = [
+ "miao-term-platform",
  "serde",
  "serde_json",
 ]
@@ -2937,6 +2938,7 @@ name = "miao-term-lsp"
 version = "0.0.20"
 dependencies = [
  "miao-term-editor",
+ "miao-term-platform",
  "serde_json",
 ]
 

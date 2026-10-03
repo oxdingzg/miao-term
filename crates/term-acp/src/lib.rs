@@ -4,11 +4,11 @@
 //! newline. This crate launches an agent, sends `initialize`, `session/new`,
 //! `session/prompt` and `session/cancel`, answers the agent's `fs/*` and
 //! `session/request_permission` requests, and forwards `session/update`
-//! notifications and responses to a [`Handler`]. It has no GPU and no host
+//! notifications and responses to a [`Handler`]. It has no GPU or window host
 //! dependency, so it is unit-tested against a fake agent.
 
 use std::io::{Read, Write};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 
@@ -62,7 +62,7 @@ impl Client {
         env: &[(String, String)],
         handler: Arc<dyn Handler>,
     ) -> std::io::Result<Client> {
-        let mut cmd = Command::new(command);
+        let mut cmd = miao_term_platform::background_command(command);
         cmd.args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

@@ -7,7 +7,7 @@
 use std::collections::VecDeque;
 use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
@@ -229,7 +229,7 @@ fn run(
     };
     let path = crate::env::search_path();
     let resolved = crate::env::which(program, &path).unwrap_or_else(|| PathBuf::from(program));
-    let mut cmd = Command::new(&resolved);
+    let mut cmd = miao_term_platform::background_command(&resolved);
     cmd.args(args)
         .current_dir(&root)
         .stdin(Stdio::piped())
