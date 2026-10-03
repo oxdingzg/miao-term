@@ -783,6 +783,8 @@ fn dispatch(state: &ServerState, req: Request) -> Response {
             let mut entry = params.clone();
             if let Value::Object(ref mut m) = entry {
                 m.insert("seq".into(), json!(seq));
+                // When this pane last reported, for the Resume picker (ADR 0042).
+                m.insert("ts".into(), json!(now_ms()));
             }
             let revision = state.bump();
             state.states.lock().unwrap().insert(k, entry.clone());

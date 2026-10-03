@@ -289,6 +289,8 @@ struct RawConfig {
     #[serde(rename = "detached-timeout")]
     detached_timeout: Option<toml::Value>,
     badges: Option<RawBadges>,
+    #[serde(rename = "agent-quota-warn")]
+    agent_quota_warn: Option<toml::Value>,
     language: Option<String>,
     #[serde(rename = "update-check-url")]
     update_check_url: Option<String>,
@@ -399,6 +401,8 @@ pub struct Config {
     pub detached_timeout: std::time::Duration,
     /// Which agent states show a tab badge.
     pub badges: Badges,
+    /// Percentage of an agent's reported quota at which the Agent tab marks it.
+    pub agent_quota_warn: u8,
     /// UI language tag (`en`, `zh`, …); `None` detects from `$LANG`.
     pub language: Option<String>,
     /// Optional URL checked for a newer version (see ADR 0013).
@@ -580,6 +584,7 @@ impl Default for Config {
             keep_sessions_on_quit: false,
             detached_timeout: DEFAULT_DETACHED_TIMEOUT,
             badges: Badges::default(),
+            agent_quota_warn: 80,
             language: None,
             update_check_url: Some(
                 "https://github.com/oxdingzg/miao-term/releases/latest/download/latest.json".into(),
@@ -1060,6 +1065,9 @@ impl Config {
                 cfg.badges.error = v;
             }
         }
+        if let Some(v) = raw.agent_quota_warn.as_ref().and_then(|v| v.as_integer()) {
+            cfg.agent_quota_warn = v.clamp(0, 100) as u8;
+        }
         if let Some(name) = raw.theme {
             if let Some(theme) = theme_by_name(&name) {
                 cfg.theme = theme;
@@ -1421,5 +1429,30 @@ mod tests {
         for text in ["", "0", "0h", "1w", "h", "-5", "1.5h"] {
             assert_eq!(parse_duration(text), None, "{text}");
         }
+    }
+
+    #[test]
+    fn agent_quota_warn_defaults_and_clamps() {
+        assert_eq!(Config::from_toml("").unwrap().agent_quota_warn, 80);
+        assert_eq!(
+            Config::from_toml("agent-quota-warn = 95\n")
+                .unwrap()
+                .agent_quota_warn,
+            95
+        );
+        assert_eq!(
+            Config::from_toml("agent-quota-warn = 300\n")
+                .unwrap()
+                .agent_quota_warn,
+            100,
+            "clamped"
+        );
+        assert_eq!(
+            Config::from_toml("agent-quota-warn = \"lots\"\n")
+                .unwrap()
+                .agent_quota_warn,
+            80,
+            "kept on a bad value"
+        );
     }
 }
