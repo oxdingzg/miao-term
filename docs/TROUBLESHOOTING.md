@@ -72,7 +72,7 @@ Restoring replays the **layout** and starts new shells; running processes are
 not preserved. To keep shells alive across a restart, set:
 
 ```toml
-pty-host = true      # Unix, experimental
+pty-host = true      # experimental
 ```
 
 ## `mtty-cli` cannot connect
@@ -123,4 +123,4 @@ The rest of the documentation is in the repository: [installation](INSTALL.md),
 [view rules](VIEW-RULES.md), and the annotated
 [`config.example.toml`](config.example.toml). For anything else, open an issue
 on [oxdingzg/miao-term](https://github.com/oxdingzg/miao-term/issues), or write
-to <dingzg@mtty.dev>.
+to <contact@mtty.dev>.

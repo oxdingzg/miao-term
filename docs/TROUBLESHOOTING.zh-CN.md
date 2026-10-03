@@ -63,7 +63,7 @@ Windows 上的 PowerShell 由 CI 运行)。
 恢复重放的是**布局**，并启动新的 shell;正在运行的进程不会被保留。若要在重启后保留 shell:
 
 ```toml
-pty-host = true      # Unix，实验性
+pty-host = true      # 实验性
 ```
 
 ## `mtty-cli` 连不上
@@ -108,4 +108,4 @@ pty-host = true      # Unix，实验性
 其余文档在仓库里:[安装](INSTALL.zh-CN.md)、[视图规则](VIEW-RULES.zh-CN.md)，以及带注释的
 [`config.example.toml`](config.example.toml)。其他问题请在
 [oxdingzg/miao-term](https://github.com/oxdingzg/miao-term/issues) 开 issue，或写信到
-<dingzg@mtty.dev>。
+<contact@mtty.dev>。
