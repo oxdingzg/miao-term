@@ -48,6 +48,24 @@ pub fn glyph(icon: Icon) -> char {
 /// Draw `icon` centered in `rect`, filled with `color`.
 pub fn draw(p: &egui::Painter, rect: egui::Rect, icon: Icon, color: egui::Color32) {
     let size = rect.height().min(rect.width()).max(8.0);
+    if matches!(icon, Icon::Sidebar | Icon::Details) {
+        // Matching left/right panels, rather than an equal-column layout glyph.
+        let frame =
+            egui::Rect::from_center_size(rect.center(), egui::vec2(size * 0.75, size * 0.75));
+        let stroke = egui::Stroke::new(size / 12.0, color);
+        p.rect_stroke(frame, egui::Rounding::same(size / 12.0), stroke);
+        let fraction = if icon == Icon::Sidebar {
+            1.0 / 3.0
+        } else {
+            2.0 / 3.0
+        };
+        let x = frame.left() + frame.width() * fraction;
+        p.line_segment(
+            [egui::pos2(x, frame.top()), egui::pos2(x, frame.bottom())],
+            stroke,
+        );
+        return;
+    }
     let font = egui::FontId::new(size, egui::FontFamily::Name("tabler".into()));
     p.text(
         rect.center(),
