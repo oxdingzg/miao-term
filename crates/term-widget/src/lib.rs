@@ -4775,6 +4775,7 @@ enum Cmd {
     SelectAll,
     CopyPath,
     RevealCwd,
+    OpenExternally,
     Settings,
     /// Quit and start again, keeping hosted programs running (ADR 0041).
     Relaunch,
@@ -4964,6 +4965,10 @@ impl State {
             (
                 Cmd::RevealCwd,
                 t(l, "Reveal in File Manager", "在文件管理器中显示"),
+            ),
+            (
+                Cmd::OpenExternally,
+                t(l, "Open Externally", "用系统默认程序打开"),
             ),
             (Cmd::Settings, t(l, "Settings", "设置")),
             (Cmd::Quit, t(l, "Quit", "退出")),
@@ -5671,6 +5676,22 @@ impl State {
             Cmd::RevealCwd => {
                 if let Some(cwd) = self.cwd() {
                     open_external(&cwd.display().to_string());
+                }
+            }
+            Cmd::OpenExternally => {
+                // An editor's file, opened by the OS default application; a
+                // terminal pane falls back to its directory.
+                let path = self
+                    .active_editor()
+                    .filter(|ed| ed.remote.is_none())
+                    .map(|ed| ed.path.clone());
+                match path {
+                    Some(path) => open_external(&path.display().to_string()),
+                    None => {
+                        if let Some(cwd) = self.cwd() {
+                            open_external(&cwd.display().to_string());
+                        }
+                    }
                 }
             }
             Cmd::Composer => self.composer = Some(String::new()),
@@ -16625,6 +16646,7 @@ impl chrome::Chrome for State {
             SelectAll => Cmd::SelectAll,
             CopyPath => Cmd::CopyPath,
             RevealCwd => Cmd::RevealCwd,
+            OpenExternally => Cmd::OpenExternally,
             Settings => Cmd::Settings,
             Quit => Cmd::Quit,
         };
