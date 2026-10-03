@@ -141,15 +141,15 @@
 
         <Component Id='StartMenuShortcut' Guid='*' Directory='ApplicationProgramsFolder'>
             <Shortcut Id='StartMenuMtty' Name='mtty' Description='mtty terminal'
-                Target='[#exe0]' WorkingDirectory='ProfileFolder' Icon='mtty.ico' IconIndex='0'/>
+                Target='[Bin]mtty.exe' WorkingDirectory='ProfileFolder' Icon='mtty.ico' IconIndex='0'/>
             <RemoveFolder Id='RemoveApplicationProgramsFolder' On='uninstall'/>
-            <RegistryValue Root='HKLM' Key='Software\mtty' Name='StartMenuShortcut'
+            <RegistryValue Root='HKCU' Key='Software\mtty' Name='StartMenuShortcut'
                 Type='integer' Value='1' KeyPath='yes'/>
         </Component>
         <Component Id='DesktopShortcut' Guid='*' Directory='DesktopFolder'>
             <Shortcut Id='DesktopMtty' Name='mtty' Description='mtty terminal'
-                Target='[#exe0]' WorkingDirectory='ProfileFolder' Icon='mtty.ico' IconIndex='0'/>
-            <RegistryValue Root='HKLM' Key='Software\mtty' Name='DesktopShortcut'
+                Target='[Bin]mtty.exe' WorkingDirectory='ProfileFolder' Icon='mtty.ico' IconIndex='0'/>
+            <RegistryValue Root='HKCU' Key='Software\mtty' Name='DesktopShortcut'
                 Type='integer' Value='1' KeyPath='yes'/>
         </Component>
 
