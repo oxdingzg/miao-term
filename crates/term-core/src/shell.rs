@@ -196,6 +196,16 @@ pub fn kind(shell: &str) -> Option<Kind> {
     }
 }
 
+/// Finder launches with a minimal PATH. A login zsh loads macOS's path_helper
+/// and the user's login profile before the interactive configuration.
+pub fn startup_args(shell: &str) -> &'static [&'static str] {
+    if cfg!(target_os = "macos") && kind(shell) == Some(Kind::Zsh) {
+        &["-l"]
+    } else {
+        &[]
+    }
+}
+
 /// What to add to a shell's command line and environment.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Integration {
@@ -344,6 +354,36 @@ mod tests {
             std::process::id(),
             N.fetch_add(1, Ordering::SeqCst)
         ))
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn login_zsh_loads_profile_path_with_integration() {
+        let base = temp_path();
+        let home = base.join("home");
+        let shim = base.join("shim");
+        std::fs::create_dir_all(home.join("bin")).unwrap();
+        ensure_private_dir(&shim).unwrap();
+        std::fs::write(shim.join(".zshenv"), ZSHENV).unwrap();
+        std::fs::write(home.join(".zprofile"), "export PATH=\"$HOME/bin:$PATH\"\n").unwrap();
+        let executable = home.join("bin/mtty-test-node");
+        std::fs::write(&executable, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let output = std::process::Command::new("/bin/zsh")
+            .args(startup_args("/bin/zsh"))
+            .args(["-ic", "command -v mtty-test-node"])
+            .env_clear()
+            .env("HOME", &home)
+            .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+            .env("ZDOTDIR", &shim)
+            .env("MTTY_ZDOTDIR_ORIG", &home)
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(output.status.success(), "{:?}", output);
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains(executable.to_string_lossy().as_ref())
+        );
     }
 
     #[test]
