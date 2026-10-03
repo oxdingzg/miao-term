@@ -52,6 +52,7 @@ pub struct Terminal {
     graphics_enabled: bool,
     scrollback: usize,
     cell_px: (u16, u16),
+    default_colors: Option<([u8; 3], [u8; 3])>,
     /// Output bytes of the running command, between OSC 133 `C` and `D`.
     capture: Option<Vec<u8>>,
     /// The last finished command's output (OSC 133 semantic prompts).
@@ -259,6 +260,7 @@ impl Terminal {
             capture: None,
             last_output: None,
             cell_px: (0, 0),
+            default_colors: None,
         }
     }
 
@@ -458,6 +460,12 @@ impl Terminal {
         self.cell_px = (w, h);
     }
 
+    /// Colors actually used by the host renderer, for OSC 10/11 queries.
+    /// Adaptive TUIs use these to choose input and message backgrounds.
+    pub fn set_default_colors(&mut self, foreground: [u8; 3], background: [u8; 3]) {
+        self.default_colors = Some((foreground, background));
+    }
+
     fn cell_h(&self) -> u32 {
         let h = self.cell_px.1 as u32;
         if h == 0 {
@@ -636,6 +644,28 @@ impl Terminal {
             return;
         };
         let code = &bytes[..semi];
+        if matches!(code, b"10" | b"11") {
+            if let Some((fg, bg)) = self.default_colors {
+                // OSC 10 can query consecutive slots (10;?;?). Reply to
+                // queries only; changing the host's theme is not supported.
+                let start = if code == b"10" { 10 } else { 11 };
+                for (slot, value) in (start..=11).zip(bytes[semi + 1..].split(|&b| b == b';')) {
+                    if value == b"?" {
+                        let [r, g, b] = if slot == 10 { fg } else { bg };
+                        self.write(
+                            format!(
+                                "\x1b]{slot};rgb:{:04x}/{:04x}/{:04x}\x1b\\",
+                                u16::from(r) * 257,
+                                u16::from(g) * 257,
+                                u16::from(b) * 257
+                            )
+                            .as_bytes(),
+                        );
+                    }
+                }
+            }
+            return;
+        }
         if code == b"133" {
             self.observe_semantic_prompt(&bytes[semi + 1..]);
             return;
@@ -951,6 +981,41 @@ mod tests {
         }
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
+        }
+    }
+
+    #[test]
+    fn default_color_queries_reply_with_host_colors_across_chunks() {
+        let stream = b"before\x1b]10;?\x07\x1b]11;?\x1b\\after";
+        for chunk_size in [1, 2, 3, 8, stream.len()] {
+            let replies = SharedBuf::default();
+            let mut term = Terminal::from_pipe(
+                20,
+                5,
+                100,
+                std::io::Cursor::new(Vec::<u8>::new()),
+                Box::new(replies.clone()),
+                std::sync::Arc::new(|| {}),
+            );
+            term.set_default_colors([0xd8, 0xde, 0xe9], [0x2e, 0x34, 0x40]);
+            for chunk in stream.chunks(chunk_size) {
+                term.feed(chunk);
+            }
+            assert_eq!(
+                &*replies.0.lock().unwrap(),
+                b"\x1b]10;rgb:d8d8/dede/e9e9\x1b\\\x1b]11;rgb:2e2e/3434/4040\x1b\\"
+            );
+            assert_eq!(term.screen.line_text(0), "beforeafter");
+            replies.0.lock().unwrap().clear();
+            term.set_default_colors([255, 255, 255], [0, 0, 0]);
+            term.feed(b"\x1b]10;?;?\x07");
+            assert_eq!(
+                &*replies.0.lock().unwrap(),
+                b"\x1b]10;rgb:ffff/ffff/ffff\x1b\\\x1b]11;rgb:0000/0000/0000\x1b\\"
+            );
+            replies.0.lock().unwrap().clear();
+            term.feed(b"\x1b]11;rgb:ffff/ffff/ffff\x07\x1b]12;?\x07");
+            assert!(replies.0.lock().unwrap().is_empty());
         }
     }
 

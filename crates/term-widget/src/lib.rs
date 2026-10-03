@@ -15,7 +15,11 @@ use std::time::{Duration, Instant};
 use miao_term_core::Terminal;
 use miao_term_render::{ImageInstance, ImageRenderer, Quad, QuadRenderer, Span, TermRenderer};
 use miao_term_ui::layout::{Layout, Rect, SplitDir};
-use miao_term_ui::{build_rows, chrome, input, theme::Theme, Selection};
+use miao_term_ui::{
+    build_rows, chrome, input,
+    theme::{Rgb, Theme},
+    Selection,
+};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, KeyEvent, MouseButton, WindowEvent};
@@ -1894,6 +1898,9 @@ impl State {
             .ok()
             .map(|mut term| {
                 term.set_graphics_enabled(self.graphics_enabled);
+                let Rgb(r, g, b) = self.theme.fg;
+                let Rgb(br, bg, bb) = self.theme.bg;
+                term.set_default_colors([r, g, b], [br, bg, bb]);
                 let scale = self.window.scale_factor() as f32;
                 term.set_cell_size((self.cw * scale) as u16, (self.ch * scale) as u16);
                 Pane {
@@ -5692,6 +5699,13 @@ impl State {
                 t.cursor = self.theme.cursor;
                 self.theme = t;
                 self.theme_name = n.to_string();
+                let Rgb(r, g, b) = self.theme.fg;
+                let Rgb(br, bg, bb) = self.theme.bg;
+                for tab in &mut self.tabs {
+                    for pane in &mut tab.panes {
+                        pane.term.set_default_colors([r, g, b], [br, bg, bb]);
+                    }
+                }
                 self.window.request_redraw();
             }
         }
@@ -9316,6 +9330,9 @@ impl State {
         });
         let mut term = Terminal::from_pipe(cols, rows, 10_000, conn.reader, conn.writer, waker);
         term.set_graphics_enabled(self.graphics_enabled);
+        let Rgb(r, g, b) = self.theme.fg;
+        let Rgb(br, bg, bb) = self.theme.bg;
+        term.set_default_colors([r, g, b], [br, bg, bb]);
         term.set_cell_size((self.cw * scale) as u16, (self.ch * scale) as u16);
         Some(Pane {
             id,
