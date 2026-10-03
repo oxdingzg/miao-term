@@ -730,9 +730,28 @@ fn agent_state_label(lang: miao_term_ui::i18n::Lang, state: &str) -> &str {
     }
 }
 
+/// A short "3m ago" for a millisecond timestamp; empty when unknown.
+fn ago(ts_ms: f64) -> String {
+    if ts_ms <= 0.0 {
+        return String::new();
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as f64)
+        .unwrap_or(0.0);
+    let secs = ((now - ts_ms) / 1000.0).max(0.0) as u64;
+    match secs {
+        0..=4 => "just now".into(),
+        5..=59 => format!("{secs}s ago"),
+        60..=3599 => format!("{}m ago", secs / 60),
+        3600..=86_399 => format!("{}h ago", secs / 3600),
+        _ => format!("{}d ago", secs / 86_400),
+    }
+}
+
 /// One compact line for an agent-reported quota object (ADR 0042, A4):
 /// `used/limit unit (window)`. Missing parts are dropped.
-fn quota_line(q: &serde_json::Value) -> Option<String> {
+fn quota_line(q: &serde_json::Value, warn_at: u8) -> Option<String> {
     let num = |k: &str| {
         q.get(k).map(|v| match v {
             serde_json::Value::String(s) => s.clone(),
@@ -759,13 +778,13 @@ fn quota_line(q: &serde_json::Value) -> Option<String> {
     {
         line.push_str(&format!(" ({window})"));
     }
-    // A fixed 80% threshold marks a nearly spent window; a configurable
-    // `agent-quota-warn` is a follow-up.
     let warn = match (
         q.get("used").and_then(serde_json::Value::as_f64),
         q.get("limit").and_then(serde_json::Value::as_f64),
     ) {
-        (Some(used), Some(limit)) if limit > 0.0 && used / limit >= 0.8 => "⚠ ",
+        (Some(used), Some(limit)) if limit > 0.0 && used / limit >= f64::from(warn_at) / 100.0 => {
+            "⚠ "
+        }
         _ => "",
     };
     Some(format!("{warn}{line}"))
@@ -1604,6 +1623,8 @@ struct State {
     keep_sessions_on_quit: bool,
     /// Which agent states show on tabs (`[badges]`).
     badges: miao_term_config::Badges,
+    /// Percentage of an agent's quota at which the Agent tab marks it.
+    agent_quota_warn: u8,
     /// How long a host waits for mtty (`detached-timeout`).
     detached_timeout: Duration,
     /// Hosts still running from an earlier mtty that no pane reattached to
@@ -4542,7 +4563,10 @@ impl State {
                             rows.push((k.to_string(), v.to_string()));
                         }
                     }
-                    if let Some(line) = a.get("quota").and_then(quota_line) {
+                    if let Some(line) = a
+                        .get("quota")
+                        .and_then(|quota| quota_line(quota, self.agent_quota_warn))
+                    {
                         rows.push(("quota".into(), line));
                     }
                     if rows.is_empty() {
@@ -8097,7 +8121,7 @@ impl State {
                 .unwrap_or_default()
                 .to_string()
         };
-        let rows: Vec<(String, String, String, String)> = sessions
+        let rows: Vec<(String, String, String, String, f64)> = sessions
             .iter()
             .map(|s| {
                 (
@@ -8105,6 +8129,9 @@ impl State {
                     field(s, "session_id"),
                     field(s, "cwd"),
                     field(s, "pane"),
+                    s.get("ts")
+                        .and_then(serde_json::Value::as_f64)
+                        .unwrap_or(0.0),
                 )
             })
             .collect();
@@ -8157,12 +8184,16 @@ impl State {
                     .max_height(320.0)
                     .show(ui, |ui| {
                         for (row, &i) in shown.iter().enumerate() {
-                            let (agent, session, cwd, pane) = &rows[i];
-                            let label = if cwd.is_empty() {
+                            let (agent, session, cwd, pane, ts) = &rows[i];
+                            let mut label = if cwd.is_empty() {
                                 format!("{agent}  {session}  ({pane})")
                             } else {
                                 format!("{agent}  {session}  {cwd}")
                             };
+                            let age = ago(*ts);
+                            if !age.is_empty() {
+                                label.push_str(&format!("  ·  {age}"));
+                            }
                             let r = ui.selectable_label(row == selected, label);
                             if r.clicked() {
                                 chosen = Some(i);
@@ -8171,7 +8202,7 @@ impl State {
                     });
             });
         if let Some(i) = chosen {
-            let (agent, session, cwd, _) = rows[i].clone();
+            let (agent, session, cwd, _, _) = rows[i].clone();
             self.resume_picker = None;
             self.resume_agent(&agent, &session, Some(cwd.as_str()));
             self.window.request_redraw();
@@ -13849,6 +13880,7 @@ impl ApplicationHandler<HostEvent> for Host {
             pty_host: cfg.pty_host,
             keep_sessions_on_quit: cfg.keep_sessions_on_quit,
             badges: cfg.badges,
+            agent_quota_warn: cfg.agent_quota_warn,
             detached_timeout: cfg.detached_timeout,
             recovered: Vec::new(),
             scrollback_saved_at: Instant::now(),
@@ -17979,6 +18011,16 @@ mod tests {
             "idle",
             "only Agent state values are states"
         );
+    }
+
+    #[test]
+    fn quota_line_formats_and_warns_at_the_threshold() {
+        let q = serde_json::json!({ "used": 42, "limit": 100, "unit": "percent", "window": "5h" });
+        assert_eq!(quota_line(&q, 80).as_deref(), Some("42/100 percent (5h)"));
+        let q = serde_json::json!({ "used": 90, "limit": 100 });
+        assert_eq!(quota_line(&q, 80).as_deref(), Some("⚠ 90/100"));
+        assert_eq!(quota_line(&q, 95).as_deref(), Some("90/100"));
+        assert_eq!(quota_line(&serde_json::json!({ "limit": 100 }), 80), None);
     }
 
     #[test]
