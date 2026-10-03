@@ -7,7 +7,7 @@
 //! Every call blocks: run them as background jobs.
 
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 /// A remote directory entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,7 +75,7 @@ impl Remote {
     /// Run a batch script; stdout without the echoed `sftp>` lines, or the
     /// first error sftp reported.
     pub fn run(&self, script: &str) -> Result<String, String> {
-        let mut child = Command::new("sftp")
+        let mut child = miao_term_platform::background_command("sftp")
             .args(self.args())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

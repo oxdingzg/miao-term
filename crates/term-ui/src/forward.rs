@@ -6,7 +6,7 @@
 //! message — and ends with mtty (the child is killed on drop).
 
 use std::io::Read;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -58,7 +58,7 @@ impl Tunnel {
         forward
             .validate()
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-        let mut child = Command::new("ssh")
+        let mut child = miao_term_platform::background_command("ssh")
             .args(args(destination, options, forward))
             .stdin(Stdio::null())
             .stdout(Stdio::null())

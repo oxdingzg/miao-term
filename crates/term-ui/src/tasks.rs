@@ -8,7 +8,6 @@
 //! tracked file changes. Everything shells out to `git`.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// Branch prefix for task branches.
 pub const BRANCH_PREFIX: &str = "mtty/";
@@ -23,7 +22,7 @@ pub struct Task {
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
+    let out = miao_term_platform::background_command("git")
         .arg("-C")
         .arg(dir)
         .args(args)

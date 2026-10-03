@@ -2,8 +2,6 @@
 //! ControlMaster connection reuse, and a remote terminfo bootstrap with a
 //! zero-install fallback.
 
-use std::process::Command;
-
 /// How the pane's local shell reads a typed command line. ssh commands are
 /// typed into the pane's shell, so their arguments are quoted for it: POSIX
 /// shells take single quotes; cmd.exe neither knows single quotes nor `;` and
@@ -313,7 +311,7 @@ pub fn persistent_host_command(
 /// values when `ssh -G` is unavailable. Runs a process: keep it off the UI
 /// thread, and connect with the typed target (see [`session_command`]).
 pub fn resolve(target: &Target) -> Target {
-    let output = Command::new("ssh")
+    let output = miao_term_platform::background_command("ssh")
         .args(["-G", &target.destination()])
         .output();
     let Ok(output) = output else {
@@ -372,7 +370,10 @@ pub fn bootstrap(term: &str) -> String {
     let b64 = match cache.iter().find(|(t, _)| t == term) {
         Some((_, b64)) => b64.clone(),
         None => {
-            let entry = Command::new("infocmp").args(["-x", term]).output().ok();
+            let entry = miao_term_platform::background_command("infocmp")
+                .args(["-x", term])
+                .output()
+                .ok();
             let b64 = entry
                 .filter(|o| o.status.success() && !o.stdout.is_empty())
                 .map(|o| base64_encode(&o.stdout))
@@ -438,7 +439,9 @@ fn base_args() -> Vec<String> {
 
 /// Read a remote file over ssh (bounded). Errors carry the ssh stderr.
 pub fn read_remote(dest: &str, path: &str) -> std::io::Result<Vec<u8>> {
-    let out = Command::new("ssh").args(read_args(dest, path)).output()?;
+    let out = miao_term_platform::background_command("ssh")
+        .args(read_args(dest, path))
+        .output()?;
     if !out.status.success() {
         return Err(std::io::Error::other(
             String::from_utf8_lossy(&out.stderr).trim().to_string(),
@@ -452,7 +455,7 @@ pub fn read_remote(dest: &str, path: &str) -> std::io::Result<Vec<u8>> {
 /// Write a remote file over ssh (`cat >`), feeding `data` on stdin.
 pub fn write_remote(dest: &str, path: &str, data: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
-    let mut child = Command::new("ssh")
+    let mut child = miao_term_platform::background_command("ssh")
         .args(write_args(dest, path))
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
@@ -563,7 +566,7 @@ mod tests {
             .strip_suffix('\'')
             .unwrap();
         let run = |path: &str| {
-            let out = Command::new("/bin/sh")
+            let out = miao_term_platform::background_command("/bin/sh")
                 .args(["-c", script])
                 .env("PATH", path)
                 .env("SHELL", "/bin/echo")

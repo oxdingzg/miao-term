@@ -348,6 +348,7 @@ impl Terminal {
                             line_feeds += count_line_feeds(text);
                         }
                         self.screen.process(text);
+                        self.send_screen_responses();
                         if let Some(buf) = self.capture.as_mut() {
                             let room = MAX_CAPTURE.saturating_sub(buf.len());
                             buf.extend_from_slice(&text[..text.len().min(room + 1)]);
@@ -365,6 +366,7 @@ impl Terminal {
                     // Respond at the query's position in the stream, after any
                     // preceding text has updated the cursor (including ConPTY).
                     self.screen.flush_synchronized_output();
+                    self.send_screen_responses();
                     let (row, col) = self.screen.cursor();
                     self.write(format!("\x1b[{};{}R", row + 1, col + 1).as_bytes());
                 }
@@ -385,6 +387,12 @@ impl Terminal {
             self.graphics.sync_total(total);
         }
         changed
+    }
+
+    fn send_screen_responses(&mut self) {
+        for response in self.screen.take_responses(self.cell_px.0, self.cell_px.1) {
+            self.write(response.as_bytes());
+        }
     }
 
     fn handle_graphic(&mut self, g: miao_term_graphics::Graphic) -> bool {
@@ -984,6 +992,35 @@ mod tests {
         }
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
+        }
+    }
+
+    #[test]
+    fn tui_queries_reply_without_leaking_into_the_input_row() {
+        let stream = b"\x1b[5n\x1b[c\x1b[18t\x1b[14t\x1b[?2026$p\x1b[?2026h> n\x1b[6n\x1b[?2026l\x1b[1;3H\x1b[KTry a prompt";
+        for chunk_size in 1..=stream.len() {
+            let replies = SharedBuf::default();
+            let mut term = Terminal::from_pipe(
+                20,
+                5,
+                100,
+                std::io::Cursor::new(Vec::<u8>::new()),
+                Box::new(replies.clone()),
+                std::sync::Arc::new(|| {}),
+            );
+            term.set_cell_size(8, 16);
+            for chunk in stream.chunks(chunk_size) {
+                term.feed(chunk);
+            }
+            assert_eq!(
+                &*replies.0.lock().unwrap(),
+                b"\x1b[0n\x1b[?6c\x1b[8;5;20t\x1b[4;80;160t\x1b[?2026;2$y\x1b[1;4R",
+                "chunk size {chunk_size}"
+            );
+            assert_eq!(term.screen.line_text(0), "> Try a prompt");
+            // A full clear and redraw must also remove a previous first char.
+            term.feed(b"\r\x1b[2K> a\x08 \x08");
+            assert_eq!(term.screen.line_text(0), ">");
         }
     }
 

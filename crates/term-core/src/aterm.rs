@@ -2,7 +2,7 @@
 //! [`crate::Terminal`]. Exposes the cells/colors/cursor/modes/scrollback the
 //! app needs, plus tests.
 
-use alacritty_terminal::event::VoidListener;
+use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
@@ -10,6 +10,17 @@ use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::Processor;
 
 pub use alacritty_terminal::vte::ansi::{Color, NamedColor};
+
+#[derive(Clone, Default)]
+struct ResponseListener(std::sync::Arc<std::sync::Mutex<Vec<Event>>>);
+
+impl EventListener for ResponseListener {
+    fn send_event(&self, event: Event) {
+        if matches!(event, Event::PtyWrite(_) | Event::TextAreaSizeRequest(_)) {
+            self.0.lock().unwrap().push(event);
+        }
+    }
+}
 
 /// A snapshot of a grid cell (owned, so the caller doesn't borrow the term).
 #[derive(Clone)]
@@ -41,7 +52,8 @@ impl Dimensions for Dims {
 
 /// A terminal screen backed by `alacritty_terminal`.
 pub struct ATerm {
-    term: Term<VoidListener>,
+    term: Term<ResponseListener>,
+    responses: ResponseListener,
     processor: Processor,
     cols: usize,
     rows: usize,
@@ -57,8 +69,10 @@ impl ATerm {
             scrolling_history: scrollback,
             ..Default::default()
         };
+        let responses = ResponseListener::default();
         Self {
-            term: Term::new(config, &dims, VoidListener),
+            term: Term::new(config, &dims, responses.clone()),
+            responses,
             processor: Processor::new(),
             cols: cols as usize,
             rows: rows as usize,
@@ -72,6 +86,24 @@ impl ATerm {
     /// A cursor query must observe writes buffered by a synchronized update.
     pub(crate) fn flush_synchronized_output(&mut self) {
         self.processor.stop_sync(&mut self.term);
+    }
+
+    /// Return protocol replies to the PTY, never to the rendered screen.
+    pub(crate) fn take_responses(&self, cell_width: u16, cell_height: u16) -> Vec<String> {
+        let size = WindowSize {
+            num_lines: self.rows as u16,
+            num_cols: self.cols as u16,
+            cell_width,
+            cell_height,
+        };
+        std::mem::take(&mut *self.responses.0.lock().unwrap())
+            .into_iter()
+            .filter_map(|event| match event {
+                Event::PtyWrite(text) => Some(text),
+                Event::TextAreaSizeRequest(format) => Some(format(size)),
+                _ => None,
+            })
+            .collect()
     }
 
     pub fn size(&self) -> (u16, u16) {

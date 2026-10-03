@@ -72,7 +72,7 @@ pub fn notify(title: &str, body: &str) {
             escape_ps(title),
             escape_ps(body)
         );
-        let _ = Command::new("powershell")
+        let _ = background_command("powershell")
             .args(["-NoProfile", "-Command", &script])
             .spawn();
     }
@@ -114,7 +114,7 @@ pub fn alert(title: &str, body: &str) {
             escape_ps(body),
             escape_ps(title)
         );
-        let _ = Command::new("powershell")
+        let _ = background_command("powershell")
             .args(["-NoProfile", "-Command", &script])
             .status();
     }

@@ -8,7 +8,7 @@
 //! used here. Every call blocks: run them as background jobs.
 
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use crate::sftp::{join, RemoteEntry};
 
@@ -190,7 +190,7 @@ impl Remote {
     }
 
     fn curl(&self, extra: &[String]) -> Result<Vec<u8>, String> {
-        let mut child = Command::new("curl")
+        let mut child = miao_term_platform::background_command("curl")
             .args(self.args())
             .args(extra)
             .stdin(Stdio::piped())
