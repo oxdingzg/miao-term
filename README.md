@@ -73,7 +73,7 @@ Recursive splits keep a git log and a running server side by side:
 
 ![A tab split into two panes, a git log on the left and an HTTP server on the right](docs/images/mtty-splits.png)
 
-> **Project status — pre-release.** The version is `0.0.24` and the API is not yet
+> **Project status — pre-release.** The version is `0.0.25` and the API is not yet
 > stable. macOS is the primary platform. Windows is built, tested and driven over
 > MTP on real hardware (see [`docs/WINDOWS-DEV.md`](docs/WINDOWS-DEV.md)); Linux
 > builds and passes tests in CI and has been checked on a real GNOME/Wayland
@@ -474,12 +474,11 @@ report-only, with absolute budgets enforced.
 Still open:
 
 - **Release acceptance**: releases are built on four runners, signed with
-  minisign and published with an update manifest (latest: v0.0.24). Updating an
+  minisign and published with an update manifest (latest: v0.0.25). Updating an
   installed app through Software Update still needs an end-to-end check on each
   desktop; **Apple notarization** and **Windows MSI signing** require
   credentials. See [`docs/RELEASE.md`](docs/RELEASE.md).
-- **Not designed yet**: agent Resume and quota display, jump-to-line highlight,
-  Open Externally.
+- **Not designed yet**: agent Resume and quota display.
 - **Platform verification (needs hardware)**: the Linux wgpu render path runs in
   CI via Mesa software Vulkan (lavapipe) and Windows is driven over MTP on real
   hardware; a real Linux desktop session, the Wayland portal hotkey and the
