@@ -1498,7 +1498,7 @@ pub fn render_external(
         return Some(png);
     }
     std::fs::write(&mmd, source).ok()?;
-    let status = std::process::Command::new(cmd)
+    let status = miao_term_platform::background_command(cmd)
         .arg("-i")
         .arg(&mmd)
         .arg("-o")

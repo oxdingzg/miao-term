@@ -14984,7 +14984,7 @@ fn pointer_to_terminal(ui_consumed: bool, over_terminal: bool, terminal_gesture:
 }
 
 fn git_rows(cwd: &std::path::Path) -> Vec<(String, String)> {
-    let out = std::process::Command::new("git")
+    let out = miao_term_platform::background_command("git")
         .arg("-C")
         .arg(cwd)
         .args(["status", "--porcelain=v1", "-b"])

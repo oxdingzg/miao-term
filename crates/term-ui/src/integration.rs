@@ -239,7 +239,7 @@ pub fn launch_command(agent: &Agent) -> String {
 /// Run `hook_script` through `sh -n` to check syntax (used in tests and by the
 /// installer as a sanity check).
 pub fn syntax_ok(script: &str) -> bool {
-    let mut child = match Command::new("sh")
+    let mut child = match miao_term_platform::background_command("sh")
         .arg("-n")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())

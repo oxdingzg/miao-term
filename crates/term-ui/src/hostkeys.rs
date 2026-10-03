@@ -8,7 +8,7 @@
 //! Nothing here stores or handles passwords.
 
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 /// How a host's key compares with `~/.ssh/known_hosts`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,7 +62,7 @@ pub fn classify(known: &str, scanned: &str, fingerprints: Vec<String>) -> HostKe
 
 /// `SHA256:…` fingerprints of keyscan output (`ssh-keygen -lf -`).
 fn fingerprints(scanned: &str) -> Vec<String> {
-    let Ok(mut child) = Command::new("ssh-keygen")
+    let Ok(mut child) = miao_term_platform::background_command("ssh-keygen")
         .args(["-l", "-f", "-"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -92,7 +92,7 @@ pub fn resolve(
     destination: &str,
     options: &[String],
 ) -> Result<(String, u16, Option<String>), String> {
-    let out = Command::new("ssh")
+    let out = miao_term_platform::background_command("ssh")
         .args(options)
         .arg("-G")
         .arg(destination)
@@ -118,7 +118,7 @@ pub fn resolve(
 pub fn check(destination: &str, options: &[String]) -> Result<HostKey, String> {
     let (host, port, jump) = resolve(destination, options)?;
     let name = known_hosts_name(&host, port);
-    let known = Command::new("ssh-keygen")
+    let known = miao_term_platform::background_command("ssh-keygen")
         .args(["-F", &name])
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
@@ -132,7 +132,7 @@ pub fn check(destination: &str, options: &[String]) -> Result<HostKey, String> {
             HostKey::Known
         });
     }
-    let scanned = Command::new("ssh-keyscan")
+    let scanned = miao_term_platform::background_command("ssh-keyscan")
         .args(["-T", "5", "-p", &port.to_string(), &host])
         .output()
         .map_err(|e| format!("ssh-keyscan: {e}"))?;
@@ -148,7 +148,7 @@ pub fn check(destination: &str, options: &[String]) -> Result<HostKey, String> {
 /// append them to `~/.ssh/known_hosts`. Never used for a changed key.
 pub fn trust(destination: &str, options: &[String]) -> Result<(), String> {
     let (host, port, _) = resolve(destination, options)?;
-    let scanned = Command::new("ssh-keyscan")
+    let scanned = miao_term_platform::background_command("ssh-keyscan")
         .args(["-T", "5", "-p", &port.to_string(), &host])
         .output()
         .map_err(|e| format!("ssh-keyscan: {e}"))?;
@@ -197,7 +197,10 @@ pub fn parse_agent(code: Option<i32>, stdout: &str) -> Agent {
 }
 
 pub fn agent_status() -> Agent {
-    match Command::new("ssh-add").arg("-l").output() {
+    match miao_term_platform::background_command("ssh-add")
+        .arg("-l")
+        .output()
+    {
         Ok(o) => parse_agent(o.status.code(), &String::from_utf8_lossy(&o.stdout)),
         Err(_) => Agent::NotRunning,
     }
