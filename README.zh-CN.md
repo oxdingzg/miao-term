@@ -63,7 +63,7 @@ git 日志，右侧是详情面板：
 
 ![一个标签分成两个窗格，左侧 git 日志，右侧 HTTP 服务](docs/images/mtty-splits.png)
 
-> **项目状态 —— 预发布。** 当前版本为 `0.0.18`,API 尚未稳定。macOS 是主要平台;
+> **项目状态 —— 预发布。** 当前版本为 `0.0.19`,API 尚未稳定。macOS 是主要平台;
 > Windows 已在真实硬件上构建、测试并经 MTP 驱动(见 [`docs/WINDOWS-DEV.zh-CN.md`](docs/WINDOWS-DEV.zh-CN.md));
 > Linux 在 CI 中构建并通过测试,并已在真实的 GNOME/Wayland 桌面上验收(输入法、菜单、文件拖放、剪贴板、快捷键)。
 
@@ -449,7 +449,7 @@ CI 性能基线已持久化于 `benches/perf-baseline.json`,由 nightly/手动�
 
 仍待完成:
 
-- **发布验收**:正式版本由四个 runner 构建、经 minisign 签名并附带更新清单发布(最新为 v0.0.18)。
+- **发布验收**:正式版本由四个 runner 构建、经 minisign 签名并附带更新清单发布(最新为 v0.0.19)。
   通过"软件更新"升级已安装的应用,仍需在各类桌面上端到端验证;**Apple 公证**与 **Windows MSI 签名**
   需要凭证。见 `docs/RELEASE.zh-CN.md`。
 - **尚未设计**:agent 的 Resume 与配额显示、跳转行高亮、Open Externally。
