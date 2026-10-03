@@ -596,7 +596,9 @@ impl Tab {
         let panes: Vec<_> = self
             .panes
             .iter()
-            .map(|p| serde_json::json!({ "id": p.id, "cwd": p.term.cwd() }))
+            .map(|p| {
+                serde_json::json!({ "id": p.id, "cwd": p.term.cwd(), "host": pane_host(&p.term) })
+            })
             .collect();
         let editors: Vec<_> = self
             .editors
@@ -1527,6 +1529,10 @@ struct State {
     notifications: bool,
     prevent_sleep: bool,
     restore_scrollback: bool,
+    /// Local shells run in PTY host processes and survive restarts
+    /// (`pty-host`, ADR 0041). Unix only for now.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pty_host: bool,
     scrollback_saved_at: Instant,
     sleep: miao_term_ui::agentloop::SleepGuard,
     agent_states: HashMap<String, String>,
@@ -1903,25 +1909,73 @@ impl State {
         self.tabs.get(self.active_tab).map(|t| t.active.clone())
     }
 
-    fn spawn_pane(&self, cwd: Option<std::path::PathBuf>) -> Option<Pane> {
-        let (cw, ch) = (
-            self.cw * self.window.scale_factor() as f32,
-            self.ch * self.window.scale_factor() as f32,
-        );
-        // A whole-area pane's text area: the shell must start at the size it
-        // is drawn at, or zsh's end-of-line mark wraps onto a line of its own.
+    /// The grid size a whole-area pane starts at: the shell must start at
+    /// the size it is drawn at, or zsh's end-of-line mark wraps onto a line
+    /// of its own.
+    fn new_pane_size(&self) -> (u16, u16) {
+        let scale = self.window.scale_factor() as f32;
+        let (cw, ch) = (self.cw * scale, self.ch * scale);
         let area = card_inner(self.grid_area());
-        let cols = ((area.w * self.window.scale_factor() as f32) / cw)
-            .floor()
-            .max(1.0) as u16;
-        let rows = ((area.h * self.window.scale_factor() as f32) / ch)
-            .floor()
-            .max(1.0) as u16;
-        let id = gen_id();
+        let cols = ((area.w * scale) / cw).floor().max(1.0) as u16;
+        let rows = ((area.h * scale) / ch).floor().max(1.0) as u16;
+        (cols, rows)
+    }
+
+    fn pane_waker(&self) -> Arc<dyn Fn() + Send + Sync> {
         let proxy = self.proxy.clone();
-        let waker: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        Arc::new(move || {
             let _ = proxy.send_event(HostEvent::Wake);
-        });
+        })
+    }
+
+    /// Apply the app's terminal settings to a new pane's terminal.
+    fn make_pane(&self, id: String, mut term: Terminal) -> Pane {
+        term.set_graphics_enabled(self.graphics_enabled);
+        let Rgb(r, g, b) = self.theme.fg;
+        let Rgb(br, bg, bb) = self.theme.bg;
+        term.set_default_colors([r, g, b], [br, bg, bb]);
+        let scale = self.window.scale_factor() as f32;
+        term.set_cell_size((self.cw * scale) as u16, (self.ch * scale) as u16);
+        Pane {
+            id,
+            term,
+            scroll: 0,
+            on_enter: None,
+            published_output: None,
+        }
+    }
+
+    /// The installed PTY host, when `pty-host` is on (ADR 0041).
+    #[cfg(unix)]
+    fn host_config(&self) -> Option<miao_term_core::HostConfig> {
+        use miao_term_ptyhost::launch;
+        if !self.pty_host {
+            return None;
+        }
+        let installed = launch::bundled_binary()
+            .zip(miao_term_config::data_dir())
+            .map(|(binary, data)| launch::install(&binary, &data));
+        match installed {
+            Some(Ok(binary)) => Some(miao_term_core::HostConfig {
+                binary,
+                ring: PTY_HOST_RING,
+                timeout: PTY_HOST_TIMEOUT,
+            }),
+            Some(Err(e)) => {
+                eprintln!("mtty: cannot install the PTY host: {e}");
+                None
+            }
+            None => {
+                eprintln!("mtty: no PTY host next to the executable");
+                None
+            }
+        }
+    }
+
+    fn spawn_pane(&self, cwd: Option<std::path::PathBuf>) -> Option<Pane> {
+        let (cols, rows) = self.new_pane_size();
+        let id = gen_id();
+        let waker = self.pane_waker();
         // A Finder/Dock launch hands the app `/` as its working directory, so
         // inheriting the process cwd would drop every pane in the filesystem
         // root. Only trust it when it names a real place to work, and fall back
@@ -1939,23 +1993,51 @@ impl State {
             ("MTTY_PANE_ID".to_string(), id.clone()),
             ("MIAOTTY_PANE_ID".to_string(), id.clone()),
         ];
+        #[cfg(unix)]
+        if let Some(config) = self.host_config() {
+            match Terminal::new_hosted(
+                &config,
+                None,
+                cols,
+                rows,
+                10_000,
+                cwd.clone(),
+                &env,
+                waker.clone(),
+            ) {
+                Ok(term) => return Some(self.make_pane(id, term)),
+                Err(e) => eprintln!("mtty: PTY host failed, running the shell in the app: {e}"),
+            }
+        }
         Terminal::new(None, cols, rows, 10_000, cwd, &env, waker)
             .ok()
-            .map(|mut term| {
-                term.set_graphics_enabled(self.graphics_enabled);
-                let Rgb(r, g, b) = self.theme.fg;
-                let Rgb(br, bg, bb) = self.theme.bg;
-                term.set_default_colors([r, g, b], [br, bg, bb]);
-                let scale = self.window.scale_factor() as f32;
-                term.set_cell_size((self.cw * scale) as u16, (self.ch * scale) as u16);
-                Pane {
-                    id,
-                    term,
-                    scroll: 0,
-                    on_enter: None,
-                    published_output: None,
-                }
-            })
+            .map(|term| self.make_pane(id, term))
+    }
+
+    /// Attach to the host a saved pane was running in, keeping its id (its
+    /// shell's environment names it). `None` when the host is gone.
+    #[cfg(unix)]
+    fn reattach_pane(&self, saved: &serde_json::Value) -> Option<Pane> {
+        let host = saved.get("host")?;
+        let id = saved.get("id")?.as_str()?;
+        let host_id = host.get("id")?.as_str()?;
+        let socket = std::path::PathBuf::from(host.get("socket")?.as_str()?);
+        let snapshot = scrollback_dir()
+            .filter(|_| is_plain_file_name(id))
+            .and_then(|dir| std::fs::read(dir.join(format!("{id}.host.json"))).ok())
+            .and_then(|bytes| serde_json::from_slice::<miao_term_core::HostSnapshot>(&bytes).ok());
+        let (cols, rows) = self.new_pane_size();
+        let term = Terminal::reattach(
+            host_id,
+            &socket,
+            snapshot,
+            cols,
+            rows,
+            10_000,
+            self.pane_waker(),
+        )
+        .ok()?;
+        Some(self.make_pane(id.to_string(), term))
     }
 
     /// Advertise the panes to the MTP control plane.
@@ -3994,6 +4076,15 @@ impl State {
         }
     }
 
+    /// The app is quitting without keeping sessions: end every hosted
+    /// program (exiting skips the terminals' destructors).
+    fn end_hosts(&mut self) {
+        #[cfg(unix)]
+        for pane in self.tabs.iter_mut().flat_map(|t| t.panes.iter_mut()) {
+            pane.term.end_host();
+        }
+    }
+
     /// Save each terminal's contents every minute, so a crash loses at most
     /// that much (a clean quit saves everything in `save_session_on_exit`).
     /// Panes under a full-screen program are saved too: the snapshot reads
@@ -4010,6 +4101,14 @@ impl State {
             let text = pane.term.screen_mut().snapshot_ansi(SCROLLBACK_LINES);
             if !text.is_empty() {
                 let _ = write_private(&dir, &format!("{}.ansi", pane.id), text.as_bytes());
+            }
+            // A hosted pane also keeps its exact screen and output offset, so
+            // after a crash it reattaches replaying only what came after.
+            #[cfg(unix)]
+            if let Some(snapshot) = pane.term.host_snapshot(SCROLLBACK_LINES) {
+                if let Ok(json) = serde_json::to_vec(&snapshot) {
+                    let _ = write_private(&dir, &format!("{}.host.json", pane.id), &json);
+                }
             }
         }
     }
@@ -4040,6 +4139,18 @@ impl State {
         let Some(tabs) = v.get("tabs").and_then(|t| t.as_array()) else {
             return false;
         };
+        // Panes that reattach to their hosts keep their ids; new ones must
+        // not take them.
+        for pane in tabs
+            .iter()
+            .filter_map(|t| t.get("panes")?.as_array())
+            .flatten()
+            .filter(|p| p.get("host").is_some_and(|h| !h.is_null()))
+        {
+            if let Some(id) = pane.get("id").and_then(|x| x.as_str()) {
+                reserve_id(id);
+            }
+        }
         // Remote editors are re-fetched after the tabs are in place.
         let mut pending_remote: Vec<(String, String, String, usize, usize)> = Vec::new();
         // Serial/Telnet/TCP tabs reconnect after the rest of the session.
@@ -4079,6 +4190,12 @@ impl State {
                         .get("cwd")
                         .and_then(|x| x.as_str())
                         .map(std::path::PathBuf::from);
+                    #[cfg(unix)]
+                    if let Some(pane) = self.reattach_pane(p) {
+                        map.insert(pane.id.clone(), pane.id.clone());
+                        panes.push(pane);
+                        continue;
+                    }
                     if let Some(mut pane) = self.spawn_pane(cwd) {
                         self.restore_pane_contents(&mut pane, p);
                         if let Some(old) = p.get("id").and_then(|x| x.as_str()) {
@@ -5438,6 +5555,7 @@ impl State {
                     self.persist_settings();
                 }
                 self.save_session_on_exit();
+                self.end_hosts();
                 self.sleep.set_awake(false);
                 std::process::exit(0);
             }
@@ -12809,10 +12927,30 @@ fn quad(ox: f32, oy: f32, row: u16, col: u16, cw: f32, ch: f32, color: (u8, u8, 
     )
 }
 
+static NEXT_PANE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 fn gen_id() -> String {
-    use std::sync::atomic::{AtomicU32, Ordering};
-    static N: AtomicU32 = AtomicU32::new(0);
-    format!("pane{}", N.fetch_add(1, Ordering::SeqCst))
+    format!(
+        "pane{}",
+        NEXT_PANE.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    )
+}
+
+/// Keep new ids clear of `id`, which a reattached pane keeps.
+fn reserve_id(id: &str) {
+    if let Some(n) = id.strip_prefix("pane").and_then(|n| n.parse::<u32>().ok()) {
+        NEXT_PANE.fetch_max(n.saturating_add(1), std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// A hosted pane's host, as the session records it.
+fn pane_host(term: &Terminal) -> serde_json::Value {
+    #[cfg(unix)]
+    if let Some((id, socket)) = term.host_id() {
+        return serde_json::json!({ "id": id, "socket": socket });
+    }
+    let _ = term;
+    serde_json::Value::Null
 }
 
 impl ApplicationHandler<HostEvent> for Host {
@@ -13093,6 +13231,7 @@ impl ApplicationHandler<HostEvent> for Host {
             notifications: cfg.notifications,
             prevent_sleep: cfg.prevent_sleep,
             restore_scrollback: cfg.restore_scrollback,
+            pty_host: cfg.pty_host,
             scrollback_saved_at: Instant::now(),
             sleep: miao_term_ui::agentloop::SleepGuard::new(),
             agent_states: HashMap::new(),
@@ -13658,6 +13797,7 @@ impl ApplicationHandler<HostEvent> for Host {
                     state.persist_settings();
                 }
                 state.save_session_on_exit();
+                state.end_hosts();
                 event_loop.exit();
             }
             WindowEvent::Focused(f) => {
@@ -15299,6 +15439,14 @@ fn scrollback_dir() -> Option<std::path::PathBuf> {
 
 /// Rows of each terminal kept for the next launch.
 const SCROLLBACK_LINES: usize = 5000;
+
+/// Output a PTY host keeps for reattaching (ADR 0041).
+#[cfg(unix)]
+const PTY_HOST_RING: usize = 8 << 20;
+
+/// How long a PTY host waits for mtty to come back (ADR 0041).
+#[cfg(unix)]
+const PTY_HOST_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// How often terminal contents are saved while mtty runs.
 const SCROLLBACK_SAVE_EVERY: Duration = Duration::from_secs(60);

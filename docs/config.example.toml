@@ -9,6 +9,7 @@ font-size = 13                   # default
 # notifications = true             # system notification when an agent needs attention
 # prevent-sleep = true             # keep the machine awake while an agent is processing
 # restore-scrollback = true        # save terminals' contents at quit and show them on relaunch
+# pty-host = false                # keep shells running across restarts (Unix, experimental)
 
 # quick-terminal-hotkey = "cmd+shift+t"  # system-wide Quick Terminal toggle
 # editor-vim = true                # minimal vim mode in the built-in editor

@@ -1,0 +1,24 @@
+[package]
+name = "miao-term-ptyhost"
+description = "PTY host: keeps a pane's program running while mtty restarts (ADR 0041)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[[bin]]
+name = "mtty-ptyhost"
+path = "src/bin/mtty-ptyhost.rs"
+
+[dependencies]
+portable-pty = "0.9.0"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+# End-to-end: a hosted Terminal against the real host binary.
+miao-term-core = { path = "../term-core" }
+serde_json = "1.0.151"

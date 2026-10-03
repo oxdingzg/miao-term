@@ -13,10 +13,12 @@
 
 pub mod aterm;
 pub mod graphics;
+pub mod hosted;
 pub mod perfgate;
 mod shell;
 mod term;
 
+pub use hosted::{HostConfig, HostSnapshot};
 pub use term::{plain_text, CommandOutput, Terminal};
 
 /// The screen model the app renders, backed by `alacritty_terminal` (ADR 0001).

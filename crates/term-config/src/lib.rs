@@ -259,6 +259,8 @@ struct RawConfig {
     prevent_sleep: Option<bool>,
     #[serde(rename = "restore-scrollback")]
     restore_scrollback: Option<bool>,
+    #[serde(rename = "pty-host")]
+    pty_host: Option<bool>,
     badges: Option<RawBadges>,
     language: Option<String>,
     #[serde(rename = "update-check-url")]
@@ -359,6 +361,10 @@ pub struct Config {
     /// Save each terminal's contents when mtty quits and show them again
     /// in the restored panes (kept in the data directory, owner-only).
     pub restore_scrollback: bool,
+    /// Run each local shell in its own PTY host process, so it keeps
+    /// running while mtty restarts and is reattached (ADR 0041). Unix only;
+    /// off by default while it is being proven.
+    pub pty_host: bool,
     /// Which agent states show a tab badge.
     pub badges: Badges,
     /// UI language tag (`en`, `zh`, …); `None` detects from `$LANG`.
@@ -538,6 +544,7 @@ impl Default for Config {
             notifications: true,
             prevent_sleep: true,
             restore_scrollback: true,
+            pty_host: false,
             badges: Badges::default(),
             language: None,
             update_check_url: Some(
@@ -869,6 +876,11 @@ impl Config {
                         cfg.restore_scrollback = v;
                     }
                 }
+                "pty-host" => {
+                    if let Ok(v) = value.parse::<bool>() {
+                        cfg.pty_host = v;
+                    }
+                }
                 "palette" => {
                     if let Some((idx, hex)) = value.split_once('=') {
                         if let (Ok(i), Some(c)) = (idx.trim().parse::<usize>(), Rgb::parse(hex)) {
@@ -913,6 +925,9 @@ impl Config {
         }
         if let Some(v) = raw.restore_scrollback {
             cfg.restore_scrollback = v;
+        }
+        if let Some(v) = raw.pty_host {
+            cfg.pty_host = v;
         }
         if let Some(lang) = raw.language {
             let lang = lang.trim();
@@ -1306,5 +1321,12 @@ mod tests {
         assert_eq!(cfg.font_size, 16.0);
         assert_eq!(cfg.theme.background, Rgb(0, 0, 0));
         assert_eq!(cfg.theme.foreground, Rgb(255, 255, 255));
+    }
+
+    #[test]
+    fn pty_host_is_opt_in() {
+        assert!(!Config::from_toml("").unwrap().pty_host);
+        assert!(Config::from_toml("pty-host = true\n").unwrap().pty_host);
+        assert!(Config::from_ghostty_text("pty-host = true\n").pty_host);
     }
 }

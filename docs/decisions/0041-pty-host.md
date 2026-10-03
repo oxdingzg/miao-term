@@ -290,6 +290,30 @@ reboot is also out of scope.
 - `docs/ARCHITECTURE.md` gains the host process and its crate once this is
   accepted; D6's platform boundaries extend to `term-ptyhost`.
 
+## Addendum: P1 as built (2026-10-03)
+
+- **Protocol v1** as frozen in `crates/term-ptyhost/src/proto.rs` (golden-frame
+  tests): `Hello`, `Attach`, `Input`, `Resize`, `Kill`, `Detach` to the host;
+  `Welcome`, `Output{offset, boundary}`, `Truncated{oldest, modes}`,
+  `Live{offset}`, `Exited`, `Detached` from it. `Live` marks the end of the
+  replay, so the app knows when to answer queries again and resize. There is
+  no `Query`/`Answer`: the app reads the foreground process group from the
+  kernel (`tpgid` via `proc_pidinfo` on macOS, `/proc/<pid>/stat` on Linux)
+  using the child pid from `Welcome`, so no round trip is needed.
+- `pty-host = true` in `config.toml` turns it on (default off). The host
+  binary `mtty-ptyhost` must sit next to `mtty`; it is copied to
+  `<data dir>/ptyhost/<version>/` before use. Packaging it is part of P2.
+- A pane whose host never answers within 2 s runs its shell in the app with
+  a dim note; a host that cannot be spawned at all falls back silently.
+- Session restore reattaches before anything else and keeps the pane id; the
+  minute-by-minute save writes `<pane>.host.json` (state + offset) next to
+  the ANSI copy. Without a snapshot the host's whole ring is replayed.
+- Verified: host tests (attach, offset resume, truncation with modes, exit
+  while detached, timeout, takeover, boundaries), a hosted `Terminal` across a
+  simulated restart (no duplicated output, replayed queries not answered,
+  foreground known), and `kill -9` of the app on a macOS and a Linux desktop
+  with output continuing without a gap and the pane id kept.
+
 ## Review findings (2026-10-03)
 
 The first draft was checked against `alacritty_terminal` 0.25.1, vte 0.15 and

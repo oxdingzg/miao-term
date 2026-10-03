@@ -11,6 +11,7 @@ homepage.workspace = true
 [dependencies]
 alacritty_terminal = "0.25.0"
 portable-pty = "0.9.0"
+miao-term-ptyhost = { path = "../term-ptyhost" }
 # Screen state snapshots (ADR 0041).
 serde = { version = "1.0.229", features = ["derive"] }
 miao-term-graphics = { path = "../term-graphics" }
