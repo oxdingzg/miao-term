@@ -1570,7 +1570,25 @@ impl EditorPane {
             } else {
                 palette.gutter
             };
-            spans.push(Span::new((gutter - 1 - number.len()) as u16, number, color));
+            // Right-align the number in the gutter. A windowed (large-file)
+            // view can number lines past what `total_lines` reports while the
+            // file is still being indexed, so the number can outgrow the
+            // gutter; keep the least significant cells instead of underflowing
+            // the column. Count cells by `char`, never bytes: the fold marker
+            // is a multi-byte glyph.
+            let room = gutter.saturating_sub(1);
+            let cells = number.chars().count();
+            let number = if cells > room {
+                number.chars().skip(cells - room).collect::<String>()
+            } else {
+                number
+            };
+            let cells = number.chars().count();
+            spans.push(Span::new(
+                gutter.saturating_sub(1 + cells) as u16,
+                number,
+                color,
+            ));
             let slice = rope.line(line);
             let mut byte = rope.line_to_byte(line);
             let mut run = String::new();
