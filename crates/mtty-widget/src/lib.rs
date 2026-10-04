@@ -1096,6 +1096,19 @@ enum JobDone {
         text: Vec<u8>,
         result: std::io::Result<()>,
     },
+    /// A remote editor pane's length/mtime, probed over ssh in the
+    /// background; `None` when the probe failed (a silent no-op).
+    RemotePolled {
+        id: String,
+        stamp: Option<editor_pane::DiskStamp>,
+    },
+    /// Bytes of a remote editor pane's file, read in the background after the
+    /// stamp changed, ready to reload if it still has no unsaved edits.
+    RemoteReloaded {
+        id: String,
+        stamp: editor_pane::DiskStamp,
+        result: std::io::Result<Vec<u8>>,
+    },
     /// A serial/Telnet/TCP connection finished dialling (ADR 0037).
     TransportConnected {
         target: TransportTarget,
@@ -12405,6 +12418,78 @@ impl State {
         }
     }
 
+    /// A background ssh stamp probe for a remote pane finished (ADR 0034,
+    /// E3). Reload silently when the file changed and the pane has no unsaved
+    /// edits; keep the edits otherwise. A failed probe is a no-op.
+    fn remote_pane_polled(&mut self, id: &str, stamp: Option<editor_pane::DiskStamp>) {
+        let mut reload: Option<(String, String, String, editor_pane::DiskStamp)> = None;
+        for tab in &mut self.tabs {
+            let Some(ed) = tab.editors.iter_mut().find(|e| e.id == id) else {
+                continue;
+            };
+            match editor_pane::remote_poll_outcome(ed.remote_disk, stamp, ed.doc.is_modified()) {
+                editor_pane::RemotePollOutcome::Ignore => {
+                    ed.remote_polling = false;
+                    // Seed the baseline on the first successful probe.
+                    if ed.remote_disk.is_none() {
+                        if let Some(s) = stamp {
+                            ed.note_remote_stamp(s);
+                        }
+                    }
+                }
+                editor_pane::RemotePollOutcome::KeepLocal => {
+                    ed.remote_polling = false;
+                    if let Some(s) = stamp {
+                        ed.note_remote_stamp(s);
+                    }
+                }
+                editor_pane::RemotePollOutcome::Reload => {
+                    // The read is now in flight; `remote_polling` stays set so
+                    // the next tick does not stack a second read.
+                    if let (Some(remote), Some(s)) = (ed.remote.as_ref(), stamp) {
+                        reload = Some((ed.id.clone(), remote.dest.clone(), remote.path.clone(), s));
+                    } else {
+                        ed.remote_polling = false;
+                    }
+                }
+            }
+            break;
+        }
+        if let Some((id, dest, path, stamp)) = reload {
+            self.spawn_job(move || {
+                let result = mtty_ui::ssh::read_remote(&dest, &path);
+                JobDone::RemoteReloaded { id, stamp, result }
+            });
+        }
+    }
+
+    /// Read a changed remote file's bytes back for a pane. Reload only if it
+    /// still has no unsaved edits; otherwise drop the bytes and adopt the
+    /// stamp. A failed read is silent. Returns whether the text changed.
+    fn remote_pane_reloaded(
+        &mut self,
+        id: &str,
+        stamp: editor_pane::DiskStamp,
+        result: std::io::Result<Vec<u8>>,
+    ) -> bool {
+        for tab in &mut self.tabs {
+            let Some(ed) = tab.editors.iter_mut().find(|e| e.id == id) else {
+                continue;
+            };
+            ed.remote_polling = false;
+            let Ok(bytes) = result else {
+                return false;
+            };
+            // Edited while the read ran: keep the local text.
+            if ed.doc.is_modified() {
+                ed.note_remote_stamp(stamp);
+                return false;
+            }
+            return ed.reload_remote(&bytes, stamp);
+        }
+        false
+    }
+
     /// Move the active editor pane to a 1-based line (and optional 0-based
     /// column), after MTP opened it (ADR 0040, A3).
     fn go_active_editor_to(&mut self, line: Option<usize>, column: Option<usize>) {
@@ -13461,10 +13546,21 @@ impl State {
         let mut redraw = false;
         let mut offer: Option<(String, editor_pane::DiskStamp)> = None;
         let mut deleted: Option<String> = None;
+        // Remote panes are probed over ssh in the background; collect them
+        // while the tabs are borrowed, then spawn once the loop is done.
+        let mut probes: Vec<(String, String, String)> = Vec::new();
         for tab in &mut self.tabs {
             for ed in &mut tab.editors {
-                // Only local files have a disk stamp to poll.
-                if ed.is_view_only() || ed.remote.is_some() {
+                if ed.is_view_only() {
+                    continue;
+                }
+                // A remote pane has no local stamp to read; probe its
+                // length/mtime over ssh instead, one probe at a time.
+                if let Some(remote) = &ed.remote {
+                    if !ed.saving && !ed.remote_polling {
+                        ed.remote_polling = true;
+                        probes.push((ed.id.clone(), remote.dest.clone(), remote.path.clone()));
+                    }
                     continue;
                 }
                 let Some(stamp) = editor_pane::disk_stamp(&ed.path) else {
@@ -13490,6 +13586,19 @@ impl State {
                     redraw = true;
                 }
             }
+        }
+        for (id, dest, path) in probes {
+            self.spawn_job(move || {
+                let stamp = mtty_ui::ssh::stat_remote(&dest, &path)
+                    .ok()
+                    .map(|(len, secs)| editor_pane::DiskStamp {
+                        len,
+                        modified: (secs >= 0).then(|| {
+                            std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(secs as u64)
+                        }),
+                    });
+                JobDone::RemotePolled { id, stamp }
+            });
         }
         if let Some(offer) = offer {
             self.editor_reload_offer = Some(offer);
@@ -13777,6 +13886,12 @@ impl State {
                         }
                     }
                 }
+            }
+            JobDone::RemotePolled { id, stamp } => {
+                self.remote_pane_polled(&id, stamp);
+            }
+            JobDone::RemoteReloaded { id, stamp, result } => {
+                self.remote_pane_reloaded(&id, stamp, result);
             }
             JobDone::TransportConnected {
                 target,

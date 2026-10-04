@@ -452,6 +452,43 @@ pub fn read_remote(dest: &str, path: &str) -> std::io::Result<Vec<u8>> {
     Ok(data)
 }
 
+/// The `ssh` argv for probing a remote file's length and mtime, reusing the
+/// ControlMaster. GNU `stat -c` first, BSD/macOS `stat -f` as the fallback.
+pub fn stat_args(dest: &str, path: &str) -> Vec<String> {
+    let q = shell_quote(path);
+    let mut args = base_args();
+    args.push(dest.to_string());
+    args.push(format!(
+        "stat -c '%s %Y' -- {q} 2>/dev/null || stat -f '%z %m' -- {q}"
+    ));
+    args
+}
+
+/// Parse `len mtime` from a `stat` probe (bytes and whole seconds since the
+/// epoch); `None` on anything else.
+pub fn parse_stat(text: &str) -> Option<(u64, i64)> {
+    let mut fields = text.split_whitespace();
+    let len = fields.next()?.parse().ok()?;
+    let mtime = fields.next()?.parse().ok()?;
+    Some((len, mtime))
+}
+
+/// A remote file's length and modification time over ssh, so an editor pane
+/// can notice external changes without reading the file. Errors carry the
+/// ssh stderr; callers treat a failure as a silent no-op.
+pub fn stat_remote(dest: &str, path: &str) -> std::io::Result<(u64, i64)> {
+    let out = mtty_platform::background_command("ssh")
+        .args(stat_args(dest, path))
+        .output()?;
+    if !out.status.success() {
+        return Err(std::io::Error::other(
+            String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        ));
+    }
+    parse_stat(&String::from_utf8_lossy(&out.stdout))
+        .ok_or_else(|| std::io::Error::other("unexpected stat output"))
+}
+
 /// Write a remote file over ssh (`cat >`), feeding `data` on stdin.
 pub fn write_remote(dest: &str, path: &str, data: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
@@ -704,6 +741,23 @@ mod tests {
         assert_eq!(r.last().unwrap(), "cat -- '/tmp/a b.txt'");
         let w = write_args("u@h", "x");
         assert_eq!(w.last().unwrap(), "cat > 'x'");
+    }
+
+    #[test]
+    fn stat_args_quote_the_path_and_fall_back_to_bsd_stat() {
+        let s = stat_args("u@h", "/tmp/a b.txt");
+        let cmd = s.last().unwrap();
+        assert!(cmd.contains("stat -c '%s %Y' -- '/tmp/a b.txt'"), "{cmd}");
+        assert!(cmd.contains("stat -f '%z %m' -- '/tmp/a b.txt'"), "{cmd}");
+    }
+
+    #[test]
+    fn parse_stat_reads_length_and_mtime_or_nothing() {
+        assert_eq!(parse_stat("123 1700000000\n"), Some((123, 1_700_000_000)));
+        assert_eq!(parse_stat("  42\t7  "), Some((42, 7)));
+        assert_eq!(parse_stat(""), None);
+        assert_eq!(parse_stat("not numbers"), None);
+        assert_eq!(parse_stat("12"), None);
     }
 
     #[test]

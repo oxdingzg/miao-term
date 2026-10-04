@@ -41,6 +41,43 @@ pub fn disk_stamp(path: &Path) -> Option<DiskStamp> {
     })
 }
 
+/// What a remote pane should do about a freshly probed remote stamp. Derived
+/// purely from the stamps and whether the pane has unsaved edits, so it is
+/// unit-tested apart from ssh and the UI.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RemotePollOutcome {
+    /// Nothing to do: the probe failed or found the same stamp (or this is
+    /// the pane's first observation, used to seed the baseline).
+    Ignore,
+    /// The file changed while the pane is unmodified: read it and reload.
+    Reload,
+    /// The file changed while the pane has unsaved edits: keep them, silently.
+    KeepLocal,
+}
+
+/// Decide what a remote poll means for a pane whose last observed stamp is
+/// `known`, given the stamp `current` the background probe just found and
+/// whether the document has unsaved edits.
+pub fn remote_poll_outcome(
+    known: Option<DiskStamp>,
+    current: Option<DiskStamp>,
+    modified: bool,
+) -> RemotePollOutcome {
+    let (Some(known), Some(current)) = (known, current) else {
+        // A failed or missing probe is a silent no-op; the first successful
+        // probe only seeds the baseline, it never reloads.
+        return RemotePollOutcome::Ignore;
+    };
+    if known == current {
+        return RemotePollOutcome::Ignore;
+    }
+    if modified {
+        RemotePollOutcome::KeepLocal
+    } else {
+        RemotePollOutcome::Reload
+    }
+}
+
 /// A file in view mode: `doc` holds lines `base..` of it (a read-only
 /// window that moves as the view scrolls).
 pub struct LargeWindow {
@@ -302,6 +339,11 @@ pub struct EditorPane {
     /// The file's stamp when it was last read or written; a mismatch on a
     /// later poll means something else changed it.
     pub disk: Option<DiskStamp>,
+    /// A remote file's stamp as of the last background probe (ADR 0034, E3);
+    /// `None` until the first probe seeds it.
+    pub remote_disk: Option<DiskStamp>,
+    /// A background stamp probe for this remote pane is running.
+    pub remote_polling: bool,
     /// The file vanished on disk and the user has been told once.
     pub missing_warned: bool,
     /// Foldable ranges, recomputed when the text or syntax changes.
@@ -547,6 +589,8 @@ impl EditorPane {
             large: None,
             diagnostics: Vec::new(),
             disk,
+            remote_disk: None,
+            remote_polling: false,
             missing_warned: false,
             folds: Vec::new(),
             folds_revision: u64::MAX,
@@ -630,15 +674,44 @@ impl EditorPane {
             return false;
         };
         self.missing_warned = false;
-        let Ok(changed) = self.doc.reload(&bytes) else {
+        let changed = self.reload_with(&bytes);
+        self.disk = disk_stamp(&self.path);
+        changed
+    }
+
+    /// Replace the document with freshly read `bytes` as one undoable step
+    /// (the cursor rides through the change), leaving the pane clean. The
+    /// shared reload path for a local re-read and for a remote external
+    /// change. Returns whether the text changed.
+    fn reload_with(&mut self, bytes: &[u8]) -> bool {
+        let Ok(changed) = self.doc.reload(bytes) else {
             return false;
         };
         if changed {
             self.doc.mark_saved();
             self.close_armed = false;
         }
-        self.disk = disk_stamp(&self.path);
         changed
+    }
+
+    /// Replace a remote pane's document with bytes read over ssh after an
+    /// external change, reusing the local reload path. Called only when the
+    /// pane has no unsaved edits; `stamp` is the probe's stamp. Returns
+    /// whether the text changed.
+    pub fn reload_remote(&mut self, bytes: &[u8], stamp: DiskStamp) -> bool {
+        if self.remote.is_none() {
+            return false;
+        }
+        let changed = self.reload_with(bytes);
+        self.remote_disk = Some(stamp);
+        self.missing_warned = false;
+        changed
+    }
+
+    /// Record the remote stamp seen by a background probe without touching
+    /// the text: a first observation, or a change kept behind unsaved edits.
+    pub fn note_remote_stamp(&mut self, stamp: DiskStamp) {
+        self.remote_disk = Some(stamp);
     }
 
     /// Turn vim mode on (fresh Normal mode) or off.
@@ -2559,8 +2632,51 @@ mod tests {
         assert!(!p.doc.is_modified());
         // A remote save goes through the host, not the local filesystem.
         assert!(p.save().is_err());
-        // External-change polling never fires for a remote pane.
+        // `reload_from_disk` never touches the local filesystem for a remote
+        // pane; the host reloads it from bytes instead.
         assert!(!p.reload_from_disk());
+    }
+
+    fn stamp(len: u64, secs: u64) -> DiskStamp {
+        DiskStamp {
+            len,
+            modified: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(secs)),
+        }
+    }
+
+    #[test]
+    fn remote_poll_only_reloads_an_unmodified_pane_on_a_new_stamp() {
+        use RemotePollOutcome::{Ignore, KeepLocal, Reload};
+        let a = stamp(10, 100);
+        let b = stamp(11, 101);
+        // First observation seeds the baseline; a failed probe is silent.
+        assert_eq!(remote_poll_outcome(None, Some(a), false), Ignore);
+        assert_eq!(remote_poll_outcome(Some(a), None, false), Ignore);
+        assert_eq!(remote_poll_outcome(None, None, false), Ignore);
+        // Same stamp: nothing to do.
+        assert_eq!(remote_poll_outcome(Some(a), Some(a), false), Ignore);
+        // A new stamp reloads when clean, keeps local text when edited.
+        assert_eq!(remote_poll_outcome(Some(a), Some(b), false), Reload);
+        assert_eq!(remote_poll_outcome(Some(a), Some(b), true), KeepLocal);
+    }
+
+    #[test]
+    fn a_remote_reload_replaces_the_text_and_moves_the_stamp() {
+        let mut p = EditorPane::open_remote(
+            "e1".into(),
+            "host".into(),
+            "/tmp/x.rs".into(),
+            b"one\ntwo\n",
+        )
+        .unwrap();
+        p.note_remote_stamp(stamp(8, 100));
+        assert!(p.reload_remote(b"one\nTWO\n", stamp(8, 101)));
+        assert_eq!(p.doc.rope().to_string(), "one\nTWO\n");
+        assert!(!p.doc.is_modified(), "an external reload leaves it clean");
+        assert_eq!(p.remote_disk, Some(stamp(8, 101)));
+        // Identical bytes are not a change.
+        assert!(!p.reload_remote(b"one\nTWO\n", stamp(8, 102)));
+        assert_eq!(p.remote_disk, Some(stamp(8, 102)));
     }
 
     #[test]
