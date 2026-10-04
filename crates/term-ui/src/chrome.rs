@@ -598,7 +598,7 @@ pub fn queue(
         ch,
         &format!("{} ({})", t(lang, "Queue", "队列"), items.len()),
     ));
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.add(
             egui::TextEdit::singleline(input)
                 .hint_text(t(lang, "Prompt to run…", "要执行的提示…"))
@@ -616,7 +616,8 @@ pub fn queue(
     });
     ui.separator();
     for (i, item) in items.iter().enumerate() {
-        ui.horizontal(|ui| {
+        // Wrapping keeps a long prompt from widening the panel.
+        ui.horizontal_wrapped(|ui| {
             if ui
                 .small_button("\u{25b6}")
                 .on_hover_text(t(lang, "Send", "发送"))
@@ -685,16 +686,23 @@ pub fn list(ui: &mut egui::Ui, ch: &ChromeColors, items: &[ChromeItem]) {
             let (irect, _) = ui.allocate_exact_size(egui::Vec2::splat(14.0), egui::Sense::hover());
             crate::icons::draw_tab_icon(ui.painter(), irect, &it.icon, bg_color(ch.text));
             ui.add_space(2.0);
-            let label = egui::RichText::new(&it.label).monospace().size(12.0);
-            let label = match it.label_color {
-                Some(c) => label.color(bg_color(c)),
-                None => label,
-            };
-            ui.label(label);
+            // Lay the row out right-to-left so the meta hugs the edge, then the
+            // label fills what is left and truncates. A long row must never ask
+            // for more width than the panel already has.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
                 if !it.meta.is_empty() {
                     ui.label(egui::RichText::new(&it.meta).size(10.5).color(muted));
+                    ui.add_space(6.0);
                 }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    let label = egui::RichText::new(&it.label).monospace().size(12.0);
+                    let label = match it.label_color {
+                        Some(c) => label.color(bg_color(c)),
+                        None => label,
+                    };
+                    ui.label(label);
+                });
             });
         });
     }
@@ -1964,6 +1972,86 @@ mod tab_menu_tests {
         assert!(
             (dragged - (left + 100.0)).abs() < 3.0,
             "sidebar is now {dragged}"
+        );
+    }
+
+    /// The details panel keeps the width it was given: long names or prompts
+    /// truncate or wrap instead of widening it, so switching icons does not
+    /// change the panel's size.
+    #[test]
+    fn details_content_never_resizes_the_panel() {
+        struct Host {
+            queue: bool,
+            label: String,
+            widths: (Option<f32>, Option<f32>),
+        }
+        impl Chrome for Host {
+            fn show_sidebar(&self) -> bool {
+                false
+            }
+            fn show_details(&self) -> bool {
+                true
+            }
+            fn details_is_queue(&self) -> bool {
+                self.queue
+            }
+            fn queue(&self) -> Vec<String> {
+                if self.queue {
+                    vec![self.label.clone()]
+                } else {
+                    Vec::new()
+                }
+            }
+            fn details_list(&self) -> Option<Vec<ChromeItem>> {
+                if self.queue {
+                    None
+                } else {
+                    Some(vec![ChromeItem {
+                        icon: crate::icons::Icon::File.into(),
+                        label: self.label.clone(),
+                        meta: "876.4 K".into(),
+                        label_color: None,
+                    }])
+                }
+            }
+            fn on_panel_widths(&mut self, sidebar: Option<f32>, details: Option<f32>) {
+                self.widths = (sidebar, details);
+            }
+        }
+
+        let ctx = test_ctx();
+        let mut host = Host {
+            queue: false,
+            label: "a-name-far-too-long-to-ever-fit-in-the-panel-".repeat(8),
+            widths: (None, None),
+        };
+        let run = |host: &mut Host, frames: usize| {
+            for _ in 0..frames {
+                let input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200.0, 700.0),
+                    )),
+                    ..Default::default()
+                };
+                let _ = ctx.run(input, |ctx| render(ctx, host));
+            }
+            host.widths.1.unwrap_or(0.0)
+        };
+
+        // A list row with an over-long label...
+        let width = run(&mut host, 2);
+        assert!(
+            (width - CHROME_DETAILS_W).abs() < 1.0,
+            "details width drifted to {width} on the list tab"
+        );
+        // ...then the user clicks the Queue icon, whose prompt row is also too
+        // wide: the panel must stay put.
+        host.queue = true;
+        let width = run(&mut host, 3);
+        assert!(
+            (width - CHROME_DETAILS_W).abs() < 1.0,
+            "details width drifted to {width} after switching to the queue tab"
         );
     }
 
