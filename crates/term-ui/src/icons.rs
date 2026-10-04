@@ -218,6 +218,33 @@ pub const RULE_ICONS: &[(&str, char)] = &[
     ("claude", '\u{ec10}'),     // cod-sparkle
 ];
 
+/// The view-rule icon name for a file-tree entry, chosen from its extension
+/// (`folder` for a directory). Unknown types fall back to `file`.
+pub fn file_type(name: &str, is_dir: bool) -> &'static str {
+    if is_dir {
+        return "folder";
+    }
+    let ext = name
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "rs" | "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "py" | "go" | "rb" | "php"
+        | "java" | "kt" | "kts" | "swift" | "c" | "h" | "cc" | "cpp" | "cxx" | "hpp" | "cs"
+        | "sh" | "bash" | "zsh" | "fish" | "lua" | "vim" | "scala" | "ex" | "exs" | "dart"
+        | "r" | "sql" | "html" | "css" | "scss" | "vue" | "svelte" | "astro" => "code",
+        "md" | "markdown" | "mdx" | "txt" | "rst" | "org" | "tex" | "log" => "file-text",
+        "json" | "jsonc" | "yaml" | "yml" | "toml" | "ini" | "cfg" | "conf" | "env"
+        | "properties" => "settings",
+        "lock" | "sum" => "lock",
+        "db" | "sqlite" | "sqlite3" => "database",
+        "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "zst" | "rar" | "7z" | "jar" | "war" => {
+            "package"
+        }
+        _ => "file",
+    }
+}
+
 /// The glyph for a view rule's icon: a known `name`, else the `emoji`, else
 /// a dot when only a color was given (docs/VIEW-RULES.md, "Icons").
 pub fn rule_glyph(name: Option<&str>, emoji: Option<&str>, has_color: bool) -> Option<String> {

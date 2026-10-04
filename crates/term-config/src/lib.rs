@@ -368,6 +368,15 @@ pub fn theme_by_name(name: &str) -> Option<Theme> {
                 "#7dcfff", "#c0caf5",
             ],
         ),
+        "superset" => theme_from(
+            "#212733",
+            "#d7dee8",
+            &[
+                "#1b2029", "#ef6b6b", "#4ec26a", "#e5b567", "#4f8cff", "#c98bdb", "#56b6c2",
+                "#d7dee8", "#5c6a7d", "#ff8a8a", "#6ee08a", "#f5cf8a", "#7aa7ff", "#e0a8ef",
+                "#7fd8e2", "#eef3f9",
+            ],
+        ),
         _ => return None,
     };
     Some(t)
@@ -1409,6 +1418,12 @@ env = { AGENT_MODE = "test", IGNORED_NONSTRING = 5 }
         .unwrap();
         assert_eq!(cfg.theme.background, Rgb(0x28, 0x2a, 0x36));
         assert_eq!(cfg.font_family.as_deref(), Some("JetBrains Mono"));
+
+        // The Superset preset is reachable from the config by name, so the
+        // widget can resolve it to its chrome as well as its terminal colours.
+        let cfg = Config::from_toml("theme = \"superset\"\n").unwrap();
+        assert_eq!(cfg.theme.background, Rgb(0x21, 0x27, 0x33));
+        assert_eq!(cfg.theme_name.as_deref(), Some("superset"));
     }
 
     #[test]
