@@ -84,10 +84,12 @@ accepted too, and an explicit `[colors]` block overrides any named theme.
 
 ### Badges
 
-`[badges]` chooses which agent states show on tabs: the state circle (half
-while working, full when finished or waiting, an empty ring when idle) and the
-`!` or finished mark. A state switched off shows the plain terminal icon and no
-mark. All four are on by default; system notifications are not affected:
+`[badges]` chooses which agent states show on tabs: the state marker — an empty
+ring when idle, a rotating arc while executing, a ring with a solid core when
+waiting for you, and a solid disc when a turn finished (green) or failed (red)
+— plus the `!` or finished mark. A state switched off shows the plain terminal
+icon and no mark. All four are on by default; system notifications are not
+affected:
 
 ```toml
 [badges]
