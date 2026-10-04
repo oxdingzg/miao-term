@@ -664,9 +664,11 @@ fn panel_frame_stroke(margin: egui::Margin, fill: Rgb, stroke: Rgb) -> egui::Fra
 /// One row in a details list (Files / Ports / Git / Outline): a single line
 /// with an icon, a label and right-aligned meta.
 pub struct ChromeItem {
-    pub icon: crate::icons::Icon,
+    pub icon: crate::icons::TabIcon,
     pub label: String,
     pub meta: String,
+    /// Label colour; falls back to the panel text colour.
+    pub label_color: Option<Rgb>,
 }
 
 /// Render `items` as a compact one-line-per-row list.
@@ -676,9 +678,14 @@ pub fn list(ui: &mut egui::Ui, ch: &ChromeColors, items: &[ChromeItem]) {
     for it in items {
         ui.horizontal(|ui| {
             let (irect, _) = ui.allocate_exact_size(egui::Vec2::splat(14.0), egui::Sense::hover());
-            crate::icons::draw(ui.painter(), irect, it.icon, bg_color(ch.text));
+            crate::icons::draw_tab_icon(ui.painter(), irect, &it.icon, bg_color(ch.text));
             ui.add_space(2.0);
-            ui.label(egui::RichText::new(&it.label).monospace().size(12.0));
+            let label = egui::RichText::new(&it.label).monospace().size(12.0);
+            let label = match it.label_color {
+                Some(c) => label.color(bg_color(c)),
+                None => label,
+            };
+            ui.label(label);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if !it.meta.is_empty() {
                     ui.label(egui::RichText::new(&it.meta).size(10.5).color(muted));
@@ -2267,5 +2274,30 @@ mod tab_menu_tests {
         frame_run(&ctx, &mut host, vec![press(p, true)]);
         frame_run(&ctx, &mut host, vec![press(p, false)]);
         assert!(host.toggled_sidebar);
+    }
+
+    #[test]
+    fn tab_chips_do_not_start_a_window_drag() {
+        let ctx = test_ctx();
+        let mut host = FrameHost {
+            sidebar: false,
+            menu: false,
+            inset: 76.0,
+            drag_hover: false,
+            toggled_sidebar: false,
+        };
+        let hover = |p: egui::Pos2, host: &mut FrameHost| {
+            frame_run(&ctx, host, vec![egui::Event::PointerMoved(p)]);
+            frame_run(&ctx, host, vec![egui::Event::PointerMoved(p)]);
+            host.drag_hover
+        };
+        frame_run(&ctx, &mut host, vec![]);
+        let on_chip = hover(egui::pos2(90.0, 15.0), &mut host);
+        let empty = hover(egui::pos2(700.0, 15.0), &mut host);
+        assert!(
+            !on_chip,
+            "hovering a tab chip must not report a window-drag region (got drag_hover=true)"
+        );
+        assert!(empty, "empty title space should still move the window");
     }
 }

@@ -5,6 +5,20 @@ use miao_term_core::aterm::{Color as TermColor, NamedColor};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Rgb(pub u8, pub u8, pub u8);
 
+/// A named palette preset. The terminal colours and the surrounding chrome
+/// both follow it, so picking "Superset" restyles the whole window.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Preset {
+    Nord,
+    Dracula,
+    Gruvbox,
+    Superset,
+    /// A theme imported from ghostty/alacritty or read from the config's
+    /// explicit colours; keeps the neutral chrome.
+    #[default]
+    Other,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum CursorStyle {
     #[default]
@@ -20,6 +34,7 @@ pub struct Theme {
     pub palette: [Rgb; 16],
     pub selection: Rgb,
     pub cursor: CursorStyle,
+    pub preset: Preset,
 }
 
 impl Theme {
@@ -48,6 +63,7 @@ impl Theme {
             palette: P,
             selection: Rgb(0x43, 0x4c, 0x5e),
             cursor: CursorStyle::Block,
+            preset: Preset::Nord,
         }
     }
 
@@ -258,6 +274,7 @@ impl Theme {
             palette: P,
             selection: Rgb(0x44, 0x47, 0x5a),
             cursor: CursorStyle::Block,
+            preset: Preset::Dracula,
         }
     }
 
@@ -286,6 +303,37 @@ impl Theme {
             palette: P,
             selection: Rgb(0x50, 0x49, 0x45),
             cursor: CursorStyle::Block,
+            preset: Preset::Gruvbox,
+        }
+    }
+
+    /// A navy workspace palette in the reference manager's style.
+    pub fn superset() -> Self {
+        const P: [Rgb; 16] = [
+            Rgb(0x1b, 0x20, 0x29),
+            Rgb(0xef, 0x6b, 0x6b),
+            Rgb(0x4e, 0xc2, 0x6a),
+            Rgb(0xe5, 0xb5, 0x67),
+            Rgb(0x4f, 0x8c, 0xff),
+            Rgb(0xc9, 0x8b, 0xdb),
+            Rgb(0x56, 0xb6, 0xc2),
+            Rgb(0xd7, 0xde, 0xe8),
+            Rgb(0x5c, 0x6a, 0x7d),
+            Rgb(0xff, 0x8a, 0x8a),
+            Rgb(0x6e, 0xe0, 0x8a),
+            Rgb(0xf5, 0xcf, 0x8a),
+            Rgb(0x7a, 0xa7, 0xff),
+            Rgb(0xe0, 0xa8, 0xef),
+            Rgb(0x7f, 0xd8, 0xe2),
+            Rgb(0xee, 0xf3, 0xf9),
+        ];
+        Self {
+            bg: Rgb(0x21, 0x27, 0x33),
+            fg: Rgb(0xd7, 0xde, 0xe8),
+            palette: P,
+            selection: Rgb(0x2f, 0x3a, 0x4c),
+            cursor: CursorStyle::Block,
+            preset: Preset::Superset,
         }
     }
 
@@ -295,11 +343,17 @@ impl Theme {
             "Nord" => Some(Self::nord()),
             "Dracula" => Some(Self::dracula()),
             "Gruvbox" => Some(Self::gruvbox()),
+            "Superset" => Some(Self::superset()),
             _ => None,
         }
     }
 
-    pub const NAMES: [&'static str; 3] = ["Nord", "Dracula", "Gruvbox"];
+    /// The preset a display name maps to, if it is a built-in.
+    pub fn preset_for_name(name: &str) -> Option<Preset> {
+        Self::named(name).map(|t| t.preset)
+    }
+
+    pub const NAMES: [&'static str; 4] = ["Nord", "Dracula", "Gruvbox", "Superset"];
 }
 
 /// Colours for the surrounding chrome (menu/tabs/sidebar/details/status).
@@ -320,6 +374,14 @@ pub struct Chrome {
     pub details: Rgb,
     /// Border for the side panels (Otty `[sidebar]` border-right `#434C5E`).
     pub border: Rgb,
+    /// Directory icon and selected-row accent in the file tree.
+    pub folder: Rgb,
+    /// Neutral file icon in the file tree.
+    pub file: Rgb,
+    /// Added/removed line counts, and warning accents.
+    pub positive: Rgb,
+    pub negative: Rgb,
+    pub warning: Rgb,
 }
 
 impl Chrome {
@@ -336,14 +398,45 @@ impl Chrome {
             sidebar: Rgb(0x2e, 0x34, 0x40),
             details: Rgb(0x14, 0x14, 0x16),
             border: Rgb(0x43, 0x4c, 0x5e),
+            folder: Rgb(0x6b, 0x9e, 0xd8),
+            file: Rgb(0x9a, 0xa4, 0xb2),
+            positive: Rgb(0x3f, 0xb9, 0x50),
+            negative: Rgb(0xf8, 0x51, 0x49),
+            warning: Rgb(0xd2, 0x99, 0x22),
+        }
+    }
+
+    /// The navy workspace palette (window `#171b24`, cards `#212733`, bars
+    /// `#2b333e`), close to the reference manager's chrome.
+    pub fn superset() -> Self {
+        Self {
+            bg: Rgb(0x17, 0x1b, 0x24),
+            card: Rgb(0x21, 0x27, 0x33),
+            text: Rgb(0xd7, 0xde, 0xe8),
+            muted: Rgb(0x8a, 0x96, 0xa5),
+            hover: Rgb(0x33, 0x3c, 0x49),
+            active: Rgb(0x3d, 0x48, 0x58),
+            accent: Rgb(0x4f, 0x8c, 0xff),
+            sidebar: Rgb(0x2b, 0x33, 0x3e),
+            details: Rgb(0x1b, 0x20, 0x29),
+            border: Rgb(0x33, 0x3c, 0x49),
+            folder: Rgb(0x5b, 0x9d, 0xf6),
+            file: Rgb(0x8a, 0x96, 0xa5),
+            positive: Rgb(0x4e, 0xc2, 0x6a),
+            negative: Rgb(0xef, 0x6b, 0x6b),
+            warning: Rgb(0xe5, 0xb5, 0x67),
         }
     }
 }
 
 impl Theme {
-    /// The chrome palette (neutral dark, not tied to the terminal colours).
+    /// The chrome palette. Built-in presets bring their own; imported or
+    /// explicit configs keep the neutral dark chrome.
     pub fn chrome(&self) -> Chrome {
-        Chrome::dark()
+        match self.preset {
+            Preset::Superset => Chrome::superset(),
+            _ => Chrome::dark(),
+        }
     }
 }
 
@@ -371,6 +464,15 @@ impl Theme {
                 miao_term_config::CursorStyle::Bar => CursorStyle::Bar,
                 miao_term_config::CursorStyle::Underline => CursorStyle::Underline,
             },
+            preset: Preset::Other,
+        }
+    }
+
+    /// Point the chrome at a built-in preset by display name, without changing
+    /// the terminal colours (the config's explicit palette stays authoritative).
+    pub fn set_preset_name(&mut self, name: &str) {
+        if let Some(preset) = Self::preset_for_name(name) {
+            self.preset = preset;
         }
     }
 }

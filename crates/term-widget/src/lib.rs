@@ -111,6 +111,33 @@ fn unified_titlebar() -> bool {
     cfg!(windows) || (cfg!(target_os = "macos") && menu_in_os())
 }
 
+// With a transparent, full-size title bar macOS treats the whole title strip as
+// window-move area: a press there starts a system window drag that swallows the
+// very gesture meant to reorder or click tab chips. Turn the system drag off and
+// keep the app's own dragging (on_title_drag_hover + drag_window), which the
+// chrome already drives per region.
+#[cfg(target_os = "macos")]
+fn disable_native_titlebar_move(window: &winit::window::Window) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let Ok(handle) = window.window_handle() else {
+        return;
+    };
+    let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+        return;
+    };
+    // SAFETY: winit keeps the NSView alive for the window's lifetime, and
+    // `window` / `setMovable:` exist on every supported macOS. Nil is checked.
+    unsafe {
+        let view = handle.ns_view.as_ptr().cast::<AnyObject>();
+        let ns_window: *mut AnyObject = msg_send![view, window];
+        if !ns_window.is_null() {
+            let _: () = msg_send![ns_window, setMovable: false];
+        }
+    }
+}
+
 /// Room the traffic lights take at the leading edge of a unified title bar.
 const TRAFFIC_LIGHTS_W: f32 = 76.0;
 
@@ -1380,6 +1407,120 @@ impl Default for TransportDialog {
     }
 }
 
+/// The New SSH Session form: a full host editor rather than a bare
+/// `[user@]host[:port]` prompt, with a quick-connect fast path.
+struct SshForm {
+    /// `[user@]host[:port]` fast path; connects without saving.
+    quick: String,
+    name: String,
+    alias: bool,
+    address: String,
+    user: String,
+    port: String,
+    group: String,
+    tags: String,
+    jump: String,
+    persistent: bool,
+    tmux: String,
+    mosh: bool,
+    forwards: Vec<miao_term_config::hosts::Forward>,
+    new_forward: Option<(miao_term_config::hosts::ForwardKind, String)>,
+    advanced: bool,
+    error: Option<String>,
+}
+
+impl Default for SshForm {
+    fn default() -> Self {
+        SshForm {
+            quick: String::new(),
+            name: String::new(),
+            alias: false,
+            address: String::new(),
+            user: String::new(),
+            port: String::new(),
+            group: String::new(),
+            tags: String::new(),
+            jump: String::new(),
+            // A persistent session is the sensible default for a named host.
+            persistent: true,
+            tmux: String::new(),
+            mosh: false,
+            forwards: Vec::new(),
+            new_forward: None,
+            advanced: false,
+            error: None,
+        }
+    }
+}
+
+impl SshForm {
+    /// Build a [`Host`](miao_term_config::hosts::Host) from the form, or the
+    /// reason it is not ready yet.
+    fn build(
+        &self,
+        lang: miao_term_ui::i18n::Lang,
+    ) -> Result<miao_term_config::hosts::Host, String> {
+        use miao_term_ui::i18n::t;
+        let name = self.name.trim().to_string();
+        let address = self.address.trim().to_string();
+        let opt = |s: &str| {
+            let v = s.trim();
+            (!v.is_empty()).then(|| v.to_string())
+        };
+        if self.alias {
+            if name.is_empty() {
+                return Err(t(
+                    lang,
+                    "A name is required for an alias.",
+                    "别名需要一个名称。",
+                )
+                .into());
+            }
+            return Ok(miao_term_config::hosts::Host {
+                name,
+                alias: true,
+                ..Default::default()
+            });
+        }
+        let host = if !address.is_empty() {
+            address
+        } else if !name.is_empty() {
+            name.clone()
+        } else {
+            return Err(t(lang, "Host or name is required.", "需要填写主机或名称。").into());
+        };
+        let port = match self.port.trim() {
+            "" => None,
+            p => Some(p.parse::<u16>().map_err(|_| {
+                t(lang, "Port must be 0–65535.", "端口需在 0–65535 之间。").to_string()
+            })?),
+        };
+        Ok(miao_term_config::hosts::Host {
+            name: if name.is_empty() { host.clone() } else { name },
+            alias: false,
+            address: Some(host),
+            user: opt(&self.user),
+            port,
+            group: opt(&self.group),
+            tags: self
+                .tags
+                .split([',', ' '])
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect(),
+            jump: opt(&self.jump),
+            tmux: self
+                .persistent
+                .then(|| opt(&self.tmux).unwrap_or_else(|| "mtty".into())),
+            mosh: self.mosh,
+            forwards: self.forwards.clone(),
+            kind: Default::default(),
+            serial: None,
+        })
+    }
+}
+
 /// Connect to an FTP/FTPS server. The password stays in memory only.
 #[derive(Default)]
 struct FtpDialog {
@@ -1611,7 +1752,7 @@ struct State {
     recipe_dialog: Option<bool>,
     recipe_name: String,
     recipe_list: Vec<String>,
-    ssh_dialog: Option<String>,
+    ssh_dialog: Option<SshForm>,
     /// New Serial/Telnet/TCP session form (ADR 0037); `None` when closed.
     transport_dialog: Option<TransportDialog>,
     /// Import PuTTY Key form (ADR 0038); `None` when closed.
@@ -2522,6 +2663,7 @@ impl State {
             return;
         }
         let filter = self.files_filter.to_lowercase();
+        let ch = self.theme.chrome();
         let mut open_file = None;
         let mut toggle = None;
         render_dir_tree(
@@ -2531,6 +2673,7 @@ impl State {
             &root,
             0,
             &filter,
+            &ch,
             &mut open_file,
             &mut toggle,
         );
@@ -5898,7 +6041,7 @@ impl State {
                     self.check_updates();
                 }
             }
-            Cmd::NewSsh => self.ssh_dialog = Some(String::new()),
+            Cmd::NewSsh => self.ssh_dialog = Some(SshForm::default()),
             Cmd::NewTransport => self.transport_dialog = Some(TransportDialog::default()),
             Cmd::OpenRemote => {
                 // From an ssh tab the host is already known.
@@ -6257,6 +6400,7 @@ impl State {
                 t.cursor = self.theme.cursor;
                 self.theme = t;
                 self.theme_name = n.to_string();
+                configure_egui(ctx, &self.theme.chrome());
                 let Rgb(r, g, b) = self.theme.fg;
                 let Rgb(br, bg, bb) = self.theme.bg;
                 for tab in &mut self.tabs {
@@ -11134,47 +11278,244 @@ impl State {
         }
     }
 
+    /// The New SSH Session form: a full host editor with a quick-connect path.
     fn ssh_dialog_window(&mut self, ctx: &egui::Context) {
-        let Some(ref mut input) = self.ssh_dialog else {
+        use miao_term_config::hosts::ForwardKind;
+        use miao_term_ui::i18n::t;
+        let lang = self.lang;
+        let Some(mut form) = self.ssh_dialog.take() else {
             return;
         };
         let mut open = true;
-        let mut connect = false;
-        egui::Window::new(miao_term_ui::i18n::t(
-            self.lang,
-            "New SSH Session",
-            "新建 SSH 会话",
-        ))
-        .collapsible(false)
-        .open(&mut open)
-        .show(ctx, |ui| {
-            let r = ui.add(
-                egui::TextEdit::singleline(input)
-                    .hint_text("[user@]host[:port]")
-                    .desired_width(280.0),
-            );
-            // Check Enter before re-taking focus: Enter makes the field give it up,
-            // and taking it back first would hide that (`lost_focus` stays false).
-            let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if !enter {
-                r.request_focus();
+        // 0 keep, 1 connect (no save), 2 save & connect, 3 cancel.
+        let mut action = 0u8;
+        let mut remove_forward: Option<usize> = None;
+        egui::Window::new(t(lang, "New SSH Session", "新建 SSH 会话"))
+            .collapsible(false)
+            .open(&mut open)
+            .default_width(460.0)
+            .show(ctx, |ui| {
+                let field = |ui: &mut egui::Ui, label: &str, value: &mut String, hint: &str| {
+                    ui.horizontal(|ui| {
+                        ui.add_sized([88.0, 18.0], egui::Label::new(label));
+                        ui.add(
+                            egui::TextEdit::singleline(value)
+                                .hint_text(hint)
+                                .desired_width(f32::INFINITY),
+                        );
+                    });
+                };
+                ui.label(egui::RichText::new(t(lang, "Quick connect", "快速连接")).strong());
+                let quick = ui.add(
+                    egui::TextEdit::singleline(&mut form.quick)
+                        .hint_text("[user@]host[:port]")
+                        .desired_width(f32::INFINITY),
+                );
+                if quick.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    action = 1;
+                }
+                ui.horizontal(|ui| {
+                    if ui.button(t(lang, "Connect", "连接")).clicked() {
+                        action = 1;
+                    }
+                    ui.label(
+                        egui::RichText::new(t(
+                            lang,
+                            "Connects the typed target without saving.",
+                            "直接连接,不保存。",
+                        ))
+                        .size(11.0)
+                        .weak(),
+                    );
+                });
+                ui.separator();
+                ui.label(egui::RichText::new(t(lang, "Saved host", "保存主机")).strong());
+                ui.checkbox(
+                    &mut form.alias,
+                    t(
+                        lang,
+                        "Use a ~/.ssh/config alias by name",
+                        "按名称使用 ~/.ssh/config 别名",
+                    ),
+                );
+                field(ui, t(lang, "Name", "名称"), &mut form.name, "web-1");
+                if !form.alias {
+                    field(ui, t(lang, "Host", "主机"), &mut form.address, "203.0.113.5");
+                    ui.horizontal(|ui| {
+                        ui.add_sized(
+                            [88.0, 18.0],
+                            egui::Label::new(t(lang, "User / port", "用户 / 端口")),
+                        );
+                        ui.add(
+                            egui::TextEdit::singleline(&mut form.user)
+                                .hint_text("deploy")
+                                .desired_width(140.0),
+                        );
+                        ui.add(
+                            egui::TextEdit::singleline(&mut form.port)
+                                .hint_text("22")
+                                .desired_width(64.0),
+                        );
+                    });
+                    field(ui, t(lang, "Group", "分组"), &mut form.group, "prod");
+                    field(ui, t(lang, "Tags", "标签"), &mut form.tags, "web, edge");
+                }
+                ui.checkbox(&mut form.advanced, t(lang, "Advanced options", "高级选项"));
+                if form.advanced {
+                    if !form.alias {
+                        field(ui, t(lang, "Jump host", "跳板机"), &mut form.jump, "bastion");
+                    }
+                    ui.horizontal(|ui| {
+                        ui.checkbox(
+                            &mut form.persistent,
+                            t(lang, "Keep the shell in tmux", "在 tmux 中保持 shell"),
+                        );
+                        if form.persistent {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut form.tmux)
+                                    .hint_text("mtty")
+                                    .desired_width(120.0),
+                            );
+                        }
+                    });
+                    ui.checkbox(
+                        &mut form.mosh,
+                        t(
+                            lang,
+                            "Connect with mosh (survives sleep)",
+                            "使用 mosh 连接(休眠不断线)",
+                        ),
+                    );
+                    let title = format!(
+                        "{} ({})",
+                        t(lang, "Port forwards", "端口转发"),
+                        form.forwards.len()
+                    );
+                    ui.collapsing(title, |ui| {
+                        for (i, fwd) in form.forwards.iter().enumerate() {
+                            ui.horizontal(|ui| {
+                                ui.monospace(format!("{} {}", fwd.kind.flag(), fwd.spec));
+                                if ui.small_button(t(lang, "Remove", "删除")).clicked() {
+                                    remove_forward = Some(i);
+                                }
+                            });
+                        }
+                        let draft = form
+                            .new_forward
+                            .get_or_insert_with(|| (ForwardKind::Local, String::new()));
+                        ui.horizontal(|ui| {
+                            egui::ComboBox::from_id_salt("ssh-fwd-kind")
+                                .selected_text(draft.0.flag())
+                                .width(80.0)
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(&mut draft.0, ForwardKind::Local, "-L local");
+                                    ui.selectable_value(&mut draft.0, ForwardKind::Remote, "-R remote");
+                                    ui.selectable_value(&mut draft.0, ForwardKind::Dynamic, "-D SOCKS");
+                                });
+                            let hint = if draft.0 == ForwardKind::Dynamic {
+                                "1080"
+                            } else {
+                                "8080:localhost:80"
+                            };
+                            ui.add(
+                                egui::TextEdit::singleline(&mut draft.1)
+                                    .hint_text(hint)
+                                    .desired_width(190.0),
+                            );
+                            let candidate = miao_term_config::hosts::Forward {
+                                kind: draft.0,
+                                spec: draft.1.trim().to_string(),
+                            };
+                            let check = candidate.validate();
+                            if ui
+                                .add_enabled(check.is_ok(), egui::Button::new(t(lang, "Add", "添加")))
+                                .clicked()
+                            {
+                                form.forwards.push(candidate);
+                                draft.1.clear();
+                            }
+                        });
+                    });
+                }
+                if let Some(e) = &form.error {
+                    ui.colored_label(egui::Color32::from_rgb(0xef, 0x6b, 0x6b), e.as_str());
+                }
+                ui.horizontal(|ui| {
+                    if ui.button(t(lang, "Cancel", "取消")).clicked() {
+                        action = 3;
+                    }
+                    let ready =
+                        form.alias || !form.address.trim().is_empty() || !form.name.trim().is_empty();
+                    if ui
+                        .add_enabled(
+                            ready,
+                            egui::Button::new(t(lang, "Save & Connect", "保存并连接")),
+                        )
+                        .clicked()
+                    {
+                        action = 2;
+                    }
+                });
+                ui.label(
+                    egui::RichText::new(t(
+                        lang,
+                        "Passwords and keys are never stored; ssh-agent and ~/.ssh/config are used.",
+                        "不保存密码和密钥;使用 ssh-agent 与 ~/.ssh/config。",
+                    ))
+                    .size(11.0)
+                    .weak(),
+                );
+            });
+        if let Some(i) = remove_forward {
+            form.forwards.remove(i);
+        }
+        match action {
+            1 => {
+                if !form.quick.trim().is_empty() {
+                    let target = form.quick.trim().to_string();
+                    self.ssh_dialog = None;
+                    self.open_ssh(&target);
+                    return;
+                }
+                match form.build(lang) {
+                    Ok(host) => {
+                        self.ssh_dialog = None;
+                        self.open_ssh_host(&host);
+                    }
+                    Err(e) => {
+                        form.error = Some(e);
+                        self.ssh_dialog = Some(form);
+                    }
+                }
             }
-            if enter {
-                connect = true;
+            2 => match form.build(lang) {
+                Ok(host) => {
+                    match self
+                        .host_book
+                        .hosts
+                        .iter()
+                        .position(|h| h.name == host.name)
+                    {
+                        Some(pos) => self.host_book.hosts[pos] = host.clone(),
+                        None => self.host_book.hosts.push(host.clone()),
+                    }
+                    self.save_hosts();
+                    self.ssh_dialog = None;
+                    self.open_ssh_host(&host);
+                }
+                Err(e) => {
+                    form.error = Some(e);
+                    self.ssh_dialog = Some(form);
+                }
+            },
+            3 => self.ssh_dialog = None,
+            _ => {
+                if open {
+                    self.ssh_dialog = Some(form);
+                } else {
+                    self.ssh_dialog = None;
+                }
             }
-            if ui
-                .button(miao_term_ui::i18n::t(self.lang, "Connect", "连接"))
-                .clicked()
-            {
-                connect = true;
-            }
-        });
-        if connect {
-            let target = input.clone();
-            self.ssh_dialog = None;
-            self.open_ssh(&target);
-        } else if !open {
-            self.ssh_dialog = None;
         }
     }
 
@@ -13644,10 +13985,10 @@ fn render_dir_tree(
     dir: &std::path::Path,
     depth: usize,
     filter: &str,
+    ch: &miao_term_ui::theme::Chrome,
     open_file: &mut Option<std::path::PathBuf>,
     toggle: &mut Option<std::path::PathBuf>,
 ) {
-    use miao_term_ui::icons::Icon;
     let Some(entries) = children.get(dir) else {
         return;
     };
@@ -13672,12 +14013,8 @@ fn render_dir_tree(
             }
             let (ird, icon_resp) =
                 ui.allocate_exact_size(egui::Vec2::splat(14.0), egui::Sense::click());
-            miao_term_ui::icons::draw(
-                ui.painter(),
-                ird,
-                if is_dir { Icon::Folder } else { Icon::File },
-                muted,
-            );
+            let icon = file_tree_icon(ch, &e.name, is_dir);
+            miao_term_ui::icons::draw_tab_icon(ui.painter(), ird, &icon, muted);
             if icon_resp.clicked() {
                 if is_dir {
                     *toggle = Some(path.clone());
@@ -13685,7 +14022,17 @@ fn render_dir_tree(
                     *open_file = Some(path.clone());
                 }
             }
-            let resp = ui.selectable_label(false, egui::RichText::new(&e.name).size(12.0));
+            let label = egui::RichText::new(&e.name).size(12.0);
+            let label = if is_dir {
+                label.color(egui::Color32::from_rgb(
+                    ch.folder.0,
+                    ch.folder.1,
+                    ch.folder.2,
+                ))
+            } else {
+                label
+            };
+            let resp = ui.selectable_label(false, label);
             if resp.clicked() {
                 if is_dir {
                     *toggle = Some(path.clone());
@@ -13711,10 +14058,36 @@ fn render_dir_tree(
                 &path,
                 depth + 1,
                 filter,
+                ch,
                 open_file,
                 toggle,
             );
         }
+    }
+}
+
+/// The tree/list icon for a file entry: a Nerd-Font type glyph, tinted from the
+/// chrome palette (directories blue, config amber, code accent, files muted).
+fn file_tree_icon(
+    ch: &miao_term_ui::theme::Chrome,
+    name: &str,
+    is_dir: bool,
+) -> miao_term_ui::icons::TabIcon {
+    use miao_term_ui::icons::{self, Icon, TabIcon};
+    let rule = icons::file_type(name, is_dir);
+    let color = if is_dir {
+        ch.folder
+    } else if matches!(rule, "settings" | "lock") {
+        ch.warning
+    } else if rule == "code" {
+        ch.accent
+    } else {
+        ch.file
+    };
+    TabIcon {
+        icon: if is_dir { Icon::Folder } else { Icon::File },
+        glyph: icons::rule_glyph(Some(rule), None, false),
+        color: Some(color),
     }
 }
 
@@ -14024,6 +14397,10 @@ impl ApplicationHandler<HostEvent> for Host {
             Err(e) => return startup_failure(event_loop, "could not create a window", e),
         };
         window.set_ime_allowed(true);
+        #[cfg(target_os = "macos")]
+        if unified_titlebar() {
+            disable_native_titlebar_move(&window);
+        }
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu_backends(),
@@ -14086,7 +14463,6 @@ impl ApplicationHandler<HostEvent> for Host {
         let egui_ctx = egui::Context::default();
         egui_extras::install_image_loaders(&egui_ctx);
         install_egui_fonts(&egui_ctx);
-        configure_egui(&egui_ctx);
         let egui_state = egui_winit::State::new(
             egui_ctx.clone(),
             egui::ViewportId::ROOT,
@@ -14103,7 +14479,7 @@ impl ApplicationHandler<HostEvent> for Host {
         let line_ratio = cfg.line_height;
         let font_family = cfg.font_family.clone();
         let lang = miao_term_ui::i18n::Lang::parse(cfg.language.as_deref());
-        let theme = Theme::from_config(&cfg.theme, cfg.cursor_style);
+        let mut theme = Theme::from_config(&cfg.theme, cfg.cursor_style);
         let theme_name = match cfg.theme_name.as_deref() {
             Some(n) => Theme::NAMES
                 .iter()
@@ -14114,6 +14490,9 @@ impl ApplicationHandler<HostEvent> for Host {
             None if cfg.imported_from.is_none() => "Nord".to_string(),
             None => String::new(),
         };
+        theme.set_preset_name(&theme_name);
+        let chrome = theme.chrome();
+        configure_egui(&egui_ctx, &chrome);
         let (cw, ch) = State::cell_size(font_size, line_ratio, font_family.as_deref());
 
         let (jobs_tx, jobs_rx) = std::sync::mpsc::channel();
@@ -16348,8 +16727,7 @@ fn list_dir(cwd: &std::path::Path, hidden: bool) -> Vec<FileEntry> {
     rows
 }
 
-fn configure_egui(ctx: &egui::Context) {
-    let ch = miao_term_ui::theme::Chrome::dark();
+fn configure_egui(ctx: &egui::Context, ch: &miao_term_ui::theme::Chrome) {
     let col = |c: miao_term_ui::theme::Rgb| egui::Color32::from_rgb(c.0, c.1, c.2);
     let mut style = (*ctx.style()).clone();
     {
@@ -16946,7 +17324,12 @@ impl chrome::Chrome for State {
     fn details_list(&self) -> Option<Vec<chrome::ChromeItem>> {
         use chrome::ChromeItem;
         use miao_term_ui::icons::Icon;
-        let item = |icon: Icon, label: String, meta: String| ChromeItem { icon, label, meta };
+        let item = |icon: Icon, label: String, meta: String| ChromeItem {
+            icon: icon.into(),
+            label,
+            meta,
+            label_color: None,
+        };
         match self.details_tab.min(6) {
             2 => Some(
                 self.outline_rows()
@@ -16969,16 +17352,22 @@ impl chrome::Chrome for State {
                 self.details_data
                     .as_ref()
                     .map(|d| {
+                        let ch = self.theme.chrome();
                         d.files
                             .iter()
                             .map(|f| {
-                                let icon = if f.is_dir { Icon::Folder } else { Icon::File };
+                                let icon = file_tree_icon(&ch, &f.name, f.is_dir);
                                 let meta = if f.is_dir {
                                     String::new()
                                 } else {
                                     human_size(f.size)
                                 };
-                                item(icon, f.name.clone(), meta)
+                                ChromeItem {
+                                    icon,
+                                    label: f.name.clone(),
+                                    meta,
+                                    label_color: f.is_dir.then_some(ch.folder),
+                                }
                             })
                             .collect()
                     })
@@ -17769,7 +18158,7 @@ mod tests {
     /// Drag a window's bottom-right corner by `d`; its rect before and after.
     fn drag_window_corner(body: fn(&mut egui::Ui), d: egui::Vec2) -> (egui::Rect, egui::Rect) {
         let ctx = egui::Context::default();
-        configure_egui(&ctx);
+        configure_egui(&ctx, &miao_term_ui::theme::Chrome::dark());
         let mut rect = egui::Rect::NOTHING;
         let mut frame = |events: Vec<egui::Event>| {
             replay(&ctx, events, |ctx| {
@@ -17941,7 +18330,7 @@ mod tests {
         // column was drawn over the first. mtty's own style: its row stripes
         // are opaque.
         let ctx = egui::Context::default();
-        configure_egui(&ctx);
+        configure_egui(&ctx, &miao_term_ui::theme::Chrome::dark());
         let md = "| Field | Purpose |\n|---|---|\n\
             | `model` | default model (`provider/model`) |\n\
             | `default_agent` | default agent |\n\
