@@ -129,8 +129,8 @@ mtty instead.
   dragging.
 - Find (`⌘F`) with match highlighting and a result count, CJK included.
 - The [kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/)
-  (CSI-u, disambiguate level) when a program requests it, modifier-aware
-  navigation keys, and F1–F12 / Insert as xterm sequences.
+  (CSI-u, all five enhancement flags) when a program requests it,
+  modifier-aware navigation keys, and F1–F12 / Insert as xterm sequences.
 
 **Window and workspace**
 - Full-height frame: the session sidebar runs the full window height (icons,
@@ -495,8 +495,6 @@ Still open:
   credentials. Releases already carry minisign signatures and update manifests.
 - **Acceptance**: current desktop update, IME, clipboard, transport and agent
   results, including their limits, are in [ACCEPTANCE.md](docs/ACCEPTANCE.md).
-- **Kitty keyboard**: alternate keys and associated text are not reported yet.
-
 - **Inline graphics**: Kitty z-index is not modelled (images paint over the
   grid); anchors are exact up to the scrollback cap and approximate past it
   (alacritty exposes no scroll counter without a patch), and session restore

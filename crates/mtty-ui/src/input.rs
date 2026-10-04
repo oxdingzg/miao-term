@@ -89,66 +89,136 @@ pub struct EncodeOpts {
     pub has_selection: bool,
 }
 
-/// The kitty `;modifiers[:event]` field; empty when both are the defaults.
-fn kitty_mods(n: u8, event: u8, report_events: bool) -> String {
-    if report_events {
-        format!(";{n}:{}", if event == 0 { 1 } else { event })
-    } else if n > 1 {
-        format!(";{n}")
-    } else {
-        String::new()
+/// Extra kitty key data read off the event: the unshifted key code, the
+/// shifted key (while Shift is held) and the PC-101 base-layout key. `0` means
+/// "not known", so the field is omitted.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub struct KittyAlternates {
+    /// The unshifted key code in the active layout; 0 derives it from the key.
+    pub unshifted: u32,
+    /// The shifted key code, reported only while Shift is held; 0 otherwise.
+    pub shifted: u32,
+    /// The PC-101 base-layout key code; 0 when unknown or equal to the key.
+    pub base: u32,
+}
+
+/// Which kitty sub-fields a sequence carries.
+#[derive(Clone, Copy)]
+struct KittySeq {
+    report_alternate: bool,
+    report_events: bool,
+    report_text: bool,
+    event: u8,
+}
+
+impl KittySeq {
+    fn from_flags(flags: u8, event: u8) -> Self {
+        Self {
+            report_alternate: flags & KITTY_REPORT_ALTERNATE != 0,
+            report_events: flags & KITTY_REPORT_EVENTS != 0,
+            report_text: flags & KITTY_REPORT_TEXT != 0,
+            event,
+        }
     }
 }
 
-/// `CSI codepoint ; modifiers u`.
-fn kitty_csi_u(cp: u32, n: u8, event: u8, report_events: bool) -> Vec<u8> {
-    format!("\x1b[{cp}{}u", kitty_mods(n, event, report_events)).into_bytes()
+/// The `key-code[:shifted[:base]]` sub-field. A base-layout key with no shifted
+/// key is sent with an empty shifted sub-field (`code::base`).
+fn kitty_key_field(code: u32, alt: KittyAlternates, report_alternate: bool) -> String {
+    let mut field = code.to_string();
+    if report_alternate {
+        let shifted = (alt.shifted != 0 && alt.shifted != code).then_some(alt.shifted);
+        let base =
+            (alt.base != 0 && alt.base != code && Some(alt.base) != shifted).then_some(alt.base);
+        if let Some(shifted) = shifted {
+            field.push(':');
+            field.push_str(&shifted.to_string());
+        }
+        if let Some(base) = base {
+            if shifted.is_none() {
+                field.push(':');
+            }
+            field.push(':');
+            field.push_str(&base.to_string());
+        }
+    }
+    field
+}
+
+/// The `;modifiers[:event][;text]` tail; empty when everything is default.
+fn kitty_params(n: u8, seq: KittySeq, text: Option<&str>) -> String {
+    let text = text.filter(|text| !text.is_empty() && seq.report_text);
+    if text.is_none() && !seq.report_events && n <= 1 {
+        return String::new();
+    }
+    let modifiers = if seq.report_events {
+        format!("{n}:{}", if seq.event == 0 { 1 } else { seq.event })
+    } else {
+        n.to_string()
+    };
+    match text {
+        Some(text) => {
+            let cps: Vec<String> = text.chars().map(|c| (c as u32).to_string()).collect();
+            format!(";{modifiers};{}", cps.join(":"))
+        }
+        None => format!(";{modifiers}"),
+    }
+}
+
+/// `CSI key-code ; modifiers u`, with the alternate and text sub-fields.
+fn kitty_csi_u(
+    code: u32,
+    alt: KittyAlternates,
+    n: u8,
+    seq: KittySeq,
+    text: Option<&str>,
+) -> Vec<u8> {
+    let field = kitty_key_field(code, alt, seq.report_alternate);
+    format!("\x1b[{field}{}u", kitty_params(n, seq, text)).into_bytes()
 }
 
 /// `CSI code ; modifiers letter`; the leading `1` goes with no modifiers.
-fn kitty_letter(code: u8, letter: char, n: u8, event: u8, report_events: bool) -> Vec<u8> {
-    let m = kitty_mods(n, event, report_events);
-    if m.is_empty() {
+fn kitty_letter(code: u8, letter: char, n: u8, seq: KittySeq) -> Vec<u8> {
+    let params = kitty_params(n, seq, None);
+    if params.is_empty() {
         format!("\x1b[{letter}").into_bytes()
     } else {
-        format!("\x1b[{code}{m}{letter}").into_bytes()
+        format!("\x1b[{code}{params}{letter}").into_bytes()
     }
 }
 
 /// `CSI code ; modifiers ~`.
-fn kitty_tilde(code: u8, n: u8, event: u8, report_events: bool) -> Vec<u8> {
-    format!("\x1b[{code}{}~", kitty_mods(n, event, report_events)).into_bytes()
+fn kitty_tilde(code: u8, n: u8, seq: KittySeq) -> Vec<u8> {
+    format!("\x1b[{code}{}~", kitty_params(n, seq, None)).into_bytes()
 }
 
 /// The kitty form of a functional key. Bare Enter, Tab and Backspace keep
 /// their C0 bytes, so the caller handles those.
-fn kitty_functional(kind: KeyKind, n: u8, event: u8, report_events: bool) -> Option<Vec<u8>> {
-    let seq = match kind {
-        KeyKind::Escape => kitty_csi_u(27, n, event, report_events),
-        KeyKind::Enter => kitty_csi_u(13, n, event, report_events),
-        KeyKind::Tab => kitty_csi_u(9, n, event, report_events),
-        KeyKind::Backspace => kitty_csi_u(127, n, event, report_events),
-        KeyKind::Up => kitty_letter(1, 'A', n, event, report_events),
-        KeyKind::Down => kitty_letter(1, 'B', n, event, report_events),
-        KeyKind::Right => kitty_letter(1, 'C', n, event, report_events),
-        KeyKind::Left => kitty_letter(1, 'D', n, event, report_events),
-        KeyKind::Home => kitty_letter(1, 'H', n, event, report_events),
-        KeyKind::End => kitty_letter(1, 'F', n, event, report_events),
-        KeyKind::Insert => kitty_tilde(2, n, event, report_events),
-        KeyKind::Delete => kitty_tilde(3, n, event, report_events),
-        KeyKind::PageUp => kitty_tilde(5, n, event, report_events),
-        KeyKind::PageDown => kitty_tilde(6, n, event, report_events),
+fn kitty_functional(kind: KeyKind, n: u8, seq: KittySeq) -> Option<Vec<u8>> {
+    let out = match kind {
+        KeyKind::Escape => kitty_csi_u(27, KittyAlternates::default(), n, seq, None),
+        KeyKind::Enter => kitty_csi_u(13, KittyAlternates::default(), n, seq, None),
+        KeyKind::Tab => kitty_csi_u(9, KittyAlternates::default(), n, seq, None),
+        KeyKind::Backspace => kitty_csi_u(127, KittyAlternates::default(), n, seq, None),
+        KeyKind::Up => kitty_letter(1, 'A', n, seq),
+        KeyKind::Down => kitty_letter(1, 'B', n, seq),
+        KeyKind::Right => kitty_letter(1, 'C', n, seq),
+        KeyKind::Left => kitty_letter(1, 'D', n, seq),
+        KeyKind::Home => kitty_letter(1, 'H', n, seq),
+        KeyKind::End => kitty_letter(1, 'F', n, seq),
+        KeyKind::Insert => kitty_tilde(2, n, seq),
+        KeyKind::Delete => kitty_tilde(3, n, seq),
+        KeyKind::PageUp => kitty_tilde(5, n, seq),
+        KeyKind::PageDown => kitty_tilde(6, n, seq),
         // F3 is `13 ~` here; `CSI R` would clash with the cursor report.
-        KeyKind::F(3) => kitty_tilde(13, n, event, report_events),
-        KeyKind::F(f) if (1..=4).contains(&f) => {
-            kitty_letter(1, (b'P' + f - 1) as char, n, event, report_events)
-        }
-        KeyKind::F(5) => kitty_tilde(15, n, event, report_events),
-        KeyKind::F(f) if (6..=10).contains(&f) => kitty_tilde(f + 11, n, event, report_events),
-        KeyKind::F(f) if f == 11 || f == 12 => kitty_tilde(f + 12, n, event, report_events),
+        KeyKind::F(3) => kitty_tilde(13, n, seq),
+        KeyKind::F(f) if (1..=4).contains(&f) => kitty_letter(1, (b'P' + f - 1) as char, n, seq),
+        KeyKind::F(5) => kitty_tilde(15, n, seq),
+        KeyKind::F(f) if (6..=10).contains(&f) => kitty_tilde(f + 11, n, seq),
+        KeyKind::F(f) if f == 11 || f == 12 => kitty_tilde(f + 12, n, seq),
         _ => return None,
     };
-    Some(seq)
+    Some(out)
 }
 
 /// Plain text (a typed character / IME commit).
@@ -169,6 +239,18 @@ pub fn encode_paste(text: &str, bracketed: bool) -> Vec<u8> {
 /// Encode a key press (special keys and modified keys; printable characters
 /// arrive through [`encode_text`]).
 pub fn encode_key(kind: KeyKind, mods: Modifiers, opts: EncodeOpts) -> Vec<u8> {
+    encode_key_full(kind, mods, opts, KittyAlternates::default(), None)
+}
+
+/// Like [`encode_key`], with the kitty alternate-key and associated-text data
+/// the widget read off the event.
+pub fn encode_key_full(
+    kind: KeyKind,
+    mods: Modifiers,
+    opts: EncodeOpts,
+    alt: KittyAlternates,
+    text: Option<&str>,
+) -> Vec<u8> {
     // Cmd/Super is reserved for host shortcuts; never sent to the shell.
     if mods.sup {
         return Vec::new();
@@ -176,30 +258,34 @@ pub fn encode_key(kind: KeyKind, mods: Modifiers, opts: EncodeOpts) -> Vec<u8> {
     let mut out = Vec::new();
 
     // Kitty keyboard protocol: disambiguate escape codes, report every key as
-    // an escape code, and carry event types, as the requested flags ask.
+    // an escape code, and carry event types, alternate keys and associated
+    // text, as the requested flags ask.
     let flags = opts.kitty;
     if flags != 0 {
         let n = mods.number();
-        let report_events = (flags & KITTY_REPORT_EVENTS) != 0;
+        let seq = KittySeq::from_flags(flags, opts.event);
         let disambiguate = (flags & KITTY_DISAMBIGUATE) != 0;
         let all_keys = (flags & KITTY_REPORT_ALL_KEYS) != 0;
+        // The protocol code is the unshifted key in the active layout.
+        let code = |c: char| {
+            if alt.unshifted != 0 {
+                alt.unshifted
+            } else {
+                c.to_ascii_lowercase() as u32
+            }
+        };
         if all_keys {
             if let KeyKind::Char(c) = kind {
-                return kitty_csi_u(c.to_ascii_lowercase() as u32, n, opts.event, report_events);
+                return kitty_csi_u(code(c), alt, n, seq, text);
             }
         }
         if disambiguate {
             if kind == KeyKind::Escape {
-                return kitty_csi_u(27, n, opts.event, report_events);
+                return kitty_csi_u(27, alt, n, seq, None);
             }
             if let KeyKind::Char(c) = kind {
                 if mods.ctrl {
-                    return kitty_csi_u(
-                        c.to_ascii_lowercase() as u32,
-                        n,
-                        opts.event,
-                        report_events,
-                    );
+                    return kitty_csi_u(code(c), alt, n, seq, text);
                 }
             }
         }
@@ -208,7 +294,7 @@ pub fn encode_key(kind: KeyKind, mods: Modifiers, opts: EncodeOpts) -> Vec<u8> {
         let bare = !(mods.shift || mods.alt || mods.ctrl);
         let c0 = matches!(kind, KeyKind::Enter | KeyKind::Tab | KeyKind::Backspace);
         if (disambiguate || all_keys) && !(c0 && bare) {
-            if let Some(seq) = kitty_functional(kind, n, opts.event, report_events) {
+            if let Some(seq) = kitty_functional(kind, n, seq) {
                 return seq;
             }
         }
@@ -445,6 +531,76 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(encode_key(KeyKind::Char('A'), shift, opts), b"\x1b[97;2u");
+    }
+
+    #[test]
+    fn kitty_reports_alternate_keys_and_text() {
+        let shift = Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        let opts = kitty(KITTY_REPORT_ALL_KEYS | KITTY_REPORT_ALTERNATE | KITTY_REPORT_TEXT);
+        let letter = KittyAlternates {
+            unshifted: 97,
+            shifted: 65,
+            base: 97,
+        };
+        assert_eq!(
+            encode_key_full(KeyKind::Char('A'), shift, opts, letter, Some("A")),
+            b"\x1b[97:65;2;65u"
+        );
+        // A base-layout key with no shifted key uses the empty sub-field, so a
+        // Cyrillic ctrl+с reaches the program as ctrl+c.
+        let ctrl = Modifiers {
+            ctrl: true,
+            ..Default::default()
+        };
+        let cyrillic = KittyAlternates {
+            unshifted: 1089,
+            shifted: 0,
+            base: 99,
+        };
+        assert_eq!(
+            encode_key_full(KeyKind::Char('с'), ctrl, opts, cyrillic, None),
+            "\x1b[1089::99;5u".as_bytes()
+        );
+        // Flag 4 alone reports the shifted key; no text without flag 16.
+        let opts = kitty(KITTY_REPORT_ALL_KEYS | KITTY_REPORT_ALTERNATE);
+        let digit = KittyAlternates {
+            unshifted: 50,
+            shifted: 64,
+            base: 50,
+        };
+        assert_eq!(
+            encode_key_full(KeyKind::Char('@'), shift, opts, digit, Some("@")),
+            b"\x1b[50:64;2u"
+        );
+        // Without the alternate/text flags the sequence is unchanged.
+        let opts = kitty(KITTY_REPORT_ALL_KEYS);
+        assert_eq!(
+            encode_key_full(KeyKind::Char('A'), shift, opts, letter, Some("A")),
+            b"\x1b[97;2u"
+        );
+    }
+
+    #[test]
+    fn kitty_associated_text_keeps_a_modifier_field() {
+        let opts = kitty(KITTY_REPORT_ALL_KEYS | KITTY_REPORT_TEXT);
+        let digit = KittyAlternates {
+            unshifted: 50,
+            shifted: 0,
+            base: 50,
+        };
+        assert_eq!(
+            encode_key_full(
+                KeyKind::Char('2'),
+                Modifiers::default(),
+                opts,
+                digit,
+                Some("2")
+            ),
+            b"\x1b[50;1;50u"
+        );
     }
 
     #[test]

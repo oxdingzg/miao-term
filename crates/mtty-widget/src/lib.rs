@@ -15839,6 +15839,15 @@ impl ApplicationHandler<HostEvent> for Host {
                         has_selection: state.selection.is_some(),
                     };
                     let kind = winit_key_kind(&event);
+                    let alt = input::KittyAlternates {
+                        unshifted: kitty_unshifted_code(&event),
+                        shifted: if mods.shift {
+                            kitty_logical_code(&event)
+                        } else {
+                            0
+                        },
+                        base: kitty_base_layout_code(event.physical_key),
+                    };
                     // Ctrl+Shift+C copies (egui turns it into a Copy event);
                     // it must not also reach the shell as ^C.
                     if !cfg!(target_os = "macos")
@@ -15862,7 +15871,13 @@ impl ApplicationHandler<HostEvent> for Host {
                             }
                         }
                     }
-                    bytes.extend_from_slice(&input::encode_key(kind, mods, opts));
+                    bytes.extend_from_slice(&input::encode_key_full(
+                        kind,
+                        mods,
+                        opts,
+                        alt,
+                        event.text.as_deref(),
+                    ));
                     state.write_input(&bytes);
                 }
             }
@@ -16317,6 +16332,87 @@ fn chord_key_kind(event: &KeyEvent) -> input::KeyKind {
 
 fn winit_key_kind(event: &KeyEvent) -> input::KeyKind {
     key_kind(&event.logical_key)
+}
+
+/// The unshifted codepoint of a character key in the active layout, for the
+/// kitty `unicode-key-code` field.
+fn kitty_unshifted_code(event: &KeyEvent) -> u32 {
+    use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
+    key_codepoint(&event.key_without_modifiers())
+}
+
+/// The codepoint of the key with its modifiers applied, i.e. the shifted key.
+fn kitty_logical_code(event: &KeyEvent) -> u32 {
+    key_codepoint(&event.logical_key)
+}
+
+fn key_codepoint(key: &Key) -> u32 {
+    match key {
+        Key::Character(s) => s.chars().next().map(u32::from).unwrap_or(0),
+        _ => 0,
+    }
+}
+
+/// The key at the same physical position in the standard PC-101 layout, for
+/// kitty's `base-layout-key` field. 0 for keys without such a position, which
+/// makes the caller omit the sub-field.
+fn kitty_base_layout_code(physical: winit::keyboard::PhysicalKey) -> u32 {
+    use winit::keyboard::{KeyCode, PhysicalKey};
+    let PhysicalKey::Code(code) = physical else {
+        return 0;
+    };
+    let ch = match code {
+        KeyCode::KeyA => 'a',
+        KeyCode::KeyB => 'b',
+        KeyCode::KeyC => 'c',
+        KeyCode::KeyD => 'd',
+        KeyCode::KeyE => 'e',
+        KeyCode::KeyF => 'f',
+        KeyCode::KeyG => 'g',
+        KeyCode::KeyH => 'h',
+        KeyCode::KeyI => 'i',
+        KeyCode::KeyJ => 'j',
+        KeyCode::KeyK => 'k',
+        KeyCode::KeyL => 'l',
+        KeyCode::KeyM => 'm',
+        KeyCode::KeyN => 'n',
+        KeyCode::KeyO => 'o',
+        KeyCode::KeyP => 'p',
+        KeyCode::KeyQ => 'q',
+        KeyCode::KeyR => 'r',
+        KeyCode::KeyS => 's',
+        KeyCode::KeyT => 't',
+        KeyCode::KeyU => 'u',
+        KeyCode::KeyV => 'v',
+        KeyCode::KeyW => 'w',
+        KeyCode::KeyX => 'x',
+        KeyCode::KeyY => 'y',
+        KeyCode::KeyZ => 'z',
+        KeyCode::Digit0 => '0',
+        KeyCode::Digit1 => '1',
+        KeyCode::Digit2 => '2',
+        KeyCode::Digit3 => '3',
+        KeyCode::Digit4 => '4',
+        KeyCode::Digit5 => '5',
+        KeyCode::Digit6 => '6',
+        KeyCode::Digit7 => '7',
+        KeyCode::Digit8 => '8',
+        KeyCode::Digit9 => '9',
+        KeyCode::Backquote => '`',
+        KeyCode::Minus => '-',
+        KeyCode::Equal => '=',
+        KeyCode::BracketLeft => '[',
+        KeyCode::BracketRight => ']',
+        KeyCode::Backslash => '\\',
+        KeyCode::Semicolon => ';',
+        KeyCode::Quote => '\'',
+        KeyCode::Comma => ',',
+        KeyCode::Period => '.',
+        KeyCode::Slash => '/',
+        KeyCode::Space => ' ',
+        _ => return 0,
+    };
+    u32::from(ch)
 }
 
 fn key_kind(key: &Key) -> input::KeyKind {

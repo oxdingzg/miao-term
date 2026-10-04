@@ -109,7 +109,7 @@ mtty 与 miao 是两个独立项目,任意一个都可以单独使用。在 mtty
 - 查找(`⌘F`),带匹配高亮与结果计数,支持中文。
 - 当程序请求时,支持
   [kitty keyboard 协议](https://sw.kovidgoyal.net/kitty/keyboard-protocol/)(CSI-u)
-  (disambiguate 级别)与带修饰键的光标移动;F1–F12 / Insert 按 xterm 序列发送。
+  (五个增强 flag 全支持)与带修饰键的光标移动;F1–F12 / Insert 按 xterm 序列发送。
 
 **窗口与工作区**
 - 满高窗口:会话侧栏占满窗口高度(图标、Agent 徽章、`+`、拖拽重排);侧栏标题旁的一行显示当前
@@ -390,8 +390,6 @@ CI 性能基线已持久化于 `benches/perf-baseline.json`,由 nightly/手动�
 - **发布签名**：Apple 公证与 Windows MSI 签名仍需要所有者提供凭证；发布包已有 minisign 签名和更新清单。
 - **验收记录**：本轮桌面更新、输入法、剪贴板、传输与 Agent 验收结果及边界见
   [ACCEPTANCE.zh-CN.md](docs/ACCEPTANCE.zh-CN.md)。
-- **Kitty 键盘协议**：尚未报告替代键和关联文本。
-
 - **终端内联图片**:不模拟 Kitty 的 z-index(图片绘制在网格之上);回滚容量内锚定精确,超出后
   为近似(alacritty 不暴露滚动计数,除非打补丁);会话恢复不保留图像(会与恢复的内容不一致)。
 - **Mermaid**:内置子集覆盖 `graph`/`flowchart`、`sequenceDiagram`、`stateDiagram`、
