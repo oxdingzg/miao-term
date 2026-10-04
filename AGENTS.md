@@ -92,6 +92,28 @@ Another session may share this directory.
 - History rewrites require the owner's explicit approval; afterwards every clone
   must re-sync (`git fetch && git reset --hard origin/main`).
 
+### Isolate a session in its own worktree
+
+A pull request only protects what is already committed. Uncommitted work in the
+shared checkout can still be wiped by another session's `checkout`/`reset
+--hard` (this has happened). For any task that edits the tree, give the session
+its own worktree and commit early:
+
+```sh
+sh scripts/session-worktree.sh start feat/short-name   # prints the path
+cd .worktrees/feat-short-name                          # work and commit there
+sh scripts/session-worktree.sh finish feat/short-name  # remove + prune
+```
+
+- `start` reuses an existing worktree for the same branch, so re-running it
+  cannot stack duplicates under `.worktrees/` (git-ignored).
+- `finish` removes the working copy and prunes git's metadata; it refuses when
+  the worktree has uncommitted changes, so it cannot discard work. Pass
+  `--delete` to also drop the local branch once it is merged.
+- `list` shows what is left; `prune` clears entries whose directory is gone.
+- **Always `finish` when a task ends** — nothing removes worktrees
+  automatically, and a leftover `.worktrees/*` is a bug, not a feature.
+
 ## Screenshots for verification
 
 The application can capture itself without screen-recording permission — useful

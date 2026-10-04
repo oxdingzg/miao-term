@@ -10,6 +10,9 @@
 # CI perf baseline cache dir
 .perf/
 
+# Per-session git worktrees (scripts/session-worktree.sh)
+/.worktrees/
+
 # Signing material — never commit
 minisign.key
 *.p12
