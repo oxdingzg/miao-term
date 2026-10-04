@@ -1,0 +1,88 @@
+name: pr-standards
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize]
+
+jobs:
+  check-standards:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Check PR standards
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const login = pr.user.login;
+            const title = pr.title;
+
+            // The maintainer's own PRs are labelled for visibility but not gated.
+            const { data: file } = await github.rest.repos.getContent({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              path: '.github/TEAM_MEMBERS',
+              ref: 'main',
+            });
+            const members = Buffer.from(file.content, 'base64').toString().split('\n').map((l) => l.trim()).filter(Boolean);
+            const isMember = members.includes(login);
+
+            async function addLabel(label) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                labels: [label],
+              });
+            }
+            async function removeLabel(label) {
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  name: label,
+                });
+              } catch (e) {}
+            }
+
+            const problems = [];
+
+            // Conventional commit title.
+            const titlePattern = /^(feat|fix|docs|chore|refactor|test)\s*(\([a-zA-Z0-9-]+\))?\s*:/;
+            if (!titlePattern.test(title)) {
+              problems.push(
+                `Title \`${title}\` is not a conventional commit. Start it with \`feat:\`, \`fix:\`, \`docs:\`, \`chore:\`, \`refactor:\`, or \`test:\`, optionally with a scope: \`fix(tui): ...\`.`,
+              );
+            }
+
+            // Issue reference (not required for docs/refactor/feat).
+            const skipIssue = /^(docs|refactor|feat)\s*(\([a-zA-Z0-9-]+\))?\s*:/.test(title);
+            if (!skipIssue) {
+              const body = pr.body || '';
+              if (!/(closes|fixes|resolves)\s+#\d+/i.test(body)) {
+                problems.push('No linked issue. Add `Closes #<number>` to the PR description.');
+              }
+            }
+
+            if (problems.length > 0 && !isMember) {
+              await addLabel('needs:standards');
+              const marker = '<!-- pr-standards -->';
+              const { data: comments } = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+              });
+              const existing = comments.find((c) => c.body.includes(marker));
+              const text = `${marker}\nThis PR doesn't yet meet the repository standards:\n\n${problems.map((p) => `- ${p}`).join('\n')}`;
+              if (existing) {
+                await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body: text });
+              } else {
+                await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: pr.number, body: text });
+              }
+            } else {
+              await removeLabel('needs:standards');
+              console.log('PR meets the repository standards');
+            }
