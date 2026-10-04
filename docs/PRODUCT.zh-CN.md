@@ -206,7 +206,7 @@
 - [x] **B3.3 端口转发**:L/R/D 规则随主机保存;每条规则一个由 mtty 管理的 `ssh -N`(`ExitOnForwardFailure`),状态可见、随 mtty 退出而结束(不复用 ControlMaster:其 60 秒 ControlPersist 会让转发随之消失)。真实主机端到端:经本地端口读到远端 sshd 握手,停止后端口关闭。
 - [x] **B3.4 SFTP**(用系统 OpenSSH sftp 批处理,保留 ssh 配置/跳板/agent/ControlMaster;真实主机往返测试;Linux Wayland 真实桌面截图核对;下载进度读取本地文件大小,上传为无进度百分比的忙碌状态):双栏文件浏览、上传下载、拖放、进度、重命名/权限;远端编辑复用 pane 连接。
 - [x] **B3.5 Snippets 与广播**(片段在多台主机上各开一个标签执行 `ssh -t 主机 '命令'`,引号经 sh 实际拆分验证;广播输入已通过 Linux 实际键盘事件验收，两个 pane 的命令输出一致):命令片段库,在当前 pane 或多台主机执行;多 pane 广播输入。
-- [x] **B3.6 FTP/FTPS 与持久会话**:FTP/FTPS 共用文件浏览(明文提示);可选 tmux/mosh 重连。(FTP 经系统 curl,口令仅在内存并经 stdin 传入,明文 FTP 与显式 FTPS 均对真实服务器做往返测试;FTP 不支持整个文件夹上传/下载。tmux 经真实 ssh 验证 detach 后重连回到同一 shell;mosh 已对真实 mosh-server 验证 SSH 引导及 UDP 会话(见 ACCEPTANCE)。)
+- [x] **B3.6 FTP/FTPS 与持久会话**:FTP/FTPS 共用文件浏览(明文提示);可选 tmux/mosh 重连。(FTP 经系统 curl,口令仅在内存并经 stdin 传入,明文 FTP 与显式 FTPS 均对真实服务器做往返测试;FTP 支持整个文件夹的递归上传/下载(在进程内按深度优先遍历,因为 curl 自身无法递归)。tmux 经真实 ssh 验证 detach 后重连回到同一 shell;mosh 已对真实 mosh-server 验证 SSH 引导及 UDP 会话(见 ACCEPTANCE)。)
   验收(M3 整体):对测试主机的自动化冒烟;凭证不进日志、会话文件或 MTP 响应。
 
 ### M4 跨平台交付

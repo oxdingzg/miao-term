@@ -189,8 +189,16 @@ impl Endpoint {
     pub fn list(&self, dir: &str) -> Result<Vec<RemoteEntry>, String> {
         each!(self, r => r.list(dir))
     }
-    pub fn download(&self, remote: &str, local_dir: &std::path::Path) -> Result<(), String> {
-        each!(self, r => r.download(remote, local_dir))
+    pub fn download(
+        &self,
+        remote: &str,
+        is_dir: bool,
+        local_dir: &std::path::Path,
+    ) -> Result<(), String> {
+        match self {
+            Endpoint::Sftp(r) => r.download(remote, local_dir),
+            Endpoint::Ftp(r) => r.download(remote, is_dir, local_dir),
+        }
     }
     pub fn upload(&self, local: &std::path::Path, remote_dir: &str) -> Result<(), String> {
         each!(self, r => r.upload(local, remote_dir))

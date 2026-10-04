@@ -283,8 +283,9 @@ verified on its own:
 - [x] **B3.6 FTP/FTPS and persistent sessions**: FTP/FTPS in the same browser
   (plaintext flagged); optional tmux/mosh reconnect. (FTP runs through the
   system curl, the password only in memory and passed on stdin; plain FTP and
-  explicit FTPS round-trip against a real server; whole folders are not
-  transferred over FTP. tmux checked over real ssh: after a detach, reconnecting
+  explicit FTPS round-trip against a real server; whole folders upload and
+  download recursively, depth-first, since curl cannot walk a tree itself. tmux
+  checked over real ssh: after a detach, reconnecting
   returns to the same shell. mosh: a real SSH bootstrap and UDP session verified
   in ACCEPTANCE, so the reconnect path is proven end to end.)
   Acceptance (M3 overall): an automated smoke against a test host; credentials

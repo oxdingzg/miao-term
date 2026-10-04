@@ -271,7 +271,8 @@ mtty instead.
 - **FTP/FTPS**: *Connect over FTP/FTPS…* opens the same two-pane browser
   through the system `curl` (explicit TLS by default; plain FTP is marked as
   unencrypted). The password stays in memory; leave it empty to use
-  `~/.netrc` or log in anonymously.
+  `~/.netrc` or log in anonymously. Upload and download walk whole folders
+  recursively.
 - **Persistent sessions**: per saved host, *Keep the shell in tmux* reattaches
   the same session on reconnect, and *Connect with mosh* survives sleep and
   network changes (mosh needed on both ends; mtty falls back to ssh without it, and always on

@@ -9861,7 +9861,6 @@ impl State {
             },
         };
         let plaintext = view.remote.is_plaintext();
-        let is_ftp = matches!(view.remote, mtty_ui::sftp::Endpoint::Ftp(_));
         let response = app_window(format!("{kind} \u{00b7} {}", view.title), ctx)
             .open(&mut open)
             .default_size([860.0, 520.0])
@@ -10165,23 +10164,13 @@ impl State {
             return;
         };
         let path = mtty_ui::sftp::join(&dir, &entry.name);
-        if download && is_ftp && entry.is_dir {
-            if let Some(v) = self.sftp_view.as_mut() {
-                v.error = Some(
-                    t_lang(
-                        lang,
-                        "Folders cannot be downloaded over FTP; download the files",
-                        "FTP 不支持下载整个文件夹,请逐个下载文件",
-                    )
-                    .into(),
-                );
-            }
-        } else if download {
+        if download {
             let target = local_dir.join(&entry.name);
             let progress = (!entry.is_dir).then_some((target, entry.size));
             let dest = local_dir.clone();
+            let is_dir = entry.is_dir;
             self.sftp_job(format!("\u{2193} {}", entry.name), progress, move |r| {
-                r.download(&path, &dest)
+                r.download(&path, is_dir, &dest)
             });
         } else if let Some(new) = rename_to {
             let to = mtty_ui::sftp::join(&dir, new.trim());

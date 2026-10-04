@@ -250,30 +250,54 @@ impl Remote {
         Ok(parse_list(dir, &String::from_utf8_lossy(&out)))
     }
 
-    /// Download one file into `local_dir` (folders are not walked over FTP).
-    pub fn download(&self, remote: &str, local_dir: &std::path::Path) -> Result<(), String> {
+    /// Download a file, or (recursively) a directory, into `local_dir`.
+    /// `is_dir` tells a directory apart from a same-named file.
+    pub fn download(
+        &self,
+        remote: &str,
+        is_dir: bool,
+        local_dir: &std::path::Path,
+    ) -> Result<(), String> {
         let name = remote.rsplit('/').next().unwrap_or(remote);
+        download_tree(
+            remote,
+            &local_dir.join(name),
+            is_dir,
+            &mut |dir| self.list(dir),
+            &mut |from, to| self.download_file(from, to),
+        )
+    }
+
+    /// Fetch one remote file to the exact local `path`.
+    fn download_file(&self, remote: &str, path: &std::path::Path) -> Result<(), String> {
         self.curl(&[
             "-o".into(),
-            local_dir.join(name).to_string_lossy().into_owned(),
+            path.to_string_lossy().into_owned(),
             self.url(remote, false),
         ])
         .map(|_| ())
     }
 
-    /// Upload one local file into `remote_dir`.
+    /// Upload a local file or (recursively) a directory into `remote_dir`.
     pub fn upload(&self, local: &std::path::Path, remote_dir: &str) -> Result<(), String> {
-        if local.is_dir() {
-            return Err("folders cannot be uploaded over FTP; upload the files".into());
-        }
         let name = local
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .ok_or("no file name")?;
+        upload_tree(
+            local,
+            &join(remote_dir, &name),
+            &mut |dir| self.mkdir(dir),
+            &mut |from, to| self.upload_file(from, to),
+        )
+    }
+
+    /// Put one local file at the exact remote `path`.
+    fn upload_file(&self, local: &std::path::Path, remote: &str) -> Result<(), String> {
         self.curl(&[
             "-T".into(),
             local.to_string_lossy().into_owned(),
-            self.url(&join(remote_dir, &name), false),
+            self.url(remote, false),
         ])
         .map(|_| ())
     }
@@ -301,6 +325,55 @@ impl Remote {
         let verb = if is_dir { "RMD" } else { "DELE" };
         self.quote(&[format!("{verb} {}", command_path(path)?)])
     }
+}
+
+/// Recursively download `remote` to the exact local `path`. `list` and
+/// `fetch` are the network primitives; directories are created locally in
+/// depth-first, name-sorted order so parents exist before their children.
+fn download_tree(
+    remote: &str,
+    path: &std::path::Path,
+    is_dir: bool,
+    list: &mut dyn FnMut(&str) -> Result<Vec<RemoteEntry>, String>,
+    fetch: &mut dyn FnMut(&str, &std::path::Path) -> Result<(), String>,
+) -> Result<(), String> {
+    if !is_dir {
+        return fetch(remote, path);
+    }
+    std::fs::create_dir_all(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut entries = list(remote)?;
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    for entry in entries {
+        let child = join(remote, &entry.name);
+        download_tree(&child, &path.join(&entry.name), entry.is_dir, list, fetch)?;
+    }
+    Ok(())
+}
+
+/// Recursively upload `local` to the exact remote `path`. `mkdir` and `put`
+/// are the network primitives; directories are created before their files.
+fn upload_tree(
+    local: &std::path::Path,
+    remote: &str,
+    mkdir: &mut dyn FnMut(&str) -> Result<(), String>,
+    put: &mut dyn FnMut(&std::path::Path, &str) -> Result<(), String>,
+) -> Result<(), String> {
+    if !local.is_dir() {
+        return put(local, remote);
+    }
+    mkdir(remote)?;
+    let mut children: Vec<std::path::PathBuf> = std::fs::read_dir(local)
+        .map_err(|e| format!("{}: {e}", local.display()))?
+        .filter_map(|e| e.ok().map(|entry| entry.path()))
+        .collect();
+    children.sort();
+    for child in children {
+        let Some(name) = child.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+            continue;
+        };
+        upload_tree(&child, &join(remote, &name), mkdir, put)?;
+    }
+    Ok(())
 }
 
 fn null_device() -> &'static str {
@@ -407,6 +480,91 @@ mod tests {
         assert_eq!((e[1].name.as_str(), e[1].size), ("report 1.csv", 1234));
     }
 
+    #[test]
+    fn folder_downloads_walk_the_tree_depth_first() {
+        let root = std::env::temp_dir().join(format!("mtty-ftp-dl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut listings = |dir: &str| -> Result<Vec<RemoteEntry>, String> {
+            let raw: &[(&str, bool)] = match dir {
+                "/root" => &[("sub", true), ("a.txt", false)],
+                "/root/sub" => &[("b.txt", false)],
+                _ => &[],
+            };
+            Ok(raw
+                .iter()
+                .map(|(name, is_dir)| RemoteEntry {
+                    name: (*name).into(),
+                    is_dir: *is_dir,
+                    is_link: false,
+                    size: 0,
+                    perms: String::new(),
+                    modified: String::new(),
+                })
+                .collect())
+        };
+        let mut fetched: Vec<String> = Vec::new();
+        let mut fetch = |remote: &str, path: &std::path::Path| -> Result<(), String> {
+            fetched.push(format!(
+                "{} -> {}",
+                remote,
+                path.file_name().unwrap().to_string_lossy()
+            ));
+            std::fs::write(path, b"x").map_err(|e| e.to_string())
+        };
+        download_tree("/root", &root, true, &mut listings, &mut fetch).unwrap();
+        assert_eq!(
+            fetched,
+            [
+                "/root/a.txt -> a.txt".to_string(),
+                "/root/sub/b.txt -> b.txt".to_string()
+            ]
+        );
+        assert!(root.join("sub").is_dir());
+        assert_eq!(
+            std::fs::read_to_string(root.join("sub/b.txt")).unwrap(),
+            "x"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn folder_uploads_create_remote_dirs_before_files() {
+        let root = std::env::temp_dir().join(format!("mtty-ftp-ul-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("a.txt"), b"a").unwrap();
+        std::fs::write(root.join("sub/b.txt"), b"b").unwrap();
+        let events = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+        let mut mkdir = {
+            let events = events.clone();
+            move |remote: &str| -> Result<(), String> {
+                events.borrow_mut().push(format!("mkdir {remote}"));
+                Ok(())
+            }
+        };
+        let mut put = {
+            let events = events.clone();
+            move |local: &std::path::Path, remote: &str| -> Result<(), String> {
+                events.borrow_mut().push(format!(
+                    "put {} {remote}",
+                    local.file_name().unwrap().to_string_lossy()
+                ));
+                Ok(())
+            }
+        };
+        upload_tree(&root, "/dest", &mut mkdir, &mut put).unwrap();
+        assert_eq!(
+            *events.borrow(),
+            [
+                "mkdir /dest",
+                "put a.txt /dest/a.txt",
+                "mkdir /dest/sub",
+                "put b.txt /dest/sub/b.txt",
+            ]
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     /// Against a real server: `MTTY_FTP_TEST_URL=ftp://user@host:port` with
     /// `MTTY_FTP_TEST_PASSWORD`; `MTTY_FTP_TEST_INSECURE=1` for self-signed
     /// FTPS. Round-trips a file through a scratch folder.
@@ -433,12 +591,41 @@ mod tests {
         remote.rename(&join(&dir, name), &renamed).unwrap();
         let back = local.join("back");
         std::fs::create_dir_all(&back).unwrap();
-        remote.download(&renamed, &back).unwrap();
+        remote.download(&renamed, false, &back).unwrap();
         assert_eq!(
             std::fs::read_to_string(back.join("renamed 文件.txt")).unwrap(),
             "hello ftp\n"
         );
         remote.remove(&renamed, false).unwrap();
+        let tree = local.join("tree");
+        std::fs::create_dir_all(tree.join("nested")).unwrap();
+        std::fs::write(tree.join("top.txt"), "top\n").unwrap();
+        std::fs::write(tree.join("nested/deep.txt"), "deep\n").unwrap();
+        remote.upload(&tree, &dir).unwrap();
+        let sub = join(&dir, "tree");
+        let names: Vec<_> = remote
+            .list(&sub)
+            .unwrap()
+            .into_iter()
+            .map(|e| (e.name, e.is_dir))
+            .collect();
+        assert_eq!(
+            names,
+            [("nested".to_string(), true), ("top.txt".to_string(), false)]
+        );
+        let tree_back = local.join("tree-back");
+        std::fs::create_dir_all(&tree_back).unwrap();
+        remote.download(&sub, true, &tree_back).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(tree_back.join("tree/nested/deep.txt")).unwrap(),
+            "deep\n"
+        );
+        remote.remove(&join(&sub, "top.txt"), false).unwrap();
+        remote
+            .remove(&join(&sub, "nested/deep.txt"), false)
+            .unwrap();
+        remote.remove(&join(&sub, "nested"), true).unwrap();
+        remote.remove(&sub, true).unwrap();
         remote.remove(&dir, true).unwrap();
         assert!(remote
             .list(&home)
