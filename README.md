@@ -157,7 +157,9 @@ mtty instead.
   ssh host to an alias, icon, tab title and badge, reloaded when `views.json`
   changes — see [`docs/VIEW-RULES.md`](docs/VIEW-RULES.md).
 - A **command palette** (`⌘K`) and **Open Quickly** (`⌘⇧O`) over tabs, agents,
-  files and directories in the current folder, and recent files.
+  files and directories in the current folder, recent files, and matching text
+  inside those files and the active pane's scrollback (a bounded scan runs off
+  the UI thread).
 - A right-hand details panel with tabs: **Info, Agent, Outline, Git, Files,
   Ports, Queue** (git status, directory listing, listening ports, prompt queue).
 - **Composer** (`⌘E`, `Ctrl+Shift+E` on Linux/Windows) and a **prompt queue**: a queued prompt targets the pane

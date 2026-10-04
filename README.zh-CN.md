@@ -126,7 +126,7 @@ mtty 与 miao 是两个独立项目,任意一个都可以单独使用。在 mtty
 - details 面板 Files 分页中的**文件列表**(单击用查看器打开)与 **View 规则**:把 pane 的目录、
   前台命令、agent 或 SSH 主机映射为别名、图标、标签标题与徽章,`views.json` 修改后自动生效 ——
   见 [`docs/VIEW-RULES.zh-CN.md`](docs/VIEW-RULES.zh-CN.md)。
-- **命令面板**(`⌘K`)与 **Open Quickly**(`⌘⇧O`):覆盖标签、agent、当前目录的文件与子目录,以及最近文件。
+- **命令面板**(`⌘K`)与 **Open Quickly**(`⌘⇧O`):覆盖标签、agent、当前目录的文件与子目录、最近文件,并搜索这些文件内容与当前 pane 回滚中的文本(有界扫描,在 UI 线程外执行)。
 - 右侧 details 面板含分页:**Info / Agent / Outline / Git / Files / Ports / Queue**
   (git 状态、目录列表、监听端口、提示队列)。
 - **Composer**(`⌘E`;Linux/Windows 上 `Ctrl+Shift+E`)与**提示队列**:队列项绑定入队时的 pane,该 pane 的 agent 每次转为空闲时

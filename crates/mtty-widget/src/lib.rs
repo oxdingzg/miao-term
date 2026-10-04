@@ -43,6 +43,7 @@ mod drag;
 mod editor_pane;
 #[cfg(target_os = "macos")]
 mod macos_url;
+mod quick_content;
 mod redraw;
 pub mod resource_metrics;
 mod session;
@@ -1831,6 +1832,10 @@ struct State {
     agent_states: HashMap<String, String>,
     composer: Option<String>,
     quick: Option<String>,
+    /// Open Quickly's file-content and scrollback search, on a worker thread.
+    quick_bg: Option<BgQuickContent>,
+    /// The scrollback match Open Quickly last opened: (line, column, width).
+    quick_hit: Option<(usize, u16, u16)>,
     closed: Vec<Option<std::path::PathBuf>>,
     /// Scratch "Quick" tab (ADR 0019): its pane id and the tab to return to.
     quick_pane: Option<String>,
@@ -3528,6 +3533,7 @@ impl State {
         let search_on = self.search.as_ref().map(|s| !s.is_empty()).unwrap_or(false);
         let search_hits = self.search_hits.clone();
         let search_idx = self.search_idx;
+        let quick_hit = self.quick_hit;
         // An editor's Find matches, when they are char ranges (view-mode
         // matches are file bytes and show as the selection only).
         let editor_hits: &[(usize, usize)] =
@@ -3639,6 +3645,27 @@ impl State {
                         };
                         for dc in 0..*width {
                             quads.push(quad(ox, oy, row as u16, col + dc, cw, ch, color));
+                        }
+                    }
+                }
+                // The scrollback match Open Quickly opened.
+                if let Some((b, col, width)) = quick_hit {
+                    if id == &active_id {
+                        let hist = pane.term.screen().history_size() as i32;
+                        let off = pane.term.screen().scroll_offset() as i32;
+                        let row = b as i32 - hist + off;
+                        if row >= 0 && row < sr as i32 {
+                            for dc in 0..width {
+                                quads.push(quad(
+                                    ox,
+                                    oy,
+                                    row as u16,
+                                    col + dc,
+                                    cw,
+                                    ch,
+                                    (0x7a, 0x5f, 0x1d),
+                                ));
+                            }
                         }
                     }
                 }
@@ -6891,6 +6918,114 @@ impl State {
         }
     }
 
+    /// The active pane's most recent scrollback as `(absolute line, cells)`,
+    /// newest first. Trailing blank cells are dropped and the capture is
+    /// capped, so a long scrollback stays a small snapshot to hand to a
+    /// worker thread.
+    fn quick_scrollback_lines(&self) -> Vec<quick_content::ScrollLine> {
+        let Some(pane) = self.active_pane() else {
+            return Vec::new();
+        };
+        let screen = pane.term.screen();
+        let total = screen.total_lines();
+        let start = total.saturating_sub(QUICK_SCROLL_LINES);
+        let mut out = Vec::new();
+        let mut budget = QUICK_SCROLL_CELLS;
+        for b in (start..total).rev() {
+            let mut cells = screen.line_chars_abs(b);
+            while matches!(cells.last(), Some((_, ' ', 1))) {
+                cells.pop();
+            }
+            if cells.is_empty() {
+                continue;
+            }
+            budget = budget.saturating_sub(cells.len());
+            out.push((b, cells));
+            if budget == 0 {
+                break;
+            }
+        }
+        out
+    }
+
+    /// The content hits found so far, and whether the scan has finished.
+    fn quick_content_hits(
+        &self,
+    ) -> (
+        Vec<quick_content::FileHit>,
+        Vec<quick_content::ScrollHit>,
+        bool,
+    ) {
+        let Some(bg) = &self.quick_bg else {
+            return (Vec::new(), Vec::new(), true);
+        };
+        let files = bg
+            .file_hits
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let scroll = bg
+            .scroll_hits
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let done = bg.done.load(std::sync::atomic::Ordering::Acquire);
+        (files, scroll, done)
+    }
+
+    /// Search files under `root` and the captured `lines` on a worker thread,
+    /// so a slow directory never blocks typing. Replaces any previous scan,
+    /// which its `Drop` cancels.
+    fn start_quick_content(
+        &mut self,
+        key: String,
+        query: String,
+        root: Option<std::path::PathBuf>,
+        lines: Vec<quick_content::ScrollLine>,
+    ) {
+        let file_hits = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let scroll_hits = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (fh, sh, d, c) = (
+            file_hits.clone(),
+            scroll_hits.clone(),
+            done.clone(),
+            cancel.clone(),
+        );
+        let proxy = self.proxy.clone();
+        let limits = quick_content::ScanLimits::default();
+        let _ = std::thread::Builder::new()
+            .name("mtty-quick".into())
+            .spawn(move || {
+                use std::sync::atomic::Ordering;
+                let wake = || {
+                    let _ = proxy.send_event(HostEvent::Wake);
+                };
+                let scroll = quick_content::scan_scrollback(&lines, &query, QUICK_SCROLL_MAX_HITS);
+                if !c.load(Ordering::Relaxed) {
+                    *sh.lock().unwrap_or_else(|e| e.into_inner()) = scroll;
+                }
+                wake();
+                if let Some(root) = root {
+                    let files = quick_content::scan_files(&root, &query, limits, &c);
+                    if !c.load(Ordering::Relaxed) {
+                        *fh.lock().unwrap_or_else(|e| e.into_inner()) = files;
+                    }
+                }
+                d.store(true, Ordering::Release);
+                wake();
+            });
+        self.quick_hit = None;
+        self.quick_bg = Some(BgQuickContent {
+            key,
+            file_hits,
+            scroll_hits,
+            done,
+            cancel,
+        });
+    }
+
     fn quick_window(&mut self, ctx: &egui::Context) {
         enum Pick {
             Tab(usize),
@@ -6900,6 +7035,11 @@ impl State {
             File(String),
             Dir(String),
             Path(std::path::PathBuf),
+            /// A file-content match: open `path` in the editor at `line`.
+            Content(std::path::PathBuf, usize),
+            /// A scrollback match: scroll the active pane to absolute `line`
+            /// and highlight its column.
+            Scrollback(usize, u16, u16),
         }
         let cwd = self.cwd();
         // Files come from the background directory listing (shared with the
@@ -6958,6 +7098,26 @@ impl State {
             .unwrap_or_default();
         let recents = self.recent_files.clone();
         let counts = self.open_counts.clone();
+        // Content search runs on a worker thread; restart it when the query,
+        // the directory or the active pane changes. Very short queries are
+        // left alone: they would match nearly every line.
+        let qtext = self.quick.clone().unwrap_or_default();
+        let pane_id = self.active_pane_id().unwrap_or_default();
+        let key = format!(
+            "{qtext}\u{0}{}\u{0}{pane_id}",
+            cwd.as_ref()
+                .map(|c| c.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        );
+        if self.quick_bg.as_ref().map(|b| b.key.as_str()) != Some(key.as_str()) {
+            if qtext.chars().count() >= QUICK_CONTENT_MIN_CHARS {
+                let lines = self.quick_scrollback_lines();
+                self.start_quick_content(key, qtext, cwd.clone(), lines);
+            } else {
+                self.quick_bg = None;
+            }
+        }
+        let (content_hits, scroll_hits, content_done) = self.quick_content_hits();
         let Some(query) = self.quick.as_mut() else {
             return;
         };
@@ -6972,8 +7132,8 @@ impl State {
                     egui::TextEdit::singleline(query)
                         .hint_text(mtty_ui::i18n::t(
                             self.lang,
-                            "tab / agent / file",
-                            "标签 / agent / 文件",
+                            "tab / agent / file / text",
+                            "标签 / agent / 文件 / 内容",
                         ))
                         .desired_width(420.0),
                 );
@@ -6981,6 +7141,13 @@ impl State {
                 let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if !enter {
                     r.request_focus();
+                }
+                if !content_done {
+                    ui.label(
+                        egui::RichText::new(mtty_ui::i18n::t(self.lang, "Searching…", "搜索中…"))
+                            .size(11.0)
+                            .color(chrome_rgb(self.theme.chrome().muted)),
+                    );
                 }
                 let q = query.to_lowercase();
                 let freq = |p: &str| std::cmp::Reverse(*counts.get(p).unwrap_or(&0));
@@ -7041,6 +7208,29 @@ impl State {
                         ));
                     }
                 }
+                for h in &content_hits {
+                    let key = h.path.to_string_lossy();
+                    let rel = cwd
+                        .as_ref()
+                        .and_then(|c| h.path.strip_prefix(c).ok())
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| key.to_string());
+                    let label = format!("\u{ea6d} {rel}:{}  {}", h.line, h.text);
+                    if let Some(s) = mtty_ui::palette::score(&label, "content", &q) {
+                        rows.push((s, freq(&key), label, Pick::Content(h.path.clone(), h.line)));
+                    }
+                }
+                for h in &scroll_hits {
+                    let label = format!("\u{f1da} {}  {}", h.line + 1, h.text);
+                    if let Some(s) = mtty_ui::palette::score(&label, "scrollback", &q) {
+                        rows.push((
+                            s,
+                            std::cmp::Reverse(0u32),
+                            label,
+                            Pick::Scrollback(h.line, h.col, h.width),
+                        ));
+                    }
+                }
                 rows.sort_by_key(|r| (r.0, r.1));
                 let clone_pick = |p: &Pick| match p {
                     Pick::Tab(i) => Pick::Tab(*i),
@@ -7050,6 +7240,8 @@ impl State {
                     Pick::File(n) => Pick::File(n.clone()),
                     Pick::Dir(n) => Pick::Dir(n.clone()),
                     Pick::Path(p) => Pick::Path(p.clone()),
+                    Pick::Content(p, l) => Pick::Content(p.clone(), *l),
+                    Pick::Scrollback(l, c, w) => Pick::Scrollback(*l, *c, *w),
                 };
                 for (_, _, label, pick) in rows.iter().take(50) {
                     if ui.selectable_label(false, label).clicked() {
@@ -7064,6 +7256,7 @@ impl State {
             });
         if let Some(p) = chosen {
             self.quick = None;
+            self.quick_bg = None;
             match p {
                 Pick::Tab(i) => {
                     if i < self.tabs.len() {
@@ -7103,9 +7296,27 @@ impl State {
                 Pick::Path(path) => {
                     self.open_editor(path);
                 }
+                Pick::Content(path, line) => {
+                    if self.open_editor(path) {
+                        if let Some(ed) = self.active_editor_mut() {
+                            ed.go_to_line_col(line.saturating_sub(1), 0);
+                            ed.reveal_cursor();
+                        }
+                    }
+                }
+                Pick::Scrollback(line, col, width) => {
+                    if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                        if let Some(pane) = tab.panes.iter_mut().find(|p| p.id == tab.active) {
+                            let hist = pane.term.screen().history_size();
+                            pane.scroll = hist.saturating_sub(line);
+                        }
+                    }
+                    self.quick_hit = Some((line, col, width));
+                }
             }
         } else if !open {
             self.quick = None;
+            self.quick_bg = None;
         }
     }
 
@@ -14710,6 +14921,8 @@ impl ApplicationHandler<HostEvent> for Host {
             agent_states: HashMap::new(),
             composer: None,
             quick: None,
+            quick_bg: None,
+            quick_hit: None,
             closed: Vec::new(),
             quick_pane: None,
             quick_return: None,
@@ -15897,6 +16110,19 @@ const BG_SEARCH_BYTES: usize = 8 << 20;
 /// Matches kept for one search.
 const MAX_SEARCH_HITS: usize = 100_000;
 
+/// Open Quickly starts a content search only from this many characters up:
+/// one letter matches almost every line of every file.
+const QUICK_CONTENT_MIN_CHARS: usize = 2;
+
+/// Recent scrollback lines captured for an Open Quickly search.
+const QUICK_SCROLL_LINES: usize = 5_000;
+
+/// Cells captured for the scrollback search, whichever comes first.
+const QUICK_SCROLL_CELLS: usize = 1_000_000;
+
+/// Scrollback matches kept for one Open Quickly search.
+const QUICK_SCROLL_MAX_HITS: usize = 200;
+
 /// The active tab's editor pane, borrowing only `tabs` (so other fields
 /// stay free to change).
 fn active_editor_of(tabs: &[Tab], active_tab: usize) -> Option<&editor_pane::EditorPane> {
@@ -16092,6 +16318,24 @@ struct BgSearch {
 }
 
 impl Drop for BgSearch {
+    fn drop(&mut self) {
+        self.cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Open Quickly's content search; dropping it cancels the scan. The key is
+/// the query plus the directory and pane it was started for, so the window
+/// restarts the scan only when one of those changes.
+struct BgQuickContent {
+    key: String,
+    file_hits: Arc<std::sync::Mutex<Vec<quick_content::FileHit>>>,
+    scroll_hits: Arc<std::sync::Mutex<Vec<quick_content::ScrollHit>>>,
+    done: Arc<std::sync::atomic::AtomicBool>,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for BgQuickContent {
     fn drop(&mut self) {
         self.cancel
             .store(true, std::sync::atomic::Ordering::Relaxed);

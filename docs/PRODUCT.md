@@ -112,7 +112,7 @@ point); problems fixed in M0–M3 are no longer listed.
 | Quick Terminal `⌘⇧T`, reopen closed tab `⌘⇧Z` | Works | Reopen restores the directory only |
 | Global Quick Terminal hotkey | Works | Fixed now: one press did two things (switch to Quick, then hide the window) |
 | Command palette `⌘K` | Works | |
-| Open Quickly `⌘⇧O` | Works | Tabs, agents, snippets, hosts, files and folders in the current directory, recent files; no file-content or scrollback search |
+| Open Quickly `⌘⇧O` | Works | Tabs, agents, snippets, hosts, files and folders in the current directory, recent files, and text inside files under that directory or in the active pane's scrollback (bounded scan, off the UI thread) |
 | Details panel: Info / Agent / Outline / Git / Files / Ports / Queue | Works | Ports cover the shell and its children; non-git dirs say so; while hidden only git is checked, every 10 s (the status line shows the branch) |
 | Session restore (layout, directories, titles, groups, terminal contents) | Works | Each terminal's last 5,000 rows come back (colours kept, owner-only files, `restore-scrollback = false` turns it off), and the program that was running is offered on Enter, never rerun unasked. Quit from the Dock, logout or AppleScript now saves too. Running programs survive updates, relaunches and crashes through per-pane PTY hosts (ADR 0041, `pty-host`, on by default); an ordinary quit ends them unless `keep-sessions-on-quit` is set |
 | Recipes save/open | Works | Names are validated as file names; write failures are shown |
