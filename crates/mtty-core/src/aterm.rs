@@ -163,7 +163,10 @@ impl ATerm {
         (0..self.cols)
             .filter_map(|c| {
                 let cell = &row[Column(c)];
-                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                if cell
+                    .flags
+                    .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                {
                     return None;
                 }
                 let width = if cell.flags.contains(Flags::WIDE_CHAR) {
@@ -203,15 +206,32 @@ impl ATerm {
             inverse: cell.flags.contains(Flags::INVERSE),
             bold: cell.flags.contains(Flags::BOLD),
             dim: cell.flags.contains(Flags::DIM),
-            wide_spacer: cell.flags.contains(Flags::WIDE_CHAR_SPACER),
+            wide_spacer: cell
+                .flags
+                .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER),
         })
+    }
+
+    /// A drag can start on the trailing cell of a wide character (its right
+    /// half). Pull the start back one column so the whole character is copied,
+    /// matching a forward drag that ends on the spacer.
+    fn selection_start(&self, row: u16, col: u16) -> u16 {
+        if col > 0 && self.cell(row, col).is_some_and(|cell| cell.wide_spacer) {
+            col - 1
+        } else {
+            col
+        }
     }
 
     /// Text between two cells (inclusive), right-trimmed per line.
     pub fn contents_between(&self, r1: u16, c1: u16, r2: u16, c2: u16) -> String {
         let mut out = String::new();
         for row in r1..=r2 {
-            let start = if row == r1 { c1 } else { 0 };
+            let start = if row == r1 {
+                self.selection_start(row, c1)
+            } else {
+                0
+            };
             let end = if row == r2 {
                 c2.saturating_add(1).min(self.cols as u16)
             } else {
@@ -237,7 +257,11 @@ impl ATerm {
     pub fn contents_ansi_between(&self, r1: u16, c1: u16, r2: u16, c2: u16) -> String {
         let mut out = String::new();
         for row in r1..=r2 {
-            let start = if row == r1 { c1 } else { 0 };
+            let start = if row == r1 {
+                self.selection_start(row, c1)
+            } else {
+                0
+            };
             let end = if row == r2 {
                 c2.saturating_add(1).min(self.cols as u16)
             } else {
@@ -766,5 +790,11 @@ mod tests {
         term.process("目录/file.txt suffix".as_bytes());
         assert_eq!(term.contents_between(0, 0, 0, 12), "目录/file.txt");
         assert_eq!(term.contents_ansi_between(0, 0, 0, 12), "目录/file.txt");
+        // A drag that starts on the trailing half of a wide character copies
+        // the whole character, so both drag directions agree.
+        assert_eq!(term.contents_between(0, 1, 0, 2), "目录");
+        assert_eq!(term.contents_between(0, 1, 0, 1), "目");
+        assert_eq!(term.contents_between(0, 3, 0, 3), "录");
+        assert_eq!(term.contents_ansi_between(0, 1, 0, 2), "目录");
     }
 }
