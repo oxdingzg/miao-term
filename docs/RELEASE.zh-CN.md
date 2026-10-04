@@ -27,6 +27,21 @@ gh workflow run release.yml --ref main -f tag=v0.0.1
 手动运行执行相同的打包、签名与清单检查,上传汇总产物 `release-assembled`。
 清单使用传入的 tag;只有正式发布该 tag 后,其中的下载 URL 才会可用。
 
+## 发布说明
+
+**Release 正文统一用英文,并且始终链接到简体中文版本。** 所有 miao 项目
+(包括 `miao`)都遵循同一规则。
+
+- 英文说明放在 `docs/releases/<tag>.md`,中文镜像放在
+  `docs/releases/<tag>.zh-CN.md`;打 tag 前两者都要写好。
+- `docs/releases/<tag>.md` 在 `# mtty <tag>` 标题正下方以
+  `[简体中文](<tag>.zh-CN.md)` 开头,可以相对链接其他文档。
+- `scripts/release-notes.py` 负责生成 release 正文:把每个相对链接转成指向
+  该 tag 的绝对链接,并强制 `[简体中文]` 指向镜像文件。发布作业优先使用它,
+  仅当某个 tag 没有说明文件时才回退到 `--generate-notes`。
+- 不要把中文说明粘贴进 release 正文;正文保持英文并用链接跳转。
+  `scripts/test-release-notes.py` 覆盖该转换。
+
 ## 产物
 
 | 平台 | 产物 | 说明 |
