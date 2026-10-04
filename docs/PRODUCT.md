@@ -285,8 +285,8 @@ verified on its own:
   system curl, the password only in memory and passed on stdin; plain FTP and
   explicit FTPS round-trip against a real server; whole folders are not
   transferred over FTP. tmux checked over real ssh: after a detach, reconnecting
-  returns to the same shell. mosh: command construction tested only, not
-  against a real mosh-server.)
+  returns to the same shell. mosh: a real SSH bootstrap and UDP session verified
+  in ACCEPTANCE, so the reconnect path is proven end to end.)
   Acceptance (M3 overall): an automated smoke against a test host; credentials
   never reach logs, session files or MTP responses.
 
