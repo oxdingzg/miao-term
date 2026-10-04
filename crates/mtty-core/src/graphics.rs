@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use mtty_graphics as gfx;
+use serde::{Deserialize, Serialize};
 
 /// Decoded-pixel cap per image (also bounds total memory per image).
 pub const DEFAULT_MAX_PIXELS: usize = 16_000_000;
@@ -17,6 +18,11 @@ pub const DEFAULT_MAX_PIXELS: usize = 16_000_000;
 pub const DEFAULT_MAX_IMAGE_BYTES: usize = 128 * 1024 * 1024;
 const MAX_PARTIAL_TRANSFERS: usize = 16;
 const MAX_ANIMATION_FRAMES: usize = 256;
+/// Version tag for saved placements, so an older file can be ignored.
+pub const SAVED_IMAGES_VERSION: u32 = 1;
+/// Largest base64 PNG saved per image, and across one pane's placements.
+const MAX_SAVED_PNG_BYTES: usize = 8 * 1024 * 1024;
+const MAX_SAVED_TOTAL_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct PlacedImage {
@@ -56,6 +62,35 @@ struct Partial {
     y: i32,
     action: char,
     data: Vec<u8>,
+}
+
+/// The placements (and their decoded pixels) saved for one pane, anchored to
+/// the scrollback window captured at the same time.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SavedImages {
+    pub version: u32,
+    /// Terminal width the anchors were computed at. Restoring only places them
+    /// when the pane comes back at the same width; otherwise the text reflowed
+    /// and a line anchor no longer names the same row.
+    pub cols: u16,
+    pub images: Vec<SavedImage>,
+}
+
+/// One image placement, stored as a delta from the captured window's last row.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SavedImage {
+    /// `anchor_index - last_index`, in buffer rows counted from the oldest.
+    /// Non-positive for the image rows the captured text contains.
+    pub delta: i32,
+    pub col: u16,
+    pub cols: Option<u16>,
+    pub rows: Option<u16>,
+    pub x_off: i32,
+    pub y_off: i32,
+    pub z: i32,
+    pub kitty_id: Option<u64>,
+    /// Frame 0 as a base64 PNG. Animations return as a still frame.
+    pub png: String,
 }
 
 /// The graphics state for one terminal.
@@ -152,6 +187,91 @@ impl GraphicsLayer {
     pub fn clear(&mut self) {
         self.images.clear();
         self.partial.clear();
+    }
+
+    /// Snapshot the placements whose top row falls inside the captured window
+    /// `[first, last]` (buffer rows counted from the oldest) for session
+    /// storage. `history` is the terminal's current history size, used to turn
+    /// a grid-line anchor into a buffer-row index. Images below the window are
+    /// left out: the restored text does not reach them. Frame 0 of an animation
+    /// is saved as a still image, and a placement too large to store is skipped.
+    pub fn save_images(&self, history: i32, first: i32, last: i32, cols: u16) -> SavedImages {
+        let mut images = Vec::new();
+        let mut total = 0usize;
+        for image in &self.images {
+            let anchor_index = image.anchor.saturating_add(history);
+            if anchor_index < first || anchor_index > last {
+                continue;
+            }
+            // Skip an image too big to fit even before encoding it: the whole
+            // point of the cap is to bound the work as well as the file.
+            if placed_bytes(image) > MAX_SAVED_TOTAL_BYTES {
+                continue;
+            }
+            let png = gfx::encode_png_base64(&image.image);
+            if png.is_empty()
+                || png.len() > MAX_SAVED_PNG_BYTES
+                || total.saturating_add(png.len()) > MAX_SAVED_TOTAL_BYTES
+            {
+                continue;
+            }
+            total += png.len();
+            images.push(SavedImage {
+                delta: anchor_index - last,
+                col: image.col,
+                cols: image.cols,
+                rows: image.rows,
+                x_off: image.x_off,
+                y_off: image.y_off,
+                z: image.z,
+                kitty_id: image.kitty_id,
+                png,
+            });
+        }
+        SavedImages {
+            version: SAVED_IMAGES_VERSION,
+            cols,
+            images,
+        }
+    }
+
+    /// Re-place saved images, anchored to `last` (the buffer-row index of the
+    /// last row of the restored text) at the pane's current `cols`. Returns how
+    /// many were placed. Nothing is placed when the width differs from the one
+    /// the anchors were computed at, or when the file is from a newer version:
+    /// a stale anchor would draw an image over unrelated text.
+    pub fn restore_images(
+        &mut self,
+        saved: &SavedImages,
+        history: i32,
+        last: i32,
+        cols: u16,
+        max_pixels: usize,
+    ) -> usize {
+        if saved.version != SAVED_IMAGES_VERSION || saved.cols != cols {
+            return 0;
+        }
+        let before = self.images.len();
+        for entry in &saved.images {
+            let Some(image) = gfx::decode_png_base64(&entry.png, max_pixels) else {
+                continue;
+            };
+            let anchor = last.saturating_add(entry.delta).saturating_sub(history);
+            let id = self.place(
+                image,
+                anchor,
+                entry.col,
+                entry.cols,
+                entry.rows,
+                entry.x_off,
+                entry.y_off,
+                entry.z,
+            );
+            if let Some(placed) = self.images.iter_mut().find(|i| i.id == id) {
+                placed.kitty_id = entry.kitty_id;
+            }
+        }
+        self.images.len() - before
     }
 
     /// Shift every anchor up by `lines` (content scrolled past the ring cap,
@@ -578,5 +698,81 @@ mod tests {
         l.kitty(gfx::kitty::parse(b"a=T,f=24,s=1x1,i=2,z=3;AAAA"), 0, 0, 0);
         assert_eq!(l.images[1].z, 3);
         assert!(!draws_behind_text(l.images[1].z));
+    }
+
+    #[test]
+    fn saved_images_keep_their_data_and_offset_from_the_window_end() {
+        let mut l = GraphicsLayer::new();
+        // history 10: buffer index = anchor + history. The window's last row is
+        // index 13, so an image anchored at grid line 2 is three rows above it.
+        l.place(img(2, 2), 2, 4, Some(3), Some(2), 5, 6, -1);
+        let mut kitty = gfx::kitty::parse(b"a=T,f=24,s=1x1,i=7;AAAA");
+        kitty.z = 0;
+        l.kitty(kitty, 3, 1, 0);
+        // An image whose top is above the window is not saved.
+        l.place(img(1, 1), -20, 0, None, None, 0, 0, 0);
+        let saved = l.save_images(10, 3, 13, 80);
+        assert_eq!(saved.version, SAVED_IMAGES_VERSION);
+        assert_eq!(saved.cols, 80);
+        assert_eq!(saved.images.len(), 2);
+        let first = &saved.images[0];
+        assert_eq!(first.delta, (2 + 10) - 13);
+        assert_eq!((first.col, first.cols, first.rows), (4, Some(3), Some(2)));
+        assert_eq!((first.x_off, first.y_off, first.z), (5, 6, -1));
+        assert_eq!(first.kitty_id, None);
+        assert!(!first.png.is_empty());
+        assert_eq!(saved.images[1].kitty_id, Some(7));
+    }
+
+    #[test]
+    fn restore_re_places_saved_images_at_the_same_content_row() {
+        let mut source = GraphicsLayer::new();
+        source.place(img(2, 2), 2, 4, Some(3), Some(4), 5, 6, -1);
+        source.place(img(1, 1), 0, 0, None, None, 0, 0, 0);
+        let saved = source.save_images(10, 3, 13, 80);
+        assert_eq!(saved.images.len(), 2);
+
+        // A fresh pane at the same width, whose restored text ends at index 13
+        // but whose history is now 8: anchors must account for the new history.
+        let mut restored = GraphicsLayer::new();
+        let placed = restored.restore_images(&saved, 8, 13, 80, DEFAULT_MAX_PIXELS);
+        assert_eq!(placed, 2);
+        assert_eq!(restored.images.len(), 2);
+        assert_eq!(restored.images[0].anchor, (2 + 10) - 8);
+        assert_eq!((restored.images[0].col, restored.images[0].z), (4, -1));
+        assert_eq!(restored.images[0].image.rgba, source.images[0].image.rgba);
+        assert_eq!(restored.images[1].anchor, 10 - 8);
+        assert!(!restored.images[0].animating, "animations restore still");
+    }
+
+    #[test]
+    fn restore_refuses_a_changed_width_or_unknown_version() {
+        let mut source = GraphicsLayer::new();
+        source.place(img(1, 1), 0, 0, None, None, 0, 0, 0);
+        let saved = source.save_images(0, 0, 0, 80);
+        let mut restored = GraphicsLayer::new();
+        assert_eq!(
+            restored.restore_images(&saved, 0, 0, 79, DEFAULT_MAX_PIXELS),
+            0
+        );
+        assert!(restored.images.is_empty());
+        let mut future = saved.clone();
+        future.version = SAVED_IMAGES_VERSION + 1;
+        assert_eq!(
+            restored.restore_images(&future, 0, 0, 80, DEFAULT_MAX_PIXELS),
+            0
+        );
+        assert!(restored.images.is_empty());
+    }
+
+    #[test]
+    fn restore_skips_a_payload_it_cannot_decode() {
+        let mut source = GraphicsLayer::new();
+        source.place(img(2, 2), 0, 0, None, None, 0, 0, 0);
+        let saved = source.save_images(0, 0, 0, 80);
+        let mut restored = GraphicsLayer::new();
+        // A zero pixel budget refuses the PNG: nothing is drawn, not an empty image.
+        assert_eq!(restored.restore_images(&saved, 0, 0, 80, 0), 0);
+        assert!(restored.images.is_empty());
     }
 }

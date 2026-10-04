@@ -306,34 +306,63 @@ impl ATerm {
     /// shell output underneath is read; the alternate screen is kept as it
     /// was, so this can run while the program is still drawing.
     pub fn snapshot_ansi(&mut self, max_lines: usize) -> String {
+        self.with_main_screen(|term| term.main_screen_ansi(max_lines))
+    }
+
+    /// Like [`Self::snapshot_ansi`], but also returns the captured main-screen
+    /// window: the index (0 = oldest buffer row) of its last non-blank row, or
+    /// `None` when the captured text is empty. Inline images are saved against
+    /// this index so they re-anchor to the same content on restore.
+    pub fn snapshot_scrollback(&mut self, max_lines: usize) -> (String, Option<usize>) {
+        self.with_main_screen(|term| term.main_screen_ansi_last(max_lines))
+    }
+
+    /// Run `f` over the main screen even while an alternate screen (vim, less)
+    /// is active, restoring the alternate screen afterwards.
+    fn with_main_screen<R>(&mut self, f: impl FnOnce(&Self) -> R) -> R {
         if !self.term.mode().contains(TermMode::ALT_SCREEN) {
-            return self.main_screen_ansi(max_lines);
+            return f(self);
         }
         let alt = self.read_screen();
         self.term.swap_alt();
-        let out = self.main_screen_ansi(max_lines);
+        let out = f(self);
         // Switching back clears the alternate screen: write it back.
         self.term.swap_alt();
         self.write_screen(&alt);
         out
     }
 
-    fn main_screen_ansi(&self, max_lines: usize) -> String {
+    /// Index (0 = oldest buffer row) of the last non-blank main-screen row,
+    /// matching the window [`Self::snapshot_ansi`] captures. Restored inline
+    /// images anchor to it. `None` when the screen is blank.
+    pub fn last_content_index(&self) -> Option<usize> {
+        self.main_screen_last_index()
+    }
+
+    /// The last non-blank main-screen row as an index from the oldest buffer
+    /// row (0-based), matching the window `snapshot_ansi` emits.
+    fn main_screen_last_index(&self) -> Option<usize> {
         let grid = self.term.grid();
         let history = grid.history_size() as i32;
-        let blank = |c: &alacritty_terminal::term::cell::Cell| {
-            shown(c.c) == ' '
-                && c.bg == Color::Named(NamedColor::Background)
-                && !c.flags.intersects(Flags::INVERSE | Flags::UNDERLINE)
-                && c.zerowidth().is_none()
-        };
+        let rows: Vec<Line> = (-history..self.rows as i32).map(Line).collect();
+        rows.iter()
+            .rposition(|&l| !(0..self.cols).all(|c| blank_cell(&grid[l][Column(c)])))
+    }
+
+    fn main_screen_ansi(&self, max_lines: usize) -> String {
+        self.main_screen_ansi_last(max_lines).0
+    }
+
+    fn main_screen_ansi_last(&self, max_lines: usize) -> (String, Option<usize>) {
+        let grid = self.term.grid();
+        let history = grid.history_size() as i32;
         // Buffer rows as alacritty lines: -history (oldest) ..= rows - 1.
         let rows: Vec<Line> = (-history..self.rows as i32).map(Line).collect();
         let Some(last) = rows
             .iter()
-            .rposition(|&l| !(0..self.cols).all(|c| blank(&grid[l][Column(c)])))
+            .rposition(|&l| !(0..self.cols).all(|c| blank_cell(&grid[l][Column(c)])))
         else {
-            return String::new();
+            return (String::new(), None);
         };
         let first = (last + 1).saturating_sub(max_lines);
         let mut out = String::new();
@@ -346,7 +375,7 @@ impl ATerm {
                 self.cols
             } else {
                 (0..self.cols)
-                    .rposition(|c| !blank(&row[Column(c)]))
+                    .rposition(|c| !blank_cell(&row[Column(c)]))
                     .map_or(0, |c| c + 1)
             };
             for c in 0..end {
@@ -380,7 +409,7 @@ impl ATerm {
         if !attrs.is_empty() {
             out.push_str("\x1b[0m");
         }
-        out
+        (out, Some(last))
     }
 
     /// Current scrollback offset (lines scrolled up from the bottom).
@@ -497,6 +526,15 @@ fn shown(c: char) -> char {
     } else {
         c
     }
+}
+
+/// True for a cell that carries nothing worth restoring: a space with the
+/// default background and no visual attribute. `snapshot_ansi` trims these.
+fn blank_cell(c: &alacritty_terminal::term::cell::Cell) -> bool {
+    shown(c.c) == ' '
+        && c.bg == Color::Named(NamedColor::Background)
+        && !c.flags.intersects(Flags::INVERSE | Flags::UNDERLINE)
+        && c.zerowidth().is_none()
 }
 
 /// The SGR parameters (after a reset) for a cell's colours and attributes.

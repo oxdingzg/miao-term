@@ -391,8 +391,9 @@ CI 性能基线已持久化于 `benches/perf-baseline.json`,由 nightly/手动�
 - **发布签名**：Apple 公证与 Windows MSI 签名仍需要所有者提供凭证；发布包已有 minisign 签名和更新清单。
 - **验收记录**：本轮桌面更新、输入法、剪贴板、传输与 Agent 验收结果及边界见
   [ACCEPTANCE.zh-CN.md](docs/ACCEPTANCE.zh-CN.md)。
-- **终端内联图片**:回滚容量内锚定精确,超出后为近似(alacritty 不暴露滚动计数,除非打补丁);
-  会话恢复不保留图像(会与恢复的内容不一致)。
+- **终端内联图片**:回滚容量内锚定精确,超出后为近似(alacritty 不暴露滚动计数,除非打补丁)。
+  会话恢复会把图像按回滚行锚点一并带回:宽度不变时精确;宽度变化导致文本重排时宁可省略,
+  也不画在无关文本上(动画恢复为静止帧)。
 - **Mermaid**:内置子集覆盖 `graph`/`flowchart`、`sequenceDiagram`、`stateDiagram`、
   `classDiagram`、`erDiagram` 与 `pie`;gantt、journey、git graph 等仍回退到
   `mermaid-command` 或占位符。

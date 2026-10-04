@@ -76,7 +76,7 @@
 | 键盘编码:Ctrl/Alt/修饰键导航、F1–F12、Insert | 可用 | 本次修复:F1–F12 与 Insert 此前完全不发送 |
 | kitty keyboard 协议 | 可用 | 五个 flag 全支持:消歧义转义(1)、按键事件类型(含释放,2)、替代键(4)、全键转义(8)、关联文本(16) |
 | 输入法(IME)内联预编辑 | 可用 | 候选窗定位到光标(`set_ime_cursor_area`);macOS 上的位置待桌面人工确认 |
-| 终端内联图片 Sixel / Kitty / iTerm2 | 可用 | Kitty z-index 生效(负值绘制在文字网格之下);会话恢复不保留图片 |
+| 终端内联图片 Sixel / Kitty / iTerm2 | 可用 | Kitty z-index 生效(负值绘制在文字网格之下);会话恢复会把图片按回滚行锚点带回,文本重排后宁可省略也不错位 |
 | 鼠标上报(SGR / X10) | 可用 | |
 
 ### 3.2 窗口与工作区
@@ -90,7 +90,7 @@
 | 命令面板 `⌘K` | 可用 | |
 | Open Quickly `⌘⇧O` | 可用 | 标签、agent、片段、主机、当前目录的文件与目录、最近文件;并搜索该目录下文件内容与当前 pane 回滚中的文本(有界扫描,在 UI 线程外执行) |
 | details 面板:Info / Agent / Outline / Git / Files / Ports / Queue | 可用 | Ports 覆盖 shell 及其子进程;非 git 目录如实显示;隐藏时只每 10 秒查一次 git(状态栏显示分支) |
-| 会话恢复(布局、目录、标题、分组、终端内容) | 可用 | 每个终端最近 5000 行内容会恢复(保留颜色,文件仅本人可读,`restore-scrollback = false` 可关闭);退出时在运行的程序会提示"按回车重新运行",绝不自动执行。从 Dock、注销或 AppleScript 退出现在也会保存。运行中的程序通过每 pane 一个的 PTY 宿主挺过更新、重启和崩溃(ADR 0041,`pty-host`,默认开启);普通退出会结束它们,除非设置 `keep-sessions-on-quit` |
+| 会话恢复(布局、目录、标题、分组、终端内容) | 可用 | 每个终端最近 5000 行内容及其内联图片会恢复(保留颜色,文件仅本人可读,`restore-scrollback = false` 可关闭;图片仅在 pane 宽度不变时恢复,文本重排后宁可省略也不错位);退出时在运行的程序会提示"按回车重新运行",绝不自动执行。从 Dock、注销或 AppleScript 退出现在也会保存。运行中的程序通过每 pane 一个的 PTY 宿主挺过更新、重启和崩溃(ADR 0041,`pty-host`,默认开启);普通退出会结束它们,除非设置 `keep-sessions-on-quit` |
 | Recipes 保存/打开工作区 | 可用 | 名称做文件名校验,写入失败会提示 |
 | 画中画、Hint、只读模式 | 可用 | 只读模式拦截 MTP `pane.send/run` |
 | View 规则 | 可用 | 别名、标题、图标、徽章;按目录/命令/agent/host/文件匹配(文件取前台程序打开的文件);`views.json` 热加载 |

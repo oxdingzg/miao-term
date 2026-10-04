@@ -349,6 +349,33 @@ pub fn decode_iterm2(data: &[u8], max_pixels: usize) -> Option<Image> {
     decode_png(&bytes, max_pixels)
 }
 
+/// Encode a decoded image as a base64 PNG (straight RGBA), for saving inline
+/// graphics alongside a session's scrollback. An image the PNG encoder refuses
+/// yields an empty string, so callers can skip it.
+pub fn encode_png_base64(image: &Image) -> String {
+    use base64::Engine;
+    use image::ImageEncoder;
+    let mut png = Vec::new();
+    if image::codecs::png::PngEncoder::new(&mut png)
+        .write_image(
+            &image.rgba,
+            image.width,
+            image.height,
+            image::ExtendedColorType::Rgba8,
+        )
+        .is_err()
+    {
+        return String::new();
+    }
+    base64::engine::general_purpose::STANDARD.encode(png)
+}
+
+/// Decode a base64 PNG written by [`encode_png_base64`], bounded by `max_pixels`.
+pub fn decode_png_base64(data: &str, max_pixels: usize) -> Option<Image> {
+    let bytes = decode_base64(data.as_bytes())?;
+    decode_png(&bytes, max_pixels)
+}
+
 /// Borrow ordinary base64; allocate a sanitized copy only when needed.
 pub(crate) fn decode_base64(data: &[u8]) -> Option<Vec<u8>> {
     use base64::Engine;
@@ -456,6 +483,25 @@ fn decode_png(bytes: &[u8], max_pixels: usize) -> Option<Image> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn png_base64_round_trips_for_session_storage() {
+        let image = Image {
+            width: 2,
+            height: 2,
+            rgba: [255u8, 0, 0, 255].repeat(4),
+        };
+        let encoded = encode_png_base64(&image);
+        assert!(!encoded.is_empty());
+        let decoded = decode_png_base64(&encoded, 4).expect("round trip");
+        assert_eq!((decoded.width, decoded.height), (2, 2));
+        assert_eq!(decoded.rgba, image.rgba);
+        assert!(
+            decode_png_base64(&encoded, 3).is_none(),
+            "the pixel budget still applies"
+        );
+        assert!(decode_png_base64("not base64", 4).is_none());
+    }
 
     #[test]
     fn png_decoding_preserves_pixels_and_enforces_geometry_budget() {

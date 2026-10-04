@@ -902,6 +902,32 @@ impl Terminal {
         &self.graphics
     }
 
+    /// The graphics layer, for restoring saved placements.
+    pub fn graphics_mut(&mut self) -> &mut crate::graphics::GraphicsLayer {
+        &mut self.graphics
+    }
+
+    /// Snapshot the main screen for session restore, with the inline images
+    /// anchored inside the captured window. `None` for the images when there is
+    /// no text to anchor them to. See [`crate::graphics::GraphicsLayer::save_images`].
+    pub fn snapshot_scrollback(
+        &mut self,
+        max_lines: usize,
+    ) -> (String, Option<crate::graphics::SavedImages>) {
+        let (text, last) = self.screen_mut().snapshot_scrollback(max_lines);
+        let (Some(last), false) = (last, text.is_empty()) else {
+            return (text, None);
+        };
+        let first = last.saturating_sub(max_lines.saturating_sub(1));
+        let history = self.screen().history_size() as i32;
+        let cols = self.screen().size().1;
+        let saved = self
+            .graphics
+            .save_images(history, first as i32, last as i32, cols);
+        let images = (!saved.images.is_empty()).then_some(saved);
+        (text, images)
+    }
+
     /// Send raw bytes (keyboard/paste) to the shell.
     pub fn write(&mut self, bytes: &[u8]) {
         if self.writer.write_all(bytes).is_ok() {
@@ -2068,6 +2094,22 @@ mod tests {
         assert_eq!((imgs[0].image.width, imgs[0].image.height), (10, 6));
         // Red at the top-left pixel.
         assert_eq!(&imgs[0].image.rgba[..4], &[255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn snapshot_scrollback_anchors_images_to_the_captured_text() {
+        let mut t = make();
+        t.feed_for_test(b"one\r\ntwo\r\n");
+        t.feed_for_test(b"\x1bPq#0;2;100;0;0#0~~~~~~~~~~\x1b\\");
+        t.feed_for_test(b"after\r\n");
+        let (text, images) = t.snapshot_scrollback(100);
+        assert!(text.contains("one") && text.contains("after"));
+        let saved = images.expect("the sixel is saved");
+        assert_eq!(saved.images.len(), 1);
+        assert_eq!(saved.cols, t.screen().size().1);
+        // Sixel sits on the row the cursor was on, then advances one row before
+        // "after": one row above the captured window's last row.
+        assert_eq!(saved.images[0].delta, -1);
     }
 
     #[test]

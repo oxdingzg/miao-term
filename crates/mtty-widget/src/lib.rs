@@ -461,6 +461,18 @@ struct Pane {
     on_enter: Option<String>,
     /// The last command output already published to the control plane.
     published_output: Option<mtty_core::CommandOutput>,
+    /// Inline images read for a restored pane, placed once the pane has its
+    /// final width. Their anchors are grid lines, so placing them before the
+    /// layout settles would leave them over reflowed text.
+    pending_images: Option<PendingImages>,
+    /// The "[mtty] Restored…" note, processed after the images are placed so
+    /// the note's own rows do not become an image's anchor.
+    pending_note: Option<String>,
+}
+
+/// A restored pane's saved images.
+struct PendingImages {
+    saved: mtty_core::graphics::SavedImages,
 }
 
 impl Pane {
@@ -2246,6 +2258,37 @@ impl State {
                 }
             }
         }
+        self.apply_restored_images();
+    }
+
+    /// Finish restored panes now that every pane has its final width: place
+    /// their inline images, then append the "[mtty] Restored…" note. Images
+    /// anchor to the restored text's last row (the note is not there yet), and
+    /// a pane that came back at a different width reflowed its text, so its
+    /// saved rows no longer name the same content: those placements are dropped
+    /// rather than drawn over the wrong text (see `GraphicsLayer::restore_images`).
+    fn apply_restored_images(&mut self) {
+        for pane in self.tabs.iter_mut().flat_map(|t| t.panes.iter_mut()) {
+            if let Some(pending) = pane.pending_images.take() {
+                if self.graphics_enabled {
+                    if let Some(last) = pane.term.screen().last_content_index() {
+                        let cols = pane.term.screen().size().1;
+                        let history = pane.term.screen().history_size() as i32;
+                        let max_pixels = pane.term.graphics().max_pixels;
+                        pane.term.graphics_mut().restore_images(
+                            &pending.saved,
+                            history,
+                            last as i32,
+                            cols,
+                            max_pixels,
+                        );
+                    }
+                }
+            }
+            if let Some(note) = pane.pending_note.take() {
+                pane.term.screen_mut().process(note.as_bytes());
+            }
+        }
     }
 
     fn pane_rects(&self) -> Vec<(String, Rect)> {
@@ -2292,6 +2335,8 @@ impl State {
             scroll: 0,
             on_enter: None,
             published_output: None,
+            pending_images: None,
+            pending_note: None,
         }
     }
 
@@ -4455,11 +4500,19 @@ impl State {
                     }
                 }
                 if self.restore_scrollback {
-                    let text = pane.term.screen_mut().snapshot_ansi(SCROLLBACK_LINES);
+                    let (text, images) = pane.term.snapshot_scrollback(SCROLLBACK_LINES);
                     let file = format!("{}.ansi", pane.id);
                     if let Some(dir) = dir.as_deref().filter(|_| !text.is_empty()) {
                         if write_private(dir, &file, text.as_bytes()).is_ok() {
                             extra.insert("scrollback".into(), file.into());
+                        }
+                        if let Some(images) = images {
+                            let name = format!("{}.images.json", pane.id);
+                            if let Ok(json) = serde_json::to_vec(&images) {
+                                if write_private(dir, &name, &json).is_ok() {
+                                    extra.insert("images".into(), name.into());
+                                }
+                            }
                         }
                     }
                 }
@@ -4497,11 +4550,13 @@ impl State {
             if let Ok(text) = std::fs::read(&path) {
                 let text = without_mtty_notes(&String::from_utf8_lossy(&text));
                 pane.term.screen_mut().process(text.as_bytes());
-                let note = format!(
+                // Held back until the pane has its final width: the note's own
+                // rows would otherwise be the anchor for a saved image.
+                pane.pending_note = Some(format!(
                     "\x1b[0;2m[mtty] {}\x1b[0m\r\n",
                     t("Restored from the last session.", "以上为上次会话的内容。")
-                );
-                pane.term.screen_mut().process(note.as_bytes());
+                ));
+                pane.pending_images = load_pending_images(saved);
             }
             // Shown once: the next quit saves the contents afresh.
             let _ = std::fs::remove_file(&path);
@@ -4512,7 +4567,11 @@ impl State {
                 t("Was running:", "上次正在运行:"),
                 t("Press Enter to run it again.", "按回车重新运行。"),
             );
-            pane.term.screen_mut().process(note.as_bytes());
+            // Same deferred path as the restore note: after the images.
+            pane.pending_note = Some(match pane.pending_note.take() {
+                Some(previous) => previous + &note,
+                None => note,
+            });
             pane.on_enter = Some(format!("{command}\r"));
         }
     }
@@ -4584,9 +4643,14 @@ impl State {
             return;
         };
         for pane in self.tabs.iter_mut().flat_map(|t| t.panes.iter_mut()) {
-            let text = pane.term.screen_mut().snapshot_ansi(SCROLLBACK_LINES);
+            let (text, images) = pane.term.snapshot_scrollback(SCROLLBACK_LINES);
             if !text.is_empty() {
                 let _ = write_private(&dir, &format!("{}.ansi", pane.id), text.as_bytes());
+                if let Some(images) = images {
+                    if let Ok(json) = serde_json::to_vec(&images) {
+                        let _ = write_private(&dir, &format!("{}.images.json", pane.id), &json);
+                    }
+                }
             }
             // A hosted pane also keeps its exact screen and output offset, so
             // after a crash it reattaches replaying only what came after.
@@ -10638,6 +10702,8 @@ impl State {
             scroll: 0,
             on_enter: None,
             published_output: None,
+            pending_images: None,
+            pending_note: None,
         })
     }
 
@@ -12133,6 +12199,9 @@ impl State {
                     if !self.restore_from_value(&v) {
                         self.new_tab();
                     }
+                    // Recipes do not go through `fit_all_panes`; finish any
+                    // restored notes (and images) here.
+                    self.apply_restored_images();
                 }
                 Err(e) => {
                     let msg = format!(
@@ -17573,6 +17642,25 @@ fn is_plain_file_name(name: &str) -> bool {
     !name.is_empty() && std::path::Path::new(name).file_name() == Some(std::ffi::OsStr::new(name))
 }
 
+/// Read the inline images saved next to a pane's scrollback, if any. The file
+/// is removed once read, like the scrollback itself: the next quit saves it
+/// afresh.
+fn load_pending_images(saved: &serde_json::Value) -> Option<PendingImages> {
+    let file = saved["images"]
+        .as_str()
+        .map(str::to_string)
+        .or_else(|| saved["id"].as_str().map(|id| format!("{id}.images.json")))
+        .filter(|f| is_plain_file_name(f))?;
+    let path = scrollback_dir()?.join(file);
+    let bytes = std::fs::read(&path).ok()?;
+    let _ = std::fs::remove_file(&path);
+    let saved = serde_json::from_slice::<mtty_core::graphics::SavedImages>(&bytes).ok()?;
+    if saved.images.is_empty() {
+        return None;
+    }
+    Some(PendingImages { saved })
+}
+
 /// Write `bytes` to `dir/name` readable by the owner only: terminal output
 /// can hold secrets.
 fn write_private(dir: &std::path::Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
@@ -18349,6 +18437,8 @@ mod tests {
             scroll: 0,
             on_enter: None,
             published_output: None,
+            pending_images: None,
+            pending_note: None,
         };
         (pane, tx)
     }

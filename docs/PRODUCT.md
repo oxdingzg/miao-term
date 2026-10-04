@@ -100,7 +100,7 @@ point); problems fixed in M0–M3 are no longer listed.
 | Key encoding: Ctrl/Alt/modified navigation, F1–F12, Insert | Works | Fixed now: F1–F12 and Insert were not sent at all |
 | kitty keyboard protocol | Works | All five flags: disambiguate escape codes (1), event types incl. release (2), alternate keys (4), all keys as escape codes (8) and associated text (16) |
 | IME inline preedit | Works | Candidate window placed at the cursor (`set_ime_cursor_area`); its position on macOS awaits a desktop check |
-| Inline images: Sixel / Kitty / iTerm2 | Works | Kitty z-index honoured (negative draws behind the text grid); session restore keeps no images |
+| Inline images: Sixel / Kitty / iTerm2 | Works | Kitty z-index honoured (negative draws behind the text grid); restored sessions bring images back anchored to their scrollback rows, and omit them rather than misplace them after a reflow |
 | Mouse reporting (SGR / X10) | Works | |
 
 ### 3.2 Window and workspace
@@ -114,7 +114,7 @@ point); problems fixed in M0–M3 are no longer listed.
 | Command palette `⌘K` | Works | |
 | Open Quickly `⌘⇧O` | Works | Tabs, agents, snippets, hosts, files and folders in the current directory, recent files, and text inside files under that directory or in the active pane's scrollback (bounded scan, off the UI thread) |
 | Details panel: Info / Agent / Outline / Git / Files / Ports / Queue | Works | Ports cover the shell and its children; non-git dirs say so; while hidden only git is checked, every 10 s (the status line shows the branch) |
-| Session restore (layout, directories, titles, groups, terminal contents) | Works | Each terminal's last 5,000 rows come back (colours kept, owner-only files, `restore-scrollback = false` turns it off), and the program that was running is offered on Enter, never rerun unasked. Quit from the Dock, logout or AppleScript now saves too. Running programs survive updates, relaunches and crashes through per-pane PTY hosts (ADR 0041, `pty-host`, on by default); an ordinary quit ends them unless `keep-sessions-on-quit` is set |
+| Session restore (layout, directories, titles, groups, terminal contents) | Works | Each terminal's last 5,000 rows and their inline images come back (colours kept, owner-only files, `restore-scrollback = false` turns it off; images return only when a pane comes back at the same width, so a reflowed pane drops them rather than misplacing them), and the program that was running is offered on Enter, never rerun unasked. Quit from the Dock, logout or AppleScript now saves too. Running programs survive updates, relaunches and crashes through per-pane PTY hosts (ADR 0041, `pty-host`, on by default); an ordinary quit ends them unless `keep-sessions-on-quit` is set |
 | Recipes save/open | Works | Names are validated as file names; write failures are shown |
 | Picture-in-picture, hints, read-only mode | Works | Read-only blocks MTP `pane.send/run` |
 | View rules | Works | Alias, title, icon, badge; matching by path/command/agent/host/file (the file the foreground program opened); `views.json` hot reload |

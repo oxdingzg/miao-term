@@ -501,9 +501,11 @@ Still open:
 - **Acceptance**: current desktop update, IME, clipboard, transport and agent
   results, including their limits, are in [ACCEPTANCE.md](docs/ACCEPTANCE.md).
 - **Inline graphics**: anchors are exact up to the scrollback cap and
-  approximate past it (alacritty exposes no scroll counter without a patch),
-  and session restore keeps no images (they would not match the restored
-  content).
+  approximate past it (alacritty exposes no scroll counter without a patch).
+  Session restore brings images back anchored to their scrollback rows: exact
+  when a pane returns at the same width, and omitted rather than drawn over
+  unrelated text when a changed width reflows it (animations return as a still
+  frame).
 - **Mermaid**: the built-in subset covers `graph`/`flowchart`,
   `sequenceDiagram`, `stateDiagram`, `classDiagram`, `erDiagram` and `pie`;
   gantt, journey, git graphs and the rest fall back to `mermaid-command` or a
