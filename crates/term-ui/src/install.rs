@@ -118,8 +118,10 @@ if ([IO.Path]::GetExtension($artifact) -ieq '.msi') {{
     $keepBackup = $false
     New-Item -ItemType Directory -Path $unpack, $backup | Out-Null
     try {{
-        & tar.exe -xf $artifact -C $unpack
-        if ($LASTEXITCODE -ne 0) {{ throw 'Could not unpack the update' }}
+        # Use .NET's Unicode paths: native tar can replace CJK characters
+        # with '?' when invoked through Windows PowerShell's legacy code page.
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::ExtractToDirectory($artifact, $unpack)
         $files = @()
         foreach ($name in @('mtty.exe', 'mtty-cli.exe', 'mtty-ptyhost.exe')) {{
             $found = @(Get-ChildItem $unpack -Recurse -File -Filter $name)

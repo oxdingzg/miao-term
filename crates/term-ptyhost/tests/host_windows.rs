@@ -86,9 +86,16 @@ fn output(frames: &[FromHost]) -> String {
 }
 
 fn printed(frames: &[FromHost], marker: &str) -> bool {
-    miao_term_core::plain_text(output(frames).as_bytes())
-        .lines()
-        .any(|line| line.trim() == marker)
+    // ConPTY can position the following prompt with CSI H rather than a
+    // newline. Decode the actual screen, so the prompt does not appear joined
+    // to the marker and an echoed command cannot satisfy the assertion.
+    let mut screen = miao_term_core::aterm::ATerm::new(80, 24, 100);
+    for frame in frames {
+        if let FromHost::Output { bytes, .. } = frame {
+            screen.process(bytes);
+        }
+    }
+    (0..24).any(|row| screen.line_text(row).trim() == marker)
 }
 
 fn live(frames: &[FromHost]) -> Option<u64> {
