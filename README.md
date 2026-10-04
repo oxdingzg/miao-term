@@ -226,7 +226,9 @@ mtty instead.
   for opencode. The user's agent config is never edited for them, and hooks
   only report for agents running inside an mtty pane. `miao` reports its state
   from a built-in integration, so it needs no hook wiring.
-- **Updates**: *Check for Updates* reads the version manifest; *Download
+- **Updates**: mtty checks the version manifest once on startup (silent, opt out
+  with `update-auto-check = false`) and reports a newer version in the status
+  line — or on demand via *Check for Updates*; *Download
   Update* fetches this platform's package and checks its SHA-256 and its
   minisign signature in process (against the release key built into mtty, or
   `update-pubkey`); an unsigned or mismatching download is deleted and never

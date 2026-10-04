@@ -32,7 +32,9 @@ to English by falling back to the key.
 **Update check.** With `update-check-url` set, the palette verb or the Settings
 button fetches that URL on a thread via `curl` (`--max-time 5`), compares the
 first token to `CARGO_PKG_VERSION`, and reports *up to date* / *update
-available*. Off by default; no TLS/runtime dependency is added.
+available*. A silent check also runs once on startup (config
+`update-auto-check`, on by default; see ADR 0022) and a newer version is shown
+in the status line. No TLS/runtime dependency is added.
 
 ## Consequences
 
