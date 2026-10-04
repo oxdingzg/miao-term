@@ -58,6 +58,7 @@ palette    = ["#3b4252", "#bf616a", "#a3be8c", "#ebcb8b",
 | `graphics` | `true` | 内联终端图像(Sixel / Kitty / iTerm2) |
 | `remote-listen` | — | 用 TCP 暴露 MTP 控制面，如 `127.0.0.1:7273`(需 `MTTY_MTP_TOKEN`) |
 | `language` | — | 界面语言，`en` 或 `zh`;也会读取 `$LANG` |
+| `update-auto-check` | `true` | 启动时检查一次更新；设为 `false` 则在你主动查之前不发任何请求 |
 | `update-pubkey` | — | minisign 公钥;启用签名校验 |
 | `update-check-url` | 项目自己的清单 | 更新检查去哪里取；见下文 |
 | `theme` | — | 内置命名主题，会被显式的 `[colors]` 覆盖 |
@@ -139,8 +140,9 @@ ACP 读文件会优先读取编辑器中的未保存内容。写文件会打开�
 
 ### 更新检查
 
-**你不主动查，它就一个请求都不发。** mtty 启动时不做任何请求;检查由菜单里的「Check for Updates」
-发起，以及更新对话框在失败后提供的重试按钮。发起时就是一条普通的 `curl`:
+**启动时检查一次，之后只在你主动查时检查。** mtty 启动时会静默检查一次(设
+`update-auto-check = false` 可跳过，则完全不发请求);有新版本时在状态栏提示。菜单里的
+「Check for Updates」以及更新对话框失败后的重试按钮按需检查。检查就是一条普通的 `curl`:
 
 ```sh
 curl -fsSL --max-time 8 <update-check-url>

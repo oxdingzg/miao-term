@@ -294,6 +294,8 @@ struct RawConfig {
     language: Option<String>,
     #[serde(rename = "update-check-url")]
     update_check_url: Option<String>,
+    #[serde(rename = "update-auto-check")]
+    update_auto_check: Option<bool>,
     editor: Option<String>,
     #[serde(rename = "editor-vim")]
     editor_vim: Option<bool>,
@@ -416,6 +418,8 @@ pub struct Config {
     pub language: Option<String>,
     /// Optional URL checked for a newer version (see ADR 0013).
     pub update_check_url: Option<String>,
+    /// Check for a newer version once on startup (ADR 0022). On by default.
+    pub update_auto_check: bool,
     /// External editor command used by "Edit in Tab" (see ADR 0017).
     pub editor: Option<String>,
     /// Enable a minimal vim mode in the built-in editor (ADR 0029).
@@ -627,6 +631,7 @@ impl Default for Config {
             update_check_url: Some(
                 "https://github.com/oxdingzg/miao-term/releases/latest/download/latest.json".into(),
             ),
+            update_auto_check: true,
             editor: None,
             editor_vim: false,
             mermaid_command: None,
@@ -1040,6 +1045,9 @@ impl Config {
             if !url.is_empty() {
                 cfg.update_check_url = Some(url.to_string());
             }
+        }
+        if let Some(auto) = raw.update_auto_check {
+            cfg.update_auto_check = auto;
         }
         if let Some(vim) = raw.editor_vim {
             cfg.editor_vim = vim;

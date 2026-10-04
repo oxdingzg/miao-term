@@ -169,7 +169,8 @@ mtty 与 miao 是两个独立项目,任意一个都可以单独使用。在 mtty
   安装状态上报 hook 脚本,并复制可直接合并的配置 —— Claude Code(`~/.claude/settings.json`)
   与 codex(`~/.codex/hooks.json`)的 `hooks` JSON、opencode 的插件文件。不替用户修改 agent 配置;
   hook 只为运行在 mtty pane 内的 agent 上报。`miao` 通过内置集成自动上报状态,无需接线 hook。
-- **更新**:*检查更新* 读取版本清单;*下载更新* 获取本平台安装包,在程序内校验 SHA-256 与 minisign 签名
+- **更新**:mtty 启动时静默检查一次版本清单(设 `update-auto-check = false` 可关闭),有新版本时在状态栏提示;
+  也可随时 *检查更新*;*下载更新* 获取本平台安装包,在程序内校验 SHA-256 与 minisign 签名
   (使用内置的发布公钥,或 `update-pubkey`);未签名或校验不符的下载会被删除,绝不安装。*安装并重启*(或命令面板
   的 *更新并重启*,一步完成)在 macOS 上替换 app 并在失败时回滚,替换正在运行的 AppImage,或运行 Windows MSI;
   deb 与 tarball 安装则打开已校验的下载交给包管理器。

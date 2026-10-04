@@ -62,6 +62,7 @@ If no mtty configuration exists, ghostty's `config` and alacritty's
 | `graphics` | `true` | Inline terminal graphics (Sixel / Kitty / iTerm2) |
 | `remote-listen` | — | Serve the MTP control plane over TCP, e.g. `127.0.0.1:7273` (needs `MTTY_MTP_TOKEN`) |
 | `language` | — | UI language, `en` or `zh`; `$LANG` is read as well |
+| `update-auto-check` | `true` | Check for updates once on startup; `false` makes no request until you ask |
 | `update-pubkey` | — | minisign public key; enables signature checks |
 | `update-check-url` | the project's own manifest | Where an update check looks; see below |
 | `theme` | — | A built-in named theme, overridden by an explicit `[colors]` |
@@ -153,9 +154,11 @@ appears in the ACP window.
 
 ### Update checks
 
-**Nothing is fetched until you ask.** mtty makes no request at startup; the
-check runs from the menu's *Check for Updates*, and from the retry button in
-the update dialog after a failure. When it runs, it is a single plain `curl`:
+**One check on startup, then only when you ask.** mtty runs a single silent
+check on startup — set `update-auto-check = false` to skip it and make no
+request at all; a newer version is then shown in the status line. The menu's
+*Check for Updates* and the retry button in the update dialog after a failure
+check on demand. A check is a single plain `curl`:
 
 ```sh
 curl -fsSL --max-time 8 <update-check-url>
