@@ -12,7 +12,7 @@ pub enum Preset {
     Nord,
     Dracula,
     Gruvbox,
-    mtty,
+    Mtty,
     /// A theme imported from ghostty/alacritty or read from the config's
     /// explicit colours; keeps the neutral chrome.
     #[default]
@@ -307,7 +307,7 @@ impl Theme {
         }
     }
 
-    /// A navy workspace palette in the reference manager's style.
+    /// A navy workspace palette.
     pub fn mtty() -> Self {
         const P: [Rgb; 16] = [
             Rgb(0x1b, 0x20, 0x29),
@@ -333,7 +333,7 @@ impl Theme {
             palette: P,
             selection: Rgb(0x2f, 0x3a, 0x4c),
             cursor: CursorStyle::Block,
-            preset: Preset::mtty,
+            preset: Preset::Mtty,
         }
     }
 
@@ -407,7 +407,7 @@ impl Chrome {
     }
 
     /// The navy workspace palette (window `#171b24`, cards `#212733`, bars
-    /// `#2b333e`), close to the reference manager's chrome.
+    /// `#2b333e`).
     pub fn mtty() -> Self {
         Self {
             bg: Rgb(0x17, 0x1b, 0x24),
@@ -434,7 +434,7 @@ impl Theme {
     /// explicit configs keep the neutral dark chrome.
     pub fn chrome(&self) -> Chrome {
         match self.preset {
-            Preset::mtty => Chrome::mtty(),
+            Preset::Mtty => Chrome::mtty(),
             _ => Chrome::dark(),
         }
     }

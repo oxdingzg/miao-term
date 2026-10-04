@@ -21,7 +21,6 @@ cloud: mtty hosts the agents you choose and never calls a model itself.
 | [Otty](https://otty.sh/) | A modern local terminal: tabs/splits, command palette, file reader, agent badges, Composer, session recovery | — |
 | [Termius](https://termius.com/) | Remote operations: host library and groups, SSH keys/identities, SFTP, port forwarding and jump hosts, snippets | Accounts, mandatory cloud sync, paywalled basics |
 | [PuTTY](https://www.chiark.greenend.org.uk/~sgtatham/putty/) | Serial, Telnet and raw TCP sessions; `.ppk` keys (M6) | Its dated UI and per-session registry settings |
-| [mtty](https://mtty.dev/) | Parallel agents: one git worktree per task, one place to watch them, diff review before merge | An agent-only IDE shape |
 | [Zed](https://zed.dev/) / VS Code | An editor core: rope buffer, multi-cursor, tree-sitter, LSP, large-file speed (M5); agents' edits reviewed inline (M7) | Extension marketplaces, a built-in AI account |
 | miao | Native integration: state reporting without hooks, session resume, two-way control over MTP | — |
 
@@ -243,7 +242,7 @@ verified on its own:
   windowless event replay for rename/cancel, tab reorder, divider drag, editor
   save and clipboard focus. Acceptance: the new replay tests run in CI.
 
-### M2 Agent workbench (from mtty / Otty)
+### M2 Agent workbench
 
 - [x] **B2.1 Launch and wiring** (the codex snippet follows its `hooks.json` format and needs `[features] hooks = true`; an end-to-end hook-script test covers `--stdin` session parsing, the pane filter and never blocking; the user's real agent configs were not touched): "Launch agent" in settings and the palette
   (codex/claude/opencode/miao, optional directory); a Copy button for wiring

@@ -21,7 +21,7 @@
 |---|---|---|
 | **终端与远程** —— 吸收 Termius 与 PuTTY | GPU 渲染的终端、标签与分屏、会话恢复;主机库、密钥、SFTP/FTP、端口转发、跳板机、片段、广播输入(经系统 OpenSSH) | 串口、Telnet 与原始 TCP 连接,`.ppk` 密钥;正在评估 Rust 原生的 SSH 实现(需另立 ADR) |
 | **编辑器** —— 一流的文本编辑器,而非附属功能 | 与终端并列的编辑器 pane:80 种语言的 tree-sitter 高亮,任意大小的文件(超过 64 MB 以只读查看模式打开),多光标,支持正则的查找替换,跳转到行,实时 Markdown 与 Mermaid 预览 pane;LSP 诊断、悬停、补全与跳转定义 | pane 中的 vim 模式、折叠与大纲([ADR 0034](docs/decisions/0034-editor-pane.zh-CN.md)) |
-| **Agent 工作台** —— 吸收 mtty,AI 原生 | Claude Code、Codex、OpenCode 与 miao 的状态 hook;需要关注时的徽章与通知;提示队列;每个任务一个 git worktree 并审阅 diff;MTP 控制面 | agent 的修改以可撤销的 diff 在行内审阅;ACP 客户端;选区、诊断与终端输出一键作为 agent 上下文 |
+| **Agent 工作台** —— AI 原生 | Claude Code、Codex、OpenCode 与 miao 的状态 hook;需要关注时的徽章与通知;提示队列;每个任务一个 git worktree 并审阅 diff;MTP 控制面 | agent 的修改以可撤销的 diff 在行内审阅;ACP 客户端;选区、诊断与终端输出一键作为 agent 上下文 |
 
 把它们连在一起的是:Rust 与 GPU 渲染,并由性能门把关;终端、编辑器、远程主机与 agent 位于同一套标签与分屏;不需要账号,
 不强制上云——mtty 托管你选择的 agent,自己从不调用模型。

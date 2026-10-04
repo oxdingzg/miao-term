@@ -17,7 +17,6 @@
 | [Otty](https://otty.sh/) | 现代本地终端体验:标签/分屏、命令面板、文件查看、Agent 徽章、Composer、会话恢复 | — |
 | [Termius](https://termius.com/) | 远程运维:主机库与分组、SSH 密钥/身份、SFTP、端口转发与跳板机、Snippets | 账号体系、强制云同步、订阅墙 |
 | [PuTTY](https://www.chiark.greenend.org.uk/~sgtatham/putty/) | 串口、Telnet 与原始 TCP 会话;`.ppk` 密钥(M6) | 过时的界面、保存在注册表里的逐会话设置 |
-| [mtty](https://mtty.dev/) | 多 agent 并行:每个任务一个 git worktree、统一看状态、diff 审阅后合并 | 只服务 agent 的 IDE 形态 |
 | [Zed](https://zed.dev/) / VS Code | 编辑器内核:rope 缓冲区、多光标、tree-sitter、LSP、大文件也快(M5);agent 的修改在行内审阅(M7) | 扩展市场、内置的 AI 账号 |
 | miao | 原生集成:无需 hook 的状态上报、会话恢复、经 MTP 双向控制 | — |
 
@@ -187,7 +186,7 @@
 - [x] **B0.5 可自动验收的 UI**(标签栏导出每个标签的矩形作为测试目标;回放测试覆盖标签拖拽重排、分隔条拖动、重命名回车提交/Esc 取消、焦点文本框接收粘贴;回放即发现:8 个输入框按回车无效,已修复;编辑器保存由单测覆盖):语义化控件目标 + 无窗口事件回放,覆盖重命名/取消、标签重排、
   分隔条拖动、编辑器保存、剪贴板焦点。验收:新增回放测试在 CI 中运行。
 
-### M2 Agent 工作台(吸收 mtty / Otty)
+### M2 Agent 工作台
 
 - [x] **B2.1 启动与接入**(codex 片段按其 `hooks.json` 格式生成,需 `[features] hooks = true`;钩子脚本端到端测试覆盖 `--stdin` 取 session、pane 过滤、不阻塞;未改动用户真实的 agent 配置):设置与命令面板中"启动 agent"(codex/claude/opencode/miao,可选目录);
   接入片段带"复制"按钮;codex hook 片段与验证脚本。验收:启动命令单测;冒烟用假 agent 上报状态。
