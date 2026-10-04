@@ -14341,8 +14341,8 @@ fn agent_icon(
 ) -> (miao_term_ui::icons::Icon, Option<miao_term_ui::theme::Rgb>) {
     use miao_term_ui::icons::Icon;
     match state {
-        "processing" => (Icon::StateHalf, Some(ch.accent)),
-        "awaiting" => (Icon::StateFull, Some(ch.warning)),
+        "processing" => (Icon::StateBusy, Some(ch.accent)),
+        "awaiting" => (Icon::StateWait, Some(ch.warning)),
         "error" => (Icon::StateFull, Some(ch.negative)),
         _ if attention == Some(Attention::Done) => (Icon::StateFull, Some(ch.positive)),
         _ => (Icon::StateEmpty, None),
@@ -18880,7 +18880,7 @@ mod tests {
         let all = miao_term_config::Badges::default();
         assert_eq!(
             super::shown_agent_icon(&all, &ch, "processing", None).map(|i| i.0),
-            Some(Icon::StateHalf)
+            Some(Icon::StateBusy)
         );
         let quiet = miao_term_config::Badges {
             processing: false,
@@ -18897,7 +18897,7 @@ mod tests {
         );
         assert_eq!(
             super::shown_agent_icon(&quiet, &ch, "awaiting", None).map(|i| i.0),
-            Some(Icon::StateFull)
+            Some(Icon::StateWait)
         );
         // A state the switches do not name still shows.
         assert_eq!(
@@ -18911,13 +18911,17 @@ mod tests {
         use miao_term_ui::icons::Icon;
         let ch = miao_term_ui::theme::Chrome::dark();
         let shape = |state, attention| super::agent_icon(&ch, state, attention).0;
-        assert_eq!(shape("processing", None), Icon::StateHalf);
-        assert_eq!(shape("processing", Some(Attention::Done)), Icon::StateHalf);
+        assert_eq!(shape("processing", None), Icon::StateBusy);
+        assert_eq!(shape("processing", Some(Attention::Done)), Icon::StateBusy);
         assert_eq!(shape("idle", Some(Attention::Done)), Icon::StateFull);
         assert_eq!(shape("idle", None), Icon::StateEmpty, "seen and acted on");
-        assert_eq!(shape("awaiting", None), Icon::StateFull);
+        assert_eq!(shape("awaiting", None), Icon::StateWait);
         assert_eq!(shape("error", None), Icon::StateFull);
-        // Finished and waiting share the shape, not the colour.
+        // Waiting and finished differ by shape and by colour.
+        assert_ne!(
+            shape("awaiting", None),
+            shape("idle", Some(Attention::Done))
+        );
         assert_ne!(
             super::agent_icon(&ch, "idle", Some(Attention::Done)).1,
             super::agent_icon(&ch, "awaiting", None).1
