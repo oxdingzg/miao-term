@@ -4,8 +4,8 @@
 
 ## 名称与实现
 
-应用名 **mtty**(官网 `mtty.dev`),主命令 `mtty`,配套 CLI 为 `mtty-cli`。仓库和可嵌入终端引擎
-继续叫 **miao-term**。v0.0.5 及之前应用名为 **miaotty**;更名及兼容规则见
+应用名 **mtty**(官网 `mtty.dev`),主命令 `mtty`,配套 CLI 为 `mtty-cli`。仓库名为 **mtty**,
+可嵌入终端引擎继续叫 **miao-term**。v0.0.5 及之前应用名为 **miaotty**;更名及兼容规则见
 [ADR 0032](decisions/0032-rename-mtty.zh-CN.md)。
 
 `mtty-app/src/main.rs` 直接启动 `miao-term-widget` 原生实现;旧 eframe 应用和独立的

@@ -1,6 +1,6 @@
-# Contributing to miao-term
+# Contributing to mtty
 
-Thanks for your interest. miao-term is in early development; the most useful
+Thanks for your interest. mtty is in early development; the most useful
 contributions right now are precise bug reports, focused fixes, and terminal
 rendering or PTY fixes with a reproduction.
 

@@ -265,7 +265,7 @@ mod appmenu {
                 }
                 None => {
                     if key == "documentation" {
-                        crate::open_external("https://github.com/oxdingzg/miao-term#readme");
+                        crate::open_external("https://github.com/oxdingzg/mtty#readme");
                     }
                 }
             }

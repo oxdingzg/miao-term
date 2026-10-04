@@ -68,7 +68,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("tag")
     parser.add_argument(
-        "--repository", default=os.environ.get("GITHUB_REPOSITORY", "oxdingzg/miao-term")
+        "--repository", default=os.environ.get("GITHUB_REPOSITORY", "oxdingzg/mtty")
     )
     parser.add_argument("--root", default=".")
     args = parser.parse_args()

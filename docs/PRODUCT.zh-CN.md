@@ -23,7 +23,7 @@
 
 ### 1.1 命名
 
-- 正式产品名:**mtty**。仓库与可嵌入引擎仍叫 **miao-term**。
+- 正式产品名:**mtty**。仓库名为 **mtty**,可嵌入引擎仍叫 **miao-term**。
 - 可执行文件 `mtty` / `mtty-cli`,bundle `mtty.app`(`dev.mtty.terminal`),配置目录
   `~/.config/mtty`,环境变量 `MTTY_*`,URL scheme `mtty://`。v0.0.5 及之前名为 `miaotty`,
   兼容规则见 [ADR 0032](decisions/0032-rename-mtty.zh-CN.md)。

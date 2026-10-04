@@ -167,5 +167,5 @@ An explicit `[lsp] enabled = false` disables the lot. See
 The rest of the documentation is in the repository: [installation](INSTALL.md),
 [view rules](VIEW-RULES.md), and the annotated
 [`config.example.toml`](config.example.toml). For anything else, open an issue
-on [oxdingzg/miao-term](https://github.com/oxdingzg/miao-term/issues), or write
+on [oxdingzg/mtty](https://github.com/oxdingzg/mtty/issues), or write
 to <contact@mtty.dev>.

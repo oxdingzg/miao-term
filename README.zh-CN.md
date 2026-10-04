@@ -1,13 +1,13 @@
-# miao-term
+# mtty
 
 **mtty —— 用 Rust 编写的 AI 原生终端与编辑器,本地与远程同样顺手。**
 
-[![CI](https://github.com/oxdingzg/miao-term/actions/workflows/ci.yml/badge.svg)](https://github.com/oxdingzg/miao-term/actions/workflows/ci.yml)
+[![CI](https://github.com/oxdingzg/mtty/actions/workflows/ci.yml/badge.svg)](https://github.com/oxdingzg/mtty/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.80%2B-orange.svg)](Cargo.toml)
 [![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#环境要求)
 
-**官网:** [mtty.dev/mtty](https://mtty.dev/zh/mtty) · **文档:** [mtty.dev/docs/mtty](https://mtty.dev/zh/docs/mtty) · [版本发布](https://github.com/oxdingzg/miao-term/releases) · [相关项目](#相关项目)
+**官网:** [mtty.dev/mtty](https://mtty.dev/zh/mtty) · **文档:** [mtty.dev/docs/mtty](https://mtty.dev/zh/docs/mtty) · [版本发布](https://github.com/oxdingzg/mtty/releases) · [相关项目](#相关项目)
 
 [English](README.md) · **简体中文**
 
@@ -87,7 +87,7 @@
 
 | 项目 | 是什么 | 链接 |
 |---|---|---|
-| **mtty**(本仓库) | AI 原生的终端与编辑器,以及其背后可嵌入的引擎 | [mtty.dev/mtty](https://mtty.dev/zh/mtty) · [oxdingzg/miao-term](https://github.com/oxdingzg/miao-term) |
+| **mtty**(本仓库) | AI 原生的终端与编辑器,以及其背后可嵌入的引擎 | [mtty.dev/mtty](https://mtty.dev/zh/mtty) · [oxdingzg/mtty](https://github.com/oxdingzg/mtty) |
 | **miao** | 在终端里运行的开源 AI 编程代理 | [mtty.dev/miao](https://mtty.dev/zh/miao) · [oxdingzg/miao](https://github.com/oxdingzg/miao) |
 | **mtty.dev** | 两者的官网与文档站 | [mtty.dev](https://mtty.dev/zh/) |
 
@@ -260,8 +260,8 @@ socket/命名管道传输(`src/lib.rs`)。
 ## 快速开始
 
 ```sh
-git clone https://github.com/oxdingzg/miao-term.git
-cd miao-term
+git clone https://github.com/oxdingzg/mtty.git
+cd mtty
 
 # 构建并运行统一的原生终端
 cargo run --release -p mtty-app

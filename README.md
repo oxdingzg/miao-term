@@ -1,13 +1,13 @@
-# miao-term
+# mtty
 
 **mtty — an AI-native terminal and editor for local and remote work, written in Rust.**
 
-[![CI](https://github.com/oxdingzg/miao-term/actions/workflows/ci.yml/badge.svg)](https://github.com/oxdingzg/miao-term/actions/workflows/ci.yml)
+[![CI](https://github.com/oxdingzg/mtty/actions/workflows/ci.yml/badge.svg)](https://github.com/oxdingzg/mtty/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.80%2B-orange.svg)](Cargo.toml)
 [![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#requirements)
 
-**Website:** [mtty.dev/mtty](https://mtty.dev/mtty) · **Docs:** [mtty.dev/docs/mtty](https://mtty.dev/docs/mtty) · [Releases](https://github.com/oxdingzg/miao-term/releases) · [Related projects](#related-projects)
+**Website:** [mtty.dev/mtty](https://mtty.dev/mtty) · **Docs:** [mtty.dev/docs/mtty](https://mtty.dev/docs/mtty) · [Releases](https://github.com/oxdingzg/mtty/releases) · [Related projects](#related-projects)
 
 **English** · [简体中文](README.zh-CN.md)
 
@@ -98,7 +98,7 @@ More short, controllable demos: **[mtty on mtty.dev](https://mtty.dev/mtty#scree
 
 | Project | What it is | Links |
 |---|---|---|
-| **mtty** (this repository) | The AI-native terminal and editor, and the embeddable engines behind it | [mtty.dev/mtty](https://mtty.dev/mtty) · [oxdingzg/miao-term](https://github.com/oxdingzg/miao-term) |
+| **mtty** (this repository) | The AI-native terminal and editor, and the embeddable engines behind it | [mtty.dev/mtty](https://mtty.dev/mtty) · [oxdingzg/mtty](https://github.com/oxdingzg/mtty) |
 | **miao** | Open-source AI coding agent for the terminal | [mtty.dev/miao](https://mtty.dev/miao) · [oxdingzg/miao](https://github.com/oxdingzg/miao) |
 | **mtty.dev** | The website and documentation for both | [mtty.dev](https://mtty.dev) |
 
@@ -349,8 +349,8 @@ socket/named-pipe transport in `term-mtp` (`src/lib.rs`).
 ## Getting started
 
 ```sh
-git clone https://github.com/oxdingzg/miao-term.git
-cd miao-term
+git clone https://github.com/oxdingzg/mtty.git
+cd mtty
 
 # Build and run the terminal (either host)
 cargo run --release -p mtty-app

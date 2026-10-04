@@ -14,7 +14,7 @@ use, and how to reach it, is kept in private notes, not in this repository.
   finds them automatically. No Visual Studio install is required otherwise.
 - Rust via [rustup](https://rustup.rs) with the default host toolchain
   (`stable-x86_64-pc-windows-msvc`). `rustfmt` + `clippy` components are handy.
-- A checkout somewhere under `%USERPROFILE%` (e.g. `%USERPROFILE%\miao-term`).
+- A checkout somewhere under `%USERPROFILE%` (e.g. `%USERPROFILE%\mtty`).
 
 ## Use the MSVC toolchain, not `-gnu`
 
@@ -36,8 +36,8 @@ If the machine has no GitHub credentials, push a snapshot instead of cloning:
 
 ```sh
 # from the machine that has the checkout
-tar -czf /tmp/miao-term-src.tgz --exclude target --exclude .git --exclude dist miao-term
-scp /tmp/miao-term-src.tgz <windows-host>:miao-term-src.tgz
+tar -czf /tmp/mtty-src.tgz --exclude target --exclude .git --exclude dist mtty
+scp /tmp/mtty-src.tgz <windows-host>:mtty-src.tgz
 ```
 
 On macOS, set `COPYFILE_DISABLE=1` for that `tar`: otherwise it adds `._*`
@@ -46,14 +46,14 @@ AppleDouble files, and `term-editor`'s build script fails reading the
 
 ```powershell
 # on the Windows host
-Remove-Item -Recurse -Force "$env:USERPROFILE\miao-term" -ErrorAction SilentlyContinue
-& tar.exe -xzf "$env:USERPROFILE\miao-term-src.tgz" -C "$env:USERPROFILE"
+Remove-Item -Recurse -Force "$env:USERPROFILE\mtty" -ErrorAction SilentlyContinue
+& tar.exe -xzf "$env:USERPROFILE\mtty-src.tgz" -C "$env:USERPROFILE"
 ```
 
 ## Verify
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\miao-term\scripts\windows-verify.ps1"
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\mtty\scripts\windows-verify.ps1"
 ```
 
 It builds `mtty` + `mtty-cli`, runs the engine/MTP tests, then starts the

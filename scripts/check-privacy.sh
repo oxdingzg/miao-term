@@ -9,7 +9,8 @@
 #      internal hostnames). Supply it out-of-band so it never lands in the repo:
 #        - $PRIVACY_DENYLIST        newline-separated strings (e.g. a CI secret)
 #        - $PRIVACY_DENYLIST_FILE   file with one string per line
-#          (default: $HOME/.config/miao-term/privacy-denylist if it exists)
+#          (default: $HOME/.config/mtty/privacy-denylist if it exists, else
+#           the pre-rename $HOME/.config/miao-term/privacy-denylist)
 #
 # Docs are expected to use placeholders such as `<windows-host>`, `%USERPROFILE%`,
 # `$HOME`, so real values appearing in the tree are a finding.
@@ -64,7 +65,17 @@ report "$(scan_files -nIE 'glpat-[A-Za-z0-9_-]{10,}|ghp_[A-Za-z0-9]{20,}|github_
 
 # Your own identifiers, out-of-band.
 denylist=${PRIVACY_DENYLIST:-}
-denylist_file=${PRIVACY_DENYLIST_FILE:-"$HOME/.config/miao-term/privacy-denylist"}
+denylist_file=${PRIVACY_DENYLIST_FILE:-}
+# Prefer the current location; keep reading the pre-rename directory too.
+if [ -z "$denylist_file" ]; then
+    for candidate in "$HOME/.config/mtty/privacy-denylist" \
+        "$HOME/.config/miao-term/privacy-denylist"; do
+        if [ -f "$candidate" ]; then
+            denylist_file=$candidate
+            break
+        fi
+    done
+fi
 if [ -z "$denylist" ] && [ -f "$denylist_file" ]; then
     denylist=$(cat "$denylist_file")
 fi

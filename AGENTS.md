@@ -62,7 +62,7 @@ Guardrails:
   optional denylist). CI runs it as the `privacy` job.
 - `sh scripts/install-hooks.sh` enables a pre-commit hook that runs the same
   check on staged files (via `core.hooksPath=.githooks`).
-- Your own identifiers go in `~/.config/miao-term/privacy-denylist` (one string
+- Your own identifiers go in `~/.config/mtty/privacy-denylist` (one string
   per line) or the CI secret `PRIVACY_DENYLIST` — never in the tree.
 
   Do **not** denylist your public GitHub handle (`oxdingzg` is fine in repo

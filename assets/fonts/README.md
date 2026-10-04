@@ -1,6 +1,6 @@
 # Bundled fonts
 
-These fonts are bundled with `miao-term` (the `mtty` app) and embedded into
+These fonts are bundled with `mtty` and embedded into
 the binary by `miao-term-render`. They are **not** covered by the project's
 Apache-2.0 license; each keeps its own license.
 

@@ -13,7 +13,7 @@
   需有 `cl.exe` / `link.exe`;rustc 会自动找到它们。除此之外无需再装 Visual Studio。
 - 通过 [rustup](https://rustup.rs) 安装 Rust,使用宿主默认工具链
   (`stable-x86_64-pc-windows-msvc`)。建议加上 `rustfmt` + `clippy` 组件。
-- 一份放在 `%USERPROFILE%` 下的检出(例如 `%USERPROFILE%\miao-term`)。
+- 一份放在 `%USERPROFILE%` 下的检出(例如 `%USERPROFILE%\mtty`)。
 
 ## 用 MSVC,不要用 `-gnu`
 
@@ -34,22 +34,22 @@ error: dlltool could not create import library with …\self-contained\dlltool.e
 
 ```sh
 # 在有检出的机器上
-tar -czf /tmp/miao-term-src.tgz --exclude target --exclude .git --exclude dist miao-term
-scp /tmp/miao-term-src.tgz <windows-host>:miao-term-src.tgz
+tar -czf /tmp/mtty-src.tgz --exclude target --exclude .git --exclude dist mtty
+scp /tmp/mtty-src.tgz <windows-host>:mtty-src.tgz
 ```
 
 在 macOS 上执行该 `tar` 时请设置 `COPYFILE_DISABLE=1`:否则会加入 `._*` AppleDouble 文件,`term-editor` 的构建脚本读取其中的 `._*.sublime-syntax` 时会失败。
 
 ```powershell
 # 在 Windows 主机上
-Remove-Item -Recurse -Force "$env:USERPROFILE\miao-term" -ErrorAction SilentlyContinue
-& tar.exe -xzf "$env:USERPROFILE\miao-term-src.tgz" -C "$env:USERPROFILE"
+Remove-Item -Recurse -Force "$env:USERPROFILE\mtty" -ErrorAction SilentlyContinue
+& tar.exe -xzf "$env:USERPROFILE\mtty-src.tgz" -C "$env:USERPROFILE"
 ```
 
 ## 验证
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\miao-term\scripts\windows-verify.ps1"
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\mtty\scripts\windows-verify.ps1"
 ```
 
 它会构建 `mtty` + `mtty-cli`,跑引擎/MTP 测试,然后启动应用并经 MTP 驱动它

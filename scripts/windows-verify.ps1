@@ -10,7 +10,7 @@
 
 [CmdletBinding()]
 param(
-    [string]$Source = "$env:USERPROFILE\miao-term",
+    [string]$Source = "$env:USERPROFILE\mtty",
     [string]$Toolchain = "stable-x86_64-pc-windows-msvc",
     [switch]$SkipTests
 )

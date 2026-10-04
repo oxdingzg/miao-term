@@ -629,7 +629,7 @@ impl Default for Config {
             agent_quota_warn: 80,
             language: None,
             update_check_url: Some(
-                "https://github.com/oxdingzg/miao-term/releases/latest/download/latest.json".into(),
+                "https://github.com/oxdingzg/mtty/releases/latest/download/latest.json".into(),
             ),
             update_auto_check: true,
             editor: None,

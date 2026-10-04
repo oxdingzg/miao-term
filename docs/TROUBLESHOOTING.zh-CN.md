@@ -142,5 +142,5 @@ keep-sessions-on-quit = true
 
 其余文档在仓库里:[安装](INSTALL.zh-CN.md)、[视图规则](VIEW-RULES.zh-CN.md)，以及带注释的
 [`config.example.toml`](config.example.toml)。其他问题请在
-[oxdingzg/miao-term](https://github.com/oxdingzg/miao-term/issues) 开 issue，或写信到
+[oxdingzg/mtty](https://github.com/oxdingzg/mtty/issues) 开 issue，或写信到
 <contact@mtty.dev>。

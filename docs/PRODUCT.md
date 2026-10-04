@@ -29,8 +29,8 @@ as local folders.**
 
 ### 1.1 Naming
 
-- Official product name: **mtty**. The repository and embeddable engine stay
-  **miao-term**.
+- Official product name: **mtty**. The repository is **mtty**; the embeddable
+  engine stays **miao-term**.
 - Binaries `mtty` / `mtty-cli`, bundle `mtty.app` (`dev.mtty.terminal`),
   config directory `~/.config/mtty`, environment `MTTY_*`, URL scheme
   `mtty://`. Up to v0.0.5 the name was `miaotty`; compatibility rules are in
