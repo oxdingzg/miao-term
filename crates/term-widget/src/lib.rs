@@ -14044,32 +14044,38 @@ fn render_dir_tree(
                     *open_file = Some(path.clone());
                 }
             }
-            let label = egui::RichText::new(&e.name).size(12.0);
-            let label = if is_dir {
-                label.color(egui::Color32::from_rgb(
-                    ch.folder.0,
-                    ch.folder.1,
-                    ch.folder.2,
-                ))
-            } else {
-                label
-            };
-            let resp = ui.selectable_label(false, label);
-            if resp.clicked() {
-                if is_dir {
-                    *toggle = Some(path.clone());
-                } else {
-                    *open_file = Some(path.clone());
-                }
-            }
+            // Right-to-left so the size hugs the edge, then the name fills
+            // what is left and truncates: a long name must not widen the panel.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
                 if !is_dir {
                     ui.label(
                         egui::RichText::new(human_size(e.size))
                             .size(10.5)
                             .color(muted),
                     );
+                    ui.add_space(6.0);
                 }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    let label = egui::RichText::new(&e.name).size(12.0);
+                    let label = if is_dir {
+                        label.color(egui::Color32::from_rgb(
+                            ch.folder.0,
+                            ch.folder.1,
+                            ch.folder.2,
+                        ))
+                    } else {
+                        label
+                    };
+                    let resp = ui.selectable_label(false, label);
+                    if resp.clicked() {
+                        if is_dir {
+                            *toggle = Some(path.clone());
+                        } else {
+                            *open_file = Some(path.clone());
+                        }
+                    }
+                });
             });
         });
         if is_dir && is_open {
