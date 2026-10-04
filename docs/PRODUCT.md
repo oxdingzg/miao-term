@@ -100,7 +100,7 @@ point); problems fixed in M0–M3 are no longer listed.
 | Key encoding: Ctrl/Alt/modified navigation, F1–F12, Insert | Works | Fixed now: F1–F12 and Insert were not sent at all |
 | kitty keyboard protocol | Works | All five flags: disambiguate escape codes (1), event types incl. release (2), alternate keys (4), all keys as escape codes (8) and associated text (16) |
 | IME inline preedit | Works | Candidate window placed at the cursor (`set_ime_cursor_area`); its position on macOS awaits a desktop check |
-| Inline images: Sixel / Kitty / iTerm2 | Works | No Kitty z-index; session restore keeps no images |
+| Inline images: Sixel / Kitty / iTerm2 | Works | Kitty z-index honoured (negative draws behind the text grid); session restore keeps no images |
 | Mouse reporting (SGR / X10) | Works | |
 
 ### 3.2 Window and workspace

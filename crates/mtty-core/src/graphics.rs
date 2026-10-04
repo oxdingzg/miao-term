@@ -312,6 +312,15 @@ fn placed_bytes(image: &PlacedImage) -> usize {
     }
 }
 
+/// Which side of the text grid a Kitty placement draws on.
+///
+/// Kitty's `z=` gives the vertical stacking order: a negative z-index places the
+/// image behind the text (so glyphs render on top of it), while the default
+/// layer (`z=0`) and positive values place it above the text.
+pub fn draws_behind_text(z: i32) -> bool {
+    z < 0
+}
+
 /// Stable cache key for one rendered image: pane + image id + animation frame.
 pub fn image_key(pane: &str, id: u64, frame: usize) -> u64 {
     use std::hash::{Hash, Hasher};
@@ -548,5 +557,26 @@ mod tests {
         assert_eq!(l.images.len(), 1);
         l.images.clear();
         assert!(l.images.is_empty());
+    }
+
+    #[test]
+    fn negative_z_index_draws_behind_text() {
+        assert!(draws_behind_text(-1));
+        assert!(draws_behind_text(-4));
+        assert!(draws_behind_text(i32::MIN));
+        assert!(!draws_behind_text(0), "the default layer is above text");
+        assert!(!draws_behind_text(1));
+        assert!(!draws_behind_text(i32::MAX));
+    }
+
+    #[test]
+    fn kitty_placement_keeps_its_z_index() {
+        let mut l = GraphicsLayer::new();
+        l.kitty(gfx::kitty::parse(b"a=T,f=24,s=1x1,i=1,z=-4;AAAA"), 0, 0, 0);
+        assert_eq!(l.images[0].z, -4);
+        assert!(draws_behind_text(l.images[0].z));
+        l.kitty(gfx::kitty::parse(b"a=T,f=24,s=1x1,i=2,z=3;AAAA"), 0, 0, 0);
+        assert_eq!(l.images[1].z, 3);
+        assert!(!draws_behind_text(l.images[1].z));
     }
 }

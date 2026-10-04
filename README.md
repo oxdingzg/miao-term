@@ -179,7 +179,9 @@ mtty instead.
   `mermaid-command`).
 - **Inline terminal graphics**: Sixel, Kitty and iTerm2 images are drawn in the
   grid by mtty — they scroll with the content and are clipped to the pane.
-  Toggle with `graphics` (on by default).
+  Kitty placements honour the protocol's z-index: a negative `z` draws behind
+  the text, the default layer and positive values above it. Toggle with
+  `graphics` (on by default).
 - **Agent tasks**: *New Agent Task…* creates a git worktree and branch
   (`<repo>/.worktrees/<name>`, `mtty/<name>`) with its own tab and, optionally,
   an agent started in it; *Agent Tasks…* lists them with Open, Diff (including
@@ -498,10 +500,10 @@ Still open:
   credentials. Releases already carry minisign signatures and update manifests.
 - **Acceptance**: current desktop update, IME, clipboard, transport and agent
   results, including their limits, are in [ACCEPTANCE.md](docs/ACCEPTANCE.md).
-- **Inline graphics**: Kitty z-index is not modelled (images paint over the
-  grid); anchors are exact up to the scrollback cap and approximate past it
-  (alacritty exposes no scroll counter without a patch), and session restore
-  keeps no images (they would not match the restored content).
+- **Inline graphics**: anchors are exact up to the scrollback cap and
+  approximate past it (alacritty exposes no scroll counter without a patch),
+  and session restore keeps no images (they would not match the restored
+  content).
 - **Mermaid**: the built-in subset covers `graph`/`flowchart`,
   `sequenceDiagram`, `stateDiagram`, `classDiagram`, `erDiagram` and `pie`;
   gantt, journey, git graphs and the rest fall back to `mermaid-command` or a

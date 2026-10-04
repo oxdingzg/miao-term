@@ -3953,25 +3953,19 @@ impl State {
                 })
                 .forget_lifetime();
             self.quads.render(&mut pass);
+            // Negative-z placements sit behind the text grid; the default and
+            // positive-z placements draw over it. The glyph pass runs between
+            // the two image layers.
             if !image_quads.is_empty() {
-                // Clip each pane's images to that pane (they are grouped by pane).
-                for (pane_idx, d) in draws.iter().enumerate() {
-                    let sx = (d.rect.x * scale).max(0.0) as u32;
-                    let sy = (d.rect.y * scale).max(0.0) as u32;
-                    let sw = ((d.rect.w * scale) as u32).min(self.config.width.saturating_sub(sx));
-                    let sh = ((d.rect.h * scale) as u32).min(self.config.height.saturating_sub(sy));
-                    if sw == 0 || sh == 0 {
-                        continue;
-                    }
-                    pass.set_scissor_rect(sx, sy, sw, sh);
-                    self.images.render(&mut pass, pane_idx as u32);
-                }
-                pass.set_scissor_rect(0, 0, self.config.width, self.config.height);
+                self.render_image_layer(&mut pass, &draws, scale, true);
             }
             for d in &draws {
                 if let Some(renderer) = self.renderers.get(&d.id) {
                     renderer.render(&mut pass);
                 }
+            }
+            if !image_quads.is_empty() {
+                self.render_image_layer(&mut pass, &draws, scale, false);
             }
             self.egui_renderer.render(&mut pass, &paint_jobs, &screen);
         }
@@ -4004,6 +3998,31 @@ impl State {
             pip.window.request_redraw();
         }
         self.retain_live_renderers();
+    }
+
+    /// Draw one layer of every pane's inline images, clipped to its pane.
+    ///
+    /// `behind` selects the negative-z placements that must sit under the glyph
+    /// grid; `false` draws the default and positive-z placements above it.
+    fn render_image_layer(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        draws: &[PaneDraw],
+        scale: f32,
+        behind: bool,
+    ) {
+        for (pane_idx, d) in draws.iter().enumerate() {
+            let sx = (d.rect.x * scale).max(0.0) as u32;
+            let sy = (d.rect.y * scale).max(0.0) as u32;
+            let sw = ((d.rect.w * scale) as u32).min(self.config.width.saturating_sub(sx));
+            let sh = ((d.rect.h * scale) as u32).min(self.config.height.saturating_sub(sy));
+            if sw == 0 || sh == 0 {
+                continue;
+            }
+            pass.set_scissor_rect(sx, sy, sw, sh);
+            self.images.render(pass, pane_idx as u32, behind);
+        }
+        pass.set_scissor_rect(0, 0, self.config.width, self.config.height);
     }
 
     /// Release the glyph atlases and font systems of panes that no longer exist.
@@ -6625,16 +6644,23 @@ impl State {
                 })
                 .forget_lifetime();
             self.quads.render(&mut pass);
+            // Behind-text images, then the glyphs, then the rest (see `render`).
             if !images.quads.is_empty() {
                 let (sx, sy, sw, sh) = grid_scissor(images.rects, images.scale, w, h);
                 pass.set_scissor_rect(sx, sy, sw, sh);
-                self.images.render_all(&mut pass);
+                self.images.render_all(&mut pass, true);
                 pass.set_scissor_rect(0, 0, w, h);
             }
             for d in draws {
                 if let Some(r) = self.renderers.get(&d.id) {
                     r.render(&mut pass);
                 }
+            }
+            if !images.quads.is_empty() {
+                let (sx, sy, sw, sh) = grid_scissor(images.rects, images.scale, w, h);
+                pass.set_scissor_rect(sx, sy, sw, sh);
+                self.images.render_all(&mut pass, false);
+                pass.set_scissor_rect(0, 0, w, h);
             }
             self.egui_renderer.render(&mut pass, paint_jobs, screen);
         }

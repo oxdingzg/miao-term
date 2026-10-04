@@ -633,8 +633,8 @@ pub struct ImageRenderer {
     textures: std::collections::HashMap<u64, wgpu::BindGroup>,
     instances: wgpu::Buffer,
     capacity: usize,
-    /// (pane, texture key, instance start, instance count)
-    runs: Vec<(u32, u64, u32, u32)>,
+    /// (pane, texture key, instance start, instance count, behind text)
+    runs: Vec<(u32, u64, u32, u32, bool)>,
 }
 
 impl ImageRenderer {
@@ -826,6 +826,11 @@ impl ImageRenderer {
     }
 
     /// Upload this frame's image quads (grouped by texture id).
+    ///
+    /// Each quad is `(texture key, z-index, pane, instance)`. Runs are grouped
+    /// by pane and texture; the run's layer (behind vs. above the text grid)
+    /// comes from Kitty's z-index, so `render`/`render_all` can draw the two
+    /// layers on either side of the glyph pass.
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
@@ -851,6 +856,7 @@ impl ImageRenderer {
                     sorted[start].0,
                     start as u32,
                     (i - start) as u32,
+                    mtty_core::graphics::draws_behind_text(sorted[start].1),
                 ));
                 start = i;
             }
@@ -870,23 +876,24 @@ impl ImageRenderer {
         }
     }
 
-    /// Draw one pane's images (its runs are contiguous after `prepare`).
-    pub fn render(&self, pass: &mut wgpu::RenderPass<'_>, pane: u32) {
-        self.draw(pass, Some(pane));
+    /// Draw one pane's images for one layer (its runs are contiguous after
+    /// `prepare`). `behind` selects the runs classified as behind the text grid.
+    pub fn render(&self, pass: &mut wgpu::RenderPass<'_>, pane: u32, behind: bool) {
+        self.draw(pass, Some(pane), behind);
     }
 
-    /// Draw every image (used by the offscreen capture).
-    pub fn render_all(&self, pass: &mut wgpu::RenderPass<'_>) {
-        self.draw(pass, None);
+    /// Draw every image for one layer (used by the offscreen capture).
+    pub fn render_all(&self, pass: &mut wgpu::RenderPass<'_>, behind: bool) {
+        self.draw(pass, None, behind);
     }
 
-    fn draw(&self, pass: &mut wgpu::RenderPass<'_>, only: Option<u32>) {
+    fn draw(&self, pass: &mut wgpu::RenderPass<'_>, only: Option<u32>, behind: bool) {
         if self.runs.is_empty() {
             return;
         }
         let mut set = false;
-        for (pane, id, start, count) in &self.runs {
-            if only.is_some_and(|p| p != *pane) {
+        for (pane, id, start, count, run_behind) in &self.runs {
+            if *run_behind != behind || only.is_some_and(|p| p != *pane) {
                 continue;
             }
             if let Some(bg) = self.textures.get(id) {
@@ -1312,7 +1319,7 @@ mod gpu_tests {
                 .forget_lifetime();
             quads.render(&mut pass);
             glyphs.render(&mut pass);
-            images.render(&mut pass, 0);
+            images.render(&mut pass, 0, false);
         }
         let bpr = (w * 4) as usize;
         let padded = (bpr + 255) & !255;

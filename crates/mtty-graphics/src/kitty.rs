@@ -137,6 +137,17 @@ mod tests {
     }
 
     #[test]
+    fn parses_placement_z_index() {
+        // Negative, zero and positive `z` all parse as a signed 32-bit int.
+        assert_eq!(parse(b"a=T,i=1,z=-7;AAAA").z, -7);
+        assert_eq!(parse(b"a=T,i=1,z=0;AAAA").z, 0);
+        assert_eq!(parse(b"a=T,i=1,z=2147483647;AAAA").z, i32::MAX);
+        // Missing / malformed `z` falls back to the default layer.
+        assert_eq!(parse(b"a=T,i=1;AAAA").z, 0);
+        assert_eq!(parse(b"a=T,i=1,z=abc;AAAA").z, 0);
+    }
+
+    #[test]
     fn animation_params_differ_by_action() {
         // Transmit: `s` is the pixel size, `c` the columns.
         let t = parse(b"a=T,f=24,s=2x1,c=3;i=1;AAAA");

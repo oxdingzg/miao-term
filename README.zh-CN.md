@@ -138,7 +138,8 @@ mtty 与 miao 是两个独立项目,任意一个都可以单独使用。在 mtty
   (`egui_commonmark`):标题、列表、引用、表格、代码、链接、远程图片,外加 `graph`/`flowchart`、`sequenceDiagram`、`stateDiagram`、`classDiagram`、
   `erDiagram` 与 `pie` 的 Mermaid 子集(或经 `mermaid-command` 全量渲染)。
 - **终端内联图片**:Sixel / Kitty / iTerm2 图片由 mtty 直接画在字符网格上——随内容滚动、
-  裁剪在 pane 内;用 `graphics` 开关(默认开)。
+  裁剪在 pane 内;Kitty 位置遵循协议的 z-index:负值绘制在文字之下,默认层与正值之上。
+  用 `graphics` 开关(默认开)。
 - **Agent 任务**:*新建 Agent 任务…* 创建 git worktree 与分支(`<仓库>/.worktrees/<名称>`、
   `mtty/<名称>`),在独立标签中打开并可直接启动 agent;*Agent 任务…* 列出任务,可打开、查看改动
   (含未提交内容)、合并回基线分支或丢弃(二者均需确认)。git 操作在后台执行,不改动仓库中被跟踪的文件。
@@ -390,8 +391,8 @@ CI 性能基线已持久化于 `benches/perf-baseline.json`,由 nightly/手动�
 - **发布签名**：Apple 公证与 Windows MSI 签名仍需要所有者提供凭证；发布包已有 minisign 签名和更新清单。
 - **验收记录**：本轮桌面更新、输入法、剪贴板、传输与 Agent 验收结果及边界见
   [ACCEPTANCE.zh-CN.md](docs/ACCEPTANCE.zh-CN.md)。
-- **终端内联图片**:不模拟 Kitty 的 z-index(图片绘制在网格之上);回滚容量内锚定精确,超出后
-  为近似(alacritty 不暴露滚动计数,除非打补丁);会话恢复不保留图像(会与恢复的内容不一致)。
+- **终端内联图片**:回滚容量内锚定精确,超出后为近似(alacritty 不暴露滚动计数,除非打补丁);
+  会话恢复不保留图像(会与恢复的内容不一致)。
 - **Mermaid**:内置子集覆盖 `graph`/`flowchart`、`sequenceDiagram`、`stateDiagram`、
   `classDiagram`、`erDiagram` 与 `pie`;gantt、journey、git graph 等仍回退到
   `mermaid-command` 或占位符。

@@ -76,7 +76,7 @@
 | 键盘编码:Ctrl/Alt/修饰键导航、F1–F12、Insert | 可用 | 本次修复:F1–F12 与 Insert 此前完全不发送 |
 | kitty keyboard 协议 | 可用 | 五个 flag 全支持:消歧义转义(1)、按键事件类型(含释放,2)、替代键(4)、全键转义(8)、关联文本(16) |
 | 输入法(IME)内联预编辑 | 可用 | 候选窗定位到光标(`set_ime_cursor_area`);macOS 上的位置待桌面人工确认 |
-| 终端内联图片 Sixel / Kitty / iTerm2 | 可用 | 不模拟 Kitty z-index;会话恢复不保留图片 |
+| 终端内联图片 Sixel / Kitty / iTerm2 | 可用 | Kitty z-index 生效(负值绘制在文字网格之下);会话恢复不保留图片 |
 | 鼠标上报(SGR / X10) | 可用 | |
 
 ### 3.2 窗口与工作区
