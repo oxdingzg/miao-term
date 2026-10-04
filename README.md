@@ -186,9 +186,12 @@ mtty instead.
 - **Recipes**: save and replay a whole workspace.
 - A settings window (`⌘,`): font size/family, opacity, line height, cursor
   style, theme, inline graphics, notifications, sleep guard and agent hook
-  installation. Changed values are written back to `config.toml` when the window
-  closes, keeping comments and other keys; a `config.toml` that fails to parse is
-  reported in the status line and never overwritten.
+  installation. The theme picker offers Nord (the default), Dracula, Gruvbox and
+  Superset; Superset is a navy workspace palette whose window, cards and sidebars
+  follow it, where the other presets keep a neutral dark chrome. Changed values
+  are written back to `config.toml` when the window closes, keeping comments and
+  other keys; a `config.toml` that fails to parse is reported in the status line
+  and never overwritten.
 
 **Configuration and integration**
 - Configuration at `~/.config/mtty/config.toml`: font size, font family,
@@ -242,7 +245,12 @@ mtty instead.
   `ssh-keygen` / `ssh-copy-id` in a terminal tab. Each host keeps port forwards
   (`-L`, `-R`, `-D` SOCKS) that start and stop from there and show whether they
   run or why ssh gave up; the status line counts them.
-- **SSH sessions and remote view/edit**: *New SSH Session…* honours
+- **SSH sessions and remote view/edit**: *New SSH Session…* is a full host
+  editor. Its quick connect takes `[user@]host[:port]` and connects without
+  saving, and the saved-host fields take a name, an optional `~/.ssh/config`
+  alias, host, user, port, group and tags; an Advanced section adds a jump host,
+  a persistent tmux session, mosh and port forwards. *Connect* opens the target
+  without keeping it, *Save & Connect* stores the host first. It honours
   `~/.ssh/config`, reuses a ControlMaster connection and bootstraps terminfo with
   nothing installed remotely; *View/Edit Remote File…* reads and writes over that
   connection (the host of the active ssh tab is filled in).
@@ -391,7 +399,7 @@ and alacritty's `alacritty.toml` are imported automatically.
 
 ```toml
 font-size = 13
-theme     = "nord"
+theme     = "nord"   # nord | dracula | gruvbox | superset
 ```
 
 [`docs/CONFIG.md`](docs/CONFIG.md) has the keys, the editor and ACP sections,
