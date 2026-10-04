@@ -372,7 +372,7 @@ pub struct Chrome {
     pub sidebar: Rgb,
     /// Right details inspector, a shade darker than the terminal card.
     pub details: Rgb,
-    /// Border for the side panels (Otty `[sidebar]` border-right `#434C5E`).
+    /// Border for the side panels (the Nord `[sidebar]` border-right `#434C5E`).
     pub border: Rgb,
     /// Directory icon and selected-row accent in the file tree.
     pub folder: Rgb,
@@ -394,7 +394,7 @@ impl Chrome {
             hover: Rgb(0x2c, 0x2c, 0x2e),
             active: Rgb(0x3a, 0x3a, 0x3c),
             accent: Rgb(0x0a, 0x84, 0xff),
-            // Otty Nord `[sidebar]`: background #2E3440, border-right #434C5E.
+            // Nord `[sidebar]`: background #2E3440, border-right #434C5E.
             sidebar: Rgb(0x2e, 0x34, 0x40),
             details: Rgb(0x14, 0x14, 0x16),
             border: Rgb(0x43, 0x4c, 0x5e),

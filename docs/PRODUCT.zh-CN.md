@@ -14,7 +14,6 @@
 
 | 来源 | 吸收什么 | 不吸收什么 |
 |---|---|---|
-| [Otty](https://otty.sh/) | 现代本地终端体验:标签/分屏、命令面板、文件查看、Agent 徽章、Composer、会话恢复 | — |
 | [Termius](https://termius.com/) | 远程运维:主机库与分组、SSH 密钥/身份、SFTP、端口转发与跳板机、Snippets | 账号体系、强制云同步、订阅墙 |
 | [PuTTY](https://www.chiark.greenend.org.uk/~sgtatham/putty/) | 串口、Telnet 与原始 TCP 会话;`.ppk` 密钥(M6) | 过时的界面、保存在注册表里的逐会话设置 |
 | [Zed](https://zed.dev/) / VS Code | 编辑器内核:rope 缓冲区、多光标、tree-sitter、LSP、大文件也快(M5);agent 的修改在行内审阅(M7) | 扩展市场、内置的 AI 账号 |

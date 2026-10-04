@@ -91,12 +91,10 @@ flows, genuine agent integrations, large-directory responsiveness and long-run
 input/rendering latency remain separate acceptance work. Use
 [WINDOWS-DEV.md](WINDOWS-DEV.md) and [RELEASE.md](RELEASE.md) for their procedures.
 
-## Otty comparison and priorities
+## Reference-terminal comparison and priorities
 
-Reference: **Otty by appmakes.io**, using its [official site](https://otty.sh/)
-and [official documentation](https://docs.otty.sh/agents/agents-overview), accessed
-2026-10-01. This is a documentation/code comparison, not a measured head-to-head
-benchmark. The similarly named `otty-shell/otty` project is a different product.
+This is a documentation/code comparison against other terminals, not a measured
+head-to-head benchmark. The priorities below are internal follow-ups.
 
 Existing overlap includes tabs/splits, command palette, file viewer/editor,
 recipes, agent badges, composer/queue, hint/read-only modes, and inline images.
@@ -104,30 +102,28 @@ The most valuable next work is:
 
 1. **P0 — interaction acceptance infrastructure.** Add semantic UI targets and
    observable interaction state, then cover rename/cancel, tab reorder, divider
-   drag, editor save, clipboard focus and IME. Otty exposes accessibility and
-   automation references; adopting that testability is more valuable than
-   adding another panel before existing interactions have acceptance coverage.
-2. **P1 — command/output context.** Otty's
-   [Send to Chat](https://docs.otty.sh/agents/send-to-chat) and command-aware
-   selection suggest OSC 133 command boundaries, last-output extraction and
-   sending selected context to Composer. Current history is not a substitute
-   for precise output boundaries.
+   drag, editor save, clipboard focus and IME. Some terminals expose
+   accessibility and automation references; adopting that testability is more
+   valuable than adding another panel before existing interactions have
+   acceptance coverage.
+2. **P1 — command/output context.** Command-aware selection suggests OSC 133
+   command boundaries, last-output extraction and sending selected context to
+   Composer. Current history is not a substitute for precise output boundaries.
 3. **P1 — completion and unread state.** Add generic job completion/progress and
    background unread indicators alongside existing agent badges, with state
    transition and duplicate-notification tests.
-4. **P1 — durable sessions.** Otty documents
-   [session recovery](https://docs.otty.sh/workflows/session-recovery) and tmux
-   reattachment. Current layout/cwd restore recreates shells; preserving live
-   jobs requires a multiplexer/session strategy and disconnect/restart tests.
+4. **P1 — durable sessions.** Session recovery and tmux reattachment are
+   established patterns. Current layout/cwd restore recreates shells; preserving
+   live jobs requires a multiplexer/session strategy and disconnect/restart
+   tests.
 5. **P2 — configurable bindings and pane drag/snap.** Existing fixed shortcuts
    and divider resize are a foundation; test conflicts and ownership before
    adding drag-to-reparent layouts.
-6. **P2 — inline suggestions and richer Unicode/styles.** Otty documents
-   [autocomplete](https://docs.otty.sh/terminal-features/autocomplete) and
-   [Unicode/text styles](https://docs.otty.sh/terminal-features/unicode-and-text-styles).
-   Grapheme clusters, bold/italic/underline/strike-through and smooth scrolling
-   need explicit visual/latency tests; a VT parser supporting a flag does not
-   prove the renderer displays it correctly.
+6. **P2 — inline suggestions and richer Unicode/styles.** Autocomplete and
+   richer Unicode/text styles are established patterns. Grapheme clusters,
+   bold/italic/underline/strike-through and smooth scrolling need explicit
+   visual/latency tests; a VT parser supporting a flag does not prove the
+   renderer displays it correctly.
 
 These are prioritized follow-ups, not claims that these features were added or
-that Otty's implementation was tested locally during this audit.
+that another terminal's implementation was tested locally during this audit.

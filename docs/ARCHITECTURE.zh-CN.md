@@ -32,10 +32,10 @@
 
 | # | 决策 | 理由 |
 |---|------|------|
-| D1 | 内核用 `alacritty_terminal` + `vte` + `portable-pty` | 最成熟、跨平台(含 ConPTY)、Otty 同款、许可宽松 |
+| D1 | 内核用 `alacritty_terminal` + `vte` + `portable-pty` | 最成熟、跨平台(含 ConPTY)、许可宽松 |
 | D2 | 渲染自绘于 `wgpu`(字形用 `glyphon`/`cosmic-text`/`swash`) | 性能可控;跨 Metal/Vulkan/DX12 |
 | D3 | 周边 UI(面板/设置)用 `egui`,与终端**共用同一帧** | 开发速度 + 终端走自绘,两全 |
-| D4 | **自研 tab/split 模型**(非 OS 原生标签) | 跨平台一致;对齐 Otty;可控 |
+| D4 | **自研 tab/split 模型**(非 OS 原生标签) | 跨平台一致;可控 |
 | D5 | 并发用 **Alacritty 同款的锁纪律**(`FairMutex<Term>` + `EventListener`) | 已验证,避免自造快照协议 |
 | D6 | 平台差异只出现在 `core::pty` / `widget::platform` / `mtp::transport` | 收敛复杂度 |
 | D7 | 控制面 `term-mtp` 与引擎解耦(Unix socket / Windows named pipe) | 引擎崩不拖垮 CLI;复用现有协议 |
@@ -165,7 +165,7 @@
 ## 11. 配置 / 主题
 
 - `term-config`:自有 TOML;键名对齐 ghostty/alacritty 以便导入。
-- 默认观感对齐 Otty(Nord 背景 `#2e3440`、字号 13),可覆盖。
+- 默认观感为 Nord(背景 `#2e3440`、字号 13),可覆盖。
 - 内置主题:`nord`(默认)、`dracula`、`gruvbox`/`gruvbox-dark`、
   `solarized`/`solarized-dark`、`tokyo-night`/`tokyonight`;并支持自定义调色板。
   背景透明度已接入,背景图后置。
@@ -190,7 +190,7 @@
 - 模型:`Window → Tab[] → SplitTree<Surface>`;surface = 一个终端实例(core+render 视图)。
 - 窗口:一个 OS 窗口承载一个 tab 集;分屏是 tab 内的树(自研,非 OS 标签)。
 - 面板(egui):**左 Tabs 侧栏**(标题/⌘N/前缀/标记/分隔线/右键菜单)、**右 Details**(Info/Outline/Git/Files)、徽章、设置、命令面板。
-- 视觉对齐 Otty:面板与终端同背景、无分隔线、hover 高亮。
+- 统一外框观感:面板与终端同背景、无分隔线、hover 高亮。
 - 系统集成:hook 安装、URL 打开、通知、防休眠(平台分支)。
 
 ## 14. 扩展点(分阶段,别提前)

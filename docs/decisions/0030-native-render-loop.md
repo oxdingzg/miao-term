@@ -8,7 +8,7 @@ Status: accepted.
 an egui `PaintCallback` and every interaction rides egui's immediate-mode frame.
 That was fast to build but caps the input-to-photon latency at the framework's
 event-loop + present cadence, which is visibly slower than a native terminal
-(Otty / Ghostty / Alacritty).
+(Ghostty / Alacritty).
 
 The engine was designed for this: `term-core` owns the hot path with no GPU or
 windowing dependency, and `term-render` owns fonts/atlas/draw passes with no

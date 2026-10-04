@@ -133,7 +133,7 @@ mtty instead.
   navigation keys, and F1–F12 / Insert as xterm sequences.
 
 **Window and workspace**
-- Otty-style frame: the session sidebar runs the full window height (icons,
+- Full-height frame: the session sidebar runs the full window height (icons,
   agent badges, `+`, drag to reorder); the row beside its header shows the
   active tab's title with the panel and font controls at the top right. On
   macOS the title bar is transparent, so the traffic lights sit in the sidebar

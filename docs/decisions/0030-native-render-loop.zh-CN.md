@@ -8,7 +8,7 @@
 
 `miaotty-app` 最初基于 `eframe`/`egui` 引导:终端网格通过 egui 的 `PaintCallback`
 绘制,所有交互都走 egui 的 immediate-mode 帧循环。开发快,但输入到上屏的延迟被框架的
-事件循环 + present 节拍卡住,明显慢于原生终端(Otty / Ghostty / Alacritty)。
+事件循环 + present 节拍卡住,明显慢于原生终端(Ghostty / Alacritty)。
 
 引擎本就是为此设计的:`term-core` 拥有热路径,不依赖 GPU 与窗口;`term-render` 拥有
 字体/图集/绘制通道,不含事件循环(见 ARCHITECTURE §3、D3)。

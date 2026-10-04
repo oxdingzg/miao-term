@@ -18,7 +18,6 @@ cloud: mtty hosts the agents you choose and never calls a model itself.
 
 | Source | What we take | What we leave |
 |---|---|---|
-| [Otty](https://otty.sh/) | A modern local terminal: tabs/splits, command palette, file reader, agent badges, Composer, session recovery | — |
 | [Termius](https://termius.com/) | Remote operations: host library and groups, SSH keys/identities, SFTP, port forwarding and jump hosts, snippets | Accounts, mandatory cloud sync, paywalled basics |
 | [PuTTY](https://www.chiark.greenend.org.uk/~sgtatham/putty/) | Serial, Telnet and raw TCP sessions; `.ppk` keys (M6) | Its dated UI and per-session registry settings |
 | [Zed](https://zed.dev/) / VS Code | An editor core: rope buffer, multi-cursor, tree-sitter, LSP, large-file speed (M5); agents' edits reviewed inline (M7) | Extension marketplaces, a built-in AI account |

@@ -51,7 +51,7 @@ pub struct TabBarEvents {
 }
 
 /// A row action from the right-click menu shared by the tab bar and the session
-/// list (wording follows Otty where the two overlap).
+/// list (wording is kept consistent where the two overlap).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TabMenuAction {
     Rename,
@@ -416,8 +416,8 @@ pub fn sidebar(
                 bg_color(c),
             );
         }
-        // Under the pointer the row's shortcut gives way to a close button,
-        // as in Otty (closing the last session is left to the menu).
+        // Under the pointer the row's shortcut gives way to a close button
+        // (closing the last session is left to the menu).
         let show_close = titles.len() > 1 && ui.rect_contains_pointer(rect);
         let meta = metas
             .get(i)
@@ -658,7 +658,7 @@ fn panel_frame_fill(ch: &ChromeColors, margin: egui::Margin, fill: Rgb) -> egui:
     panel_frame_stroke(margin, fill, ch.hover)
 }
 
-/// A panel frame with an explicit fill and stroke (the side panels use Otty's
+/// A panel frame with an explicit fill and stroke (the side panels use the
 /// border colour so their edge reads as a separator, like `[sidebar]`).
 fn panel_frame_stroke(margin: egui::Margin, fill: Rgb, stroke: Rgb) -> egui::Frame {
     egui::Frame::default()
@@ -1096,7 +1096,7 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
             });
     }
 
-    // Otty's frame: the session list runs the full height of the window, its
+    // The window frame: the session list runs the full height of the window, its
     // header beside the title row. With a transparent macOS title bar the
     // traffic lights sit over that header, so its controls keep to the right.
     let inset = host.titlebar_inset();
@@ -1515,7 +1515,7 @@ mod tab_menu_tests {
     }
 
     #[test]
-    fn menu_matches_otty_wording_and_order() {
+    fn menu_matches_tab_context_wording_and_order() {
         let labels: Vec<&str> = tab_menu_items(Lang::En)
             .into_iter()
             .filter(|(l, _)| !l.is_empty())

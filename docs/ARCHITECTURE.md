@@ -39,10 +39,10 @@ engine (`miao-term-*`) is separate from the app (`mtty-app`), and the control pl
 
 | # | Decision | Rationale |
 |---|----------|-----------|
-| D1 | Core uses `alacritty_terminal` + `vte` + `portable-pty` | Most mature, cross-platform (incl. ConPTY), same as Otty, permissive |
+| D1 | Core uses `alacritty_terminal` + `vte` + `portable-pty` | Most mature, cross-platform (incl. ConPTY), permissive |
 | D2 | Self-drawn rendering on `wgpu` (glyphs via `glyphon`/`cosmic-text`/`swash`) | Controllable performance; Metal/Vulkan/DX12 |
 | D3 | Surrounding UI (panels/settings) uses `egui`, **co-rendered in one frame** with the terminal | Dev speed + a fast self-drawn terminal |
-| D4 | **Own tab/split model** (not OS-native tabs) | Cross-platform consistency; matches Otty; controllable |
+| D4 | **Own tab/split model** (not OS-native tabs) | Cross-platform consistency; controllable |
 | D5 | Concurrency per **Alacritty's lock discipline** (`FairMutex<Term>` + `EventListener`) | Proven; avoids inventing a snapshot protocol |
 | D6 | Platform differences only in `core::pty` / `widget::platform` / `mtp::transport` | Contain complexity |
 | D7 | `term-mtp` decoupled from the engine (Unix socket / Windows named pipe) | A crash in one doesn't take down the other; reuse the protocol |
@@ -183,7 +183,7 @@ Use Alacritty's proven model (`FairMutex<Term>` + `EventListener`); do not inven
 ## 11. Config / themes
 
 - `term-config`: its own TOML; keys aligned with ghostty/alacritty for import.
-- Default look matches Otty (Nord background `#2e3440`, font size 13), overridable.
+- Default look is Nord (background `#2e3440`, font size 13), overridable.
 - Built-in themes: `nord` (default), `dracula`, `gruvbox`/`gruvbox-dark`,
   `solarized`/`solarized-dark`, `tokyo-night`/`tokyonight`; plus custom palettes.
   Background opacity is wired; background images are later.
@@ -212,7 +212,7 @@ Use Alacritty's proven model (`FairMutex<Term>` + `EventListener`); do not inven
 - Window: one OS window holds a set of tabs; splits are a tree inside a tab (ours, not OS tabs).
 - Panels (egui): **left Tabs sidebar** (title/⌘N/prefix/mark/dividers/context menu), **right Details**
   (Info/Outline/Git/Files), badges, settings, command palette.
-- Visual parity with Otty: panels share the terminal background, no divider line, hover highlight.
+- Unified chrome: panels share the terminal background, no divider line, hover highlight.
 - OS integration: hook install, URL open, notifications, sleep inhibition (per-platform).
 
 ## 14. Extension points (phased; don't front-load)

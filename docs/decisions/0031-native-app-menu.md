@@ -6,7 +6,7 @@ Status: accepted.
 
 The chrome drew its own menu row (File / Edit / View / …) inside the window, the
 same way `miaotty-app` and `miaotty-native` draw the rest of the chrome. On macOS
-that reads as foreign: every other terminal — Otty included — shows the menu in
+that reads as foreign: other terminals show the menu in
 the system menu bar, and the window itself has no menu strip. `winit` 0.30 has no
 menu API, so this needs a platform crate: `muda` (MIT, the tauri menu library).
 
@@ -45,12 +45,12 @@ Put the menu in the system menu bar on macOS, and keep it honest:
 
 The window also asks the OS for the dark appearance (`with_theme(Dark)`), because
 the chrome is dark and a light title bar next to it looks like a foreign strip —
-Otty themes its whole frame the same way.
+This app themes its whole frame the same way.
 
 ## Consequences
 
 - macOS gets a native menu bar (About / Services / Hide / Quit included) and the
-  window has no menu strip, matching Otty; Linux and Windows keep the in-window
+  window has no menu strip; Linux and Windows keep the in-window
   menu, and the eframe host is unchanged.
 - Menu items carry real accelerators, so AppKit owns those shortcuts while the
   menu is installed (our key handler remains as a fallback for bare runs).

@@ -72,31 +72,25 @@ Windows 交互式 IME/ConPTY、Linux 实际窗口、安装/升级流程、真实
 超大目录响应和长时间输入/渲染延迟仍有独立验收工作。相应流程见
 [WINDOWS-DEV.zh-CN.md](WINDOWS-DEV.zh-CN.md) 和 [RELEASE.zh-CN.md](RELEASE.zh-CN.md)。
 
-## 与 Otty 对比：建议吸收的方向
+## 与其他终端对比：建议吸收的方向
 
-参考 **appmakes.io 的 Otty**，来源为其[官网](https://otty.sh/)和
-[官方文档](https://docs.otty.sh/agents/agents-overview)，查阅日期 2026-10-01。
-这是文档/代码能力对照，未进行同机 Otty 性能实测；`otty-shell/otty` 是另一个同名产品。
+这是与其他终端的文档/代码能力对照，未进行同机性能实测。以下为内部后续优先级。
 
 已有交集包括标签/分屏、命令面板、文件查看/编辑、Recipes、Agent 徽章、Composer/队列、
 hint/只读模式和内联图片。后续优先级建议：
 
 1. **P0：可自动验收的 UI。** 引入语义化控件目标和可观察交互状态，覆盖重命名/取消、
    标签重排、分隔条拖动、编辑器保存、剪贴板焦点和 IME。
-   Otty 有 accessibility/automation 文档，先吸收可测试性比继续堆叠面板更有价值。
-2. **P1：命令与输出上下文。** 参考 [Send to Chat](https://docs.otty.sh/agents/send-to-chat)，
-   引入 OSC 133 命令边界、最近一次命令输出提取、选区发送到 Composer。
-   当前命令历史并不能代替精确的输出边界。
+   部分终端已提供 accessibility/automation 参考，先吸收可测试性比继续堆叠面板更有价值。
+2. **P1：命令与输出上下文。** 命令感知的选区可引入 OSC 133 命令边界、
+   最近一次命令输出提取、选区发送到 Composer。当前命令历史并不能代替精确的输出边界。
 3. **P1：任务完成与未读状态。** 在 Agent 徽章基础上补通用进程完成/进度、后台未读提示，
    加入状态转换和重复通知回归。
-4. **P1：可靠会话恢复。** Otty 文档涉及
-   [session recovery](https://docs.otty.sh/workflows/session-recovery) 和 tmux 重连。
+4. **P1：可靠会话恢复。** 会话恢复与 tmux 重连已是成熟做法。
    当前恢复布局/cwd 会重新创建 shell；保住活跃任务需要明确的持久会话策略及断线/重启测试。
 5. **P2：可配置快捷键、pane 拖动吸附。** 现有固定快捷键和分隔条 resize 是基础；
    扩展布局重组前先验证冲突和事件归属。
-6. **P2：行内建议、Unicode/字体样式。** 参考
-   [autocomplete](https://docs.otty.sh/terminal-features/autocomplete) 和
-   [Unicode/text styles](https://docs.otty.sh/terminal-features/unicode-and-text-styles)。
+6. **P2：行内建议、Unicode/字体样式。** 自动补全与更丰富的 Unicode/字体样式已是成熟做法。
    字素簇、粗体/斜体/下划线/删除线、平滑滚动应配视觉与延迟验收；解析器识别标志不等于渲染器正确显示。
 
-以上是后续排序，不代表本次新增了这些功能，也不代表已在本机验证 Otty 的实现。
+以上是后续排序，不代表本次新增了这些功能，也不代表已在本机验证其他终端的实现。

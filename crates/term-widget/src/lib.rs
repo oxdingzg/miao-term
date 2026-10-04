@@ -103,7 +103,7 @@ fn menu_in_os() -> bool {
     }
 }
 
-/// Whether the window extends under a transparent title bar, Otty-style: the
+/// Whether the window extends under a transparent title bar: the
 /// traffic lights float over the sidebar header and the title row takes the
 /// title bar's place. Windows uses a custom caption and compact menu in that
 /// same row; macOS does so only when the menu lives in the OS menu bar.
@@ -3552,7 +3552,7 @@ impl State {
                 let oy = inner.y * scale;
 
                 let mut quads: Vec<Quad> = Vec::new();
-                // Container card (border + terminal background), Otty-style.
+                // Container card (border + terminal background).
                 let card = Rect {
                     x: r.x + CARD_MARGIN,
                     y: r.y + CARD_MARGIN,
@@ -3722,7 +3722,7 @@ impl State {
             }
         }
 
-        // Split dividers between panes (Otty's 1px `[divider]` token).
+        // Split dividers between panes (a 1px `[divider]` token).
         if let Some(tab) = self.tabs.get(self.active_tab) {
             let border = theme.chrome().hover;
             let mut divider_quads = Vec::new();
@@ -14397,8 +14397,7 @@ impl ApplicationHandler<HostEvent> for Host {
             .with_title(&self.title)
             .with_inner_size(LogicalSize::new(init_w, init_h))
             // The chrome is dark; ask the OS for a dark title bar so the window
-            // does not open with a light strip that clashes with the app (Otty
-            // themes its whole frame the same way).
+            // does not open with a light strip that clashes with the dark chrome.
             .with_theme(Some(winit::window::Theme::Dark))
             .with_transparent(opacity < 1.0);
         #[cfg(windows)]
@@ -16792,7 +16791,7 @@ fn configure_egui(ctx: &egui::Context, ch: &miao_term_ui::theme::Chrome) {
         v.widgets.hovered.bg_fill = col(ch.active);
         v.widgets.active.bg_fill = col(ch.active);
         // Panel separators: egui defaults to a flat grey; use the sidebar edge
-        // colour so the split reads like Otty's `[sidebar] border-right`.
+        // colour so the split reads like a `[sidebar] border-right`.
         v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, col(ch.border));
     }
     let r = egui::Rounding::same(6.0);
