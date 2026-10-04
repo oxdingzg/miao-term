@@ -1891,6 +1891,10 @@ struct State {
     /// the reload/keep dialog's pane and the stamp seen.
     editor_reload_offer: Option<(String, editor_pane::DiskStamp)>,
     update_url: Option<String>,
+    /// Check for updates once on startup (config `update-auto-check`).
+    update_auto_check: bool,
+    /// Set until the one startup check has been kicked off.
+    update_startup_pending: bool,
     update_rx: Option<std::sync::mpsc::Receiver<UpdateResult>>,
     update_install: UpdateInstall,
     /// Carry on from check to download to install without further clicks.
@@ -4960,6 +4964,13 @@ impl State {
             s.push_str("   \u{00b7}   ");
             s.push_str(t(l, "You're up to date", "已是最新版本"));
             s.push_str(concat!(" (v", env!("CARGO_PKG_VERSION"), ")"));
+        }
+        if let Some(UpdateResult::Available { version, .. }) = &self.update_result {
+            s.push_str("   \u{00b7}   ");
+            s.push_str(&format!(
+                "{} v{version}",
+                t(l, "Update available", "有可用更新")
+            ));
         }
         s
     }
@@ -8801,9 +8812,20 @@ impl State {
     }
 
     fn check_updates(&mut self) {
+        self.check_updates_inner(true);
+    }
+
+    /// A silent check: no dialog and no "up to date" toast, used on startup.
+    fn check_updates_silent(&mut self) {
+        self.check_updates_inner(false);
+    }
+
+    fn check_updates_inner(&mut self, open_dialog: bool) {
         // Reopening an in-flight check must not launch a second request.
-        self.update_dialog = true;
-        self.update_notice_until = None;
+        if open_dialog {
+            self.update_dialog = true;
+            self.update_notice_until = None;
+        }
         if self.update_rx.is_some() {
             return;
         }
@@ -14706,6 +14728,8 @@ impl ApplicationHandler<HostEvent> for Host {
             editor_reload_checked: Instant::now(),
             editor_reload_offer: None,
             update_url: cfg.update_check_url.clone(),
+            update_auto_check: cfg.update_auto_check,
+            update_startup_pending: true,
             update_rx: None,
             update_install: UpdateInstall::Idle,
             update_auto: false,
@@ -14940,6 +14964,12 @@ impl ApplicationHandler<HostEvent> for Host {
             state.reload_rules_if_changed();
             state.reload_editors_if_changed();
             state.sync_tick();
+            if state.update_startup_pending {
+                state.update_startup_pending = false;
+                if state.update_auto_check {
+                    state.check_updates_silent();
+                }
+            }
             if let Some(rx) = state.update_rx.take() {
                 match rx.try_recv() {
                     Ok(result) => {

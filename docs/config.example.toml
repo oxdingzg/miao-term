@@ -20,9 +20,11 @@ font-size = 13                   # default
 # graphics = true                  # inline terminal graphics (Sixel / Kitty / iTerm2)
 # remote-listen = "127.0.0.1:7273"   # serve the MTP control plane over TCP (needs MTTY_MTP_TOKEN)
 # language = "zh"                  # UI language ("en" default; also reads $LANG)
-# The update check runs only from the menu's "Check for Updates" — never at
-# startup. update-check-url already points at this project's release manifest,
-# so set it only to use a mirror or an internal host.
+# The update check runs once on startup (silently), then again from the menu's
+# "Check for Updates". Set update-auto-check = false to skip the startup check
+# and make no request until you ask. update-check-url already points at this
+# project's release manifest, so set it only to use a mirror or an internal host.
+# update-auto-check = true         # check for updates once on startup
 # update-pubkey = "RW…"            # minisign public key; enables signature checks
 # update-check-url = "https://example.com/mtty/latest.json"
 #   JSON manifest: {"version":"0.2.0","artifacts":{"macos-aarch64":{"url":"…","sha256":"…"}}}
