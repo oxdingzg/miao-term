@@ -146,7 +146,7 @@ point); problems fixed in M0–M3 are no longer listed.
 
 | Feature | Status | Notes |
 |---|---|---|
-| New SSH session (`~/.ssh/config`, ControlMaster reuse, zero-install terminfo) | Works | No `ssh -G` on the UI thread; a restored SSH tab says it is disconnected and reconnects on Enter |
+| New SSH session (`~/.ssh/config`, ControlMaster reuse, zero-install terminfo) | Works | No `ssh -G` on the UI thread; a restored SSH tab says it is disconnected and reconnects on Enter, or connects on startup with `ssh-auto-reconnect = true` (off by default) |
 | Remote file view/edit over ssh | Works | Host taken from the active SSH tab (typed otherwise); reads and writes run in the background and failures are shown |
 | Host library, groups, key management, SFTP, FTP, port forwarding, snippets | Works | See M3; real mosh SSH bootstrap and UDP verified in ACCEPTANCE |
 

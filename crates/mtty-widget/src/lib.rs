@@ -495,6 +495,22 @@ fn typed_ssh(cmd: &str) -> String {
     mtty_ui::ssh::Syntax::local().typed(cmd)
 }
 
+/// What a restored SSH tab does at startup: connect by itself when
+/// `ssh-auto-reconnect` is on, otherwise wait for the user to press Enter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RestoredSsh {
+    Auto,
+    OnEnter,
+}
+
+fn restored_ssh_action(auto_reconnect: bool) -> RestoredSsh {
+    if auto_reconnect {
+        RestoredSsh::Auto
+    } else {
+        RestoredSsh::OnEnter
+    }
+}
+
 /// How a non-SSH pane reaches its byte stream (ADR 0037). Saved in the session
 /// so the tab reconnects on restore.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1826,6 +1842,8 @@ struct State {
     notifications: bool,
     prevent_sleep: bool,
     restore_scrollback: bool,
+    /// A restored SSH tab connects on startup (`ssh-auto-reconnect`).
+    ssh_auto_reconnect: bool,
     /// Local shells run in PTY host processes and survive restarts
     /// (`pty-host`, ADR 0041).
     pty_host: bool,
@@ -9136,7 +9154,9 @@ impl State {
         self.update_rx = Some(rx);
     }
 
-    /// A restored ssh tab: say it is disconnected and let Enter reconnect.
+    /// A restored ssh tab: say it is disconnected and let Enter reconnect,
+    /// or, with `ssh-auto-reconnect`, connect on startup. Either way the
+    /// command runs in the pane's shell, so ssh still verifies host keys.
     fn offer_reconnect(&self, tab: &mut Tab) {
         let cmd = tab.ssh_cmd.clone().or_else(|| {
             tab.ssh_target
@@ -9152,13 +9172,22 @@ impl State {
         let Some(pane) = tab.panes.iter_mut().find(|p| p.id == active) else {
             return;
         };
-        let note = format!(
-            "\x1b[2m[mtty] {} {target}. {}\x1b[0m\r\n",
-            mtty_ui::i18n::t(self.lang, "Disconnected from", "已与以下主机断开:"),
-            mtty_ui::i18n::t(self.lang, "Press Enter to reconnect.", "按回车重新连接。"),
-        );
-        pane.term.screen_mut().process(note.as_bytes());
-        pane.on_enter = Some(typed_ssh(&cmd));
+        let command = typed_ssh(&cmd);
+        match restored_ssh_action(self.ssh_auto_reconnect) {
+            RestoredSsh::Auto => {
+                pane.scroll = 0;
+                pane.term.write(command.as_bytes());
+            }
+            RestoredSsh::OnEnter => {
+                let note = format!(
+                    "\x1b[2m[mtty] {} {target}. {}\x1b[0m\r\n",
+                    mtty_ui::i18n::t(self.lang, "Disconnected from", "已与以下主机断开:"),
+                    mtty_ui::i18n::t(self.lang, "Press Enter to reconnect.", "按回车重新连接。"),
+                );
+                pane.term.screen_mut().process(note.as_bytes());
+                pane.on_enter = Some(command);
+            }
+        }
     }
 
     fn open_ssh(&mut self, input: &str) {
@@ -15014,6 +15043,7 @@ impl ApplicationHandler<HostEvent> for Host {
             notifications: cfg.notifications,
             prevent_sleep: cfg.prevent_sleep,
             restore_scrollback: cfg.restore_scrollback,
+            ssh_auto_reconnect: cfg.ssh_auto_reconnect,
             pty_host: cfg.pty_host,
             keep_sessions_on_quit: cfg.keep_sessions_on_quit,
             badges: cfg.badges,
@@ -19732,6 +19762,20 @@ mod tests {
         assert!(on_enter_input(&mut pending, b"l").is_none());
         assert!(pending.is_none(), "other input keeps the shell as it is");
         assert!(on_enter_input(&mut None, b"\r").is_none());
+    }
+
+    #[test]
+    fn restored_ssh_tabs_wait_unless_auto_reconnect_is_configured() {
+        let off = mtty_config::Config::from_toml("").unwrap();
+        assert_eq!(
+            restored_ssh_action(off.ssh_auto_reconnect),
+            RestoredSsh::OnEnter
+        );
+        let on = mtty_config::Config::from_toml("ssh-auto-reconnect = true\n").unwrap();
+        assert_eq!(
+            restored_ssh_action(on.ssh_auto_reconnect),
+            RestoredSsh::Auto
+        );
     }
 
     #[test]

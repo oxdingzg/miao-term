@@ -48,6 +48,7 @@ palette    = ["#3b4252", "#bf616a", "#a3be8c", "#ebcb8b",
 | `notifications` | `true` | agent 需要你时发系统通知 |
 | `prevent-sleep` | `true` | agent 工作时保持系统不休眠 |
 | `restore-scrollback` | `true` | 退出时保存终端内容，重启后显示 |
+| `ssh-auto-reconnect` | `false` | 启动时自动重连恢复的 SSH 标签，无需按回车 |
 | `pty-host` | `true` | 每个 shell 运行在 PTY 宿主中,更新、重启或崩溃都不会结束 pane 里正在运行的程序 |
 | `keep-sessions-on-quit` | `false` | 退出时程序也继续运行,下次启动时接回(类似 tmux) |
 | `detached-timeout` | `"24h"` | 程序等待 mtty 的时长:`90s`、`30m`、`24h`、`7d` 或秒数 |

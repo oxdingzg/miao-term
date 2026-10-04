@@ -282,6 +282,8 @@ struct RawConfig {
     prevent_sleep: Option<bool>,
     #[serde(rename = "restore-scrollback")]
     restore_scrollback: Option<bool>,
+    #[serde(rename = "ssh-auto-reconnect")]
+    ssh_auto_reconnect: Option<bool>,
     #[serde(rename = "pty-host")]
     pty_host: Option<bool>,
     #[serde(rename = "keep-sessions-on-quit")]
@@ -401,6 +403,9 @@ pub struct Config {
     /// Save each terminal's contents when mtty quits and show them again
     /// in the restored panes (kept in the data directory, owner-only).
     pub restore_scrollback: bool,
+    /// Connect a restored SSH tab on startup instead of waiting for Enter
+    /// (`ssh-auto-reconnect`). Off by default, so nothing connects unasked.
+    pub ssh_auto_reconnect: bool,
     /// Run each local shell in its own PTY host process, so it keeps
     /// running while mtty restarts and is reattached (ADR 0041): an update
     /// does not end what runs in the panes. On by default.
@@ -622,6 +627,7 @@ impl Default for Config {
             notifications: true,
             prevent_sleep: true,
             restore_scrollback: true,
+            ssh_auto_reconnect: false,
             pty_host: true,
             keep_sessions_on_quit: false,
             detached_timeout: DEFAULT_DETACHED_TIMEOUT,
@@ -1017,6 +1023,9 @@ impl Config {
         }
         if let Some(v) = raw.restore_scrollback {
             cfg.restore_scrollback = v;
+        }
+        if let Some(v) = raw.ssh_auto_reconnect {
+            cfg.ssh_auto_reconnect = v;
         }
         if let Some(v) = raw.pty_host {
             cfg.pty_host = v;
@@ -1459,6 +1468,24 @@ env = { AGENT_MODE = "test", IGNORED_NONSTRING = 5 }
         assert_eq!(cfg.font_size, 16.0);
         assert_eq!(cfg.theme.background, Rgb(0, 0, 0));
         assert_eq!(cfg.theme.foreground, Rgb(255, 255, 255));
+    }
+
+    #[test]
+    fn ssh_auto_reconnect_is_off_unless_asked() {
+        assert!(
+            !Config::from_toml("").unwrap().ssh_auto_reconnect,
+            "opt-in: nothing connects on startup by default"
+        );
+        assert!(
+            Config::from_toml("ssh-auto-reconnect = true\n")
+                .unwrap()
+                .ssh_auto_reconnect
+        );
+        assert!(
+            !Config::from_toml("ssh-auto-reconnect = false\n")
+                .unwrap()
+                .ssh_auto_reconnect
+        );
     }
 
     #[test]

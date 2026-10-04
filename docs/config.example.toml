@@ -9,6 +9,7 @@ font-size = 13                   # default
 # notifications = true             # system notification when an agent needs attention
 # prevent-sleep = true             # keep the machine awake while an agent is processing
 # restore-scrollback = true        # save terminals' contents at quit and show them on relaunch
+# ssh-auto-reconnect = false      # connect restored SSH tabs on startup instead of waiting for Enter
 # pty-host = true                 # updates, relaunches and crashes keep programs running
 # keep-sessions-on-quit = false   # quitting keeps programs running too, like tmux
 # detached-timeout = "24h"        # how long a kept program waits for mtty (90s, 30m, 24h, 7d)

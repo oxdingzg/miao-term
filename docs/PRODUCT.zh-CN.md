@@ -122,7 +122,7 @@
 
 | 功能 | 状态 | 备注 |
 |---|---|---|
-| 新建 SSH 会话(遵循 `~/.ssh/config`、ControlMaster 复用、零安装 terminfo) | 可用 | 不在 UI 线程执行 `ssh -G`;恢复的 SSH 标签提示已断开,按回车重新连接 |
+| 新建 SSH 会话(遵循 `~/.ssh/config`、ControlMaster 复用、零安装 terminfo) | 可用 | 不在 UI 线程执行 `ssh -G`;恢复的 SSH 标签提示已断开,按回车重新连接,设置 `ssh-auto-reconnect = true` 后启动时自动重连(默认关闭) |
 | 远端文件查看/编辑(经 ssh) | 可用 | 主机取自当前 SSH 标签(其他情况手填);读写在后台执行,失败会提示 |
 | 主机库、分组、密钥管理、SFTP、FTP、端口转发、Snippets | 可用 | 见 M3；真实 mosh SSH 引导及 UDP 会话已验收 |
 
