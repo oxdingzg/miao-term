@@ -355,9 +355,3 @@ jobs:
         run: |
           set -euo pipefail
           gh release create "${GITHUB_REF_NAME}" artifacts/* --generate-notes
-          # The SignPath Foundation's open-source program asks the download
-          # page to name it, so put the attribution on every release.
-          footer='Free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org).'
-          notes=$(gh release view "${GITHUB_REF_NAME}" --json body -q .body)
-          { printf '%s\n\n---\n\n' "$notes"; printf '%s\n' "$footer"; } > body.md
-          gh release edit "${GITHUB_REF_NAME}" --notes-file body.md
