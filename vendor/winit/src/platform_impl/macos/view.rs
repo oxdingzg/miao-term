@@ -804,6 +804,18 @@ declare_class!(
             trace_scope!("acceptsFirstMouse:");
             self.ivars().accepts_first_mouse
         }
+
+        // miao-term: never let the content view start a system window drag.
+        // With a transparent, full-size title bar the view is non-opaque, so
+        // AppKit's default `mouseDownCanMoveWindow` is true and AppKit turns a
+        // drag in the title strip into a window move — swallowing tab-chip
+        // drags (reordering), sliders, and text selection. The host moves the
+        // window itself, per region, via `Window::drag_window`. See
+        // `PATCHES.miao.md`.
+        #[method(mouseDownCanMoveWindow)]
+        fn mouse_down_can_move_window(&self) -> bool {
+            false
+        }
     }
 );
 

@@ -111,33 +111,6 @@ fn unified_titlebar() -> bool {
     cfg!(windows) || (cfg!(target_os = "macos") && menu_in_os())
 }
 
-// With a transparent, full-size title bar macOS treats the whole title strip as
-// window-move area: a press there starts a system window drag that swallows the
-// very gesture meant to reorder or click tab chips. Turn the system drag off and
-// keep the app's own dragging (on_title_drag_hover + drag_window), which the
-// chrome already drives per region.
-#[cfg(target_os = "macos")]
-fn disable_native_titlebar_move(window: &winit::window::Window) {
-    use objc2::msg_send;
-    use objc2::runtime::AnyObject;
-    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    let Ok(handle) = window.window_handle() else {
-        return;
-    };
-    let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
-        return;
-    };
-    // SAFETY: winit keeps the NSView alive for the window's lifetime, and
-    // `window` / `setMovable:` exist on every supported macOS. Nil is checked.
-    unsafe {
-        let view = handle.ns_view.as_ptr().cast::<AnyObject>();
-        let ns_window: *mut AnyObject = msg_send![view, window];
-        if !ns_window.is_null() {
-            let _: () = msg_send![ns_window, setMovable: false];
-        }
-    }
-}
-
 /// Room the traffic lights take at the leading edge of a unified title bar.
 const TRAFFIC_LIGHTS_W: f32 = 76.0;
 
@@ -14051,10 +14024,6 @@ impl ApplicationHandler<HostEvent> for Host {
             Err(e) => return startup_failure(event_loop, "could not create a window", e),
         };
         window.set_ime_allowed(true);
-        #[cfg(target_os = "macos")]
-        if unified_titlebar() {
-            disable_native_titlebar_move(&window);
-        }
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu_backends(),

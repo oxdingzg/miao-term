@@ -314,12 +314,15 @@ pub fn tab_bar(
         ui.add_space(2.0);
     }
     ev.tab_rects = rects.clone();
-    // Resolve a finished drag against the collected chip rects.
-    if ui.ctx().input(|i| i.pointer.any_released()) {
-        let from = ui
-            .ctx()
-            .memory_mut(|m| m.data.remove_temp::<usize>(egui::Id::new(DRAG_ID)));
-        if let (Some(from), Some(p)) = (from, ui.ctx().pointer_interact_pos()) {
+    // Move the dragged chip live, so the tabs visibly follow the pointer
+    // instead of only snapping on release. `from` tracks the chip's current
+    // index as the order changes, so the drag converges rather than oscillates.
+    let pressed = ui.ctx().input(|i| i.pointer.any_down());
+    let from = ui
+        .ctx()
+        .memory(|m| m.data.get_temp::<usize>(egui::Id::new(DRAG_ID)));
+    if let (true, Some(from)) = (pressed, from) {
+        if let Some(p) = ui.ctx().pointer_interact_pos() {
             let mut target = from;
             for (j, r) in rects.iter().enumerate() {
                 if p.x >= r.left() && p.x <= r.right() {
@@ -329,8 +332,13 @@ pub fn tab_bar(
             }
             if target != from {
                 ev.reorder = Some((from, target));
+                ui.ctx()
+                    .memory_mut(|m| m.data.insert_temp(egui::Id::new(DRAG_ID), target));
             }
         }
+    } else if from.is_some() {
+        ui.ctx()
+            .memory_mut(|m| m.data.remove_temp::<usize>(egui::Id::new(DRAG_ID)));
     }
     if ui
         .button("+")
@@ -513,20 +521,26 @@ pub fn sidebar(
         rects.push(rect);
     }
     ev.tab_rects = rects.clone();
-    // Resolve a finished drag against the rows, by height.
-    if ui.ctx().input(|i| i.pointer.any_released()) {
-        let from = ui
-            .ctx()
-            .memory_mut(|m| m.data.remove_temp::<usize>(egui::Id::new(DRAG_ID)));
-        if let (Some(from), Some(p)) = (from, ui.ctx().pointer_interact_pos()) {
+    // Reorder live while a row is dragged (same idea as `tab_bar`).
+    let pressed = ui.ctx().input(|i| i.pointer.any_down());
+    let from = ui
+        .ctx()
+        .memory(|m| m.data.get_temp::<usize>(egui::Id::new(DRAG_ID)));
+    if let (true, Some(from)) = (pressed, from) {
+        if let Some(p) = ui.ctx().pointer_interact_pos() {
             let target = rects
                 .iter()
                 .position(|r| p.y >= r.top() && p.y <= r.bottom())
                 .unwrap_or(from);
             if target != from {
                 ev.reorder = Some((from, target));
+                ui.ctx()
+                    .memory_mut(|m| m.data.insert_temp(egui::Id::new(DRAG_ID), target));
             }
         }
+    } else if from.is_some() {
+        ui.ctx()
+            .memory_mut(|m| m.data.remove_temp::<usize>(egui::Id::new(DRAG_ID)));
     }
     ev
 }
@@ -1828,9 +1842,19 @@ mod tab_menu_tests {
             pressed: true,
             modifiers: egui::Modifiers::NONE,
         }]);
+        let mut order = vec![0usize, 1, 2];
+        let mut saw_switch = false;
+        let note = |ev: &TabBarEvents, order: &mut Vec<usize>, saw_switch: &mut bool| {
+            if let Some((f, t)) = ev.reorder {
+                let x = order.remove(f);
+                order.insert(t, x);
+            }
+            *saw_switch |= ev.switch.is_some();
+        };
         for step in 1..=6 {
             let t = step as f32 / 6.0;
-            frame(vec![egui::Event::PointerMoved(from + (to - from) * t)]);
+            let ev = frame(vec![egui::Event::PointerMoved(from + (to - from) * t)]);
+            note(&ev, &mut order, &mut saw_switch);
         }
         let ev = frame(vec![egui::Event::PointerButton {
             pos: to,
@@ -1838,8 +1862,9 @@ mod tab_menu_tests {
             pressed: false,
             modifiers: egui::Modifiers::NONE,
         }]);
-        assert_eq!(ev.reorder, Some((0, 2)));
-        assert_eq!(ev.switch, None, "a drag is not a click");
+        note(&ev, &mut order, &mut saw_switch);
+        assert_eq!(order, vec![1, 2, 0], "the chip moves live to the drop spot");
+        assert!(!saw_switch, "a drag is not a click");
     }
 
     struct PanelHost {
@@ -2019,14 +2044,25 @@ mod tab_menu_tests {
         let (from, to) = (rects[0].center(), rects[2].center());
         sidebar_frame(&ctx, &groups, vec![egui::Event::PointerMoved(from)]);
         sidebar_frame(&ctx, &groups, vec![press(from, true)]);
+        let mut order = vec![0usize, 1, 2];
+        let mut saw_switch = false;
+        let note = |ev: &TabBarEvents, order: &mut Vec<usize>, saw_switch: &mut bool| {
+            if let Some((f, t)) = ev.reorder {
+                let x = order.remove(f);
+                order.insert(t, x);
+            }
+            *saw_switch |= ev.switch.is_some();
+        };
         for step in 1..=6 {
             let t = step as f32 / 6.0;
             let p = from + (to - from) * t;
-            sidebar_frame(&ctx, &groups, vec![egui::Event::PointerMoved(p)]);
+            let ev = sidebar_frame(&ctx, &groups, vec![egui::Event::PointerMoved(p)]).0;
+            note(&ev, &mut order, &mut saw_switch);
         }
         let ev = sidebar_frame(&ctx, &groups, vec![press(to, false)]).0;
-        assert_eq!(ev.reorder, Some((0, 2)));
-        assert_eq!(ev.switch, None, "a drag is not a click");
+        note(&ev, &mut order, &mut saw_switch);
+        assert_eq!(order, vec![1, 2, 0], "the row moves live to the drop spot");
+        assert!(!saw_switch, "a drag is not a click");
         // A plain click still switches.
         let p = rects[1].center();
         sidebar_frame(&ctx, &groups, vec![egui::Event::PointerMoved(p)]);
