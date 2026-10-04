@@ -3925,6 +3925,29 @@ impl State {
             self.window.request_redraw();
         }
         self.render_pip();
+        self.retain_live_renderers();
+    }
+
+    /// Release the glyph atlases and font systems of panes that no longer exist.
+    /// A `TermRenderer` owns a whole `FontSystem` (including the CJK face) plus
+    /// GPU atlas buffers, so a closed split, editor, preview, or tab must not
+    /// leave one behind for the life of the process.
+    fn retain_live_renderers(&mut self) {
+        if self.renderers.is_empty() {
+            return;
+        }
+        let live: std::collections::HashSet<&str> = self
+            .tabs
+            .iter()
+            .flat_map(|tab| {
+                tab.panes
+                    .iter()
+                    .map(|pane| pane.id.as_str())
+                    .chain(tab.editors.iter().map(|editor| editor.id.as_str()))
+                    .chain(tab.previews.iter().map(|preview| preview.id.as_str()))
+            })
+            .collect();
+        self.renderers.retain(|id, _| live.contains(id.as_str()));
     }
 
     fn chrome(&mut self, ctx: &egui::Context) {
