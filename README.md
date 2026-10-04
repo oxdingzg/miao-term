@@ -309,30 +309,30 @@ The engine is layered so that dependencies point inward only
 
 | Crate | Responsibility |
 |-------|----------------|
-| [`mtty-core`](crates/term-core) | PTY, VT parsing, grid/scrollback, selection, search, OSC, input encoding. No GPU or windowing. |
-| [`mtty-graphics`](crates/term-graphics) | Inline-graphics stream scanner and decoders (Sixel, Kitty, iTerm2). |
-| [`mtty-render`](crates/term-render) | `wgpu` + `glyphon` glyph-grid renderer, quad and image pipelines. |
-| [`mtty-ui`](crates/term-ui) | Host-agnostic UI shared by mtty: theme, input encoding, selection, split layout, egui chrome, palette, hints, vim, markdown, ssh, update and agent-integration helpers. |
-| [`mtty-editor`](crates/term-editor) | Editing core for the editor pane: rope buffer, transactions and undo, multiple selections, motions, search and replace (ADR 0034). No UI code. |
-| [`mtty-lsp`](crates/term-lsp) | Language Server Protocol client for the editor pane: servers per workspace on background threads, document sync, diagnostics, hover, completion, definitions (ADR 0034). No UI code. |
-| [`mtty-config`](crates/term-config) | Configuration and themes, ghostty/alacritty import, and the View-rule engine. |
-| [`mtty-mtp`](crates/term-mtp) | MTP protocol, host/client and transport (Unix socket, Windows named pipe, TCP). |
-| [`mtty-widget`](crates/term-widget) | The native host library for mtty: `winit` + `wgpu` render loop that draws the grid directly and composites the egui chrome. |
+| [`mtty-core`](crates/mtty-core) | PTY, VT parsing, grid/scrollback, selection, search, OSC, input encoding. No GPU or windowing. |
+| [`mtty-graphics`](crates/mtty-graphics) | Inline-graphics stream scanner and decoders (Sixel, Kitty, iTerm2). |
+| [`mtty-render`](crates/mtty-render) | `wgpu` + `glyphon` glyph-grid renderer, quad and image pipelines. |
+| [`mtty-ui`](crates/mtty-ui) | Host-agnostic UI shared by mtty: theme, input encoding, selection, split layout, egui chrome, palette, hints, vim, markdown, ssh, update and agent-integration helpers. |
+| [`mtty-editor`](crates/mtty-editor) | Editing core for the editor pane: rope buffer, transactions and undo, multiple selections, motions, search and replace (ADR 0034). No UI code. |
+| [`mtty-lsp`](crates/mtty-lsp) | Language Server Protocol client for the editor pane: servers per workspace on background threads, document sync, diagnostics, hover, completion, definitions (ADR 0034). No UI code. |
+| [`mtty-config`](crates/mtty-config) | Configuration and themes, ghostty/alacritty import, and the View-rule engine. |
+| [`mtty-mtp`](crates/mtty-mtp) | MTP protocol, host/client and transport (Unix socket, Windows named pipe, TCP). |
+| [`mtty-widget`](crates/mtty-widget) | The native host library for mtty: `winit` + `wgpu` render loop that draws the grid directly and composites the egui chrome. |
 | [`mtty-app`](mtty-app) | The `mtty` native executable and platform packaging metadata. |
 | [`mtty-cli`](mtty-cli) | The `mtty-cli` control client. |
 
 The hot path — `pty → vt → grid → renderer` — takes no locks and allocates
 nothing per frame. Platform differences are confined to small `#[cfg]`-guarded
-blocks in the crate that owns the concern: PTY spawning in `term-core`
-(`src/term.rs`), the window/event loop in `term-widget` (`src/lib.rs`), and the
-socket/named-pipe transport in `term-mtp` (`src/lib.rs`).
+blocks in the crate that owns the concern: PTY spawning in `mtty-core`
+(`src/term.rs`), the window/event loop in `mtty-widget` (`src/lib.rs`), and the
+socket/named-pipe transport in `mtty-mtp` (`src/lib.rs`).
 
 ### Principles
 
 1. Engine and hosts are separate; the hosts are the engine's first consumers.
 2. The hot path takes no locks and allocates nothing.
 3. Build the application first, extract the library later — APIs are driven by real needs.
-4. OS differences are confined to `#[cfg]`-guarded blocks in `term-core`, `term-widget` and `term-mtp`.
+4. OS differences are confined to `#[cfg]`-guarded blocks in `mtty-core`, `mtty-widget` and `mtty-mtp`.
 5. The control plane (MTP / CLI) is decoupled from the engine.
 
 ---

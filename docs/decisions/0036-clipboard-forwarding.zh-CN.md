@@ -11,7 +11,7 @@
 bundle 绑在一起(ADR 0035)。Linux 走 `wl-paste`/`xclip`,Windows 走 PowerShell。
 
 宿主本来就会为文本粘贴读取剪贴板,而“剪贴板里只有图片”的既有约定是发一个空的
-bracketed paste,让应用自己去取图(`crates/term-widget/src/lib.rs` 的
+bracketed paste,让应用自己去取图(`crates/mtty-widget/src/lib.rs` 的
 `paste_clipboard`)。
 
 ## 决定

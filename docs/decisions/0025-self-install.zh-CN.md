@@ -38,7 +38,7 @@ Linux AppImage/deb)是另一份工作。
 
 ## 附记(B4.3,原生应用)
 
-移除 eframe host 后,统一的原生应用(ADR 0032)失去了这一流程;B4.3 在 `term-ui/src/install.rs` 中恢复它
+移除 eframe host 后,统一的原生应用(ADR 0032)失去了这一流程;B4.3 在 `mtty-ui/src/install.rs` 中恢复它
 (改用 `sh` 单引号转义),`update::download_verified` 改为在程序内(`minisign-verify`)用内置发布公钥校验
 minisign 签名,签名为必需项,不再因缺少 `minisign` 工具而跳过。命令面板的 *更新并重启* 一步完成检查、下载、
 校验与安装。

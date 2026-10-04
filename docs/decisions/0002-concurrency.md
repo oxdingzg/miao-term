@@ -28,5 +28,5 @@ GPU work, and must not add per-frame allocations or polling.
 ## Consequences
 
 - Simple and correct now; the channel adds one copy per chunk (acceptable).
-- The R1 swap to `FairMutex` keeps the same external API (`term-core`), so the
+- The R1 swap to `FairMutex` keeps the same external API (`mtty-core`), so the
   app is unaffected.

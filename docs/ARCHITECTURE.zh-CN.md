@@ -15,7 +15,7 @@
 - 三平台同一套代码,含 **Windows(ConPTY)**。
 - 热路径性能对齐 Alacritty 量级:输入延迟 P95 ≤ 16ms(目标 ≤ 8ms)、首帧 ≤ 100ms、滚动不丢帧、空闲 CPU ≈ 0。
 - 引擎可被第三方嵌入;`mtty-app` 是第一个消费者(仓库里唯一的示例是
-  `crates/term-render/examples/pipeline_probe.rs`,一个渲染管线探针)。
+  `crates/mtty-render/examples/pipeline_probe.rs`,一个渲染管线探针)。
 - 复用现有控制面:`mtp` 类型、`mtty-cli`、插件、agent/shell hooks。
 
 **非目标(现阶段)**
@@ -38,7 +38,7 @@
 | D4 | **自研 tab/split 模型**(非 OS 原生标签) | 跨平台一致;可控 |
 | D5 | 并发用 **Alacritty 同款的锁纪律**(`FairMutex<Term>` + `EventListener`) | 已验证,避免自造快照协议 |
 | D6 | 平台差异只出现在 `core::pty` / `widget::platform` / `mtp::transport` | 收敛复杂度 |
-| D7 | 控制面 `term-mtp` 与引擎解耦(Unix socket / Windows named pipe) | 引擎崩不拖垮 CLI;复用现有协议 |
+| D7 | 控制面 `mtty-mtp` 与引擎解耦(Unix socket / Windows named pipe) | 引擎崩不拖垮 CLI;复用现有协议 |
 | D8 | 先做 app、后抽库;扩展点分阶段 | 由真实需求驱动 API |
 | D9 | 引擎 crate 采用 `Apache-2.0` | 宽松、便于被嵌 |
 | D10 | 单一原生 `mtty` 主程序调用 `mtty-widget`（winit + wgpu），旧 eframe 宿主退役 | 统一产品身份与直接绘制；见 APP-IDENTITY.zh-CN.md |
@@ -46,25 +46,25 @@
 ## 3. 依赖分层(DAG)与规则
 
 ```
-   term-graphics    term-config    term-mtp     (叶子 crate,无引擎依赖)
+   mtty-graphics    mtty-config    mtty-mtp     (叶子 crate,无引擎依赖)
         │                │            │
         ▼                │            │
-   term-core             │            │
+   mtty-core             │            │
         │                │            │
         ▼                │            │
-   term-render           │            │
+   mtty-render           │            │
         │                │            │
         ▼                ▼            │
-   term-ui ◄─────────────┘            │
+   mtty-ui ◄─────────────┘            │
         │                             │
         ▼                             │
-   term-widget ◄──────────────────────┘   (原生宿主:winit + wgpu)
+   mtty-widget ◄──────────────────────┘   (原生宿主:winit + wgpu)
         ▲
-        └── mtty-app   (原生主程序;依赖 term-widget)
-   mtty-cli ──► term-mtp
+        └── mtty-app   (原生主程序;依赖 mtty-widget)
+   mtty-cli ──► mtty-mtp
 ```
 
-图里没有画全所有边:`term-widget` 还依赖 `term-core`/`term-render`,`mtty-app` 调用 `term-widget`。
+图里没有画全所有边:`mtty-widget` 还依赖 `mtty-core`/`mtty-render`,`mtty-app` 调用 `mtty-widget`。
 工作区共九个成员。
 
 **规则**
@@ -82,14 +82,14 @@
 
 | crate | 职责(做什么) | 明确不做 |
 |-------|--------------|----------|
-| `term-graphics` | 内联图形扫描器 + Sixel/Kitty/iTerm2 解码器 | 不碰渲染/GPU/窗口 |
-| `term-core` | PTY、vte 解析、网格/回滚/光标/模式、选区/查找、OSC/CSI 语义、键鼠→字节编码、事件;持有 `term-graphics` 的扫描器 | 不碰 GPU/窗口/配置/业务 |
-| `term-render` | 字形加载/shaping/图集、网格实例化、绘制 pass、damage 增量 | 不管事件循环/输入 |
-| `term-ui` | 无宿主 UI:主题、输入编码、选区、分屏布局、egui chrome、调色板、hints、vim、markdown、ssh、update、agent 集成 | 不含窗口/事件循环 |
-| `term-widget` | 原生 host 库（主程序由 mtty-app 提供）:winit 事件循环、wgpu surface、输入/IME/剪贴板/拖放、直接自绘网格(ADR 0030) | 不重复实现 PTY/parser |
-| `term-editor` | 编辑器 pane 的编辑内核:rope、事务与撤销、多选区、光标移动、查找替换(ADR 0034) | 不依赖 UI 与 GPU |
-| `term-config` | 配置模型、主题、ghostty/alacritty 导入 | 不依赖 UI |
-| `term-mtp` | 协议信封、传输、server/client、agent/history 注册表、revision + `core.wait` 长轮询 | 不依赖引擎 |
+| `mtty-graphics` | 内联图形扫描器 + Sixel/Kitty/iTerm2 解码器 | 不碰渲染/GPU/窗口 |
+| `mtty-core` | PTY、vte 解析、网格/回滚/光标/模式、选区/查找、OSC/CSI 语义、键鼠→字节编码、事件;持有 `mtty-graphics` 的扫描器 | 不碰 GPU/窗口/配置/业务 |
+| `mtty-render` | 字形加载/shaping/图集、网格实例化、绘制 pass、damage 增量 | 不管事件循环/输入 |
+| `mtty-ui` | 无宿主 UI:主题、输入编码、选区、分屏布局、egui chrome、调色板、hints、vim、markdown、ssh、update、agent 集成 | 不含窗口/事件循环 |
+| `mtty-widget` | 原生 host 库（主程序由 mtty-app 提供）:winit 事件循环、wgpu surface、输入/IME/剪贴板/拖放、直接自绘网格(ADR 0030) | 不重复实现 PTY/parser |
+| `mtty-editor` | 编辑器 pane 的编辑内核:rope、事务与撤销、多选区、光标移动、查找替换(ADR 0034) | 不依赖 UI 与 GPU |
+| `mtty-config` | 配置模型、主题、ghostty/alacritty 导入 | 不依赖 UI |
+| `mtty-mtp` | 协议信封、传输、server/client、agent/history 注册表、revision + `core.wait` 长轮询 | 不依赖引擎 |
 | `mtty-app` | 原生 `mtty` 入口、命令 help/version 与平台安装包元数据 | 不重复实现终端内核 |
 | `mtty-cli` | 供脚本/agent 使用的 MTP 客户端 | 不依赖引擎 |
 
@@ -98,11 +98,11 @@
 初稿里画的这些 trait/类型(`Damage`、`TermEvent`、`EventSink`、`Pty`、`InputEncoder`、
 `GlyphAtlas`、`Renderer`、`Host`)**并未采用**。实际交付的 API 是:
 
-- `term-core`:`Terminal`(PTY + 解析器 + 网格)与 `ATerm`(`alacritty_terminal` 屏幕模型),
-  位于 `crates/term-core`。
-- `term-render`:`TermRenderer`、`QuadRenderer`、`ImageRenderer`。
-- 应用：`mtty-app` 启动 `term-widget`，由后者管理事件循环，
-  经 `term-render` 直接绘制网格并合成 egui 外壳。
+- `mtty-core`:`Terminal`(PTY + 解析器 + 网格)与 `ATerm`(`alacritty_terminal` 屏幕模型),
+  位于 `crates/mtty-core`。
+- `mtty-render`:`TermRenderer`、`QuadRenderer`、`ImageRenderer`。
+- 应用：`mtty-app` 启动 `mtty-widget`，由后者管理事件循环，
+  经 `mtty-render` 直接绘制网格并合成 egui 外壳。
 
 ## 6. 线程模型与锁纪律
 
@@ -129,10 +129,10 @@
 
 - **输出**:PTY → 读线程 → `vte` → `Term`(+OSC→`TermEvent`)→ `Wakeup` → 主线程渲染。
 - **输入**:winit 键/鼠/IME → `core::input` 编码 → `Pty::write`;选区/粘贴走 bracketed paste 模式。
-- **控制**:`term-mtp` server 独立线程;进程内 UI 直连注册表,外部 CLI/插件走 socket/pipe。
+- **控制**:`mtty-mtp` server 独立线程;进程内 UI 直连注册表,外部 CLI/插件走 socket/pipe。
 - **元数据**:cwd(OSC 7)、标题、agent 状态、命令历史 → 事件/注册表 → 面板订阅。
 
-## 8. 渲染架构(term-render)
+## 8. 渲染架构(mtty-render)
 
 1. **字形**:`cosmic-text` 解析/回退,`swash` 光栅化 → **R8 图集**(shelf packing,LRU;键 `(glyph_id, style, px, subpixel)`).
 2. **实例化**:每个 Cell → quads(bg / glyph / underline / strike / cursor / selection);实例缓冲按脏行增量更新。
@@ -141,14 +141,14 @@
 5. **与 egui 组合**:egui 驱动整帧,终端通过 `egui-wgpu` 的 **`PaintCallback`** 在自己的矩形内绘制(独立 pipeline,复用同一 `wgpu::Device/Queue/Surface`)。
 6. **优化顺序**:全量重建 → 脏行 → 图集命中 → 去 per-frame 分配;用 `tracy`/`puffin` 标注热点。
 
-## 9. 终端模型(term-core)
+## 9. 终端模型(mtty-core)
 
 - 网格:Cell{char + 组合 + fg/bg/attrs + underline 样式};回滚环形缓冲;reflow(宽窗口)。
 - 模式:应用光标键、bracketed paste、鼠标上报、alternate screen、kitty keyboard(CSI u)、焦点上报。
 - 语义:标题、超链接(OSC 8)、cwd(OSC 7)、进度(OSC 9;4)、shell 集成标记(OSC 133 A/B/C/D)。
 - 选区/查找:行/块选区、词边界(CJK/grapheme 用 `unicode-width` + grapheme 边界)、搜索高亮。
-- 图形协议(kitty graphics / sixel / iTerm2)已由 `term-graphics` 实现,
-  经 `term-core`/`term-render` 接入,默认开启(`graphics = true`)。
+- 图形协议(kitty graphics / sixel / iTerm2)已由 `mtty-graphics` 实现,
+  经 `mtty-core`/`mtty-render` 接入,默认开启(`graphics = true`)。
 
 ## 10. 平台抽象层
 
@@ -157,14 +157,14 @@
 | PTY | `trait Pty` | `forkpty` | **ConPTY** |
 | 传输 | `mtp::transport` | Unix socket | `\\.\pipe\mtty` |
 | 剪贴板 | `trait Clipboard` | NSPasteboard / X11-Wayland | Win32 clipboard |
-| 字体 | `term-render::font` | CoreText / fontconfig | DirectWrite(`font-kit`) |
+| 字体 | `mtty-render::font` | CoreText / fontconfig | DirectWrite(`font-kit`) |
 | IME | `widget::input` | 原生 | **TSF**(风险最高,见 §19) |
 
 `#[cfg(...)]` **只允许**出现在上表对应模块内;其余代码保持平台无关。
 
 ## 11. 配置 / 主题
 
-- `term-config`:自有 TOML;键名对齐 ghostty/alacritty 以便导入。
+- `mtty-config`:自有 TOML;键名对齐 ghostty/alacritty 以便导入。
 - 默认观感为 Nord(背景 `#2e3440`、字号 13),可覆盖。
 - 内置主题:`nord`(默认)、`dracula`、`gruvbox`/`gruvbox-dark`、
   `solarized`/`solarized-dark`、`tokyo-night`/`tokyonight`;并支持自定义调色板。
@@ -172,7 +172,7 @@
 
 ## 12. 控制面(MTP)
 
-- `term-mtp` 实现 server;本地传输:Unix socket(`$XDG_RUNTIME_DIR/mtty.sock`,回退到
+- `mtty-mtp` 实现 server;本地传输:Unix socket(`$XDG_RUNTIME_DIR/mtty.sock`,回退到
   `$TMPDIR/mtty.sock`)或 Windows named pipe。
 - 远程访问:`remote-listen = addr:port` 会额外用 TCP 提供控制面;它**要求**设置
   `MTTY_MTP_TOKEN`,客户端每个请求都要带上该令牌。
@@ -195,7 +195,7 @@
 
 ## 14. 扩展点(分阶段,别提前)
 
-- **现在**:引擎 API(`Terminal`/`ATerm`、`term-render`)+ MTP(够用)。
+- **现在**:引擎 API(`Terminal`/`ATerm`、`mtty-render`)+ MTP(够用)。
 - **R4+**:MTP `provider.*`(Details 自定义组件,kind=tui/web)。
 - **以后(真有人要)**:渲染器/面板插件、主题包 —— 才考虑"框架"化。
 
@@ -232,7 +232,7 @@
 
 ## 18. 里程碑
 
-R0 最小闭环(pty→vt→grid→render→input,量延迟) → **R0.5 IME 专项** → R1 可用终端 → R2 三平台+打包 → R3 `term-mtp` → R4 面板 → R5 打磨/签名。每阶段退出须过对应性能门。
+R0 最小闭环(pty→vt→grid→render→input,量延迟) → **R0.5 IME 专项** → R1 可用终端 → R2 三平台+打包 → R3 `mtty-mtp` → R4 面板 → R5 打磨/签名。每阶段退出须过对应性能门。
 
 ## 19. 风险
 
@@ -243,7 +243,7 @@ R0 最小闭环(pty→vt→grid→render→input,量延迟) → **R0.5 IME 专�
 | ConPTY 性能/退出码 | 读写并发 + OSC 133;D + 独立基准 |
 | egui 与自绘共帧的兼容/性能 | `PaintCallback` 方式;必要时退化为手动 viewport |
 | 早期过度抽象 | 引擎先"够用";扩展点分阶段 |
-| 上游 `alacritty_terminal` API 变动 | pin 版本;封装 `term-core` 适配层 |
+| 上游 `alacritty_terminal` API 变动 | pin 版本;封装 `mtty-core` 适配层 |
 
 ## 20. 性能影响分析(相对 Ghostty / Alacritty)
 

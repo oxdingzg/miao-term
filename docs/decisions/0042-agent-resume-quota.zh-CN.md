@@ -21,7 +21,7 @@ agent 闭环(ADR 0010、0016、0040)已经知道每个 pane 里跑的是哪个 a
 
 ### 恢复
 
-每个受支持的 agent([`integration::Agent`](../../crates/term-ui/src/integration.rs))
+每个受支持的 agent([`integration::Agent`](../../crates/mtty-ui/src/integration.rs))
 新增一个带 `{session}`、`{cwd}` 占位符的 `resume` 命令模板;没有模板的 agent 即不可恢复。
 具体参数在接线时逐个核对。
 

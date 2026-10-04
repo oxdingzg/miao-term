@@ -1,4 +1,4 @@
-//! The editor pane (ADR 0034, phase E2): a `term-editor` document shown on the
+//! The editor pane (ADR 0034, phase E2): a `mtty-editor` document shown on the
 //! same monospace cell grid as a terminal and drawn by the same renderer.
 //!
 //! Everything here works in cells (rows and columns of the pane's text area)

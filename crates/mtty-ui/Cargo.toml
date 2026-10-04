@@ -9,11 +9,11 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
-mtty-core = { path = "../term-core" }
-mtty-render = { path = "../term-render" }
-mtty-config = { path = "../term-config" }
-mtty-mtp = { path = "../term-mtp" }
-mtty-platform = { path = "../term-platform" }
+mtty-core = { path = "../mtty-core" }
+mtty-render = { path = "../mtty-render" }
+mtty-config = { path = "../mtty-config" }
+mtty-mtp = { path = "../mtty-mtp" }
+mtty-platform = { path = "../mtty-platform" }
 egui = "0.30"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

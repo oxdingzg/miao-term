@@ -67,7 +67,7 @@ Attack, is a timing side channel in `rsa`'s *decryption*, and no fixed release
 exists. mtty reaches `rsa` only through `ssh-key`, and only to parse and
 re-encode a private key: the workspace calls `PrivateKey::from_openssh` and
 `to_openssh` and nothing else, and contains no `sign`, `verify` or RSA-decrypt
-call at all — the single `decrypt` in `term-keys` is the PuTTY `.ppk`'s own
+call at all — the single `decrypt` in `mtty-keys` is the PuTTY `.ppk`'s own
 AES-256-CBC. The crate is linked into the binary; the vulnerable operation is
 not on any path from this code. `deny.toml` records that reasoning beside the
 exception, with the date, and a note to re-examine it when `ssh-key` is

@@ -12,7 +12,7 @@ Linux shells out to `wl-paste`/`xclip`, Windows to PowerShell.
 The host already reads the pasteboard for text pastes, and the existing
 convention for an image-only clipboard is an empty bracketed paste that tells
 the application to fetch the image on its own
-(`crates/term-widget/src/lib.rs`, `paste_clipboard`).
+(`crates/mtty-widget/src/lib.rs`, `paste_clipboard`).
 
 ## Decision
 

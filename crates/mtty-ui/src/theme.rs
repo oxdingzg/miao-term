@@ -447,7 +447,7 @@ impl Default for Theme {
 }
 
 impl Theme {
-    /// Build a UI theme from a `term-config` theme (and cursor style), so both
+    /// Build a UI theme from a `mtty-config` theme (and cursor style), so both
     /// hosts share one mapping.
     pub fn from_config(cfg: &mtty_config::Theme, cursor: mtty_config::CursorStyle) -> Self {
         let rgb = |c: mtty_config::Rgb| Rgb(c.0, c.1, c.2);

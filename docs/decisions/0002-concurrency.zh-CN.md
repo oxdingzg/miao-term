@@ -25,4 +25,4 @@
 ## 后果
 
 - 当前实现简单正确;通道带来每块一次拷贝(可接受)。
-- R1 换成 `FairMutex` 时对外 API(`term-core`)不变,app 无感。
+- R1 换成 `FairMutex` 时对外 API(`mtty-core`)不变,app 无感。

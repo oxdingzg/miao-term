@@ -10,7 +10,7 @@ M6 (PuTTY-style remote) starts with R1: serial consoles (baud, data bits,
 parity, stop bits, flow control), Telnet and raw TCP, saved in the host
 library beside SSH. Today every pane is a shell on a PTY: `mtty-core`'s
 `Terminal` spawns a `MasterPty` plus a child process and reads the master on a
-thread (`crates/term-core/src/term.rs`), and the host library
+thread (`crates/mtty-core/src/term.rs`), and the host library
 (`mtty-config::hosts`) stores SSH targets only.
 
 A serial console, a Telnet server and a raw TCP peer have no shell, no PTY and

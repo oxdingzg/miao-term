@@ -24,7 +24,7 @@ gaps as "Not available — not designed yet":
 
 ### Resume
 
-Each supported agent ([`integration::Agent`](../../crates/term-ui/src/integration.rs))
+Each supported agent ([`integration::Agent`](../../crates/mtty-ui/src/integration.rs))
 gains a `resume` command template with `{session}` and `{cwd}` placeholders;
 an agent without one is simply not resumable. The exact flags are verified per
 agent when wired.

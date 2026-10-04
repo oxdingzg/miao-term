@@ -11,13 +11,13 @@
 
 ## 决定
 
-**统一意图模型**(`crates/term-ui/src/launch.rs`)。`Intent` 为
+**统一意图模型**(`crates/mtty-ui/src/launch.rs`)。`Intent` 为
 `Activate | Quick | Focus(pane_id) | Run(command)`,从 argv 解析
 (`--quick`、`--focus <id>`、`ssh://…`、`x-man-page://…`、`miaotty://quick`、
 `miaotty://focus?pane=…`),并为跨实例 inbox 编码/解码
 (`quick`、`focus\t<id>`、`run\t<cmd>`)。往返有单测。
 
-**全局热键。** `crates/term-ui/src/hotkey.rs` 解析加速键(`cmd+shift+t`、
+**全局热键。** `crates/mtty-ui/src/hotkey.rs` 解析加速键(`cmd+shift+t`、
 `ctrl+alt+space`,与平台无关且各处可测),并在 macOS 与 Windows 上通过
 `global-hotkey`(MIT)注册;该依赖按目标平台声明,故 Linux CI 不会引入 X11/Wayland。
 处理器翻转标志并调用 `egui::Context::request_repaint`;应用每帧轮询并切换快速终端。

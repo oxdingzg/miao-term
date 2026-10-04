@@ -4,7 +4,7 @@
 use crate::theme::{Chrome as ChromeColors, Rgb};
 
 /// How a shortcut is written on this platform: macOS's ⌘ chord, or the
-/// Linux/Windows one (see the keymap in term-widget).
+/// Linux/Windows one (see the keymap in mtty-widget).
 pub fn shortcut_hint(mac: &'static str, pc: &'static str) -> &'static str {
     if cfg!(target_os = "macos") {
         mac

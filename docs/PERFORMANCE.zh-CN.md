@@ -22,12 +22,12 @@ release 运行它们。预算是绝对值且留出宽裕余量(数量级退化�
 
 | 指标 | 预算 | 基线(M 系列,release) | 位置 |
 |------|------|------------------------|------|
-| VT 解析吞吐 | ≥ 25 MB/s | 73 MB/s | `crates/term-core/tests/perf.rs` |
-| 屏幕快照(30 行) | ≤ 2 ms | 0.012 ms | `crates/term-core/tests/perf.rs` |
+| VT 解析吞吐 | ≥ 25 MB/s | 73 MB/s | `crates/mtty-core/tests/perf.rs` |
+| 屏幕快照(30 行) | ≤ 2 ms | 0.012 ms | `crates/mtty-core/tests/perf.rs` |
 | 每帧行构建 | ≤ 4 ms | 0.12 ms | `mtty-app/tests/perf.rs` |
 | 面板排名(10k 条目) | ≤ 100 ms | 2.0 ms | `mtty-app/tests/perf.rs` |
-| 托管回显往返(p95) | ≤ 4 ms | 0.04 ms | `crates/term-ptyhost/tests/perf.rs` |
-| 托管输出吞吐 | ≥ 25 MB/s | 180 MB/s | `crates/term-ptyhost/tests/perf.rs` |
+| 托管回显往返(p95) | ≤ 4 ms | 0.04 ms | `crates/mtty-ptyhost/tests/perf.rs` |
+| 托管输出吞吐 | ≥ 25 MB/s | 180 MB/s | `crates/mtty-ptyhost/tests/perf.rs` |
 | IPC 空闲开销 | ≈ 0(无轮询) | — | 设计如此 |
 | agent 突发 | 100 事件 → 1 重绘 | — | 设计如此 |
 

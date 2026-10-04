@@ -9,7 +9,7 @@
 M6(PuTTY 风格的远程)从 R1 开始:串口控制台(波特率、数据位、校验、停止位、流控)、
 Telnet 与裸 TCP,与 SSH 一起保存在主机库中。目前每个 pane 都是 PTY 上的 shell:
 `mtty-core` 的 `Terminal` 启动 `MasterPty` 与子进程,并在后台线程读取 master
-(`crates/term-core/src/term.rs`);主机库(`mtty-config::hosts`)只保存 SSH 目标。
+(`crates/mtty-core/src/term.rs`);主机库(`mtty-config::hosts`)只保存 SSH 目标。
 
 串口控制台、Telnet 服务器与裸 TCP 对端都没有 shell、没有 PTY,也没有 OSC 133 的命令
 边界——它们只是一个进出的字节流。因此终端核心必须能直接消费和写入一条普通传输,而不能

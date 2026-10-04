@@ -7,7 +7,7 @@ Status: accepted.
 ADR 0010 fires a system notification when an agent pane transitions into
 `awaiting` or `error` while it is not focused. The backends chosen then were
 command-line tools: `osascript` on macOS, `notify-send` on Linux and BurntToast
-on Windows, all in `crates/term-ui/src/agentloop.rs`.
+on Windows, all in `crates/mtty-ui/src/agentloop.rs`.
 
 On macOS, `osascript … display notification` is attributed to **Script Editor**,
 because `/usr/bin/osascript` belongs to that app's bundle. The banner shows the
@@ -17,8 +17,8 @@ that may be absent. Linux `notify-send` is fine.
 
 ## Decision
 
-Add `crates/term-platform` (`mtty-platform`) for native system
-integration, starting with notifications. `crates/term-ui/src/agentloop.rs`
+Add `crates/mtty-platform` (`mtty-platform`) for native system
+integration, starting with notifications. `crates/mtty-ui/src/agentloop.rs`
 re-exports `notify`/`alert` from it, so hosts keep calling `agentloop::notify`
 (ADR 0010) while the platform code leaves the host-agnostic crate.
 
@@ -42,7 +42,7 @@ WinRT toasts under mtty's AppUserModelID; both keep their command-line fallback.
 
 - macOS notifications belong to mtty, can be clicked, and no longer activate
   Script Editor.
-- `term-ui` stays host-agnostic: `objc2`, `block2` and
+- `mtty-ui` stays host-agnostic: `objc2`, `block2` and
   `objc2-user-notifications` are confined to `mtty-platform`'s macOS
   target.
 - The native path needs an app bundle. `scripts/package-macos.sh` already builds

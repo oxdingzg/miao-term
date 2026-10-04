@@ -11,7 +11,7 @@
 
 ## 决定
 
-**Agent hooks**(`crates/term-ui/src/integration.rs`)。应用知道一小组 agent(claude、codex、
+**Agent hooks**(`crates/mtty-ui/src/integration.rs`)。应用知道一小组 agent(claude、codex、
 opencode、miao)及其二进制、启动命令与 hook 注册位置。在 *设置 → Agent 集成* 中你可以:
 - 查看各 agent 是否在 `PATH` 上;
 - **安装 hook**:写出 `~/.config/miaotty/hooks/<agent>.sh`(mode 0755,并以 `sh -n`
@@ -27,7 +27,7 @@ opencode、miao)及其二进制、启动命令与 hook 注册位置。在 *设�
 
 **单实例 / 深链接。** 启动时检查 MTP socket;若已有实例在监听,新进程把请求写到
 `~/.local/share/miaotty/inbox/` 后退出。运行中的实例每帧排空该目录,为转发的命令开标签
-(裸启动即"激活")。无需新的 MTP 方法 —— 因此**不改动共享的 `term-mtp` crate**。
+(裸启动即"激活")。无需新的 MTP 方法 —— 因此**不改动共享的 `mtty-mtp` crate**。
 
 ## 后果
 

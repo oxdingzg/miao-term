@@ -56,7 +56,7 @@
 **该漏洞被判定为不可达,据此接受。** RUSTSEC-2023-0071(Marvin Attack)是 `rsa` **解密**路径上的
 时序侧信道,且没有已修复的版本。mtty 只经由 `ssh-key` 触及 `rsa`,且只用于解析与重新编码私钥:
 工作区只调用 `PrivateKey::from_openssh` 与 `to_openssh`,别无其他,也不存在任何 `sign`、`verify`
-或 RSA 解密调用 —— `term-keys` 里唯一的 `decrypt` 是 PuTTY `.ppk` 自己的 AES-256-CBC。
+或 RSA 解密调用 —— `mtty-keys` 里唯一的 `decrypt` 是 PuTTY `.ppk` 自己的 AES-256-CBC。
 该 crate 被链接进二进制,但那个有漏洞的操作**不在本代码的任何调用路径上**。`deny.toml` 把这条推理
 连同日期与"升级 `ssh-key` 时重评"的提示一起记在例外旁边。
 

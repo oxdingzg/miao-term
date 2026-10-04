@@ -15,12 +15,12 @@ configure a system-wide proxy by itself.
 
 ## Existing foundation
 
-- `crates/term-config/src/hosts.rs` saves local (`-L`), remote (`-R`) and
+- `crates/mtty-config/src/hosts.rs` saves local (`-L`), remote (`-R`) and
   dynamic SOCKS (`-D`) forwarding rules under SSH hosts.
-- `crates/term-ui/src/forward.rs` launches a dedicated `ssh -N` child with
+- `crates/mtty-ui/src/forward.rs` launches a dedicated `ssh -N` child with
   batch authentication, forwarding failure detection and keepalives. Its drop
   handler kills and waits for that child.
-- The host manager in `crates/term-widget/src/lib.rs` provides manual
+- The host manager in `crates/mtty-widget/src/lib.rs` provides manual
   start/stop and error display. Each window currently owns its tunnel map.
 - Host aliases can be imported from SSH config; importing forwarding rules,
   app-wide ownership, automatic startup and reconnect still need design/work.

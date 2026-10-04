@@ -10,7 +10,7 @@ instance instead of reusing the running one.
 
 ## Decision
 
-**Agent hooks** (`crates/term-ui/src/integration.rs`). The app knows a small set of
+**Agent hooks** (`crates/mtty-ui/src/integration.rs`). The app knows a small set of
 agents (claude, codex, opencode, miao) with their binary, launch command and
 where the hook is registered. From *Settings → Agent integrations* you can:
 - see whether each agent is on `PATH`;
@@ -34,7 +34,7 @@ is already listening, the new process writes a request under
 `~/.local/share/miaotty/inbox/` and exits. The running instance drains that
 directory each frame and opens a tab for any forwarded command (a bare launch
 is just an activation). No new MTP method — and therefore no change to the
-shared `term-mtp` crate — was needed.
+shared `mtty-mtp` crate — was needed.
 
 ## Consequences
 

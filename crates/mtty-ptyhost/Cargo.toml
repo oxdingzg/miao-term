@@ -25,5 +25,5 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_
 
 [dev-dependencies]
 # End-to-end: a hosted Terminal against the real host binary.
-mtty-core = { path = "../term-core" }
+mtty-core = { path = "../mtty-core" }
 serde_json = "1.0.151"

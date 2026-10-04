@@ -8,12 +8,12 @@
 
 ADR 0021 用 ssh 提供了远端 view/edit,但**被隧道的**客户端(远端 shell 把 `MIAOTTY_SOCKET`
 指向应用 socket)仍无法请应用打开文件、也无法读/写文件,因为这些动词在控制面不存在。
-此前 `term-mtp` 之所以被卡住,只是因为工作树有未提交改动 —— 而查明那其实是本会话 `cargo fmt`
+此前 `mtty-mtp` 之所以被卡住,只是因为工作树有未提交改动 —— 而查明那其实是本会话 `cargo fmt`
 的产物,并非他人的工作,故可以安全扩展。
 
 ## 决定
 
-扩展 MTP 面(`crates/term-mtp`):
+扩展 MTP 面(`crates/mtty-mtp`):
 
 - **`app.view` / `app.edit`** —— `{ path }`;入队 `Command::View/Edit(path)`。应用把文件以只读
   方式在查看器(`view`)或编辑器(`edit`)中打开,故客户端可以驱动 UI。

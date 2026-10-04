@@ -37,7 +37,7 @@ bundle ID 现在就改:项目仍是 0.0.x 预发布,`mtty.dev` 是自有域名,�
 代价是 macOS 把它视为新应用,通知等权限需重新授予;本 ADR 与发布说明都写明这一点。
 
 迁移集中在 `mtty-config` 的 `config_dir()` 与 `migrate_legacy_config()`,所有配置/状态路径
-都经由它,不再各自拼 `"miaotty"`。环境变量读取集中在 `mtty_config::env()`(`term-mtp`
+都经由它,不再各自拼 `"miaotty"`。环境变量读取集中在 `mtty_config::env()`(`mtty-mtp`
 无该依赖,使用自身同等的小函数)。
 
 旧 eframe 应用的 `$XDG_DATA_HOME/miaotty/session.json` 仍作为最后一级会话来源,不改名。

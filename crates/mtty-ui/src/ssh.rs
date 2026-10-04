@@ -29,7 +29,7 @@ impl Syntax {
         }
     }
 
-    /// The syntax of the shell new panes run (term-core's default shell:
+    /// The syntax of the shell new panes run (mtty-core's default shell:
     /// `COMSPEC` on Windows, else a POSIX `$SHELL`).
     pub fn local() -> Self {
         if cfg!(windows) {

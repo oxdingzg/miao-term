@@ -10,7 +10,7 @@ not trust the download path.
 
 ## Decision
 
-`crates/term-ui/src/update.rs` plus a small UI:
+`crates/mtty-ui/src/update.rs` plus a small UI:
 
 - **Manifest.** `update-check-url` may return either a plain document whose first
   line is the version, or JSON:

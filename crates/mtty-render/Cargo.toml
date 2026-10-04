@@ -10,7 +10,7 @@ homepage.workspace = true
 
 [dependencies]
 glyphon = "0.7"
-mtty-core = { path = "../term-core" }
+mtty-core = { path = "../mtty-core" }
 wgpu = "23"
 
 [dev-dependencies]

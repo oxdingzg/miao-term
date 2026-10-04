@@ -20,7 +20,7 @@ engine (`mtty-*`) is separate from the app (`mtty-app`), and the control plane
 - Hot-path performance at Alacritty's level: input latency P95 ≤ 16 ms (target ≤ 8 ms),
   first frame ≤ 100 ms, no dropped frames while scrolling, idle CPU ≈ 0.
 - The engine is embeddable; `mtty-app` is its first consumer (the only in-repo example is
-  `crates/term-render/examples/pipeline_probe.rs`, a render-pipeline probe).
+  `crates/mtty-render/examples/pipeline_probe.rs`, a render-pipeline probe).
 - Reuse the existing control plane: `mtp` types, `mtty-cli`, plugins, agent/shell hooks.
 
 **Non-goals (for now)**
@@ -45,7 +45,7 @@ engine (`mtty-*`) is separate from the app (`mtty-app`), and the control plane
 | D4 | **Own tab/split model** (not OS-native tabs) | Cross-platform consistency; controllable |
 | D5 | Concurrency per **Alacritty's lock discipline** (`FairMutex<Term>` + `EventListener`) | Proven; avoids inventing a snapshot protocol |
 | D6 | Platform differences only in `core::pty` / `widget::platform` / `mtp::transport` | Contain complexity |
-| D7 | `term-mtp` decoupled from the engine (Unix socket / Windows named pipe) | A crash in one doesn't take down the other; reuse the protocol |
+| D7 | `mtty-mtp` decoupled from the engine (Unix socket / Windows named pipe) | A crash in one doesn't take down the other; reuse the protocol |
 | D8 | Build the app first, extract the library later; phase the extension points | Real needs drive the API |
 | D9 | Engine crates licensed `Apache-2.0` | Permissive; easy to embed |
 | D10 | One native `mtty` executable delegates to `mtty-widget` (winit + wgpu); the eframe host is retired | Single product identity and direct rendering; see APP-IDENTITY.md |
@@ -53,26 +53,26 @@ engine (`mtty-*`) is separate from the app (`mtty-app`), and the control plane
 ## 3. Layering (DAG) and rules
 
 ```
-   term-graphics    term-config    term-mtp     (leaf crates, no engine deps)
+   mtty-graphics    mtty-config    mtty-mtp     (leaf crates, no engine deps)
         │                │            │
         ▼                │            │
-   term-core             │            │
+   mtty-core             │            │
         │                │            │
         ▼                │            │
-   term-render           │            │
+   mtty-render           │            │
         │                │            │
         ▼                ▼            │
-   term-ui ◄─────────────┘            │
+   mtty-ui ◄─────────────┘            │
         │                             │
         ▼                             │
-   term-widget ◄──────────────────────┘   (native host: winit + wgpu)
+   mtty-widget ◄──────────────────────┘   (native host: winit + wgpu)
         ▲
-        └── mtty-app   (native executable; depends on term-widget)
-   mtty-cli ──► term-mtp
+        └── mtty-app   (native executable; depends on mtty-widget)
+   mtty-cli ──► mtty-mtp
 ```
 
-Not every edge is drawn: `term-widget` also depends on `term-core`/`term-render`, and
-`mtty-app` delegates to `term-widget`. The workspace has nine members.
+Not every edge is drawn: `mtty-widget` also depends on `mtty-core`/`mtty-render`, and
+`mtty-app` delegates to `mtty-widget`. The workspace has nine members.
 
 **Rules**
 - Dependencies point inward only: `widget → render → core`. The one exception is
@@ -89,14 +89,14 @@ Not every edge is drawn: `term-widget` also depends on `term-core`/`term-render`
 
 | Crate | Does | Does not |
 |-------|------|----------|
-| `term-graphics` | Inline-graphics scanner + Sixel/Kitty/iTerm2 decoders | No rendering/GPU/windowing |
-| `term-core` | PTY, vte parsing, grid/scrollback/cursor/modes, selection/search, OSC/CSI semantics, key/mouse→bytes encoding, events; owns the scanner in `term-graphics` | No GPU/window/config/business logic |
-| `term-render` | Font load/shaping/atlas, grid instancing, draw passes, damage increments | No event loop/input |
-| `term-ui` | Host-agnostic UI: theme, input encoding, selection, split layout, egui chrome, palette, hints, vim, markdown, ssh, update, agent integration | No window/event loop |
-| `term-widget` | Native host library (`mtty-app` supplies the executable): winit event loop, wgpu surface, input/IME/clipboard/drag-drop, direct grid draw (ADR 0030) | No PTY/parser duplication |
-| `term-editor` | Editing core for the editor pane: rope, transactions and undo, multiple selections, motions, find/replace (ADR 0034) | No UI, no GPU |
-| `term-config` | Config model, themes, ghostty/alacritty import | No UI |
-| `term-mtp` | Protocol envelope, transport, server/client, agent/history registries, revision + `core.wait` long-poll | No engine dependency |
+| `mtty-graphics` | Inline-graphics scanner + Sixel/Kitty/iTerm2 decoders | No rendering/GPU/windowing |
+| `mtty-core` | PTY, vte parsing, grid/scrollback/cursor/modes, selection/search, OSC/CSI semantics, key/mouse→bytes encoding, events; owns the scanner in `mtty-graphics` | No GPU/window/config/business logic |
+| `mtty-render` | Font load/shaping/atlas, grid instancing, draw passes, damage increments | No event loop/input |
+| `mtty-ui` | Host-agnostic UI: theme, input encoding, selection, split layout, egui chrome, palette, hints, vim, markdown, ssh, update, agent integration | No window/event loop |
+| `mtty-widget` | Native host library (`mtty-app` supplies the executable): winit event loop, wgpu surface, input/IME/clipboard/drag-drop, direct grid draw (ADR 0030) | No PTY/parser duplication |
+| `mtty-editor` | Editing core for the editor pane: rope, transactions and undo, multiple selections, motions, find/replace (ADR 0034) | No UI, no GPU |
+| `mtty-config` | Config model, themes, ghostty/alacritty import | No UI |
+| `mtty-mtp` | Protocol envelope, transport, server/client, agent/history registries, revision + `core.wait` long-poll | No engine dependency |
 | `mtty-app` | Native `mtty` entry point, command help/version and platform packaging metadata | No terminal core duplication |
 | `mtty-cli` | MTP client for scripts/agents | No engine dependency |
 
@@ -106,11 +106,11 @@ The traits/types sketched in the original draft (`Damage`, `TermEvent`, `EventSi
 `Pty`, `InputEncoder`, `GlyphAtlas`, `Renderer`, `Host`) were **not adopted**. The
 shipped API is:
 
-- `term-core`: `Terminal` (PTY + parser + grid) and `ATerm` (the `alacritty_terminal`
-  screen model), in `crates/term-core`.
-- `term-render`: `TermRenderer`, `QuadRenderer`, `ImageRenderer`.
-- Application: `mtty-app` launches `term-widget`, which owns the event loop
-  and draws the grid directly with `term-render`, compositing egui chrome.
+- `mtty-core`: `Terminal` (PTY + parser + grid) and `ATerm` (the `alacritty_terminal`
+  screen model), in `crates/mtty-core`.
+- `mtty-render`: `TermRenderer`, `QuadRenderer`, `ImageRenderer`.
+- Application: `mtty-app` launches `mtty-widget`, which owns the event loop
+  and draws the grid directly with `mtty-render`, compositing egui chrome.
 
 ## 6. Threading model and lock discipline
 
@@ -139,11 +139,11 @@ Use Alacritty's proven model (`FairMutex<Term>` + `EventListener`); do not inven
 
 - **Output**: PTY → reader thread → `vte` → `Term` (+OSC → `TermEvent`) → `Wakeup` → main-thread render.
 - **Input**: winit key/mouse/IME → `core::input` encode → `Pty::write`; selection/paste honor bracketed-paste mode.
-- **Control**: the `term-mtp` server runs on its own thread; in-process UI talks to the registries directly,
+- **Control**: the `mtty-mtp` server runs on its own thread; in-process UI talks to the registries directly,
   external CLI/plugins go over the socket/pipe.
 - **Metadata**: cwd (OSC 7), title, agent state, command history → events/registries → panel subscriptions.
 
-## 8. Rendering (term-render)
+## 8. Rendering (mtty-render)
 
 1. **Glyphs**: `cosmic-text` resolve/fallback, `swash` rasterize → **R8 atlas** (shelf packing, LRU;
    key `(glyph_id, style, px, subpixel)`).
@@ -156,7 +156,7 @@ Use Alacritty's proven model (`FairMutex<Term>` + `EventListener`); do not inven
 6. **Optimization order**: full rebuild → dirty lines → atlas hits → zero per-frame allocation;
    annotate hot spots with `tracy`/`puffin`.
 
-## 9. Terminal model (term-core)
+## 9. Terminal model (mtty-core)
 
 - Grid: `Cell { char + combining + fg/bg/attrs + underline style }`; ring scrollback; reflow.
 - Modes: application cursor keys, bracketed paste, mouse reporting, alternate screen, kitty keyboard
@@ -165,8 +165,8 @@ Use Alacritty's proven model (`FairMutex<Term>` + `EventListener`); do not inven
   (OSC 133 A/B/C/D).
 - Selection/search: line/block, word boundaries (CJK/grapheme via `unicode-width` + grapheme
   boundaries), search highlight.
-- Graphics protocols (kitty graphics / sixel / iTerm2) are implemented by `term-graphics`,
-  wired through `term-core`/`term-render`, and on by default (`graphics = true`).
+- Graphics protocols (kitty graphics / sixel / iTerm2) are implemented by `mtty-graphics`,
+  wired through `mtty-core`/`mtty-render`, and on by default (`graphics = true`).
 
 ## 10. Platform abstraction layer
 
@@ -175,14 +175,14 @@ Use Alacritty's proven model (`FairMutex<Term>` + `EventListener`); do not inven
 | PTY | `trait Pty` | `forkpty` | **ConPTY** |
 | Transport | `mtp::transport` | Unix socket | `\\.\pipe\mtty` |
 | Clipboard | `trait Clipboard` | NSPasteboard / X11-Wayland | Win32 clipboard |
-| Fonts | `term-render::font` | CoreText / fontconfig | DirectWrite (`font-kit`) |
+| Fonts | `mtty-render::font` | CoreText / fontconfig | DirectWrite (`font-kit`) |
 | IME | `widget::input` | native | **TSF** (highest risk, see §19) |
 
 `#[cfg(...)]` is **only** allowed in the modules above; all other code stays platform-neutral.
 
 ## 11. Config / themes
 
-- `term-config`: its own TOML; keys aligned with ghostty/alacritty for import.
+- `mtty-config`: its own TOML; keys aligned with ghostty/alacritty for import.
 - Default look is Nord (background `#2e3440`, font size 13), overridable.
 - Built-in themes: `nord` (default), `dracula`, `gruvbox`/`gruvbox-dark`,
   `solarized`/`solarized-dark`, `tokyo-night`/`tokyonight`; plus custom palettes.
@@ -190,7 +190,7 @@ Use Alacritty's proven model (`FairMutex<Term>` + `EventListener`); do not inven
 
 ## 12. Control plane (MTP)
 
-- `term-mtp` implements the server; the local transport is a Unix socket
+- `mtty-mtp` implements the server; the local transport is a Unix socket
   (`$XDG_RUNTIME_DIR/mtty.sock`, falling back to `$TMPDIR/mtty.sock`) or a Windows named pipe.
 - Remote access: `remote-listen = addr:port` also serves the control plane over TCP; it
   **requires** `MTTY_MTP_TOKEN`, and the client sends that token on every request.
@@ -217,7 +217,7 @@ Use Alacritty's proven model (`FairMutex<Term>` + `EventListener`); do not inven
 
 ## 14. Extension points (phased; don't front-load)
 
-- **Now**: the engine API (`Terminal`/`ATerm`, `term-render`) + MTP (enough).
+- **Now**: the engine API (`Terminal`/`ATerm`, `mtty-render`) + MTP (enough).
 - **R4+**: MTP `provider.*` (custom Details components, kind=tui/web).
 - **Later (only if demanded)**: renderer/panel plugins, theme packs — only then consider "framework"-izing.
 
@@ -258,7 +258,7 @@ Use Alacritty's proven model (`FairMutex<Term>` + `EventListener`); do not inven
 ## 18. Milestones
 
 R0 minimal loop (pty→vt→grid→render→input, measure latency) → **R0.5 IME** → R1 usable terminal →
-R2 three platforms + packaging → R3 `term-mtp` → R4 panels → R5 polish/signing. Each exit must pass its performance gate.
+R2 three platforms + packaging → R3 `mtty-mtp` → R4 panels → R5 polish/signing. Each exit must pass its performance gate.
 
 ## 19. Risks
 
@@ -269,7 +269,7 @@ R2 three platforms + packaging → R3 `term-mtp` → R4 panels → R5 polish/sig
 | ConPTY performance / exit codes | Concurrent read+write + OSC 133;D + separate baseline |
 | egui co-frame compatibility/perf | `PaintCallback` approach; fall back to manual viewport if needed |
 | Over-abstraction too early | Engine "good enough" first; phase the extension points |
-| `alacritty_terminal` API churn | Pin versions; wrap with a `term-core` adapter layer |
+| `alacritty_terminal` API churn | Pin versions; wrap with a `mtty-core` adapter layer |
 
 ## 20. Performance impact analysis (vs Ghostty / Alacritty)
 

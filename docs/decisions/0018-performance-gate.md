@@ -13,7 +13,7 @@ with Instruments; we need something a headless CI can run deterministically.
 A **release-mode, absolute-budget gate** rather than a statistical benchmark
 runner:
 
-- `crates/term-core/tests/perf.rs` measures VT parse throughput (≥ 25 MB/s over
+- `crates/mtty-core/tests/perf.rs` measures VT parse throughput (≥ 25 MB/s over
   a 16 MB SGR-heavy workload) and a 30-row screen snapshot (≤ 2 ms).
 - `miaotty-app` `perf_tests` measure the damage-rebuild path, `build_rows`
   (≤ 4 ms/frame — the roadmap frame budget), and Open Quickly ranking over 10k

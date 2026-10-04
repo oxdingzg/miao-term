@@ -41,7 +41,7 @@ scp /tmp/mtty-src.tgz <windows-host>:mtty-src.tgz
 ```
 
 On macOS, set `COPYFILE_DISABLE=1` for that `tar`: otherwise it adds `._*`
-AppleDouble files, and `term-editor`'s build script fails reading the
+AppleDouble files, and `mtty-editor`'s build script fails reading the
 `._*.sublime-syntax` ones.
 
 ```powershell

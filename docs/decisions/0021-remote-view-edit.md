@@ -5,7 +5,7 @@ Status: accepted.
 ## Context
 
 M4's acceptance is "a remote pane can view/edit files". miaotty's usual answer is
-an MTP method the host answers, but the `term-mtp` crate currently carries
+an MTP method the host answers, but the `mtty-mtp` crate currently carries
 another author's uncommitted changes, so editing its dispatcher would mix work.
 
 ## Decision
@@ -13,7 +13,7 @@ another author's uncommitted changes, so editing its dispatcher would mix work.
 Implement the capability **through the existing ControlMaster ssh connection**,
 with no MTP change and nothing installed on the host:
 
-- `crates/term-ui/src/ssh.rs` gains `read_remote(dest, path)`
+- `crates/mtty-ui/src/ssh.rs` gains `read_remote(dest, path)`
   (`ssh … dest 'cat -- <path>'`) and `write_remote(dest, path, data)`
   (`ssh … dest 'cat > <path>'` fed on stdin), both reusing `ControlMaster=auto` /
   `ControlPersist=60s` and `BatchMode=yes`, and capped at 2 MB per read. The argv
@@ -34,8 +34,8 @@ with no MTP change and nothing installed on the host:
   rather than as a hang.
 - Exposing `app.view` / `app.edit` (and `file.read` / `file.write`) as first-class
   MTP methods — so a *tunnelled* client can trigger this without running our
-  binary locally — remains a follow-up, gated on landing the pending `term-mtp`
+  binary locally — remains a follow-up, gated on landing the pending `mtty-mtp`
   changes first.
-- Update: the `term-mtp` pending changes turned out to be `cargo fmt` fallout,
+- Update: the `mtty-mtp` pending changes turned out to be `cargo fmt` fallout,
   not another author's work; `app.view` / `app.edit` and `file.read` /
   `file.write` landed in ADR 0024, so this route is no longer the only one.

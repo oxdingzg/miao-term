@@ -14,7 +14,7 @@ roadmap 把每个里程碑的退出条件都设为性能预算,并规定在 base
 
 采用 **release 模式、绝对预算的门**,而非统计型基准框架:
 
-- `crates/term-core/tests/perf.rs` 测 VT 解析吞吐(16 MB 重 SGR 负载 ≥ 25 MB/s)与 30 行
+- `crates/mtty-core/tests/perf.rs` 测 VT 解析吞吐(16 MB 重 SGR 负载 ≥ 25 MB/s)与 30 行
   屏幕快照(≤ 2 ms)。
 - `miaotty-app` 的 `perf_tests` 测 damage 重建路径 `build_rows`(≤ 4 ms/帧 —— 即 roadmap
   的帧预算)与 10k 条目的 Open Quickly 排名(≤ 100 ms)。

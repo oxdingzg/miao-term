@@ -222,21 +222,21 @@ mtty 与 miao 是两个独立项目,任意一个都可以单独使用。在 mtty
 
 | Crate | 职责 |
 |-------|------|
-| [`mtty-core`](crates/term-core) | PTY、VT 解析、网格/回滚、选区、查找、OSC、输入编码。不含 GPU 与窗口。 |
-| [`mtty-graphics`](crates/term-graphics) | 内联图片流扫描器与解码器(Sixel、Kitty、iTerm2)。 |
-| [`mtty-render`](crates/term-render) | `wgpu` + `glyphon` 字形网格渲染器,含 quad 与图像管线。 |
-| [`mtty-ui`](crates/term-ui) | 与 host 无关的 UI:主题、输入编码、选区、分屏布局、egui 外壳、命令面板、hint、vim、markdown、ssh、更新与 agent 集成等 helper。 |
-| [`mtty-editor`](crates/term-editor) | 编辑器 pane 的编辑内核:rope 缓冲区、事务与撤销、多选区、光标移动、查找替换(ADR 0034)。不含界面代码。 |
-| [`mtty-lsp`](crates/term-lsp) | 编辑器 pane 的语言服务器(LSP)客户端:按工作区在后台线程运行服务器,同步文档,提供诊断、悬停、补全与跳转定义(ADR 0034)。不含界面代码。 |
-| [`mtty-config`](crates/term-config) | 配置与主题,ghostty/alacritty 导入,以及 View 规则引擎。 |
-| [`mtty-mtp`](crates/term-mtp) | MTP 协议、host/client 与传输(Unix socket、Windows 命名管道、TCP)。 |
-| [`mtty-widget`](crates/term-widget) | mtty 原生 host 库:`winit` + `wgpu` 渲染循环,直接绘制网格并合成 egui 外壳。 |
+| [`mtty-core`](crates/mtty-core) | PTY、VT 解析、网格/回滚、选区、查找、OSC、输入编码。不含 GPU 与窗口。 |
+| [`mtty-graphics`](crates/mtty-graphics) | 内联图片流扫描器与解码器(Sixel、Kitty、iTerm2)。 |
+| [`mtty-render`](crates/mtty-render) | `wgpu` + `glyphon` 字形网格渲染器,含 quad 与图像管线。 |
+| [`mtty-ui`](crates/mtty-ui) | 与 host 无关的 UI:主题、输入编码、选区、分屏布局、egui 外壳、命令面板、hint、vim、markdown、ssh、更新与 agent 集成等 helper。 |
+| [`mtty-editor`](crates/mtty-editor) | 编辑器 pane 的编辑内核:rope 缓冲区、事务与撤销、多选区、光标移动、查找替换(ADR 0034)。不含界面代码。 |
+| [`mtty-lsp`](crates/mtty-lsp) | 编辑器 pane 的语言服务器(LSP)客户端:按工作区在后台线程运行服务器,同步文档,提供诊断、悬停、补全与跳转定义(ADR 0034)。不含界面代码。 |
+| [`mtty-config`](crates/mtty-config) | 配置与主题,ghostty/alacritty 导入,以及 View 规则引擎。 |
+| [`mtty-mtp`](crates/mtty-mtp) | MTP 协议、host/client 与传输(Unix socket、Windows 命名管道、TCP)。 |
+| [`mtty-widget`](crates/mtty-widget) | mtty 原生 host 库:`winit` + `wgpu` 渲染循环,直接绘制网格并合成 egui 外壳。 |
 | [`mtty-app`](mtty-app) | `mtty` 原生主程序及平台安装包元数据。 |
 | [`mtty-cli`](mtty-cli) | `mtty-cli` 控制客户端。 |
 
 热路径 —— `pty → vt → grid → renderer` —— 不跨锁,且每帧不做分配。平台差异只出现在负责
-相应关注点的 crate 中少量 `#[cfg]` 守卫的代码块里:`term-core` 的 PTY 派生
-(`src/term.rs`)、`term-widget` 的窗口/事件循环(`src/lib.rs`),以及 `term-mtp` 的
+相应关注点的 crate 中少量 `#[cfg]` 守卫的代码块里:`mtty-core` 的 PTY 派生
+(`src/term.rs`)、`mtty-widget` 的窗口/事件循环(`src/lib.rs`),以及 `mtty-mtp` 的
 socket/命名管道传输(`src/lib.rs`)。
 
 ### 原则
@@ -244,7 +244,7 @@ socket/命名管道传输(`src/lib.rs`)。
 1. 引擎与 host 分离;hosts 是引擎的第一批消费者。
 2. 热路径不跨锁、不做分配。
 3. 先做应用、后抽库,API 由真实需求驱动。
-4. 平台差异只出现在 `term-core`、`term-widget` 与 `term-mtp` 中 `#[cfg]` 守卫的代码块里。
+4. 平台差异只出现在 `mtty-core`、`mtty-widget` 与 `mtty-mtp` 中 `#[cfg]` 守卫的代码块里。
 5. 控制面(MTP / CLI)与引擎解耦。
 
 ---

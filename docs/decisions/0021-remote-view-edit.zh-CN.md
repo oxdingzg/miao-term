@@ -7,14 +7,14 @@
 ## 背景
 
 M4 的验收是"远端 pane 可 view/edit"。miaotty 惯常的做法是由 host 应答某个 MTP 方法,
-但 `term-mtp` crate 目前带着另一位作者的未提交改动,改它的 dispatcher 会把两人的工作混在
+但 `mtty-mtp` crate 目前带着另一位作者的未提交改动,改它的 dispatcher 会把两人的工作混在
 一起。
 
 ## 决定
 
 **经由既有的 ControlMaster ssh 连接**实现该能力,不改 MTP、也无需在远端安装任何东西:
 
-- `crates/term-ui/src/ssh.rs` 新增 `read_remote(dest, path)`
+- `crates/mtty-ui/src/ssh.rs` 新增 `read_remote(dest, path)`
   (`ssh … dest 'cat -- <path>'`)与 `write_remote(dest, path, data)`
   (`ssh … dest 'cat > <path>'`,数据走 stdin),两者都复用
   `ControlMaster=auto` / `ControlPersist=60s` 与 `BatchMode=yes`,单次读取上限 2 MB。argv
@@ -33,6 +33,6 @@ M4 的验收是"远端 pane 可 view/edit"。miaotty 惯常的做法是由 host 
   失败会显示在状态行,而不是卡住。
 - 把 `app.view` / `app.edit`(及 `file.read` / `file.write`)暴露为一等 MTP 方法,以便
   *被隧道*的客户端无需本地运行我们的二进制即可触发,仍属后续 —— 前提是先落地
-  `term-mtp` 的待提交改动。
-- Update:`term-mtp` 的待提交改动实为本会话 `cargo fmt` 的产物,并非他人工作;`app.view` /
+  `mtty-mtp` 的待提交改动。
+- Update:`mtty-mtp` 的待提交改动实为本会话 `cargo fmt` 的产物,并非他人工作;`app.view` /
   `app.edit` 与 `file.read` / `file.write` 已在 ADR 0024 落地,故该路径不再是唯一途径。

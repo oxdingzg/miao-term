@@ -4,7 +4,7 @@
 //! goes through `UserNotifications`, so it belongs to mtty and can be clicked,
 //! instead of being attributed to Script Editor like `osascript` — and fall
 //! back to a command-line tool elsewhere. Putting the platform-specific
-//! dependencies here keeps `term-ui` host-agnostic. Clipboard image access
+//! dependencies here keeps `mtty-ui` host-agnostic. Clipboard image access
 //! will live here too; see ADR 0035.
 
 use std::process::Command;

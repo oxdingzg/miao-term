@@ -10,13 +10,13 @@ including focusing a specific pane — rather than opening a duplicate window.
 
 ## Decision
 
-**One intent model** (`crates/term-ui/src/launch.rs`). `Intent` is
+**One intent model** (`crates/mtty-ui/src/launch.rs`). `Intent` is
 `Activate | Quick | Focus(pane_id) | Run(command)`, parsed from argv
 (`--quick`, `--focus <id>`, `ssh://…`, `x-man-page://…`, `miaotty://quick`,
 `miaotty://focus?pane=…`) and encoded/decoded for the cross-instance inbox
 (`quick`, `focus\t<id>`, `run\t<cmd>`). Unit-tested round-trip.
 
-**Global hotkey.** `crates/term-ui/src/hotkey.rs` parses an accelerator
+**Global hotkey.** `crates/mtty-ui/src/hotkey.rs` parses an accelerator
 (`cmd+shift+t`, `ctrl+alt+space`, platform-independent and tested everywhere) and
 registers it via `global-hotkey` (MIT) on macOS and Windows; the dependency is
 declared per-target so Linux CI does not pull X11/Wayland. The handler flips a

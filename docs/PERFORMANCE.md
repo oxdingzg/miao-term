@@ -27,12 +27,12 @@ signal — the absolute budgets are the gate.
 
 | Metric | Budget | Baseline (M-series, release) | Where |
 |--------|--------|------------------------------|-------|
-| VT parse throughput | ≥ 25 MB/s | 73 MB/s | `crates/term-core/tests/perf.rs` |
-| Screen snapshot (30 rows) | ≤ 2 ms | 0.012 ms | `crates/term-core/tests/perf.rs` |
+| VT parse throughput | ≥ 25 MB/s | 73 MB/s | `crates/mtty-core/tests/perf.rs` |
+| Screen snapshot (30 rows) | ≤ 2 ms | 0.012 ms | `crates/mtty-core/tests/perf.rs` |
 | Row build per frame | ≤ 4 ms | 0.12 ms | `mtty-app/tests/perf.rs` |
 | Palette rank (10k entries) | ≤ 100 ms | 2.0 ms | `mtty-app/tests/perf.rs` |
-| Hosted echo round trip (p95) | ≤ 4 ms | 0.04 ms | `crates/term-ptyhost/tests/perf.rs` |
-| Hosted output | ≥ 25 MB/s | 180 MB/s | `crates/term-ptyhost/tests/perf.rs` |
+| Hosted echo round trip (p95) | ≤ 4 ms | 0.04 ms | `crates/mtty-ptyhost/tests/perf.rs` |
+| Hosted output | ≥ 25 MB/s | 180 MB/s | `crates/mtty-ptyhost/tests/perf.rs` |
 | IPC idle cost | ≈ 0 (no polling) | — | by design |
 | Agent burst | 100 events → 1 repaint | — | by design |
 

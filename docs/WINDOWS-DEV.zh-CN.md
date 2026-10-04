@@ -38,7 +38,7 @@ tar -czf /tmp/mtty-src.tgz --exclude target --exclude .git --exclude dist mtty
 scp /tmp/mtty-src.tgz <windows-host>:mtty-src.tgz
 ```
 
-在 macOS 上执行该 `tar` 时请设置 `COPYFILE_DISABLE=1`:否则会加入 `._*` AppleDouble 文件,`term-editor` 的构建脚本读取其中的 `._*.sublime-syntax` 时会失败。
+在 macOS 上执行该 `tar` 时请设置 `COPYFILE_DISABLE=1`:否则会加入 `._*` AppleDouble 文件,`mtty-editor` 的构建脚本读取其中的 `._*.sublime-syntax` 时会失败。
 
 ```powershell
 # 在 Windows 主机上

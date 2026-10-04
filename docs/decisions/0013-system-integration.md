@@ -11,7 +11,7 @@ heavy dependencies.
 
 ## Decision
 
-**URL schemes** (`crates/term-ui/src/launch.rs`). The executable inspects its argv
+**URL schemes** (`crates/mtty-ui/src/launch.rs`). The executable inspects its argv
 for `scheme://…` and turns it into a shell command for a new tab:
 `ssh://[user@]host[:port][/path]` → `ssh [-p port] host` (IPv6 via `[..]`,
 arguments single-quoted), `x-man-page://cmd` → `man cmd`, `miaotty://…` →
@@ -23,7 +23,7 @@ activate only. Registration lives in the macOS `Info.plist` (built by
 first use, then switching between it and the previously active tab. A true
 system-wide hotkey needs an OS-specific API and is deferred.
 
-**i18n** (`crates/term-ui/src/i18n.rs`). A string table with English keys: `En`
+**i18n** (`crates/mtty-ui/src/i18n.rs`). A string table with English keys: `En`
 returns the key, `Zh` maps the visible chrome (Settings, Details tabs, palette
 verbs, editor/composer/recipe buttons, section titles, agent-loop messages).
 `language` in the config or `$LANG` selects it; anything untranslated degrades

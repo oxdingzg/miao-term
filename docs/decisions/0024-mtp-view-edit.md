@@ -7,13 +7,13 @@ Status: accepted.
 ADR 0021 gave remote view/edit through ssh, but a *tunnelled* client (a remote
 shell with `MIAOTTY_SOCKET` pointed at the app's socket) still had no way to ask
 the app to open a file, or to read/write one, because those verbs did not exist
-on the control plane. The `term-mtp` crate blocked this only because the working
+on the control plane. The `mtty-mtp` crate blocked this only because the working
 tree had uncommitted changes — which turned out to be `cargo fmt` fallout from
 this session, not another author's work, so it is safe to extend.
 
 ## Decision
 
-Extend the MTP surface (`crates/term-mtp`):
+Extend the MTP surface (`crates/mtty-mtp`):
 
 - **`app.view` / `app.edit`** — `{ path }`; queue `Command::View/Edit(path)`. The
   app opens the file read-only in the reader (`view`) or in the editor (`edit`),

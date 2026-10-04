@@ -13,5 +13,5 @@ name = "mtty-cli"
 path = "src/main.rs"
 
 [dependencies]
-mtty-mtp = { path = "../crates/term-mtp" }
+mtty-mtp = { path = "../crates/mtty-mtp" }
 serde_json = "1"

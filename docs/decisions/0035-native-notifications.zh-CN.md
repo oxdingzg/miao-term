@@ -8,7 +8,7 @@
 
 ADR 0010 规定:某 agent pane 转换到 `awaiting` 或 `error` 且它不是焦点 pane 时,发一条
 系统通知。当时选的平台后端是命令行工具:`osascript`(macOS)、`notify-send`(Linux)、
-BurntToast(Windows),都写在 `crates/term-ui/src/agentloop.rs`。
+BurntToast(Windows),都写在 `crates/mtty-ui/src/agentloop.rs`。
 
 在 macOS 上,`osascript … display notification` 会归属于 **脚本编辑器**,因为
 `/usr/bin/osascript` 属于那个 app 的 bundle:横幅显示错误的图标和名字、不能点击,
@@ -17,8 +17,8 @@ BurntToast(Windows),都写在 `crates/term-ui/src/agentloop.rs`。
 
 ## 决定
 
-新增 `crates/term-platform`(`mtty-platform`)承载原生系统集成,先从通知开始。
-`crates/term-ui/src/agentloop.rs` 从它 re-export `notify`/`alert`,这样各 host 仍然调用
+新增 `crates/mtty-platform`(`mtty-platform`)承载原生系统集成,先从通知开始。
+`crates/mtty-ui/src/agentloop.rs` 从它 re-export `notify`/`alert`,这样各 host 仍然调用
 `agentloop::notify`(ADR 0010),而平台代码离开 host-agnostic 的 crate。
 
 在 macOS 上,当进程从 app bundle 运行时,`notify` 通过 `UNUserNotificationCenter`
@@ -35,7 +35,7 @@ WinRT toast 发送,两者都保留命令行回退。`alert`(启动失败时的�
 ## 后果
 
 - macOS 通知归属于 mtty、可点击,不再激活脚本编辑器。
-- `term-ui` 保持 host-agnostic:`objc2`、`block2`、`objc2-user-notifications` 都限制在
+- `mtty-ui` 保持 host-agnostic:`objc2`、`block2`、`objc2-user-notifications` 都限制在
   `mtty-platform` 的 macOS target 内。
 - 原生路径需要 app bundle。`scripts/package-macos.sh` 已经会构建并 ad-hoc 签名一个,
   测试和本地运行都不需要证书;只有对外分发才需要 Developer ID + 公证。

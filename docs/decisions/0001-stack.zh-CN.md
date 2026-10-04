@@ -22,7 +22,7 @@ Ghostty(Zig + 平台 UI)。自研 VT 内核昂贵且不是差异点;差异在渲
 
 ## 更新
 
-引导阶段屏幕模型用 `vt100`;Phase 2 起 app 运行在 `alacritty_terminal` 上(经 `term-core::aterm`),`vt100` 已移除。
+引导阶段屏幕模型用 `vt100`;Phase 2 起 app 运行在 `alacritty_terminal` 上(经 `mtty-core::aterm`),`vt100` 已移除。
 
 Update:ADR 0030 增加了第二个宿主 `mtty-widget`(bin `miaotty-native`),其原生
 `winit` + `wgpu` 循环直接绘制网格;终端不再总是经 egui `PaintCallback`,该路径现仅

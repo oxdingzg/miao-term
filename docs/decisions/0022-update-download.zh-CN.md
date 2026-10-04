@@ -11,7 +11,7 @@ ADR 0013 只做了版本比较。被提示"有新版本"的用户应当能不离
 
 ## 决定
 
-`crates/term-ui/src/update.rs` 加一小块 UI:
+`crates/mtty-ui/src/update.rs` 加一小块 UI:
 
 - **清单。** `update-check-url` 可返回首行为版本的纯文本文档,或 JSON:
   `{ "version": "0.2.0", "artifacts": { "macos-aarch64": { "url": …, "sha256": … } } }`。

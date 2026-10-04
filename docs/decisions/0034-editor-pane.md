@@ -33,7 +33,7 @@ renderer and laid out by the existing split tree.
    `editors` with path, cursor and scroll; MTP `pane.list` reports each pane's
    `kind`. `pane.send`/`pane.run` to an editor insert the text at its carets
    (one undo step); `pane.close` leaves an editor with unsaved changes open.
-2. **A GPU-free core crate, `term-editor`.** A rope (`ropey`) buffer;
+2. **A GPU-free core crate, `mtty-editor`.** A rope (`ropey`) buffer;
    transactions with an undo/redo history; multiple selections; search
    (`regex`) over the rope; line-ending and UTF-8/BOM detection; reload on
    external change. Pure functions with unit tests and its own perf bench.
@@ -69,7 +69,7 @@ renderer and laid out by the existing split tree.
 4. **Rendering through the terminal pipeline.** The editor builds the visible
    rows as styled spans on the monospace cell grid (tabs expanded, wide
    characters as two cells) plus quads for the gutter, selections and
-   cursors. `term-render` gains per-span style (bold, italic, underline) and
+   cursors. `mtty-render` gains per-span style (bold, italic, underline) and
    clips glyphs to the pane (today only to the window). Only visible lines are
    built, so a 100 MB file costs what a screen costs; a perf-gate entry holds
    that under the 4 ms frame budget.
@@ -77,7 +77,7 @@ renderer and laid out by the existing split tree.
    text conventions (arrows, ⌥ word, ⌘ line, ⇧ select, ⌘Z/⇧⌘Z, ⌘F, ⌘D next
    occurrence, ⌥-click add cursor) with Ctrl equivalents elsewhere; IME
    preedit draws inline at the caret, as in terminals; the vim mode moves over
-   in a later phase. (Implementation note, E6: vim mode is a `term-editor`
+   in a later phase. (Implementation note, E6: vim mode is a `mtty-editor`
    state machine over the document — NORMAL/INSERT/VISUAL/VISUAL LINE, counts,
    `h j k l w b e 0 ^ $ gg G`, `i a I A o O`, `x`, `d`/`c`/`y` with motions
    (`dd`/`cc`/`yy`, `dw`, `d$`), `p`/`P` with an internal register, `u` and
@@ -105,7 +105,7 @@ renderer and laid out by the existing split tree.
    View-mode panes, over 64 MB, are left alone.)
 7. **LSP later**, per workspace root over stdio: diagnostics, hover,
    completion, go-to-definition, configured per language in `config.toml`. (Implementation note, E5:
-   a GPU-free crate, `term-lsp`, speaks JSON-RPC over the server's stdio
+   a GPU-free crate, `mtty-lsp`, speaks JSON-RPC over the server's stdio
    with serde_json alone. One server runs per language group and workspace
    root (the nearest folder with a project file, else the `.git` folder);
    it is started, initialized and read on background threads, and found on
@@ -140,7 +140,7 @@ renderer and laid out by the existing split tree.
 
 | Phase | Content | Acceptance |
 |---|---|---|
-| E1 | `term-editor` core: rope, transactions, undo, selections, search | unit tests; edit/search bench on a 100 MB file |
+| E1 | `mtty-editor` core: rope, transactions, undo, selections, search | unit tests; edit/search bench on a 100 MB file |
 | E2 | Editor pane MVP: pane kinds, styled spans and clipping, keys, mouse, IME, clipboard, open/save/close, session restore | replay tests; real-window capture; perf gate for the row build |
 | E3 | tree-sitter highlighting (80 languages, a Sublime-syntax fallback for more), large-file mode, remote files | highlight snapshot tests; keystroke latency on a large file |
 | E4 | Multi-cursor, find/replace, go to line, Markdown preview pane | replay tests |

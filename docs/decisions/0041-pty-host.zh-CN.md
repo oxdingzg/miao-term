@@ -10,9 +10,9 @@
 
 今天子进程与应用绑在一起的方式:
 
-- `Terminal`(`crates/term-core/src/term.rs`)持有 `portable-pty` 的 master、writer 和 child。portable-pty 让每个子进程自成一个会话,以该 PTY 为控制终端。
+- `Terminal`(`crates/mtty-core/src/term.rs`)持有 `portable-pty` 的 master、writer 和 child。portable-pty 让每个子进程自成一个会话,以该 PTY 为控制终端。
 - `Cmd::Quit`(菜单、Dock、注销,以及经 `install_update` 的更新路径)以 `std::process::exit(0)` 结束。随后内核关闭 master,PTY 挂断,shell 收到 `SIGHUP`。关窗口或关 pane 会走 `Drop for Terminal`,主动杀子进程(Windows 上是 `taskkill /T /F`,ADR 0027)。
-- MTP 控制 socket(`term-mtp`)是应用内的一个线程。pane id 是每次运行重新计数的(`pane0`、`pane1`……),并以 `MTTY_PANE_ID` 导出给子进程。
+- MTP 控制 socket(`mtty-mtp`)是应用内的一个线程。pane id 是每次运行重新计数的(`pane0`、`pane1`……),并以 `MTTY_PANE_ID` 导出给子进程。
 
 只要 master 没被持有,子进程就会丢,所以 master 必须放在一个比应用活得更久的进程里。
 
@@ -35,7 +35,7 @@
 
 代价是每个 pane 多一个进程(常驻几 MB;不链接 GPU、字体或 UI 代码)。
 
-`mtty-ptyhost` 是一个独立的小二进制,来自新的叶子 crate `term-ptyhost`(协议、宿主、客户端;依赖 `portable-pty`,不依赖引擎)。它和 `mtty-cli` 一起进入每个安装包。
+`mtty-ptyhost` 是一个独立的小二进制,来自新的叶子 crate `mtty-ptyhost`(协议、宿主、客户端;依赖 `portable-pty`,不依赖引擎)。它和 `mtty-cli` 一起进入每个安装包。
 
 启动宿主前,应用先把宿主二进制复制到按版本区分的用户目录(`<data dir>/mtty/ptyhost/<version>/`,只复制一次),从那里运行。以下三种情况让"从安装位置直接运行"不安全:
 
@@ -165,8 +165,8 @@ MTP socket 仍在应用内,所以在重启的一两秒内不可用。
 
 | 阶段 | 内容 | 验收 |
 |---|---|---|
-| P0 | 在 `term-core` 中实现状态快照与恢复(`ATerm::snapshot_state` / `restore_state`):备用屏下不破坏内容,恢复时不发查询回复;周期保存覆盖运行全屏程序的 pane | 等价测试:对录制的字节流 *A* 和 *B*(shell、类 vim 备用屏、Ink 式重绘、宽字符、软换行),在 *A* 之后拍快照、恢复、再喂 *B*,得到的单元格、光标和模式,与不间断地喂 *A + B* 完全一致;在 macOS 桌面上截图核对 vim、less、Claude Code |
-| P1 | `term-ptyhost` crate、宿主二进制、Unix 客户端后端、`pty-host` 设置(默认关闭)、版本化复制 | 宿主集成测试(启动、断开、从偏移量重连、截断、kill、超时、对端检查);在 macOS 和 Linux 桌面上 kill -9 应用后重连 |
+| P0 | 在 `mtty-core` 中实现状态快照与恢复(`ATerm::snapshot_state` / `restore_state`):备用屏下不破坏内容,恢复时不发查询回复;周期保存覆盖运行全屏程序的 pane | 等价测试:对录制的字节流 *A* 和 *B*(shell、类 vim 备用屏、Ink 式重绘、宽字符、软换行),在 *A* 之后拍快照、恢复、再喂 *B*,得到的单元格、光标和模式,与不间断地喂 *A + B* 完全一致;在 macOS 桌面上截图核对 vim、less、Claude Code |
+| P1 | `mtty-ptyhost` crate、宿主二进制、Unix 客户端后端、`pty-host` 设置(默认关闭)、版本化复制 | 宿主集成测试(启动、断开、从偏移量重连、截断、kill、超时、对端检查);在 macOS 和 Linux 桌面上 kill -9 应用后重连 |
 | P2 | 更新路径断开并重连;保留 pane id;已恢复会话列表;`mtty-cli --wait` | 在 macOS 桌面(.app)和 Linux 桌面(AppImage)上从上一个正式版真实更新,更新时 Claude Code 正在执行:它继续运行,重启后 pane 显示其输出 |
 | P3 | Windows 宿主(ConPTY、命名管道、job 脱离、复制到 `Program Files` 之外的版本化目录) | 在 Windows 桌面上用 MSI 做同样的更新测试 |
 | P4 | `keep-sessions-on-quit`、`detached-timeout`、托管模式的性能门禁测试 | 开启托管时门禁通过 |
@@ -180,11 +180,11 @@ SSH、串口、Telnet、TCP pane 不在范围内。它们的状态在远端,SSH 
 - 每个本地 pane 多一个进程,外加一个冻结的线协议:只要还可能有老宿主在运行,就必须继续支持它。
 - 关闭托管时,恢复的 pane 运行的是*新的* shell,所以只显示快照的内容,从不应用其中的模式(新 shell 并不处于 vim 的备用屏或鼠标模式)。P0 对这条路径仍有帮助:快照不再破坏备用屏,周期保存也能覆盖运行全屏程序的 pane。
 - 打包在四个目标上多一个二进制(`release.yml`、MSI、AppImage、deb、`.app`)。
-- 本 ADR 接受后,`docs/ARCHITECTURE.md` 补充宿主进程及其 crate;D6 的平台边界扩展到 `term-ptyhost`。
+- 本 ADR 接受后,`docs/ARCHITECTURE.md` 补充宿主进程及其 crate;D6 的平台边界扩展到 `mtty-ptyhost`。
 
 ## 补充:P1 的实际实现(2026-10-03)
 
-- **协议 v1** 以 `crates/term-ptyhost/src/proto.rs` 为准(有固定帧测试):发往宿主的有 `Hello`、`Attach`、`Input`、`Resize`、`Kill`、`Detach`;宿主发出的有 `Welcome`、`Output{offset, boundary}`、`Truncated{oldest, modes}`、`Live{offset}`、`Exited`、`Detached`。`Live` 标记回放结束,应用据此恢复回复查询并调整尺寸。没有 `Query`/`Answer`:应用用 `Welcome` 里的子进程 pid 直接向内核读取前台进程组(macOS 用 `proc_pidinfo` 的 `tpgid`,Linux 读 `/proc/<pid>/stat`),不需要往返。
+- **协议 v1** 以 `crates/mtty-ptyhost/src/proto.rs` 为准(有固定帧测试):发往宿主的有 `Hello`、`Attach`、`Input`、`Resize`、`Kill`、`Detach`;宿主发出的有 `Welcome`、`Output{offset, boundary}`、`Truncated{oldest, modes}`、`Live{offset}`、`Exited`、`Detached`。`Live` 标记回放结束,应用据此恢复回复查询并调整尺寸。没有 `Query`/`Answer`:应用用 `Welcome` 里的子进程 pid 直接向内核读取前台进程组(macOS 用 `proc_pidinfo` 的 `tpgid`,Linux 读 `/proc/<pid>/stat`),不需要往返。
 - 在 `config.toml` 里写 `pty-host = true` 开启(默认关闭)。宿主二进制 `mtty-ptyhost` 需放在 `mtty` 旁边,使用前复制到 `<data dir>/ptyhost/<version>/`。打进安装包属于 P2。
 - 宿主 2 秒内无响应时,该 pane 在应用内运行 shell 并显示一行暗色提示;宿主根本无法启动时静默回退。
 - 恢复会话时先尝试重连,并保留 pane id;每分钟一次的保存会在 ANSI 副本旁写出 `<pane>.host.json`(状态加偏移量)。没有快照时回放宿主的整个环形缓冲。
@@ -210,7 +210,7 @@ SSH、串口、Telnet、TCP pane 不在范围内。它们的状态在远端,SSH 
 ## 补充:P4 的实际实现(2026-10-03)
 
 - `keep-sessions-on-quit`(默认 `false`):普通退出(菜单、⌘Q、关闭窗口)时,像更新一样保存每个托管 pane 的状态并断开宿主,而不是结束它。`detached-timeout`(默认 `24h`;支持 `90s`、`30m`、`24h`、`7d` 或秒数)会传给每个新宿主。
-- 性能门禁:`crates/term-ptyhost/tests/perf.rs` 测量按键经宿主的回显往返(`hosted_echo_p95_ms`,预算 4 ms)和经宿主的输出吞吐(`hosted_output_mbps`,预算 25 MB/s,即屏幕解析的预算),各自与测试直接持有的 PTY 上的同样工作对比。
+- 性能门禁:`crates/mtty-ptyhost/tests/perf.rs` 测量按键经宿主的回显往返(`hosted_echo_p95_ms`,预算 4 ms)和经宿主的输出吞吐(`hosted_output_mbps`,预算 25 MB/s,即屏幕解析的预算),各自与测试直接持有的 PTY 上的同样工作对比。
 - 第一次测量发现,Linux 上经宿主的输出只有直连 PTY 的 37%–79%:Linux 的 PTY 每次读取只给几百字节,而宿主每读一次就发一帧。现在宿主在一个线程里把读到的内容放进有界队列,在另一个线程里把队列中已有的全部内容一次组成一帧(最多 256 KiB):输出密集时自然攒成大帧,空闲时的输出仍然立即发出。现在 Linux 上经宿主的输出是直连的 89%–112%,macOS 上超过直连;回显的 p95 从约 0.025 ms 变为约 0.07 ms,相对 16 ms 的按键到字形预算可以忽略。
 
 ## 补充:P5(2026-10-03)

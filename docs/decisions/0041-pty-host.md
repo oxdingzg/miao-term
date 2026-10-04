@@ -18,7 +18,7 @@ not survive a quit (that needs a separate PTY daemon)".
 
 What ties a child to the app today:
 
-- `Terminal` (`crates/term-core/src/term.rs`) owns the `portable-pty` master,
+- `Terminal` (`crates/mtty-core/src/term.rs`) owns the `portable-pty` master,
   the writer and the child. portable-pty starts each child in its own session
   with the PTY as controlling terminal.
 - `Cmd::Quit` (menu, Dock, logout, and the update path via `install_update`)
@@ -26,7 +26,7 @@ What ties a child to the app today:
   PTY hangs up and the shell gets `SIGHUP`. Closing the window or a pane runs
   `Drop for Terminal`, which kills the child explicitly (`taskkill /T /F` on
   Windows, ADR 0027).
-- The MTP control socket (`term-mtp`) is a thread in the app. Pane ids are a
+- The MTP control socket (`mtty-mtp`) is a thread in the app. Pane ids are a
   per-run counter (`pane0`, `pane1`, …), exported to the child as
   `MTTY_PANE_ID`.
 
@@ -63,7 +63,7 @@ The cost is one extra process per pane (a few MB resident; no GPU, font or UI
 code is linked).
 
 `mtty-ptyhost` is a separate small binary from a new leaf crate
-`term-ptyhost` (protocol, host, client; depends on `portable-pty`, not on the
+`mtty-ptyhost` (protocol, host, client; depends on `portable-pty`, not on the
 engine). It ships in every package next to `mtty-cli`.
 
 Before spawning, the app copies the host binary into a versioned per-user
@@ -263,8 +263,8 @@ input.
 
 | Phase | Content | Acceptance |
 |---|---|---|
-| P0 | State snapshot and restore in `term-core` (`ATerm::snapshot_state` / `restore_state`), non-destructive under the alternate screen, replies muted while restoring; the periodic save includes full-screen panes | Equivalence tests: for recorded streams *A* and *B* (shell, vim-like alternate screen, Ink-style redraws, wide characters, wrapped lines), restoring a snapshot taken after *A* and then feeding *B* yields the same cells, cursor and modes as feeding *A + B* without interruption; vim/less/Claude Code captures on a macOS desktop |
-| P1 | `term-ptyhost` crate, host binary, Unix client backend, `pty-host` setting (default off), versioned copy | Host integration tests (spawn, detach, reattach from offset, truncation, kill, timeout, peer check); kill -9 the app and reattach on a macOS and a Linux desktop |
+| P0 | State snapshot and restore in `mtty-core` (`ATerm::snapshot_state` / `restore_state`), non-destructive under the alternate screen, replies muted while restoring; the periodic save includes full-screen panes | Equivalence tests: for recorded streams *A* and *B* (shell, vim-like alternate screen, Ink-style redraws, wide characters, wrapped lines), restoring a snapshot taken after *A* and then feeding *B* yields the same cells, cursor and modes as feeding *A + B* without interruption; vim/less/Claude Code captures on a macOS desktop |
+| P1 | `mtty-ptyhost` crate, host binary, Unix client backend, `pty-host` setting (default off), versioned copy | Host integration tests (spawn, detach, reattach from offset, truncation, kill, timeout, peer check); kill -9 the app and reattach on a macOS and a Linux desktop |
 | P2 | Update path detaches and reattaches; pane ids preserved; recovered-sessions list; `mtty-cli --wait` | Real update from the previous release on a macOS desktop (.app) and a Linux desktop (AppImage) with Claude Code mid-turn: it keeps running and the pane shows its output after relaunch |
 | P3 | Windows host (ConPTY, named pipe, job breakaway, versioned copy outside `Program Files`) | Same update test with the MSI on a Windows desktop |
 | P4 | `keep-sessions-on-quit`, `detached-timeout`, hosted performance-gate tests | Gate green with hosting on |
@@ -288,11 +288,11 @@ reboot is also out of scope.
 - Packaging gains one binary on four targets (`release.yml`, MSI, AppImage,
   deb, `.app`).
 - `docs/ARCHITECTURE.md` gains the host process and its crate once this is
-  accepted; D6's platform boundaries extend to `term-ptyhost`.
+  accepted; D6's platform boundaries extend to `mtty-ptyhost`.
 
 ## Addendum: P1 as built (2026-10-03)
 
-- **Protocol v1** as frozen in `crates/term-ptyhost/src/proto.rs` (golden-frame
+- **Protocol v1** as frozen in `crates/mtty-ptyhost/src/proto.rs` (golden-frame
   tests): `Hello`, `Attach`, `Input`, `Resize`, `Kill`, `Detach` to the host;
   `Welcome`, `Output{offset, boundary}`, `Truncated{oldest, modes}`,
   `Live{offset}`, `Exited`, `Detached` from it. `Live` marks the end of the
@@ -374,7 +374,7 @@ reboot is also out of scope.
   closing the window) saves each hosted pane's state and detaches its host,
   as an update does, instead of ending it. `detached-timeout` (default
   `24h`; `90s`, `30m`, `24h`, `7d` or seconds) is passed to each new host.
-- Performance gate: `crates/term-ptyhost/tests/perf.rs` measures a
+- Performance gate: `crates/mtty-ptyhost/tests/perf.rs` measures a
   keystroke's echo through a host (`hosted_echo_p95_ms`, budget 4 ms) and
   output through a host (`hosted_output_mbps`, budget 25 MB/s, the screen's
   parse budget), each against the same work on a PTY the test owns.

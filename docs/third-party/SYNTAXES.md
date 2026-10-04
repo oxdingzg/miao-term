@@ -34,7 +34,7 @@ under ADR 0006. Each directory carries the upstream licence file and a
 `SOURCE.md` naming the upstream repository and commit. Syntaxes bat converted
 from TextMate grammars keep the upstream grammar's licence.
 
-`crates/term-editor/build.rs` compiles them with syntect's defaults into one
+`crates/mtty-editor/build.rs` compiles them with syntect's defaults into one
 embedded dump; every vendored file must compile under the pure-Rust regex
 engine. Left out: bat's VimHelp and hosts (their patterns need Oniguruma), and
 syntaxes for languages a built-in tree-sitter grammar already covers.

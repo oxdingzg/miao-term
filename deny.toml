@@ -55,9 +55,9 @@ ignore = [
   # exists (RustCrypto/RSA#626), so this cannot be resolved by upgrading.
   #
   # mtty reaches `rsa` only through `ssh-key`, and only to parse and re-encode a
-  # private key: crates/term-keys calls PrivateKey::from_openssh and to_openssh,
+  # private key: crates/mtty-keys calls PrivateKey::from_openssh and to_openssh,
   # and the workspace contains no sign, verify or RSA-decrypt call at all — the
-  # one `decrypt` in term-keys is the PuTTY .ppk's own AES-256-CBC. The crate is
+  # one `decrypt` in mtty-keys is the PuTTY .ppk's own AES-256-CBC. The crate is
   # linked, but the vulnerable primitive is not on any path from this code.
   #
   # RE-ASSESS when ssh-key is upgraded. Assessed 2026-10-03.

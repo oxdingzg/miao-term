@@ -39,7 +39,7 @@ block2 = "0.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Native notifications through the freedesktop D-Bus service. zbus is already in
-# the tree through ashpd (term-ui's global shortcut), so this reuses its build.
+# the tree through ashpd (mtty-ui's global shortcut), so this reuses its build.
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]

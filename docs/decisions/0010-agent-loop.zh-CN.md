@@ -13,7 +13,7 @@ U6/M1 要求系统通知、防休眠,以及把提示交给 agent 的方式 —�
 
 三个副作用,均由 MTP 发布的 agent 状态(按 pane,`agent.state.*`)驱动:
 
-**通知**(`crates/term-ui/src/agentloop.rs`)。应用记录每个 pane 的上一次状态,当某 pane
+**通知**(`crates/mtty-ui/src/agentloop.rs`)。应用记录每个 pane 的上一次状态,当某 pane
 **转换**到 `awaiting` 或 `error` 且它不是焦点 pane 时,发系统通知。平台后端:
 `osascript`(macOS)、`notify-send`(Linux)、`powershell`/BurntToast(Windows,尽力而为)。
 开关:`notifications`。

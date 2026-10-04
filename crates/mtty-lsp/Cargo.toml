@@ -9,6 +9,6 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
-mtty-platform = { path = "../term-platform" }
-mtty-editor = { path = "../term-editor" }
+mtty-platform = { path = "../mtty-platform" }
+mtty-editor = { path = "../mtty-editor" }
 serde_json = "1.0"

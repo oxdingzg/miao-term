@@ -9,17 +9,17 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
-mtty-core = { path = "../term-core" }
-mtty-ptyhost = { path = "../term-ptyhost" }
-mtty-render = { path = "../term-render" }
-mtty-ui = { path = "../term-ui" }
-mtty-mtp = { path = "../term-mtp" }
-mtty-platform = { path = "../term-platform" }
-mtty-config = { path = "../term-config" }
-mtty-editor = { path = "../term-editor" }
-mtty-lsp = { path = "../term-lsp" }
-mtty-keys = { path = "../term-keys" }
-mtty-acp = { path = "../term-acp" }
+mtty-core = { path = "../mtty-core" }
+mtty-ptyhost = { path = "../mtty-ptyhost" }
+mtty-render = { path = "../mtty-render" }
+mtty-ui = { path = "../mtty-ui" }
+mtty-mtp = { path = "../mtty-mtp" }
+mtty-platform = { path = "../mtty-platform" }
+mtty-config = { path = "../mtty-config" }
+mtty-editor = { path = "../mtty-editor" }
+mtty-lsp = { path = "../mtty-lsp" }
+mtty-keys = { path = "../mtty-keys" }
+mtty-acp = { path = "../mtty-acp" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 winit = "0.30"
