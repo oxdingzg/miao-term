@@ -1,5 +1,5 @@
 [package]
-name = "miao-term-keys"
+name = "mtty-keys"
 description = "Import PuTTY .ppk private keys and re-encode them as encrypted OpenSSH keys (ADR 0038)"
 version.workspace = true
 edition.workspace = true

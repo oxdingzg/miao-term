@@ -1,4 +1,4 @@
-# miao-term Architecture
+# mtty architecture
 
 > A cross-platform (macOS / Linux / Windows) terminal **engine** plus the `mtty`
 > application built on it.
@@ -10,7 +10,7 @@
 
 **`portable-pty` + `alacritty_terminal` + `vte` as the core, `winit` + `wgpu` for the
 window and drawing, the terminal grid self-drawn and the surrounding UI in egui; the
-engine (`miao-term-*`) is separate from the app (`mtty-app`), and the control plane
+engine (`mtty-*`) is separate from the app (`mtty-app`), and the control plane
 (MTP) is decoupled from the engine.**
 
 ## 1. Goals · Non-goals · Constraints
@@ -48,7 +48,7 @@ engine (`miao-term-*`) is separate from the app (`mtty-app`), and the control pl
 | D7 | `term-mtp` decoupled from the engine (Unix socket / Windows named pipe) | A crash in one doesn't take down the other; reuse the protocol |
 | D8 | Build the app first, extract the library later; phase the extension points | Real needs drive the API |
 | D9 | Engine crates licensed `Apache-2.0` | Permissive; easy to embed |
-| D10 | One native `mtty` executable delegates to `miao-term-widget` (winit + wgpu); the eframe host is retired | Single product identity and direct rendering; see APP-IDENTITY.md |
+| D10 | One native `mtty` executable delegates to `mtty-widget` (winit + wgpu); the eframe host is retired | Single product identity and direct rendering; see APP-IDENTITY.md |
 
 ## 3. Layering (DAG) and rules
 
@@ -234,7 +234,7 @@ Use Alacritty's proven model (`FairMutex<Term>` + `EventListener`); do not inven
 - **Conformance**: no `vttest`/`esctest`/`cargo-fuzz` harness has been added; parser behavior is
   covered by the crates' own unit tests.
 - **Integration**: spawn a real shell, feed byte sequences, assert grid/events.
-- **Performance gate (ubuntu-latest only)**: `cargo test --release -p miao-term-core -p mtty-app -- --ignored`
+- **Performance gate (ubuntu-latest only)**: `cargo test --release -p mtty-core -p mtty-app -- --ignored`
   plus `scripts/check-perf-baseline.py`. Budgets: input latency P95 ≤ 16 ms, first frame ≤ 100 ms,
   no dropped frames on a large `cat`, idle CPU ≈ 0.
 - **CI** (`.github/workflows/ci.yml`): jobs `changes`, `privacy`, `lint`, `check-linux`

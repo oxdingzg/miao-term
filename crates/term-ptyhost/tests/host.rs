@@ -5,11 +5,11 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use miao_term_ptyhost::client;
-use miao_term_ptyhost::host::HostArgs;
-use miao_term_ptyhost::launch;
-use miao_term_ptyhost::proto::{FromHost, ToHost};
-use miao_term_ptyhost::scanner::Modes;
+use mtty_ptyhost::client;
+use mtty_ptyhost::host::HostArgs;
+use mtty_ptyhost::launch;
+use mtty_ptyhost::proto::{FromHost, ToHost};
+use mtty_ptyhost::scanner::Modes;
 
 struct Host {
     dir: PathBuf,

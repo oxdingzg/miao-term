@@ -1,6 +1,6 @@
 //! Terminal theme: default colors, indexed color mapping, cursor style.
 
-use miao_term_core::aterm::{Color as TermColor, NamedColor};
+use mtty_core::aterm::{Color as TermColor, NamedColor};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Rgb(pub u8, pub u8, pub u8);
@@ -212,7 +212,7 @@ mod tests {
             // A user palette can still contain the traditional dark ANSI blue.
             theme.palette[4] = Rgb(0, 0, 128);
             for sgr in ["30", "34", "90", "38;5;19", "38;5;234", "38;2;20;25;65"] {
-                let mut screen = miao_term_core::ATerm::new(40, 2, 100);
+                let mut screen = mtty_core::ATerm::new(40, 2, 100);
                 screen.process(format!("\x1b[{sgr}m/tmp/目录\x1b[0m").as_bytes());
                 let rows = crate::build_rows(&screen, &theme, None);
                 for span in &rows[0] {
@@ -230,7 +230,7 @@ mod tests {
     #[test]
     fn cell_background_and_readable_truecolor_are_preserved() {
         let theme = Theme::nord();
-        let mut screen = miao_term_core::ATerm::new(10, 2, 100);
+        let mut screen = mtty_core::ATerm::new(10, 2, 100);
         screen.process(b"\x1b[38;2;180;200;220;48;2;10;20;30mX");
         let cell = screen.cell(0, 0).unwrap();
         assert_eq!(rgb_tuple(theme.color(cell.bg, false)), (10, 20, 30));
@@ -449,20 +449,17 @@ impl Default for Theme {
 impl Theme {
     /// Build a UI theme from a `term-config` theme (and cursor style), so both
     /// hosts share one mapping.
-    pub fn from_config(
-        cfg: &miao_term_config::Theme,
-        cursor: miao_term_config::CursorStyle,
-    ) -> Self {
-        let rgb = |c: miao_term_config::Rgb| Rgb(c.0, c.1, c.2);
+    pub fn from_config(cfg: &mtty_config::Theme, cursor: mtty_config::CursorStyle) -> Self {
+        let rgb = |c: mtty_config::Rgb| Rgb(c.0, c.1, c.2);
         Self {
             bg: rgb(cfg.background),
             fg: rgb(cfg.foreground),
             palette: cfg.palette.map(rgb),
             selection: Rgb(0x43, 0x4c, 0x5e),
             cursor: match cursor {
-                miao_term_config::CursorStyle::Block => CursorStyle::Block,
-                miao_term_config::CursorStyle::Bar => CursorStyle::Bar,
-                miao_term_config::CursorStyle::Underline => CursorStyle::Underline,
+                mtty_config::CursorStyle::Block => CursorStyle::Block,
+                mtty_config::CursorStyle::Bar => CursorStyle::Bar,
+                mtty_config::CursorStyle::Underline => CursorStyle::Underline,
             },
             preset: Preset::Other,
         }

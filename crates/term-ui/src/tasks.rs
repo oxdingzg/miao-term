@@ -22,7 +22,7 @@ pub struct Task {
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let out = miao_term_platform::background_command("git")
+    let out = mtty_platform::background_command("git")
         .arg("-C")
         .arg(dir)
         .args(args)

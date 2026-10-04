@@ -1,7 +1,7 @@
 //! Import the real `.ppk` fixtures (generated with `puttygen` 0.81) and check
 //! that the resulting OpenSSH key carries the same public key and is encrypted.
 
-use miao_term_keys::import_ppk;
+use mtty_keys::import_ppk;
 
 const NEW: &str = "a-fresh-passphrase";
 

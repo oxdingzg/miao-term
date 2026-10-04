@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use miao_term_editor::{layout, Rope};
+use mtty_editor::{layout, Rope};
 use serde_json::{json, Value};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

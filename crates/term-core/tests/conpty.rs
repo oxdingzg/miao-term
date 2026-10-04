@@ -1,4 +1,4 @@
-//! Windows ConPTY smoke test for `miao-term-core`.
+//! Windows ConPTY smoke test for `mtty-core`.
 //!
 //! Spawns a real shell on a ConPTY through [`Terminal`], drives it, and checks the
 //! output reaches the screen model. Also checks resize propagates to screen + PTY.
@@ -6,7 +6,7 @@
 
 use std::time::{Duration, Instant};
 
-use miao_term_core::Terminal;
+use mtty_core::Terminal;
 
 fn screen_text(term: &Terminal) -> String {
     let (rows, _cols) = term.screen().size();

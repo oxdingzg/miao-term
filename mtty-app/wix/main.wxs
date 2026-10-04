@@ -69,7 +69,7 @@
 
         <Package Id='*'
             Keywords='Installer'
-            Description='The mtty terminal application, built on the miao-term engine'
+            Description='The mtty terminal application, built on the mtty engine'
             Manufacturer='mtty contributors'
             InstallerVersion='450'
             Languages='1033'

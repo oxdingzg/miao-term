@@ -1,6 +1,6 @@
 //! Grid selection helpers (pure geometry over the screen).
 
-use miao_term_core::ATerm;
+use mtty_core::ATerm;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Selection {

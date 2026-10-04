@@ -46,7 +46,7 @@ try {
     Step "build mtty" { & $cargo build -p mtty-app --color never }
     Step "build mtty-cli" { & $cargo build -p mtty-cli --color never }
     if (-not $SkipTests) {
-        Step "engine + mtp tests" { & $cargo test -p miao-term-core -p miao-term-mtp --color never }
+        Step "engine + mtp tests" { & $cargo test -p mtty-core -p mtty-mtp --color never }
     }
 
     $exe = Join-Path $Source "target\debug\mtty.exe"

@@ -1,5 +1,5 @@
 [package]
-name = "miao-term-lsp"
+name = "mtty-lsp"
 description = "Language Server Protocol client for mtty's editor pane"
 version.workspace = true
 edition.workspace = true
@@ -9,6 +9,6 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
-miao-term-platform = { path = "../term-platform" }
-miao-term-editor = { path = "../term-editor" }
+mtty-platform = { path = "../term-platform" }
+mtty-editor = { path = "../term-editor" }
 serde_json = "1.0"

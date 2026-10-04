@@ -146,7 +146,7 @@ jobs:
           MIAO_REQUIRE_GPU: "1"
           WGPU_BACKEND: vulkan
           LIBGL_ALWAYS_SOFTWARE: "1"
-        run: cargo test -p miao-term-render -- --nocapture
+        run: cargo test -p mtty-render -- --nocapture
 
   # Release + LTO build; run it on PRs/nightly/manual, not on every push.
   perf:
@@ -165,7 +165,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # Performance gate (ADR 0018/0028): release-mode budgets plus a comparison
       # against the durable baseline committed at benches/perf-baseline.json.
-      - run: cargo test --release -p miao-term-core -p miao-term-graphics -p miao-term-editor -p miao-term-widget -p miao-term-ptyhost -p mtty-app -- --ignored
+      - run: cargo test --release -p mtty-core -p mtty-graphics -p mtty-editor -p mtty-widget -p mtty-ptyhost -p mtty-app -- --ignored
       - name: Compare against the committed baseline
         run: python3 scripts/check-perf-baseline.py
       - name: Refresh the baseline (main, nightly / manual)

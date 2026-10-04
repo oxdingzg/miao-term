@@ -10,7 +10,7 @@ use std::process::{Child, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use miao_term_config::hosts::Forward;
+use mtty_config::hosts::Forward;
 
 /// The ssh arguments for one forward to `destination`.
 pub fn args(destination: &str, options: &[String], forward: &Forward) -> Vec<String> {
@@ -58,7 +58,7 @@ impl Tunnel {
         forward
             .validate()
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-        let mut child = miao_term_platform::background_command("ssh")
+        let mut child = mtty_platform::background_command("ssh")
             .args(args(destination, options, forward))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -127,7 +127,7 @@ impl Drop for Tunnel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use miao_term_config::hosts::ForwardKind;
+    use mtty_config::hosts::ForwardKind;
 
     #[test]
     fn forwards_run_ssh_without_a_shell_and_fail_loudly() {

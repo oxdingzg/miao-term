@@ -11,11 +11,11 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use miao_term_ptyhost::client;
-use miao_term_ptyhost::host::HostArgs;
-use miao_term_ptyhost::launch;
-use miao_term_ptyhost::proto::{FromHost, ToHost};
-use miao_term_ptyhost::sys::Stream;
+use mtty_ptyhost::client;
+use mtty_ptyhost::host::HostArgs;
+use mtty_ptyhost::launch;
+use mtty_ptyhost::proto::{FromHost, ToHost};
+use mtty_ptyhost::sys::Stream;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
 fn scale() -> f64 {
@@ -228,7 +228,7 @@ fn hosted_echo_round_trip() {
     assert!(p95 < 4.0 * scale(), "hosted echo p95 {p95:.3} ms");
     let measured = p95 / scale();
     record_metric("hosted_echo_p95_ms", measured);
-    miao_term_core::perfgate::baseline_gate("hosted_echo_p95_ms", measured, false);
+    mtty_core::perfgate::baseline_gate("hosted_echo_p95_ms", measured, false);
 }
 
 /// Output through the host, against the same output read from a PTY the
@@ -276,5 +276,5 @@ fn hosted_output_throughput() {
     assert!(hosted > 25.0 / scale(), "hosted output {hosted:.1} MB/s");
     let measured = hosted * scale();
     record_metric("hosted_output_mbps", measured);
-    miao_term_core::perfgate::baseline_gate("hosted_output_mbps", measured, true);
+    mtty_core::perfgate::baseline_gate("hosted_output_mbps", measured, true);
 }

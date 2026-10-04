@@ -229,7 +229,7 @@ fn run(
     };
     let path = crate::env::search_path();
     let resolved = crate::env::which(program, &path).unwrap_or_else(|| PathBuf::from(program));
-    let mut cmd = miao_term_platform::background_command(&resolved);
+    let mut cmd = mtty_platform::background_command(&resolved);
     cmd.args(args)
         .current_dir(&root)
         .stdin(Stdio::piped())

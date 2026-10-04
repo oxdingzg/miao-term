@@ -2784,17 +2784,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "miao-term-acp"
+name = "mtty-acp"
 version = "0.1.5"
 dependencies = [
  "libc",
- "miao-term-platform",
+ "mtty-platform",
  "serde",
  "serde_json",
 ]
 
 [[package]]
-name = "miao-term-config"
+name = "mtty-config"
 version = "0.1.5"
 dependencies = [
  "chacha20poly1305",
@@ -2804,13 +2804,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "miao-term-core"
+name = "mtty-core"
 version = "0.1.5"
 dependencies = [
  "alacritty_terminal",
  "libc",
- "miao-term-graphics",
- "miao-term-ptyhost",
+ "mtty-graphics",
+ "mtty-ptyhost",
  "portable-pty",
  "serde",
  "serde_json",
@@ -2818,7 +2818,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "miao-term-editor"
+name = "mtty-editor"
 version = "0.1.5"
 dependencies = [
  "arborium-ada",
@@ -2910,7 +2910,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "miao-term-graphics"
+name = "mtty-graphics"
 version = "0.1.5"
 dependencies = [
  "base64",
@@ -2920,7 +2920,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "miao-term-keys"
+name = "mtty-keys"
 version = "0.1.5"
 dependencies = [
  "aes",
@@ -2935,16 +2935,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "miao-term-lsp"
+name = "mtty-lsp"
 version = "0.1.5"
 dependencies = [
- "miao-term-editor",
- "miao-term-platform",
+ "mtty-editor",
+ "mtty-platform",
  "serde_json",
 ]
 
 [[package]]
-name = "miao-term-mtp"
+name = "mtty-mtp"
 version = "0.1.5"
 dependencies = [
  "interprocess",
@@ -2953,7 +2953,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "miao-term-platform"
+name = "mtty-platform"
 version = "0.1.5"
 dependencies = [
  "arboard",
@@ -2967,11 +2967,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "miao-term-ptyhost"
+name = "mtty-ptyhost"
 version = "0.1.5"
 dependencies = [
  "libc",
- "miao-term-core",
+ "mtty-core",
  "portable-pty",
  "serde_json",
  "uds_windows",
@@ -2979,27 +2979,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "miao-term-render"
+name = "mtty-render"
 version = "0.1.5"
 dependencies = [
  "glyphon",
- "miao-term-core",
+ "mtty-core",
  "pollster",
  "wgpu",
 ]
 
 [[package]]
-name = "miao-term-ui"
+name = "mtty-ui"
 version = "0.1.5"
 dependencies = [
  "ashpd",
  "egui",
  "global-hotkey",
- "miao-term-config",
- "miao-term-core",
- "miao-term-mtp",
- "miao-term-platform",
- "miao-term-render",
+ "mtty-config",
+ "mtty-core",
+ "mtty-mtp",
+ "mtty-platform",
+ "mtty-render",
  "minisign-verify",
  "serde",
  "serde_json",
@@ -3008,7 +3008,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "miao-term-widget"
+name = "mtty-widget"
 version = "0.1.5"
 dependencies = [
  "egui",
@@ -3017,17 +3017,17 @@ dependencies = [
  "egui_commonmark",
  "egui_extras",
  "image",
- "miao-term-acp",
- "miao-term-config",
- "miao-term-core",
- "miao-term-editor",
- "miao-term-keys",
- "miao-term-lsp",
- "miao-term-mtp",
- "miao-term-platform",
- "miao-term-ptyhost",
- "miao-term-render",
- "miao-term-ui",
+ "mtty-acp",
+ "mtty-config",
+ "mtty-core",
+ "mtty-editor",
+ "mtty-keys",
+ "mtty-lsp",
+ "mtty-mtp",
+ "mtty-platform",
+ "mtty-ptyhost",
+ "mtty-render",
+ "mtty-ui",
  "muda",
  "objc2 0.6.4",
  "objc2-foundation 0.3.2",
@@ -3121,9 +3121,9 @@ version = "0.1.5"
 dependencies = [
  "find-msvc-tools",
  "libc",
- "miao-term-core",
- "miao-term-ui",
- "miao-term-widget",
+ "mtty-core",
+ "mtty-ui",
+ "mtty-widget",
  "serde_json",
  "windows-sys 0.59.0",
 ]
@@ -3132,7 +3132,7 @@ dependencies = [
 name = "mtty-cli"
 version = "0.1.5"
 dependencies = [
- "miao-term-mtp",
+ "mtty-mtp",
  "serde_json",
 ]
 

@@ -1,5 +1,5 @@
 [package]
-name = "miao-term-graphics"
+name = "mtty-graphics"
 description = "Inline terminal graphics (Sixel / Kitty / iTerm2): stream scanner + decoders"
 version.workspace = true
 edition.workspace = true

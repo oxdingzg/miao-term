@@ -14,7 +14,7 @@ lands before them (roadmap U2).
 ## Decision
 
 A single **rule set** is loaded from `~/.config/miaotty/views.json` (JSON, so it
-is user-editable and round-trippable). It lives in `miao-term-config::view`
+is user-editable and round-trippable). It lives in `mtty-config::view`
 (pure data + matching, no dependency on the terminal core) and is:
 
 ```jsonc

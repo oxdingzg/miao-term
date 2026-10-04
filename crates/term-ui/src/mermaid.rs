@@ -1451,7 +1451,7 @@ fn edge_point(c: egui::Pos2, s: egui::Vec2, toward: egui::Pos2) -> egui::Pos2 {
 
 /// Whether `cmd` can be found on `PATH` (or as an absolute path).
 pub fn on_path(cmd: &str) -> bool {
-    miao_term_platform::find_executable(cmd).is_some()
+    mtty_platform::find_executable(cmd).is_some()
 }
 
 fn hash_str(s: &str) -> u64 {
@@ -1480,7 +1480,7 @@ pub fn render_external(
         return Some(png);
     }
     std::fs::write(&mmd, source).ok()?;
-    let status = miao_term_platform::background_command(cmd)
+    let status = mtty_platform::background_command(cmd)
         .arg("-i")
         .arg(&mmd)
         .arg("-o")

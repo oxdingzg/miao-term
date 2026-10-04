@@ -7,8 +7,8 @@
 
 use std::time::Instant;
 
-use miao_term_core::aterm::ATerm;
-use miao_term_core::perfgate::baseline_gate;
+use mtty_core::aterm::ATerm;
+use mtty_core::perfgate::baseline_gate;
 
 fn scale() -> f64 {
     std::env::var("MTTY_PERF_SCALE")

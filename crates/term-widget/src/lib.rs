@@ -1,21 +1,21 @@
-//! `miao-term-widget` — a native `winit` + `wgpu` host for the engine.
+//! `mtty-widget` — a native `winit` + `wgpu` host for the engine.
 //!
 //! The terminal grid is **self-drawn** (no egui immediate-mode frame flow): the
 //! host owns the window and surface, and the PTY reader threads wake the loop so
 //! echo is drawn on the next frame. The surrounding UI (tabs, sidebar, details,
 //! status) is an **egui overlay composed in the same wgpu frame**. Shared,
 //! host-agnostic pieces (theme, input encoding, selection, split layout, row
-//! building, chrome widgets) live in `miao-term-ui`.
+//! building, chrome widgets) live in `mtty-ui`.
 
 use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use miao_term_core::Terminal;
-use miao_term_render::{ImageInstance, ImageRenderer, Quad, QuadRenderer, Span, TermRenderer};
-use miao_term_ui::layout::{Layout, Rect, SplitDir};
-use miao_term_ui::{
+use mtty_core::Terminal;
+use mtty_render::{ImageInstance, ImageRenderer, Quad, QuadRenderer, Span, TermRenderer};
+use mtty_ui::layout::{Layout, Rect, SplitDir};
+use mtty_ui::{
     build_rows, chrome, input,
     theme::{Rgb, Theme},
     Selection,
@@ -34,7 +34,7 @@ enum HostEvent {
     /// A command from the OS menu bar (macOS, inside an app bundle).
     #[cfg(target_os = "macos")]
     /// The flag says the menu item's shortcut was pressed, not clicked.
-    Menu(miao_term_ui::chrome::MenuId, bool),
+    Menu(mtty_ui::chrome::MenuId, bool),
 }
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
@@ -53,7 +53,7 @@ enum UpdateResult {
     Current,
     Available {
         version: String,
-        artifact: Option<miao_term_ui::update::Artifact>,
+        artifact: Option<mtty_ui::update::Artifact>,
     },
     Failed(String),
 }
@@ -190,7 +190,7 @@ mod appmenu {
 
     /// Build and install the application menu.
     pub fn install(
-        lang: miao_term_ui::i18n::Lang,
+        lang: mtty_ui::i18n::Lang,
         proxy: EventLoopProxy<HostEvent>,
     ) -> Option<MenuHandle> {
         let mut items: Vec<MenuItem> = Vec::new();
@@ -207,7 +207,7 @@ mod appmenu {
         let _ = app_sub.append(&PredefinedMenuItem::show_all(None));
         let _ = app_sub.append(&PredefinedMenuItem::separator());
         let quit = MenuItem::with_id(
-            MudaId::new(miao_term_ui::menu::key(miao_term_ui::chrome::MenuId::Quit)),
+            MudaId::new(mtty_ui::menu::key(mtty_ui::chrome::MenuId::Quit)),
             "Quit mtty",
             true,
             Accelerator::from_str("CmdOrCtrl+Q").ok(),
@@ -218,18 +218,18 @@ mod appmenu {
             return None;
         }
         submenus.push(app_sub);
-        for (title, entries) in miao_term_ui::menu::menus(lang) {
+        for (title, entries) in mtty_ui::menu::menus(lang) {
             let sub = Submenu::new(title, true);
             for entry in entries {
                 match entry {
-                    miao_term_ui::menu::Entry::Item {
+                    mtty_ui::menu::Entry::Item {
                         label,
                         id,
                         shortcut,
                     } => {
                         let acc = shortcut.and_then(|s| Accelerator::from_str(s).ok());
                         let item = MenuItem::with_id(
-                            MudaId::new(miao_term_ui::menu::key(id)),
+                            MudaId::new(mtty_ui::menu::key(id)),
                             label,
                             true,
                             acc,
@@ -239,10 +239,10 @@ mod appmenu {
                         }
                         items.push(item);
                     }
-                    miao_term_ui::menu::Entry::Separator => {
+                    mtty_ui::menu::Entry::Separator => {
                         let _ = sub.append(&PredefinedMenuItem::separator());
                     }
-                    miao_term_ui::menu::Entry::Link { label, .. } => {
+                    mtty_ui::menu::Entry::Link { label, .. } => {
                         let item =
                             MenuItem::with_id(MudaId::new("documentation"), label, true, None);
                         if sub.append(&item).is_err() {
@@ -259,7 +259,7 @@ mod appmenu {
         }
         MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
             let key = e.id.0.as_str();
-            match miao_term_ui::menu::from_key(key) {
+            match mtty_ui::menu::from_key(key) {
                 Some(id) => {
                     let _ = proxy.send_event(HostEvent::Menu(id, current_event_is_key()));
                 }
@@ -348,7 +348,7 @@ fn export_pane_environment() {
 /// terminal launches, a dialog for everyone else.
 fn startup_failure(event_loop: &ActiveEventLoop, what: &str, err: impl std::fmt::Display) {
     eprintln!("mtty: {what}: {err}");
-    miao_term_ui::agentloop::alert("mtty cannot start", &format!("{what}: {err}"));
+    mtty_ui::agentloop::alert("mtty cannot start", &format!("{what}: {err}"));
     event_loop.exit();
 }
 
@@ -358,14 +358,14 @@ pub fn run(title: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
     // `mtty <url>` — is handed to the running instance, which drains
     // its inbox, and this process exits without opening a window.
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let intent = miao_term_ui::launch::Intent::from_args(&args);
-    if miao_term_ui::launch::forward_to_running(&intent.encode()) {
+    let intent = mtty_ui::launch::Intent::from_args(&args);
+    if mtty_ui::launch::forward_to_running(&intent.encode()) {
         eprintln!("mtty: forwarded to the running instance");
         return Ok(());
     }
 
     // ADR 0032: carry the pre-rename config directory over once.
-    match miao_term_config::migrate_legacy_config() {
+    match mtty_config::migrate_legacy_config() {
         Ok(true) => eprintln!("mtty: copied the former miaotty configuration"),
         Ok(false) => {}
         Err(e) => eprintln!("mtty: could not copy the former miaotty configuration: {e}"),
@@ -375,31 +375,29 @@ pub fn run(title: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
     // MTP control plane (ADR 0005): the shell inherits `MTTY_SOCKET` (and the
     // former `MIAOTTY_SOCKET`), so `mtty-cli`, plugins and agent hooks use the
     // same control plane.
-    let socket = miao_term_mtp::default_socket();
+    let socket = mtty_mtp::default_socket();
     for name in ["MTTY_SOCKET", "MIAOTTY_SOCKET"] {
         std::env::set_var(name, &socket);
     }
     // MTTY_MTP_TOKEN (if set) requires it on every request; MTTY_MTP_ALLOW
     // (if set) restricts which capabilities are accepted.
-    let mtp = miao_term_mtp::ServerState::with_config(
-        miao_term_config::env("MTP_TOKEN"),
-        miao_term_mtp::ServerState::parse_allow(miao_term_config::env("MTP_ALLOW")),
+    let mtp = mtty_mtp::ServerState::with_config(
+        mtty_config::env("MTP_TOKEN"),
+        mtty_mtp::ServerState::parse_allow(mtty_config::env("MTP_ALLOW")),
     );
-    match miao_term_mtp::serve(&socket, mtp.clone()) {
+    match mtty_mtp::serve(&socket, mtp.clone()) {
         Ok(()) => {
             eprintln!("mtty: MTP host on {}", socket.display());
             // Older CLIs default to the pre-rename socket path.
             #[cfg(unix)]
-            if let Err(e) =
-                miao_term_mtp::link_legacy_socket(&socket, &miao_term_mtp::legacy_socket())
-            {
+            if let Err(e) = mtty_mtp::link_legacy_socket(&socket, &mtty_mtp::legacy_socket()) {
                 eprintln!("mtty: could not link the former socket path: {e}");
             }
         }
         Err(e) => eprintln!("mtty: MTP host failed: {e}"),
     }
-    if let Some(addr) = miao_term_config::Config::load().remote_listen {
-        match miao_term_mtp::serve_tcp(&addr, mtp.clone()) {
+    if let Some(addr) = mtty_config::Config::load().remote_listen {
+        match mtty_mtp::serve_tcp(&addr, mtp.clone()) {
             Ok(()) => eprintln!("mtty: remote MTP access on {addr}"),
             Err(e) => eprintln!("mtty: remote access disabled: {e}"),
         }
@@ -418,7 +416,7 @@ pub fn run(title: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
     // A large file's background parse wakes the loop to draw its colours.
     {
         let proxy = proxy.clone();
-        miao_term_editor::set_parse_waker(move || {
+        mtty_editor::set_parse_waker(move || {
             let _ = proxy.send_event(HostEvent::Wake);
         });
     }
@@ -445,7 +443,7 @@ pub fn run(title: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
 struct Host {
     title: String,
     proxy: EventLoopProxy<HostEvent>,
-    mtp: Arc<miao_term_mtp::ServerState>,
+    mtp: Arc<mtty_mtp::ServerState>,
     state: Option<State>,
     /// The OS menu bar, kept alive for the whole run (ADR 0031).
     #[cfg(target_os = "macos")]
@@ -460,7 +458,7 @@ struct Pane {
     /// reconnects the session, or the program that was running at quit.
     on_enter: Option<String>,
     /// The last command output already published to the control plane.
-    published_output: Option<miao_term_core::CommandOutput>,
+    published_output: Option<mtty_core::CommandOutput>,
 }
 
 impl Pane {
@@ -492,7 +490,7 @@ fn on_enter_input(pending: &mut Option<String>, bytes: &[u8]) -> Option<Vec<u8>>
 /// of history (ignorespace), and `clear` wipes the echoed command line, so the
 /// pane starts with the remote session.
 fn typed_ssh(cmd: &str) -> String {
-    miao_term_ui::ssh::Syntax::local().typed(cmd)
+    mtty_ui::ssh::Syntax::local().typed(cmd)
 }
 
 /// How a non-SSH pane reaches its byte stream (ADR 0037). Saved in the session
@@ -712,14 +710,14 @@ fn remove_whole_tab(tabs: &mut Vec<Tab>, active: &mut usize, i: usize) -> bool {
 }
 
 fn views_mtime() -> Option<std::time::SystemTime> {
-    let path = miao_term_config::view::RuleSet::path()?;
+    let path = mtty_config::view::RuleSet::path()?;
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
 /// Chinese for the fixed words of the details panel (titles, keys and the
 /// status values the workers produce); anything else is shown as is.
-fn localize_detail(lang: miao_term_ui::i18n::Lang, text: &str) -> &str {
-    if lang == miao_term_ui::i18n::Lang::En {
+fn localize_detail(lang: mtty_ui::i18n::Lang, text: &str) -> &str {
+    if lang == mtty_ui::i18n::Lang::En {
         return text;
     }
     match text {
@@ -761,8 +759,8 @@ fn localize_detail(lang: miao_term_ui::i18n::Lang, text: &str) -> &str {
 
 /// An agent state as the details panel shows it. Only the Agent rows' state
 /// values go through this: a tab or file could be named `idle` too.
-fn agent_state_label(lang: miao_term_ui::i18n::Lang, state: &str) -> &str {
-    if lang == miao_term_ui::i18n::Lang::En {
+fn agent_state_label(lang: mtty_ui::i18n::Lang, state: &str) -> &str {
+    if lang == mtty_ui::i18n::Lang::En {
         return state;
     }
     match state {
@@ -836,7 +834,7 @@ fn quota_line(q: &serde_json::Value, warn_at: u8) -> Option<String> {
 
 /// The host part of an ssh target as typed (`deploy@work:2200` → `work`).
 fn ssh_host(target: &str) -> String {
-    miao_term_ui::ssh::Target::parse(target)
+    mtty_ui::ssh::Target::parse(target)
         .map(|t| t.host)
         .unwrap_or_else(|| target.to_string())
 }
@@ -874,13 +872,13 @@ fn window_body<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R 
         .inner
 }
 
-fn t_lang(lang: miao_term_ui::i18n::Lang, en: &'static str, zh: &'static str) -> &'static str {
-    miao_term_ui::i18n::t(lang, en, zh)
+fn t_lang(lang: mtty_ui::i18n::Lang, en: &'static str, zh: &'static str) -> &'static str {
+    mtty_ui::i18n::t(lang, en, zh)
 }
 
 /// The palette label for launching an agent.
-fn launch_label(lang: miao_term_ui::i18n::Lang, agent: &str) -> &'static str {
-    use miao_term_ui::i18n::t;
+fn launch_label(lang: mtty_ui::i18n::Lang, agent: &str) -> &'static str {
+    use mtty_ui::i18n::t;
     match agent {
         "claude" => t(lang, "Launch claude", "启动 claude"),
         "codex" => t(lang, "Launch codex", "启动 codex"),
@@ -892,11 +890,11 @@ fn launch_label(lang: miao_term_ui::i18n::Lang, agent: &str) -> &'static str {
 
 /// The split divider under a pointer given in physical pixels, if any.
 fn divider_at(
-    handles: Vec<miao_term_ui::layout::Handle>,
+    handles: Vec<mtty_ui::layout::Handle>,
     px: f32,
     py: f32,
     scale: f32,
-) -> Option<miao_term_ui::layout::Handle> {
+) -> Option<mtty_ui::layout::Handle> {
     handles.into_iter().find(|h| {
         px >= h.rect.x * scale
             && px < (h.rect.x + h.rect.w) * scale
@@ -926,12 +924,12 @@ enum DialogOutcome {
 /// box cancels. A free function so it can be driven by replayed input.
 fn rename_dialog(
     ctx: &egui::Context,
-    lang: miao_term_ui::i18n::Lang,
+    lang: mtty_ui::i18n::Lang,
     buf: &mut String,
 ) -> DialogOutcome {
     let mut open = true;
     let mut commit = false;
-    egui::Window::new(miao_term_ui::i18n::t(lang, "Rename Tab", "重命名标签"))
+    egui::Window::new(mtty_ui::i18n::t(lang, "Rename Tab", "重命名标签"))
         .id(egui::Id::new("rename_tab_dialog"))
         .collapsible(false)
         .open(&mut open)
@@ -947,7 +945,7 @@ fn rename_dialog(
                 commit = true;
             }
             if ui
-                .button(miao_term_ui::i18n::t(lang, "Rename", "重命名"))
+                .button(mtty_ui::i18n::t(lang, "Rename", "重命名"))
                 .clicked()
             {
                 commit = true;
@@ -1048,15 +1046,15 @@ enum JobDone {
         dir: std::path::PathBuf,
         entries: Vec<FileEntry>,
     },
-    AgentStatus(miao_term_ui::hostkeys::Agent),
+    AgentStatus(mtty_ui::hostkeys::Agent),
     SftpListed {
         dir: String,
-        result: Result<Vec<miao_term_ui::sftp::RemoteEntry>, String>,
+        result: Result<Vec<mtty_ui::sftp::RemoteEntry>, String>,
     },
     /// A verified update download, or why it failed (B4.3).
     UpdateDownloaded(Result<std::path::PathBuf, String>),
     /// A sync finished (B4.5).
-    Synced(Result<miao_term_config::sync::Outcome, String>),
+    Synced(Result<mtty_config::sync::Outcome, String>),
     SftpLocalListed {
         dir: std::path::PathBuf,
         entries: Vec<FileEntry>,
@@ -1068,15 +1066,15 @@ enum JobDone {
     },
     HostKeyChecked {
         name: String,
-        result: Result<miao_term_ui::hostkeys::HostKey, String>,
+        result: Result<mtty_ui::hostkeys::HostKey, String>,
     },
     TaskCreated {
-        result: Result<miao_term_ui::tasks::Task, String>,
+        result: Result<mtty_ui::tasks::Task, String>,
         agent: Option<usize>,
     },
     TasksListed {
         repo: std::path::PathBuf,
-        result: Result<Vec<miao_term_ui::tasks::Task>, String>,
+        result: Result<Vec<mtty_ui::tasks::Task>, String>,
     },
     TaskDiff {
         name: String,
@@ -1102,7 +1100,7 @@ enum JobDone {
         target: TransportTarget,
         /// A restored tab's title, else the connection's own label.
         title: Option<String>,
-        result: Result<miao_term_ui::transport::Connection, String>,
+        result: Result<mtty_ui::transport::Connection, String>,
     },
     /// A PuTTY key was imported and written, or why it was not (ADR 0038).
     /// The `Ok` value is the path written.
@@ -1145,7 +1143,7 @@ enum JobDone {
 /// confirmation for a destructive action.
 struct TasksView {
     repo: std::path::PathBuf,
-    tasks: Vec<miao_term_ui::tasks::Task>,
+    tasks: Vec<mtty_ui::tasks::Task>,
     loading: bool,
     /// Index into `tasks` and whether it is a merge (else a discard).
     confirm: Option<(usize, bool)>,
@@ -1154,13 +1152,13 @@ struct TasksView {
 /// End-to-end-encrypted sync of hosts and snippets (B4.5, ADR 0033).
 struct SyncState {
     dir: Option<std::path::PathBuf>,
-    key: Option<miao_term_config::sync::Key>,
+    key: Option<mtty_config::sync::Key>,
     running: bool,
     /// When the next background sync is due.
     due: Option<Instant>,
     last: Option<(
         std::time::SystemTime,
-        Result<miao_term_config::sync::Outcome, String>,
+        Result<mtty_config::sync::Outcome, String>,
     )>,
 }
 
@@ -1191,7 +1189,7 @@ struct KeyImportDialog {
 /// A running ACP session (ADR 0040, A2): the client, its session id and the
 /// transcript shown in the window.
 struct AcpSession {
-    client: miao_term_acp::Client,
+    client: mtty_acp::Client,
     cwd: String,
     session: Option<String>,
     transcript: String,
@@ -1239,7 +1237,7 @@ impl AcpBridge {
     }
 }
 
-impl miao_term_acp::Handler for AcpBridge {
+impl mtty_acp::Handler for AcpBridge {
     fn on_update(&self, _session: &str, update: &serde_json::Value) {
         if let Some((path, text)) = acp_diff(update) {
             self.send(JobDone::AcpDiff { path, text });
@@ -1423,8 +1421,8 @@ struct SshForm {
     persistent: bool,
     tmux: String,
     mosh: bool,
-    forwards: Vec<miao_term_config::hosts::Forward>,
-    new_forward: Option<(miao_term_config::hosts::ForwardKind, String)>,
+    forwards: Vec<mtty_config::hosts::Forward>,
+    new_forward: Option<(mtty_config::hosts::ForwardKind, String)>,
     advanced: bool,
     error: Option<String>,
 }
@@ -1454,13 +1452,10 @@ impl Default for SshForm {
 }
 
 impl SshForm {
-    /// Build a [`Host`](miao_term_config::hosts::Host) from the form, or the
+    /// Build a [`Host`](mtty_config::hosts::Host) from the form, or the
     /// reason it is not ready yet.
-    fn build(
-        &self,
-        lang: miao_term_ui::i18n::Lang,
-    ) -> Result<miao_term_config::hosts::Host, String> {
-        use miao_term_ui::i18n::t;
+    fn build(&self, lang: mtty_ui::i18n::Lang) -> Result<mtty_config::hosts::Host, String> {
+        use mtty_ui::i18n::t;
         let name = self.name.trim().to_string();
         let address = self.address.trim().to_string();
         let opt = |s: &str| {
@@ -1476,7 +1471,7 @@ impl SshForm {
                 )
                 .into());
             }
-            return Ok(miao_term_config::hosts::Host {
+            return Ok(mtty_config::hosts::Host {
                 name,
                 alias: true,
                 ..Default::default()
@@ -1495,7 +1490,7 @@ impl SshForm {
                 t(lang, "Port must be 0–65535.", "端口需在 0–65535 之间。").to_string()
             })?),
         };
-        Ok(miao_term_config::hosts::Host {
+        Ok(mtty_config::hosts::Host {
             name: if name.is_empty() { host.clone() } else { name },
             alias: false,
             address: Some(host),
@@ -1536,7 +1531,7 @@ struct FtpDialog {
 #[derive(Default)]
 struct SnippetsView {
     filter: String,
-    form: miao_term_config::snippets::Snippet,
+    form: mtty_config::snippets::Snippet,
     form_tags: String,
     /// Saved host names to run the chosen snippet on.
     hosts: std::collections::BTreeSet<String>,
@@ -1546,17 +1541,12 @@ struct SnippetsView {
 /// An ssh command that runs `command` on a host in a terminal tab (its
 /// output stays visible; the tab returns to the local shell afterwards).
 fn remote_run_command(destination: &str, options: &[String], command: &str) -> String {
-    remote_run_command_with(
-        miao_term_ui::ssh::Syntax::local(),
-        destination,
-        options,
-        command,
-    )
+    remote_run_command_with(mtty_ui::ssh::Syntax::local(), destination, options, command)
 }
 
 /// The same for a given local shell syntax (tests pin POSIX).
 fn remote_run_command_with(
-    syn: miao_term_ui::ssh::Syntax,
+    syn: mtty_ui::ssh::Syntax,
     destination: &str,
     options: &[String],
     command: &str,
@@ -1576,9 +1566,9 @@ fn remote_run_command_with(
 /// The SFTP window (B3.4): this machine on the left, the host on the right.
 struct SftpView {
     title: String,
-    remote: miao_term_ui::sftp::Endpoint,
+    remote: mtty_ui::sftp::Endpoint,
     remote_dir: Option<String>,
-    remote_entries: Vec<miao_term_ui::sftp::RemoteEntry>,
+    remote_entries: Vec<mtty_ui::sftp::RemoteEntry>,
     remote_sel: Option<String>,
     local_dir: std::path::PathBuf,
     local_entries: Vec<FileEntry>,
@@ -1603,14 +1593,14 @@ struct SftpView {
 struct HostsView {
     filter: String,
     confirm_delete: Option<usize>,
-    form: miao_term_config::hosts::Host,
+    form: mtty_config::hosts::Host,
     form_port: String,
     /// The ssh agent, checked when the window opens (B3.2).
-    agent: Option<miao_term_ui::hostkeys::Agent>,
+    agent: Option<mtty_ui::hostkeys::Agent>,
     /// The add-forward form: host name, kind and spec.
-    new_forward: Option<(String, miao_term_config::hosts::ForwardKind, String)>,
+    new_forward: Option<(String, mtty_config::hosts::ForwardKind, String)>,
     /// Host key checks by host name: `None` while running.
-    keys: HashMap<String, Option<Result<miao_term_ui::hostkeys::HostKey, String>>>,
+    keys: HashMap<String, Option<Result<mtty_ui::hostkeys::HostKey, String>>>,
 }
 
 /// What a save request led to.
@@ -1690,11 +1680,11 @@ struct State {
     pip_request: bool,
     graphics_enabled: bool,
     renderers: HashMap<String, TermRenderer>,
-    mtp: Arc<miao_term_mtp::ServerState>,
+    mtp: Arc<mtty_mtp::ServerState>,
     tabs: Vec<Tab>,
     active_tab: usize,
     theme: Theme,
-    rules: miao_term_config::view::RuleSet,
+    rules: mtty_config::view::RuleSet,
     /// `views.json`'s modification time when last loaded, and when it was
     /// last checked: edits apply without a restart.
     rules_mtime: Option<std::time::SystemTime>,
@@ -1705,7 +1695,7 @@ struct State {
     default_font_size: f32,
     line_ratio: f32,
     font_family: Option<String>,
-    lang: miao_term_ui::i18n::Lang,
+    lang: mtty_ui::i18n::Lang,
     mods: ModifiersState,
     selection: Option<(String, Selection)>,
     dragging: bool,
@@ -1765,7 +1755,7 @@ struct State {
     /// A permission request the agent is waiting on.
     acp_permission: Option<(String, std::sync::mpsc::Sender<bool>)>,
     /// ACP agents from `config.toml`'s `[acp]` (ADR 0040, A2).
-    acp_agents: Vec<miao_term_config::AcpAgent>,
+    acp_agents: Vec<mtty_config::AcpAgent>,
     /// Connections being dialled: an all-transport restore is not "empty".
     pending_transport_connects: usize,
     /// New Agent Task dialog: name and the chosen agent (B2.4).
@@ -1774,18 +1764,18 @@ struct State {
     tasks_view: Option<TasksView>,
     /// Saved SSH hosts (B3.1). `host_book_error` blocks saving over a
     /// hosts.toml that could not be read.
-    host_book: miao_term_config::hosts::HostBook,
+    host_book: mtty_config::hosts::HostBook,
     host_book_error: Option<String>,
     hosts_view: Option<HostsView>,
     sftp_view: Option<SftpView>,
     /// Typed input goes to every pane of the active tab (B3.5).
     broadcast: bool,
     /// Saved command snippets (B3.5); an unreadable file blocks saving.
-    snippet_book: miao_term_config::snippets::SnippetBook,
+    snippet_book: mtty_config::snippets::SnippetBook,
     snippet_book_error: Option<String>,
     snippets_view: Option<SnippetsView>,
     /// Running port forwards by (host name, rule spec) (B3.3).
-    tunnels: HashMap<(String, String), miao_term_ui::forward::Tunnel>,
+    tunnels: HashMap<(String, String), mtty_ui::forward::Tunnel>,
     remote_dialog: Option<(String, String)>,
     ftp_dialog: Option<FtpDialog>,
     sync: SyncState,
@@ -1793,7 +1783,7 @@ struct State {
     editor_vim: bool,
     /// The `editor` config key: what Edit in Tab runs (ADR 0017).
     editor_command: Option<String>,
-    vim: Option<miao_term_ui::vim::VimRuntime>,
+    vim: Option<mtty_ui::vim::VimRuntime>,
     vim_for: String,
     cmark: egui_commonmark::CommonMarkCache,
     mmd: Mmd,
@@ -1802,7 +1792,7 @@ struct State {
     integration_msg: Option<String>,
     read_only: bool,
     hint_mode: bool,
-    hints: Vec<miao_term_ui::hints::Hint>,
+    hints: Vec<mtty_ui::hints::Hint>,
     tree_expanded: std::collections::HashSet<std::path::PathBuf>,
     tree_children: HashMap<std::path::PathBuf, Vec<FileEntry>>,
     /// Directories being listed in the background.
@@ -1814,7 +1804,7 @@ struct State {
     mark_buf: String,
     group_renaming: Option<usize>,
     group_buf: String,
-    hotkeys: Option<miao_term_ui::hotkey::Hotkeys>,
+    hotkeys: Option<mtty_ui::hotkey::Hotkeys>,
     opacity: f32,
     notifications: bool,
     prevent_sleep: bool,
@@ -1825,16 +1815,16 @@ struct State {
     /// An ordinary quit keeps hosted programs running (`keep-sessions-on-quit`).
     keep_sessions_on_quit: bool,
     /// Which agent states show on tabs (`[badges]`).
-    badges: miao_term_config::Badges,
+    badges: mtty_config::Badges,
     /// Percentage of an agent's quota at which the Agent tab marks it.
     agent_quota_warn: u8,
     /// How long a host waits for mtty (`detached-timeout`).
     detached_timeout: Duration,
     /// Hosts still running from an earlier mtty that no pane reattached to
     /// (a crash before the session was saved), offered in the palette.
-    recovered: Vec<miao_term_ptyhost::launch::HostInfo>,
+    recovered: Vec<mtty_ptyhost::launch::HostInfo>,
     scrollback_saved_at: Instant,
-    sleep: miao_term_ui::agentloop::SleepGuard,
+    sleep: mtty_ui::agentloop::SleepGuard,
     agent_states: HashMap<String, String>,
     composer: Option<String>,
     quick: Option<String>,
@@ -1868,7 +1858,7 @@ struct State {
     /// The vim `:` command line's text, while it is open.
     vim_command: Option<String>,
     /// Language servers for editor panes (ADR 0034, E5).
-    lsp: miao_term_lsp::Lsp,
+    lsp: mtty_lsp::Lsp,
     /// `MTTY_QA_COMMAND` has run.
     qa_done: bool,
     /// The pointer resting on editor text, until a hover is asked for.
@@ -1883,7 +1873,7 @@ struct State {
     /// A view-mode file loading for editing: its pane and the result.
     large_loading: Option<(
         String,
-        std::sync::mpsc::Receiver<Result<miao_term_editor::Document, String>>,
+        std::sync::mpsc::Receiver<Result<mtty_editor::Document, String>>,
     )>,
     /// When the open editor panes were last checked against disk.
     editor_reload_checked: Instant,
@@ -1939,7 +1929,7 @@ struct State {
     details_rx: Option<std::sync::mpsc::Receiver<(std::path::PathBuf, DetailsData)>>,
     details_at: Instant,
     /// Prompts waiting for an agent pane to become idle (ADR 0010, B2.2).
-    prompt_queue: miao_term_ui::agentloop::PromptQueue,
+    prompt_queue: mtty_ui::agentloop::PromptQueue,
     prompt_input: String,
     last_title: Option<String>,
     focused: bool,
@@ -2151,7 +2141,7 @@ struct LinkHit {
 
 impl State {
     fn cell_size(font_size: f32, line_ratio: f32, family: Option<&str>) -> (f32, f32) {
-        let mut probe = miao_term_render::MetricsProbe::new();
+        let mut probe = mtty_render::MetricsProbe::new();
         probe.cell(font_size, (font_size * line_ratio).round(), family)
     }
 
@@ -2252,16 +2242,16 @@ impl State {
     }
 
     /// The installed PTY host, when `pty-host` is on (ADR 0041).
-    fn host_config(&self) -> Option<miao_term_core::HostConfig> {
-        use miao_term_ptyhost::launch;
+    fn host_config(&self) -> Option<mtty_core::HostConfig> {
+        use mtty_ptyhost::launch;
         if !self.pty_host {
             return None;
         }
         let installed = launch::bundled_binary()
-            .zip(miao_term_config::data_dir())
+            .zip(mtty_config::data_dir())
             .map(|(binary, data)| launch::install(&binary, &data));
         match installed {
-            Some(Ok(binary)) => Some(miao_term_core::HostConfig {
+            Some(Ok(binary)) => Some(mtty_core::HostConfig {
                 binary,
                 ring: PTY_HOST_RING,
                 timeout: self.detached_timeout,
@@ -2291,7 +2281,7 @@ impl State {
             std::env::current_dir()
                 .ok()
                 .filter(|dir| dir.as_path() != std::path::Path::new("/"))
-                .or_else(miao_term_config::home_dir)
+                .or_else(mtty_config::home_dir)
         });
         // Both names: installed hooks and miao read the former one (ADR 0032).
         let env = vec![
@@ -2328,7 +2318,7 @@ impl State {
         let snapshot = scrollback_dir()
             .filter(|_| is_plain_file_name(id))
             .and_then(|dir| std::fs::read(dir.join(format!("{id}.host.json"))).ok())
-            .and_then(|bytes| serde_json::from_slice::<miao_term_core::HostSnapshot>(&bytes).ok());
+            .and_then(|bytes| serde_json::from_slice::<mtty_core::HostSnapshot>(&bytes).ok());
         let (cols, rows) = self.new_pane_size();
         let term = Terminal::reattach(
             host_id,
@@ -2460,7 +2450,7 @@ impl State {
         let prev = self.active_tab;
         self.new_tab();
         if let Some(tab) = self.tabs.last_mut() {
-            tab.title = miao_term_ui::i18n::t(self.lang, "Quick", "快速").to_string();
+            tab.title = mtty_ui::i18n::t(self.lang, "Quick", "快速").to_string();
             tab.title_set = true;
             if let Some(pane) = tab.panes.first() {
                 self.quick_pane = Some(pane.id.clone());
@@ -2603,7 +2593,7 @@ impl State {
         let screen = pane.term.screen();
         let (rows, _) = screen.size();
         let lines: Vec<String> = (0..rows).map(|r| screen.line_text(r)).collect();
-        self.hints = miao_term_ui::hints::scan(&lines);
+        self.hints = mtty_ui::hints::scan(&lines);
         self.hint_mode = !self.hints.is_empty();
     }
 
@@ -2635,8 +2625,8 @@ impl State {
         }
     }
 
-    fn files_body(&mut self, ui: &mut egui::Ui, lang: miao_term_ui::i18n::Lang) {
-        use miao_term_ui::i18n::t;
+    fn files_body(&mut self, ui: &mut egui::Ui, lang: mtty_ui::i18n::Lang) {
+        use mtty_ui::i18n::t;
         ui.horizontal(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.files_filter)
@@ -2864,7 +2854,7 @@ impl State {
                     let msg = format!(
                         "{}: {}",
                         e.title(),
-                        miao_term_ui::i18n::t(
+                        mtty_ui::i18n::t(
                             self.lang,
                             "unsaved changes; not closed",
                             "有未保存的修改,未关闭"
@@ -3236,10 +3226,10 @@ impl State {
         #[cfg(all(unix, not(target_os = "macos")))]
         let image = match self.dnd.as_mut() {
             Some(dnd) => dnd.selection_image(),
-            None => miao_term_platform::clipboard_image(),
+            None => mtty_platform::clipboard_image(),
         };
         #[cfg(not(all(unix, not(target_os = "macos"))))]
-        let image = miao_term_platform::clipboard_image();
+        let image = mtty_platform::clipboard_image();
         if let Some(image) = image {
             if std::fs::write(&path, image).is_ok() {
                 self.paste("");
@@ -3300,7 +3290,7 @@ impl State {
     }
 
     /// Evaluate the view rule engine (ADR 0007) for a tab's active pane.
-    fn view_for(&self, tab: &Tab) -> Option<miao_term_config::view::Resolved> {
+    fn view_for(&self, tab: &Tab) -> Option<mtty_config::view::Resolved> {
         let pane = tab.panes.iter().find(|p| p.id == tab.active)?;
         let agent = self
             .mtp
@@ -3326,7 +3316,7 @@ impl State {
             .iter()
             .position(|t| t.active == tab.active)
             .map(|i| i + 1);
-        let ctx = miao_term_config::view::Context {
+        let ctx = mtty_config::view::Context {
             cwd,
             command: pane.term.foreground_command(),
             agent,
@@ -3346,7 +3336,7 @@ impl State {
     }
 
     /// The displayed title, given the tab's evaluated view rules.
-    fn title_with(&self, tab: &Tab, view: Option<miao_term_config::view::Resolved>) -> String {
+    fn title_with(&self, tab: &Tab, view: Option<mtty_config::view::Resolved>) -> String {
         if tab.title_set && !tab.title.is_empty() {
             return tab.title.clone();
         }
@@ -3416,7 +3406,7 @@ impl State {
         // MTP `pane.focus` / `pane.close` / `app.view` / `app.edit`.
         for command in self.mtp.take_commands() {
             match command {
-                miao_term_mtp::Command::Focus(id) => {
+                mtty_mtp::Command::Focus(id) => {
                     let found = self.tabs.iter().position(|t| t.has_pane(&id));
                     if let Some(ti) = found {
                         self.tabs[ti].active = id.clone();
@@ -3427,25 +3417,25 @@ impl State {
                         }
                     }
                 }
-                miao_term_mtp::Command::Close(id) => self.close_pane_id(&id),
-                miao_term_mtp::Command::View { path, line } => {
+                mtty_mtp::Command::Close(id) => self.close_pane_id(&id),
+                mtty_mtp::Command::View { path, line } => {
                     if self.open_editor_ro(std::path::PathBuf::from(path), true) {
                         self.go_active_editor_to(line, None);
                     }
                 }
-                miao_term_mtp::Command::Edit { path, line, column } => {
+                mtty_mtp::Command::Edit { path, line, column } => {
                     if self.open_editor_ro(std::path::PathBuf::from(path), false) {
                         self.go_active_editor_to(line, column);
                     }
                 }
-                miao_term_mtp::Command::ResumeAgent {
+                mtty_mtp::Command::ResumeAgent {
                     agent,
                     session,
                     cwd,
                 } => {
                     self.resume_agent(&agent, &session, cwd.as_deref());
                 }
-                miao_term_mtp::Command::Propose {
+                mtty_mtp::Command::Propose {
                     pane,
                     path,
                     edits,
@@ -3572,7 +3562,7 @@ impl State {
                         let Some(cell) = pane.term.screen().cell(row, col) else {
                             continue;
                         };
-                        let bg = miao_term_ui::cell_background(&theme, &cell);
+                        let bg = mtty_ui::cell_background(&theme, &cell);
                         if bg != theme.bg && bg != panel_bg {
                             quads.push(quad(ox, oy, row, col, cw, ch, (bg.0, bg.1, bg.2)));
                         }
@@ -3628,11 +3618,11 @@ impl State {
                     && cur.1 < sc;
                 if show {
                     match theme.cursor {
-                        miao_term_ui::CursorStyle::Block => {
+                        mtty_ui::CursorStyle::Block => {
                             let f = theme.fg;
                             quads.push(quad(ox, oy, cur.0, cur.1, cw, ch, (f.0, f.1, f.2)));
                         }
-                        miao_term_ui::CursorStyle::Bar => {
+                        mtty_ui::CursorStyle::Bar => {
                             let f = theme.fg;
                             quads.push(Quad::new(
                                 (ox + cur.1 as f32 * cw, oy + cur.0 as f32 * ch),
@@ -3640,7 +3630,7 @@ impl State {
                                 (f.0, f.1, f.2, 255),
                             ));
                         }
-                        miao_term_ui::CursorStyle::Underline => {
+                        mtty_ui::CursorStyle::Underline => {
                             let f = theme.fg;
                             quads.push(Quad::new(
                                 (ox + cur.1 as f32 * cw, oy + (cur.0 as f32 + 1.0) * ch - 2.0),
@@ -3673,7 +3663,7 @@ impl State {
                             0
                         };
                         let frame = &im.frames[fi.min(im.frames.len().saturating_sub(1))];
-                        let key = miao_term_core::graphics::image_key(id, im.id, fi);
+                        let key = mtty_core::graphics::image_key(id, im.id, fi);
                         image_keep.insert(key);
                         let w = frame.width as f32;
                         let h = frame.height as f32;
@@ -3837,7 +3827,7 @@ impl State {
             &screen,
         );
         if self.shot_now
-            || miao_term_config::env("SHOT").is_some()
+            || mtty_config::env("SHOT").is_some()
             || std::env::var_os("MIAOTTY_NATIVE_SHOT").is_some()
         {
             self.capture(
@@ -3956,13 +3946,13 @@ impl State {
         self.preview_panes(ctx);
         self.lsp_popups(ctx);
         if self.update_dialog {
-            use miao_term_ui::i18n::t;
+            use mtty_ui::i18n::t;
             let lang = self.lang;
             let checking = self.update_rx.is_some();
             let mut open = true;
             let mut dismiss = false;
             let mut retry = false;
-            let mut download: Option<miao_term_ui::update::Artifact> = None;
+            let mut download: Option<mtty_ui::update::Artifact> = None;
             let mut install: Option<std::path::PathBuf> = None;
             egui::Window::new(t(lang, "Software Update", "软件更新"))
                 .id(egui::Id::new("software_update"))
@@ -4158,7 +4148,7 @@ impl State {
                     egui::Id::new("ime_preedit"),
                 ));
                 let ch = self.theme.chrome();
-                let col_of = |c: miao_term_ui::theme::Rgb| egui::Color32::from_rgb(c.0, c.1, c.2);
+                let col_of = |c: mtty_ui::theme::Rgb| egui::Color32::from_rgb(c.0, c.1, c.2);
                 let galley = painter.layout_no_wrap(
                     self.preedit.clone(),
                     egui::FontId::proportional(14.0),
@@ -4370,7 +4360,7 @@ impl State {
     /// A restored pane: show what it held at quit, then offer the program
     /// that was running (never run it unasked).
     fn restore_pane_contents(&self, pane: &mut Pane, saved: &serde_json::Value) {
-        let t = |en, zh| miao_term_ui::i18n::t(self.lang, en, zh);
+        let t = |en, zh| mtty_ui::i18n::t(self.lang, en, zh);
         // Named by a clean quit; after a crash, the periodic save's file for
         // the pane's id.
         let file = saved["scrollback"]
@@ -4622,7 +4612,7 @@ impl State {
                         let len = ed.doc.rope().len_chars();
                         let cursor = e.get("cursor").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
                         ed.doc
-                            .set_selection(miao_term_editor::Selection::cursor(cursor.min(len)));
+                            .set_selection(mtty_editor::Selection::cursor(cursor.min(len)));
                         ed.scroll_line =
                             e.get("scroll").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
                         if let Some(old) = e.get("id").and_then(|x| x.as_str()) {
@@ -4713,7 +4703,7 @@ impl State {
         // Fetch the restored remote files now that their panes exist.
         for (id, dest, path, cursor, scroll) in pending_remote {
             self.spawn_job(move || {
-                let result = miao_term_ui::ssh::read_remote(&dest, &path);
+                let result = mtty_ui::ssh::read_remote(&dest, &path);
                 JobDone::RemoteRead {
                     id: Some(id),
                     cursor,
@@ -4758,7 +4748,7 @@ impl State {
             return false;
         };
         // The retired eframe app kept its session in the pre-rename data dir.
-        let data = miao_term_config::legacy_data_dir();
+        let data = mtty_config::legacy_data_dir();
         let Some(v) = session::load(config, data.as_deref()) else {
             return false;
         };
@@ -4889,7 +4879,7 @@ impl State {
     fn agent_tab_icon(
         &self,
         tab: &Tab,
-    ) -> Option<(miao_term_ui::icons::Icon, Option<miao_term_ui::theme::Rgb>)> {
+    ) -> Option<(mtty_ui::icons::Icon, Option<mtty_ui::theme::Rgb>)> {
         let a = self.mtp.agent_for(&tab.active)?;
         let state = a.get("state").and_then(|v| v.as_str())?;
         shown_agent_icon(&self.badges, &self.theme.chrome(), state, tab.attention)
@@ -4936,7 +4926,7 @@ impl State {
     }
 
     fn status_text(&self) -> String {
-        use miao_term_ui::i18n::t;
+        use mtty_ui::i18n::t;
         let l = self.lang;
         let mut s = self
             .cwd()
@@ -5112,7 +5102,7 @@ enum Cmd {
 }
 
 impl State {
-    fn handles(&self) -> Vec<miao_term_ui::layout::Handle> {
+    fn handles(&self) -> Vec<mtty_ui::layout::Handle> {
         self.tabs
             .get(self.active_tab)
             .map(|t| t.layout.handles(self.grid_area()))
@@ -5120,7 +5110,7 @@ impl State {
     }
 
     fn commands(&self) -> Vec<(Cmd, std::borrow::Cow<'static, str>)> {
-        use miao_term_ui::i18n::t;
+        use mtty_ui::i18n::t;
         let l = self.lang;
         vec![
             (Cmd::NewTab, t(l, "New Tab", "新建标签")),
@@ -5319,7 +5309,7 @@ impl State {
         }))
         .chain(
             // Agents found on PATH (the Settings check, refreshed every 5 s).
-            miao_term_ui::integration::AGENTS
+            mtty_ui::integration::AGENTS
                 .iter()
                 .enumerate()
                 .filter(|(i, _)| {
@@ -5337,7 +5327,7 @@ impl State {
     /// Palette entries for hosts left running by an earlier mtty.
     fn recovered_commands(&self) -> Vec<(Cmd, std::borrow::Cow<'static, str>)> {
         {
-            use miao_term_ui::i18n::t;
+            use mtty_ui::i18n::t;
             let l = self.lang;
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::SystemTime::UNIX_EPOCH)
@@ -5350,7 +5340,7 @@ impl State {
                 );
                 let minutes = now.saturating_sub(host.started_at) / 60;
                 let what = match l {
-                    miao_term_ui::i18n::Lang::Zh => format!("{program}(已运行 {minutes} 分钟)"),
+                    mtty_ui::i18n::Lang::Zh => format!("{program}(已运行 {minutes} 分钟)"),
                     _ => format!("{program} (running {minutes} min)"),
                 };
                 out.push((
@@ -5378,11 +5368,11 @@ impl State {
     /// before the session file was written. Offer them rather than adopt them
     /// unasked; also drop host binaries nothing uses any more.
     fn find_recovered(&mut self) {
-        use miao_term_ptyhost::launch;
+        use mtty_ptyhost::launch;
         let Ok(dir) = launch::hosts_dir() else {
             return;
         };
-        if let Some(data) = miao_term_config::data_dir() {
+        if let Some(data) = mtty_config::data_dir() {
             launch::remove_unused_versions(&data, &dir);
         }
         let attached: Vec<String> = self
@@ -5398,7 +5388,7 @@ impl State {
         if !self.recovered.is_empty() {
             let n = self.recovered.len();
             let msg = match self.lang {
-                miao_term_ui::i18n::Lang::Zh => {
+                mtty_ui::i18n::Lang::Zh => {
                     format!("还有 {n} 个程序在上次的 mtty 中运行:在命令面板中接回或结束它们。")
                 }
                 _ => format!(
@@ -5417,9 +5407,9 @@ impl State {
         let host = self.recovered.remove(i);
         if !attach {
             if let Ok((mut stream, _)) =
-                miao_term_ptyhost::client::connect(&host.socket, Duration::from_millis(500))
+                mtty_ptyhost::client::connect(&host.socket, Duration::from_millis(500))
             {
-                let _ = miao_term_ptyhost::proto::ToHost::Kill.write(&mut stream);
+                let _ = mtty_ptyhost::proto::ToHost::Kill.write(&mut stream);
             }
             return;
         }
@@ -5449,9 +5439,9 @@ impl State {
             .as_ref()
             .map_or(true, |(at, _)| at.elapsed() > Duration::from_secs(5))
         {
-            let found = miao_term_ui::integration::AGENTS
+            let found = mtty_ui::integration::AGENTS
                 .iter()
-                .map(|a| miao_term_ui::integration::detected(a.bin))
+                .map(|a| mtty_ui::integration::detected(a.bin))
                 .collect();
             self.agents_detected = Some((Instant::now(), found));
         }
@@ -5460,10 +5450,10 @@ impl State {
     /// Start an agent CLI in a new tab in the active pane's directory. The
     /// pane carries MTTY_PANE_ID, so the agent's hook reports to that tab.
     fn launch_agent(&mut self, index: usize) {
-        let Some(agent) = miao_term_ui::integration::AGENTS.get(index) else {
+        let Some(agent) = mtty_ui::integration::AGENTS.get(index) else {
             return;
         };
-        let cmd = miao_term_ui::integration::launch_command(agent);
+        let cmd = mtty_ui::integration::launch_command(agent);
         self.new_tab_in(self.active_cwd_for_new());
         if let Some(tab) = self.tabs.last_mut() {
             let active = tab.active.clone();
@@ -5477,13 +5467,13 @@ impl State {
     /// Open a tab in the session's directory and type the agent's resume
     /// command (ADR 0042, A4).
     fn resume_agent(&mut self, agent_name: &str, session: &str, cwd: Option<&str>) {
-        let Some(agent) = miao_term_ui::integration::AGENTS
+        let Some(agent) = mtty_ui::integration::AGENTS
             .iter()
             .find(|a| a.name == agent_name)
         else {
             return;
         };
-        let Some(cmd) = miao_term_ui::integration::resume_command(agent, session) else {
+        let Some(cmd) = mtty_ui::integration::resume_command(agent, session) else {
             return;
         };
         let dir = cwd
@@ -5523,13 +5513,13 @@ impl State {
                 match (saved, typed) {
                     (Some(host), _) => self.open_sftp(
                         host.name.clone(),
-                        miao_term_ui::sftp::Remote {
+                        mtty_ui::sftp::Remote {
                             destination: host.destination(),
                             options: host.ssh_options(),
                         },
                     ),
                     (None, Some(target)) => {
-                        let parsed = miao_term_ui::ssh::Target::parse(&target);
+                        let parsed = mtty_ui::ssh::Target::parse(&target);
                         let options = parsed
                             .as_ref()
                             .and_then(|t| t.port)
@@ -5538,14 +5528,14 @@ impl State {
                         let destination = parsed.map(|t| t.destination()).unwrap_or(target.clone());
                         self.open_sftp(
                             target,
-                            miao_term_ui::sftp::Remote {
+                            mtty_ui::sftp::Remote {
                                 destination,
                                 options,
                             },
                         );
                     }
                     _ => self.show_notice(
-                        miao_term_ui::i18n::t(
+                        mtty_ui::i18n::t(
                             self.lang,
                             "The active tab is not an ssh session; open Files from Hosts…",
                             "当前标签不是 SSH 会话;请从“主机…”中打开文件",
@@ -5600,7 +5590,7 @@ impl State {
             Cmd::Hosts => {
                 self.reload_hosts();
                 self.hosts_view = Some(HostsView::default());
-                self.spawn_job(|| JobDone::AgentStatus(miao_term_ui::hostkeys::agent_status()));
+                self.spawn_job(|| JobDone::AgentStatus(mtty_ui::hostkeys::agent_status()));
             }
             Cmd::NewTask => {
                 self.refresh_agents_detected();
@@ -5621,7 +5611,7 @@ impl State {
                     self.reload_tasks();
                 }
                 None => self.show_notice(
-                    miao_term_ui::i18n::t(self.lang, "No current directory", "没有当前目录").into(),
+                    mtty_ui::i18n::t(self.lang, "No current directory", "没有当前目录").into(),
                 ),
             },
             Cmd::CopyLastOutput | Cmd::SendLastOutput => {
@@ -5633,7 +5623,7 @@ impl State {
                     Some(out) => {
                         if matches!(cmd, Cmd::CopyLastOutput) {
                             self.egui_ctx.copy_text(out.text);
-                            let msg = miao_term_ui::i18n::t(self.lang, "Copied", "已复制");
+                            let msg = mtty_ui::i18n::t(self.lang, "Copied", "已复制");
                             self.show_notice(msg.to_string());
                         } else {
                             // Fenced, so an agent sees where the output starts and ends.
@@ -5643,7 +5633,7 @@ impl State {
                         }
                     }
                     None => {
-                        let msg = miao_term_ui::i18n::t(
+                        let msg = mtty_ui::i18n::t(
                             self.lang,
                             "No finished command here yet (needs the zsh integration).",
                             "这里还没有已结束的命令(需要 zsh 集成)。",
@@ -5655,7 +5645,7 @@ impl State {
             Cmd::SendSelectionToAgent => {
                 let text = self.active_editor().map(|e| e.copy()).unwrap_or_default();
                 if text.trim().is_empty() {
-                    let msg = miao_term_ui::i18n::t(
+                    let msg = mtty_ui::i18n::t(
                         self.lang,
                         "Select some text in an editor pane first.",
                         "请先在编辑器 pane 中选中文字。",
@@ -5665,7 +5655,7 @@ impl State {
                 } else {
                     let prompt = format!(
                         "{}\n```\n{text}\n```",
-                        miao_term_ui::i18n::t(
+                        mtty_ui::i18n::t(
                             self.lang,
                             "Here is the selected code:",
                             "以下是选中的代码:"
@@ -5690,7 +5680,7 @@ impl State {
                     })
                     .unwrap_or_default();
                 if text.is_empty() {
-                    let msg = miao_term_ui::i18n::t(
+                    let msg = mtty_ui::i18n::t(
                         self.lang,
                         "No diagnostics in the active editor.",
                         "当前编辑器没有诊断。",
@@ -5700,11 +5690,7 @@ impl State {
                 } else {
                     let prompt = format!(
                         "{}\n```\n{text}\n```",
-                        miao_term_ui::i18n::t(
-                            self.lang,
-                            "Here are the diagnostics:",
-                            "以下是诊断:"
-                        )
+                        mtty_ui::i18n::t(self.lang, "Here are the diagnostics:", "以下是诊断:")
                     );
                     self.send_to_agent(&prompt);
                 }
@@ -5724,7 +5710,7 @@ impl State {
                     Some(out) => {
                         let prompt = format!(
                             "{}\n```\n{}\n```",
-                            miao_term_ui::i18n::t(
+                            mtty_ui::i18n::t(
                                 self.lang,
                                 "Here is the last command's output:",
                                 "以下是上一条命令的输出:"
@@ -5734,7 +5720,7 @@ impl State {
                         self.send_to_agent(&prompt);
                     }
                     None => {
-                        let msg = miao_term_ui::i18n::t(
+                        let msg = mtty_ui::i18n::t(
                             self.lang,
                             "No finished command in this tab (needs the shell integration).",
                             "本标签中没有已结束的命令(需要 shell 集成)。",
@@ -5767,7 +5753,7 @@ impl State {
                     .active_editor_mut()
                     .is_some_and(|ed| ed.reject_proposal());
                 if rejected {
-                    let msg = miao_term_ui::i18n::t(
+                    let msg = mtty_ui::i18n::t(
                         self.lang,
                         "Agent edit rejected.",
                         "已拒绝 agent 的修改。",
@@ -5949,7 +5935,7 @@ impl State {
             Cmd::EditLargeFile => match self.active_editor().filter(|e| e.is_view_only()) {
                 Some(ed) => self.large_edit_offer = Some(ed.id.clone()),
                 None => self.show_notice(
-                    miao_term_ui::i18n::t(
+                    mtty_ui::i18n::t(
                         self.lang,
                         "The active pane is not a file in view mode.",
                         "当前 pane 不是只读查看中的文件。",
@@ -6116,7 +6102,7 @@ impl State {
                 }
             }
             Cmd::Settings => self.show_settings = true,
-            Cmd::Relaunch => match miao_term_ui::install::relaunch() {
+            Cmd::Relaunch => match mtty_ui::install::relaunch() {
                 Ok(()) => self.quit_keeping_sessions(),
                 Err(e) => self.show_notice(e),
             },
@@ -6151,65 +6137,58 @@ impl State {
         let mut open = true;
         let mut close = false;
         let ch = self.theme.chrome();
-        egui::Window::new(miao_term_ui::i18n::t(
-            self.lang,
-            "Command Palette",
-            "命令面板",
-        ))
-        .collapsible(false)
-        .resizable(false)
-        .anchor(egui::Align2::CENTER_TOP, [0.0, 120.0])
-        .open(&mut open)
-        .show(ctx, |ui| {
-            ui.visuals_mut().selection.bg_fill = miao_term_ui::chrome::bg_color(ch.active);
-            let resp = ui.add(
-                egui::TextEdit::singleline(&mut query)
-                    .hint_text(miao_term_ui::i18n::t(
-                        self.lang,
-                        "Type a command…",
-                        "输入命令…",
-                    ))
-                    .desired_width(420.0),
-            );
-            // Enter makes the field give up focus; check it before re-taking focus.
-            let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if !enter {
-                resp.request_focus();
-            }
-            let q = query.to_lowercase();
-            let mut rows: Vec<(usize, Cmd, &str)> = cmds
-                .iter()
-                .filter_map(|(c, l)| {
-                    miao_term_ui::palette::score(l, "command", &q).map(|s| (s, *c, l.as_ref()))
-                })
-                .collect();
-            rows.sort_by_key(|(s, _, _)| *s);
-            let down = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown));
-            let up = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp));
-            let esc = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
-            if down {
-                self.palette_idx = (self.palette_idx + 1).min(rows.len().saturating_sub(1));
-            }
-            if up {
-                self.palette_idx = self.palette_idx.saturating_sub(1);
-            }
-            if rows.is_empty() {
-                self.palette_idx = 0;
-            } else {
-                self.palette_idx = self.palette_idx.min(rows.len() - 1);
-            }
-            for (i, (_, _, label)) in rows.iter().enumerate() {
-                if ui.selectable_label(i == self.palette_idx, *label).clicked() {
-                    chosen = Some(rows[i].1);
+        egui::Window::new(mtty_ui::i18n::t(self.lang, "Command Palette", "命令面板"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_TOP, [0.0, 120.0])
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.visuals_mut().selection.bg_fill = mtty_ui::chrome::bg_color(ch.active);
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut query)
+                        .hint_text(mtty_ui::i18n::t(self.lang, "Type a command…", "输入命令…"))
+                        .desired_width(420.0),
+                );
+                // Enter makes the field give up focus; check it before re-taking focus.
+                let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if !enter {
+                    resp.request_focus();
                 }
-            }
-            if enter {
-                chosen = rows.get(self.palette_idx).map(|(_, c, _)| *c);
-            }
-            if esc {
-                close = true;
-            }
-        });
+                let q = query.to_lowercase();
+                let mut rows: Vec<(usize, Cmd, &str)> = cmds
+                    .iter()
+                    .filter_map(|(c, l)| {
+                        mtty_ui::palette::score(l, "command", &q).map(|s| (s, *c, l.as_ref()))
+                    })
+                    .collect();
+                rows.sort_by_key(|(s, _, _)| *s);
+                let down =
+                    ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown));
+                let up = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp));
+                let esc = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+                if down {
+                    self.palette_idx = (self.palette_idx + 1).min(rows.len().saturating_sub(1));
+                }
+                if up {
+                    self.palette_idx = self.palette_idx.saturating_sub(1);
+                }
+                if rows.is_empty() {
+                    self.palette_idx = 0;
+                } else {
+                    self.palette_idx = self.palette_idx.min(rows.len() - 1);
+                }
+                for (i, (_, _, label)) in rows.iter().enumerate() {
+                    if ui.selectable_label(i == self.palette_idx, *label).clicked() {
+                        chosen = Some(rows[i].1);
+                    }
+                }
+                if enter {
+                    chosen = rows.get(self.palette_idx).map(|(_, c, _)| *c);
+                }
+                if esc {
+                    close = true;
+                }
+            });
         self.palette_query = query;
         if let Some(cmd) = chosen {
             self.run_command(cmd);
@@ -6245,7 +6224,7 @@ impl State {
             .unwrap_or_default();
         let current_theme = self.theme_name.clone();
         let mut chosen_theme: Option<&'static str> = None;
-        app_window(miao_term_ui::i18n::t(self.lang, "Settings", "设置"), ctx)
+        app_window(mtty_ui::i18n::t(self.lang, "Settings", "设置"), ctx)
             .collapsible(false)
             .default_size([460.0, 560.0])
             .open(&mut open)
@@ -6253,13 +6232,13 @@ impl State {
                 egui::ScrollArea::both()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        ui.label(miao_term_ui::i18n::t(self.lang, "Font size", "字号"));
+                        ui.label(mtty_ui::i18n::t(self.lang, "Font size", "字号"));
                         ui.add(egui::Slider::new(&mut font, 6.0..=40.0));
                         ui.horizontal(|ui| {
-                            ui.label(miao_term_ui::i18n::t(self.lang, "Font family", "字体"));
+                            ui.label(mtty_ui::i18n::t(self.lang, "Font family", "字体"));
                             ui.add(
                                 egui::TextEdit::singleline(&mut family)
-                                    .hint_text(miao_term_ui::i18n::t(
+                                    .hint_text(mtty_ui::i18n::t(
                                         self.lang,
                                         "system default",
                                         "系统默认",
@@ -6267,25 +6246,25 @@ impl State {
                                     .desired_width(170.0),
                             );
                         });
-                        ui.label(miao_term_ui::i18n::t(self.lang, "Line height", "行高"));
+                        ui.label(mtty_ui::i18n::t(self.lang, "Line height", "行高"));
                         ui.add(egui::Slider::new(&mut line_ratio, 1.0..=2.0));
-                        ui.label(miao_term_ui::i18n::t(self.lang, "Opacity", "不透明度"));
+                        ui.label(mtty_ui::i18n::t(self.lang, "Opacity", "不透明度"));
                         ui.add(egui::Slider::new(&mut opacity, 0.1..=1.0));
                         ui.separator();
-                        ui.label(miao_term_ui::i18n::t(self.lang, "Cursor", "光标"));
+                        ui.label(mtty_ui::i18n::t(self.lang, "Cursor", "光标"));
                         ui.horizontal(|ui| {
                             for (s, n) in [
                                 (
-                                    miao_term_ui::CursorStyle::Block,
-                                    miao_term_ui::i18n::t(self.lang, "Block", "方块"),
+                                    mtty_ui::CursorStyle::Block,
+                                    mtty_ui::i18n::t(self.lang, "Block", "方块"),
                                 ),
                                 (
-                                    miao_term_ui::CursorStyle::Bar,
-                                    miao_term_ui::i18n::t(self.lang, "Bar", "竖线"),
+                                    mtty_ui::CursorStyle::Bar,
+                                    mtty_ui::i18n::t(self.lang, "Bar", "竖线"),
                                 ),
                                 (
-                                    miao_term_ui::CursorStyle::Underline,
-                                    miao_term_ui::i18n::t(self.lang, "Underline", "下划线"),
+                                    mtty_ui::CursorStyle::Underline,
+                                    mtty_ui::i18n::t(self.lang, "Underline", "下划线"),
                                 ),
                             ] {
                                 if ui.radio(cursor == s, n).clicked() {
@@ -6296,31 +6275,31 @@ impl State {
                         ui.separator();
                         ui.checkbox(
                             &mut graphics,
-                            miao_term_ui::i18n::t(self.lang, "Inline graphics", "终端内联图片"),
+                            mtty_ui::i18n::t(self.lang, "Inline graphics", "终端内联图片"),
                         );
                         ui.checkbox(
                             &mut notifications,
-                            miao_term_ui::i18n::t(self.lang, "Notifications", "通知"),
+                            mtty_ui::i18n::t(self.lang, "Notifications", "通知"),
                         );
                         ui.checkbox(
                             &mut prevent_sleep,
-                            miao_term_ui::i18n::t(self.lang, "Prevent sleep", "防休眠"),
+                            mtty_ui::i18n::t(self.lang, "Prevent sleep", "防休眠"),
                         );
                         ui.checkbox(
                             &mut restore_scrollback,
-                            miao_term_ui::i18n::t(
+                            mtty_ui::i18n::t(
                                 self.lang,
                                 "Restore terminal contents on relaunch",
                                 "重新打开时恢复终端内容",
                             ),
                         );
                         ui.separator();
-                        ui.label(miao_term_ui::i18n::t(
+                        ui.label(mtty_ui::i18n::t(
                             self.lang,
                             "Agent integrations",
                             "Agent 集成",
                         ));
-                        for (i, (a, found)) in miao_term_ui::integration::AGENTS
+                        for (i, (a, found)) in mtty_ui::integration::AGENTS
                             .iter()
                             .zip(&detected)
                             .enumerate()
@@ -6331,7 +6310,7 @@ impl State {
                                 if ui
                                     .add_enabled(
                                         *found,
-                                        egui::Button::new(miao_term_ui::i18n::t(
+                                        egui::Button::new(mtty_ui::i18n::t(
                                             self.lang, "Launch", "启动",
                                         )),
                                     )
@@ -6340,11 +6319,7 @@ impl State {
                                     launch = Some(i);
                                 }
                                 if ui
-                                    .button(miao_term_ui::i18n::t(
-                                        self.lang,
-                                        "Install hook",
-                                        "安装钩子",
-                                    ))
+                                    .button(mtty_ui::i18n::t(self.lang, "Install hook", "安装钩子"))
                                     .clicked()
                                 {
                                     install_agent = Some(a.name);
@@ -6353,7 +6328,7 @@ impl State {
                         }
                         if let Some(msg) = self.integration_msg.as_mut() {
                             if ui
-                                .button(miao_term_ui::i18n::t(self.lang, "Copy", "复制"))
+                                .button(mtty_ui::i18n::t(self.lang, "Copy", "复制"))
                                 .clicked()
                             {
                                 ui.ctx().copy_text(msg.clone());
@@ -6367,7 +6342,7 @@ impl State {
                             );
                         }
                         ui.separator();
-                        ui.label(miao_term_ui::i18n::t(self.lang, "Theme", "主题"));
+                        ui.label(mtty_ui::i18n::t(self.lang, "Theme", "主题"));
                         for name in Theme::NAMES {
                             if ui.selectable_label(current_theme == name, name).clicked() {
                                 chosen_theme = Some(name);
@@ -6399,15 +6374,15 @@ impl State {
             self.launch_agent(i);
         }
         if let Some(name) = install_agent {
-            let msg = match miao_term_ui::integration::install(name) {
-                Ok(path) => miao_term_ui::integration::AGENTS
+            let msg = match mtty_ui::integration::install(name) {
+                Ok(path) => mtty_ui::integration::AGENTS
                     .iter()
                     .find(|a| a.name == name)
-                    .map(|a| miao_term_ui::integration::snippet(a, &path))
+                    .map(|a| mtty_ui::integration::snippet(a, &path))
                     .unwrap_or_default(),
                 Err(e) => format!(
                     "{}: {e}",
-                    miao_term_ui::i18n::t(self.lang, "Install failed", "安装失败")
+                    mtty_ui::i18n::t(self.lang, "Install failed", "安装失败")
                 ),
             };
             self.integration_msg = Some(msg);
@@ -6453,11 +6428,11 @@ impl State {
 
     /// The settings the window edits, as config.toml literals.
     fn settings_values(&self) -> Vec<(&'static str, String)> {
-        use miao_term_config::toml_string;
+        use mtty_config::toml_string;
         let cursor = match self.theme.cursor {
-            miao_term_ui::CursorStyle::Block => "block",
-            miao_term_ui::CursorStyle::Bar => "bar",
-            miao_term_ui::CursorStyle::Underline => "underline",
+            mtty_ui::CursorStyle::Block => "block",
+            mtty_ui::CursorStyle::Bar => "bar",
+            mtty_ui::CursorStyle::Underline => "underline",
         };
         let mut v = vec![
             ("font-size", format!("{:.1}", self.font_size)),
@@ -6481,7 +6456,7 @@ impl State {
 
     /// Write changed settings to config.toml; failures stay visible.
     fn persist_settings(&mut self) {
-        use miao_term_ui::i18n::t;
+        use mtty_ui::i18n::t;
         let current = self.settings_values();
         let changed: Vec<(&str, String)> = current
             .iter()
@@ -6491,7 +6466,7 @@ impl State {
         if changed.is_empty() {
             return;
         }
-        let msg = match miao_term_config::Config::save_settings(&changed) {
+        let msg = match mtty_config::Config::save_settings(&changed) {
             Ok(path) => {
                 self.saved_settings = current;
                 let mut msg = format!(
@@ -6521,7 +6496,7 @@ impl State {
         &self,
         draws: &[PaneDraw],
         images: ImageLayer<'_>,
-        window_bg: miao_term_ui::theme::Rgb,
+        window_bg: mtty_ui::theme::Rgb,
         paint_jobs: &[egui::ClippedPrimitive],
         screen: &egui_wgpu::ScreenDescriptor,
     ) {
@@ -6624,8 +6599,8 @@ impl State {
     }
 
     /// Apply a URL-scheme / argv launch intent (ADR 0013).
-    fn apply_launch(&mut self, intent: &miao_term_ui::launch::Intent) {
-        use miao_term_ui::launch::Intent;
+    fn apply_launch(&mut self, intent: &mtty_ui::launch::Intent) {
+        use mtty_ui::launch::Intent;
         match intent {
             // A second plain launch was forwarded here: bring the window forward.
             Intent::Activate => {
@@ -6658,7 +6633,7 @@ impl State {
                 {
                     Some(host) => self.open_sftp(
                         host.name.clone(),
-                        miao_term_ui::sftp::Remote {
+                        mtty_ui::sftp::Remote {
                             destination: host.destination(),
                             options: host.ssh_options(),
                         },
@@ -6666,7 +6641,7 @@ impl State {
                     None => {
                         let msg = format!(
                             "{} {name}",
-                            miao_term_ui::i18n::t(
+                            mtty_ui::i18n::t(
                                 self.lang,
                                 "No saved host named",
                                 "没有名为此的已保存主机:"
@@ -6691,7 +6666,7 @@ impl State {
                     None => {
                         let msg = format!(
                             "{} {name}",
-                            miao_term_ui::i18n::t(
+                            mtty_ui::i18n::t(
                                 self.lang,
                                 "No saved host named",
                                 "没有名为此的已保存主机:"
@@ -6775,7 +6750,7 @@ impl State {
 
     /// Type a queued prompt into its pane (or the active pane when it has no
     /// target). Read-only mode holds it back.
-    fn deliver_prompt(&mut self, item: miao_term_ui::agentloop::QueuedPrompt) {
+    fn deliver_prompt(&mut self, item: mtty_ui::agentloop::QueuedPrompt) {
         if self.read_only {
             self.prompt_queue.items.insert(0, item);
             return;
@@ -6795,7 +6770,7 @@ impl State {
             None => self
                 .prompt_queue
                 .items
-                .push(miao_term_ui::agentloop::QueuedPrompt { pane: None, ..item }),
+                .push(mtty_ui::agentloop::QueuedPrompt { pane: None, ..item }),
         }
     }
 
@@ -6851,7 +6826,7 @@ impl State {
             self.save_queue();
         }
         if let Some((title, body)) = alert {
-            miao_term_ui::agentloop::notify(&title, &body);
+            mtty_ui::agentloop::notify(&title, &body);
         }
         if self.prevent_sleep {
             let any_processing = self.tabs.iter().flat_map(|t| &t.panes).any(|p| {
@@ -6940,108 +6915,105 @@ impl State {
         };
         let mut chosen: Option<Pick> = None;
         let mut open = true;
-        app_window(
-            miao_term_ui::i18n::t(self.lang, "Open Quickly", "快速打开"),
-            ctx,
-        )
-        .collapsible(false)
-        .default_size([460.0, 420.0])
-        .open(&mut open)
-        .show(ctx, |ui| {
-            let r = ui.add(
-                egui::TextEdit::singleline(query)
-                    .hint_text(miao_term_ui::i18n::t(
-                        self.lang,
-                        "tab / agent / file",
-                        "标签 / agent / 文件",
-                    ))
-                    .desired_width(420.0),
-            );
-            // Enter makes the field give up focus; check it before re-taking focus.
-            let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if !enter {
-                r.request_focus();
-            }
-            let q = query.to_lowercase();
-            let freq = |p: &str| std::cmp::Reverse(*counts.get(p).unwrap_or(&0));
-            let mut rows: Vec<(usize, std::cmp::Reverse<u32>, String, Pick)> = Vec::new();
-            for (i, title) in &tabs {
-                if let Some(s) = miao_term_ui::palette::score(title, "tab", &q) {
-                    rows.push((s, freq(title), format!("\u{21e5} {title}"), Pick::Tab(*i)));
+        app_window(mtty_ui::i18n::t(self.lang, "Open Quickly", "快速打开"), ctx)
+            .collapsible(false)
+            .default_size([460.0, 420.0])
+            .open(&mut open)
+            .show(ctx, |ui| {
+                let r = ui.add(
+                    egui::TextEdit::singleline(query)
+                        .hint_text(mtty_ui::i18n::t(
+                            self.lang,
+                            "tab / agent / file",
+                            "标签 / agent / 文件",
+                        ))
+                        .desired_width(420.0),
+                );
+                // Enter makes the field give up focus; check it before re-taking focus.
+                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if !enter {
+                    r.request_focus();
                 }
-            }
-            for (i, pane, label) in &agents {
-                if let Some(s) = miao_term_ui::palette::score(label, "agent", &q) {
-                    rows.push((
-                        s,
-                        freq(label),
-                        format!("\u{2726} {label}"),
-                        Pick::Pane(*i, pane.clone()),
-                    ));
+                let q = query.to_lowercase();
+                let freq = |p: &str| std::cmp::Reverse(*counts.get(p).unwrap_or(&0));
+                let mut rows: Vec<(usize, std::cmp::Reverse<u32>, String, Pick)> = Vec::new();
+                for (i, title) in &tabs {
+                    if let Some(s) = mtty_ui::palette::score(title, "tab", &q) {
+                        rows.push((s, freq(title), format!("\u{21e5} {title}"), Pick::Tab(*i)));
+                    }
                 }
-            }
-            for (i, label) in &snippets {
-                if let Some(s) = miao_term_ui::palette::score(label, "snippet", &q) {
-                    rows.push((
-                        s,
-                        freq(label),
-                        format!("\u{276f} {label}"),
-                        Pick::Snippet(*i),
-                    ));
+                for (i, pane, label) in &agents {
+                    if let Some(s) = mtty_ui::palette::score(label, "agent", &q) {
+                        rows.push((
+                            s,
+                            freq(label),
+                            format!("\u{2726} {label}"),
+                            Pick::Pane(*i, pane.clone()),
+                        ));
+                    }
                 }
-            }
-            for (i, label) in &saved_hosts {
-                if let Some(s) = miao_term_ui::palette::score(label, "host ssh", &q) {
-                    rows.push((s, freq(label), format!("\u{21c4} {label}"), Pick::Host(*i)));
+                for (i, label) in &snippets {
+                    if let Some(s) = mtty_ui::palette::score(label, "snippet", &q) {
+                        rows.push((
+                            s,
+                            freq(label),
+                            format!("\u{276f} {label}"),
+                            Pick::Snippet(*i),
+                        ));
+                    }
                 }
-            }
-            for (name, is_dir) in &files {
-                let kind = if *is_dir { "dir" } else { "file" };
-                if let Some(s) = miao_term_ui::palette::score(name, kind, &q) {
-                    let icon = if *is_dir { "\u{ea83}" } else { " " };
-                    let pick = if *is_dir {
-                        Pick::Dir(name.clone())
-                    } else {
-                        Pick::File(name.clone())
-                    };
-                    let f = cwd
-                        .as_ref()
-                        .map(|c| c.join(name).to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    rows.push((s, freq(&f), format!("{icon}  {name}"), pick));
+                for (i, label) in &saved_hosts {
+                    if let Some(s) = mtty_ui::palette::score(label, "host ssh", &q) {
+                        rows.push((s, freq(label), format!("\u{21c4} {label}"), Pick::Host(*i)));
+                    }
                 }
-            }
-            for path in &recents {
-                if let Some(s) = miao_term_ui::palette::score(path, "recent", &q) {
-                    rows.push((
-                        s,
-                        freq(path),
-                        format!("\u{21ba} {path}"),
-                        Pick::Path(std::path::PathBuf::from(path)),
-                    ));
+                for (name, is_dir) in &files {
+                    let kind = if *is_dir { "dir" } else { "file" };
+                    if let Some(s) = mtty_ui::palette::score(name, kind, &q) {
+                        let icon = if *is_dir { "\u{ea83}" } else { " " };
+                        let pick = if *is_dir {
+                            Pick::Dir(name.clone())
+                        } else {
+                            Pick::File(name.clone())
+                        };
+                        let f = cwd
+                            .as_ref()
+                            .map(|c| c.join(name).to_string_lossy().to_string())
+                            .unwrap_or_default();
+                        rows.push((s, freq(&f), format!("{icon}  {name}"), pick));
+                    }
                 }
-            }
-            rows.sort_by_key(|r| (r.0, r.1));
-            let clone_pick = |p: &Pick| match p {
-                Pick::Tab(i) => Pick::Tab(*i),
-                Pick::Pane(i, id) => Pick::Pane(*i, id.clone()),
-                Pick::Host(i) => Pick::Host(*i),
-                Pick::Snippet(i) => Pick::Snippet(*i),
-                Pick::File(n) => Pick::File(n.clone()),
-                Pick::Dir(n) => Pick::Dir(n.clone()),
-                Pick::Path(p) => Pick::Path(p.clone()),
-            };
-            for (_, _, label, pick) in rows.iter().take(50) {
-                if ui.selectable_label(false, label).clicked() {
-                    chosen = Some(clone_pick(pick));
+                for path in &recents {
+                    if let Some(s) = mtty_ui::palette::score(path, "recent", &q) {
+                        rows.push((
+                            s,
+                            freq(path),
+                            format!("\u{21ba} {path}"),
+                            Pick::Path(std::path::PathBuf::from(path)),
+                        ));
+                    }
                 }
-            }
-            if enter {
-                if let Some((_, _, _, p)) = rows.first() {
-                    chosen = Some(clone_pick(p));
+                rows.sort_by_key(|r| (r.0, r.1));
+                let clone_pick = |p: &Pick| match p {
+                    Pick::Tab(i) => Pick::Tab(*i),
+                    Pick::Pane(i, id) => Pick::Pane(*i, id.clone()),
+                    Pick::Host(i) => Pick::Host(*i),
+                    Pick::Snippet(i) => Pick::Snippet(*i),
+                    Pick::File(n) => Pick::File(n.clone()),
+                    Pick::Dir(n) => Pick::Dir(n.clone()),
+                    Pick::Path(p) => Pick::Path(p.clone()),
+                };
+                for (_, _, label, pick) in rows.iter().take(50) {
+                    if ui.selectable_label(false, label).clicked() {
+                        chosen = Some(clone_pick(pick));
+                    }
                 }
-            }
-        });
+                if enter {
+                    if let Some((_, _, _, p)) = rows.first() {
+                        chosen = Some(clone_pick(p));
+                    }
+                }
+            });
         if let Some(p) = chosen {
             self.quick = None;
             match p {
@@ -7141,8 +7113,8 @@ impl State {
     }
 
     /// The Find bar's query with its options, for an editor pane.
-    fn editor_query(&self) -> miao_term_editor::SearchQuery {
-        miao_term_editor::SearchQuery {
+    fn editor_query(&self) -> mtty_editor::SearchQuery {
+        mtty_editor::SearchQuery {
             pattern: self.search.clone().unwrap_or_default(),
             regex: self.find_opts.regex,
             case_sensitive: self.find_opts.case_sensitive,
@@ -7190,10 +7162,10 @@ impl State {
             return;
         }
         let caret = ed.doc.selection().primary().from();
-        let found = miao_term_editor::search::find_all(ed.doc.rope(), &self.editor_query());
+        let found = mtty_editor::search::find_all(ed.doc.rope(), &self.editor_query());
         self.find_rejump = false;
         self.find_error = match &found {
-            Err(miao_term_editor::SearchError::Invalid(why)) => Some(why.clone()),
+            Err(mtty_editor::SearchError::Invalid(why)) => Some(why.clone()),
             _ => None,
         };
         let found = found.unwrap_or_default();
@@ -7250,8 +7222,8 @@ impl State {
                         .unwrap_or_else(|e| e.into_inner())
                         .append(&mut batch);
                 } else if let Some(rope) = rope {
-                    let found = miao_term_editor::search::find_all(&rope, &editor_query)
-                        .unwrap_or_default();
+                    let found =
+                        mtty_editor::search::find_all(&rope, &editor_query).unwrap_or_default();
                     if !c.load(Ordering::Relaxed) {
                         let mut found = found;
                         found.truncate(MAX_SEARCH_HITS);
@@ -7335,9 +7307,10 @@ impl State {
                     ed.select_bytes(start as u64, end as u64);
                     return;
                 }
-                ed.doc.set_selection(miao_term_editor::Selection::single(
-                    miao_term_editor::Range::new(start, end),
-                ));
+                ed.doc
+                    .set_selection(mtty_editor::Selection::single(mtty_editor::Range::new(
+                        start, end,
+                    )));
                 ed.reveal_cursor();
             }
             return;
@@ -7378,7 +7351,7 @@ impl State {
             self.large_edit_offer = None;
             return;
         };
-        use miao_term_ui::i18n::t;
+        use mtty_ui::i18n::t;
         let l = self.lang;
         let loading = self.large_loading.is_some();
         let (mut go, mut cancel) = (false, false);
@@ -7389,7 +7362,7 @@ impl State {
             .show(ctx, |ui| {
                 ui.set_max_width(420.0);
                 ui.label(
-                    if l == miao_term_ui::i18n::Lang::En {
+                    if l == mtty_ui::i18n::Lang::En {
                         format!(
                             "{name} ({}) is open in view mode: read from disk a screen at a time, so it needs little memory.\n\nEditing loads the whole file into memory, about {} for this file. Opening, searching and saving it take longer too.",
                             human_bytes(size),
@@ -7436,7 +7409,7 @@ impl State {
                     let doc = std::fs::read(&path)
                         .map_err(|e| e.to_string())
                         .and_then(|b| {
-                            miao_term_editor::Document::from_bytes(&b).map_err(|e| e.to_string())
+                            mtty_editor::Document::from_bytes(&b).map_err(|e| e.to_string())
                         });
                     let _ = tx.send(doc);
                     let _ = proxy.send_event(HostEvent::Wake);
@@ -7476,14 +7449,14 @@ impl State {
                 self.search_key.clear();
                 self.bg_search = None;
                 self.show_notice(
-                    miao_term_ui::i18n::t(lang, "The file is now editable.", "文件已可编辑。")
+                    mtty_ui::i18n::t(lang, "The file is now editable.", "文件已可编辑。")
                         .to_string(),
                 );
             }
             (Err(e), _) => {
                 self.show_notice(format!(
                     "{}: {e}",
-                    miao_term_ui::i18n::t(lang, "Could not load for editing", "无法加载为可编辑")
+                    mtty_ui::i18n::t(lang, "Could not load for editing", "无法加载为可编辑")
                 ));
             }
             (Ok(_), None) => {}
@@ -7508,7 +7481,7 @@ impl State {
             self.editor_reload_offer = None;
             return;
         };
-        use miao_term_ui::i18n::t;
+        use mtty_ui::i18n::t;
         let l = self.lang;
         let (mut reload, mut keep) = (false, false);
         egui::Window::new(t(l, "File Changed on Disk", "文件已在磁盘上更改"))
@@ -7517,7 +7490,7 @@ impl State {
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 ui.set_max_width(440.0);
-                ui.label(if l == miao_term_ui::i18n::Lang::En {
+                ui.label(if l == mtty_ui::i18n::Lang::En {
                     format!(
                         "{name} changed on disk while this pane has unsaved edits.\n\nReloading replaces your text with the file's contents (you can undo it). Keeping your version asks again only if the file changes once more."
                     )
@@ -7581,8 +7554,8 @@ impl State {
             ));
         }
         let ch = self.theme.chrome();
-        let fg = miao_term_ui::chrome::bg_color(ch.text);
-        let panel = miao_term_ui::chrome::bg_color(ch.card);
+        let fg = mtty_ui::chrome::bg_color(ch.text);
+        let panel = mtty_ui::chrome::bg_color(ch.card);
         let mut focus = None;
         for (id, r, text, base) in shown {
             let rect = egui::Rect::from_min_size(egui::pos2(r.x, r.y), egui::vec2(r.w, r.h));
@@ -7649,7 +7622,7 @@ impl State {
         };
         let Some(source) = source else {
             self.show_notice(
-                miao_term_ui::i18n::t(
+                mtty_ui::i18n::t(
                     self.lang,
                     "Markdown preview works for a file open in an editor pane.",
                     "Markdown 预览用于在编辑器 pane 中打开的文件。",
@@ -7726,8 +7699,8 @@ impl State {
         }
     }
 
-    fn lsp_event(&mut self, event: miao_term_lsp::Event) {
-        use miao_term_lsp::Event;
+    fn lsp_event(&mut self, event: mtty_lsp::Event) {
+        use mtty_lsp::Event;
         match event {
             Event::Diagnostics(path) => {
                 let list = self.lsp.diagnostics(&path).to_vec();
@@ -7742,8 +7715,8 @@ impl State {
                     let mut diagnostics: Vec<editor_pane::PaneDiagnostic> = list
                         .iter()
                         .map(|d| {
-                            let from = miao_term_lsp::pos_to_char(rope, d.range.start, encoding);
-                            let to = miao_term_lsp::pos_to_char(rope, d.range.end, encoding);
+                            let from = mtty_lsp::pos_to_char(rope, d.range.start, encoding);
+                            let to = mtty_lsp::pos_to_char(rope, d.range.end, encoding);
                             editor_pane::PaneDiagnostic {
                                 from,
                                 to: to.max(from),
@@ -7785,8 +7758,7 @@ impl State {
             Event::Definition { targets, encoding } => match targets.into_iter().next() {
                 Some((path, range)) => self.go_to_target(&path, range, encoding),
                 None => self.show_notice(
-                    miao_term_ui::i18n::t(self.lang, "No definition found.", "未找到定义。")
-                        .to_string(),
+                    mtty_ui::i18n::t(self.lang, "No definition found.", "未找到定义。").to_string(),
                 ),
             },
             Event::Failed {
@@ -7800,7 +7772,7 @@ impl State {
                 if configured {
                     self.show_notice(format!(
                         "{} {server}: {message}",
-                        miao_term_ui::i18n::t(self.lang, "Language server", "语言服务器")
+                        mtty_ui::i18n::t(self.lang, "Language server", "语言服务器")
                     ));
                 }
             }
@@ -7812,18 +7784,17 @@ impl State {
     fn go_to_target(
         &mut self,
         path: &std::path::Path,
-        range: miao_term_lsp::LspRange,
-        encoding: miao_term_lsp::Encoding,
+        range: mtty_lsp::LspRange,
+        encoding: mtty_lsp::Encoding,
     ) {
         if !self.open_editor_pane(path) {
             return;
         }
         if let Some(ed) = self.active_editor_mut() {
-            let at = miao_term_lsp::pos_to_char(ed.doc.rope(), range.start, encoding);
+            let at = mtty_lsp::pos_to_char(ed.doc.rope(), range.start, encoding);
             let line = ed.doc.rope().char_to_line(at);
             ed.go_to_line(line);
-            ed.doc
-                .set_selection(miao_term_editor::Selection::cursor(at));
+            ed.doc.set_selection(mtty_editor::Selection::cursor(at));
             ed.reveal_cursor();
         }
         self.completion = None;
@@ -7991,8 +7962,8 @@ impl State {
         let (tx, after) = completion_edit(ed.doc.rope(), caret, c.start, &item, c.encoding);
         ed.doc.apply(
             tx,
-            miao_term_editor::Selection::cursor(after),
-            miao_term_editor::history::EditKind::Other,
+            mtty_editor::Selection::cursor(after),
+            mtty_editor::history::EditKind::Other,
         );
         ed.reveal_cursor();
     }
@@ -8098,8 +8069,8 @@ impl State {
             self.hover = None;
         }
         let ch = self.theme.chrome();
-        let fg = miao_term_ui::chrome::bg_color(ch.text);
-        let panel = miao_term_ui::chrome::bg_color(ch.card);
+        let fg = mtty_ui::chrome::bg_color(ch.text);
+        let panel = mtty_ui::chrome::bg_color(ch.card);
         if let Some(h) = &self.hover {
             if h.markdown.is_some() || !h.diagnostics.is_empty() {
                 let (x, y) = h.pos;
@@ -8162,7 +8133,7 @@ impl State {
             .collect();
         let (selected, total) = (c.selected, c.shown.len());
         let mut clicked = None;
-        let muted = miao_term_ui::chrome::bg_color(ch.muted);
+        let muted = mtty_ui::chrome::bg_color(ch.muted);
         egui::Area::new(egui::Id::new("mtty-completion"))
             .order(egui::Order::Foreground)
             .fixed_pos(egui::pos2(x, y + 2.0))
@@ -8207,7 +8178,7 @@ impl State {
         let Some(text) = self.goto_line.as_mut() else {
             return;
         };
-        use miao_term_ui::i18n::t;
+        use mtty_ui::i18n::t;
         let lang = self.lang;
         let Some((total, (line, _))) = self
             .tabs
@@ -8225,7 +8196,7 @@ impl State {
             .resizable(false)
             .anchor(egui::Align2::CENTER_TOP, [0.0, 40.0])
             .show(ctx, |ui| {
-                let hint = if lang == miao_term_ui::i18n::Lang::En {
+                let hint = if lang == mtty_ui::i18n::Lang::En {
                     format!("line[:column] — now {line} of {total}")
                 } else {
                     format!("行[:列] —— 当前第 {line} 行,共 {total} 行")
@@ -8271,7 +8242,7 @@ impl State {
         if self.goto_symbol.is_none() {
             return;
         }
-        use miao_term_ui::i18n::t;
+        use mtty_ui::i18n::t;
         let lang = self.lang;
         let symbols = match self.active_editor() {
             Some(ed) => ed
@@ -8369,7 +8340,7 @@ impl State {
         let Some((query, selected)) = self.resume_picker.clone() else {
             return;
         };
-        use miao_term_ui::i18n::t;
+        use mtty_ui::i18n::t;
         let lang = self.lang;
         // Newest first, from the states agents reported over MTP.
         let sessions = self.mtp.agent_sessions();
@@ -8488,7 +8459,7 @@ impl State {
         let Some(text) = self.vim_command.as_mut() else {
             return;
         };
-        use miao_term_ui::i18n::t;
+        use mtty_ui::i18n::t;
         let lang = self.lang;
         let (mut go, mut close) = (false, false);
         egui::Window::new(t(lang, "Vim Command", "Vim 命令"))
@@ -8563,7 +8534,7 @@ impl State {
         if self.search.is_none() {
             return;
         }
-        use miao_term_ui::i18n::t;
+        use mtty_ui::i18n::t;
         let lang = self.lang;
         let n = self.search_count();
         let idx = self.search_idx;
@@ -8754,7 +8725,7 @@ impl State {
         let msg = match ed.doc.replace_all(&query, &replacement) {
             Ok(n) => {
                 ed.reveal_cursor();
-                if lang == miao_term_ui::i18n::Lang::En {
+                if lang == mtty_ui::i18n::Lang::En {
                     format!("Replaced {n} {}.", if n == 1 { "match" } else { "matches" })
                 } else {
                     format!("已替换 {n} 处。")
@@ -8785,7 +8756,7 @@ impl State {
         let Some(text) = self.composer.as_mut() else {
             return;
         };
-        use miao_term_ui::i18n::t;
+        use mtty_ui::i18n::t;
         let lang = self.lang;
         let mut open = true;
         let mut send = false;
@@ -8855,7 +8826,7 @@ impl State {
         self.update_result = None;
         let Some(url) = self.update_url.clone() else {
             self.update_result = Some(UpdateResult::Failed(
-                miao_term_ui::i18n::t(self.lang, "No update URL configured.", "未配置更新地址。")
+                mtty_ui::i18n::t(self.lang, "No update URL configured.", "未配置更新地址。")
                     .to_string(),
             ));
             return;
@@ -8863,15 +8834,14 @@ impl State {
         let (tx, rx) = std::sync::mpsc::channel();
         let proxy = self.proxy.clone();
         std::thread::spawn(move || {
-            let out = miao_term_platform::background_command("curl")
+            let out = mtty_platform::background_command("curl")
                 .args(["-fsSL", "--max-time", "8", &url])
                 .output();
             let result = match out {
                 Ok(o) if o.status.success() => {
-                    match miao_term_ui::update::parse_checked(&String::from_utf8_lossy(&o.stdout)) {
+                    match mtty_ui::update::parse_checked(&String::from_utf8_lossy(&o.stdout)) {
                         Ok(m) => {
-                            if miao_term_ui::update::is_newer(&m.version, env!("CARGO_PKG_VERSION"))
-                            {
+                            if mtty_ui::update::is_newer(&m.version, env!("CARGO_PKG_VERSION")) {
                                 let artifact = m.for_platform().cloned();
                                 UpdateResult::Available {
                                     version: m.version,
@@ -8900,7 +8870,7 @@ impl State {
         let cmd = tab.ssh_cmd.clone().or_else(|| {
             tab.ssh_target
                 .as_deref()
-                .and_then(miao_term_ui::ssh::session_command)
+                .and_then(mtty_ui::ssh::session_command)
                 .map(|(_, cmd)| cmd)
         });
         let Some(cmd) = cmd else {
@@ -8913,22 +8883,22 @@ impl State {
         };
         let note = format!(
             "\x1b[2m[mtty] {} {target}. {}\x1b[0m\r\n",
-            miao_term_ui::i18n::t(self.lang, "Disconnected from", "已与以下主机断开:"),
-            miao_term_ui::i18n::t(self.lang, "Press Enter to reconnect.", "按回车重新连接。"),
+            mtty_ui::i18n::t(self.lang, "Disconnected from", "已与以下主机断开:"),
+            mtty_ui::i18n::t(self.lang, "Press Enter to reconnect.", "按回车重新连接。"),
         );
         pane.term.screen_mut().process(note.as_bytes());
         pane.on_enter = Some(typed_ssh(&cmd));
     }
 
     fn open_ssh(&mut self, input: &str) {
-        let Some((title, cmd)) = miao_term_ui::ssh::session_command(input) else {
+        let Some((title, cmd)) = mtty_ui::ssh::session_command(input) else {
             return;
         };
         self.open_ssh_command(title, cmd, input.trim().to_string());
     }
 
     fn reload_snippets(&mut self) {
-        match miao_term_config::snippets::SnippetBook::load() {
+        match mtty_config::snippets::SnippetBook::load() {
             Ok(book) => {
                 self.snippet_book = book;
                 self.snippet_book_error = None;
@@ -8963,7 +8933,7 @@ impl State {
     }
 
     fn snippets_window(&mut self, ctx: &egui::Context) {
-        use miao_term_ui::i18n::t;
+        use mtty_ui::i18n::t;
         let lang = self.lang;
         let Some(mut view) = self.snippets_view.take() else {
             return;
@@ -9141,7 +9111,7 @@ impl State {
         }
     }
 
-    fn start_update_download(&mut self, artifact: miao_term_ui::update::Artifact) {
+    fn start_update_download(&mut self, artifact: mtty_ui::update::Artifact) {
         if self.update_install == UpdateInstall::Working {
             return;
         }
@@ -9149,9 +9119,7 @@ impl State {
         let key = self.update_pubkey.clone();
         self.spawn_job(move || {
             let dir = std::env::temp_dir().join(format!("mtty-download-{}", std::process::id()));
-            JobDone::UpdateDownloaded(miao_term_ui::update::download_verified(
-                &artifact, &key, &dir,
-            ))
+            JobDone::UpdateDownloaded(mtty_ui::update::download_verified(&artifact, &key, &dir))
         });
     }
 
@@ -9178,15 +9146,15 @@ impl State {
     /// Hand a verified update to the platform helper and quit, or open the
     /// download where this install cannot replace itself.
     fn install_update(&mut self, path: &std::path::Path) {
-        match miao_term_ui::install::prepare(path) {
-            Ok(miao_term_ui::install::Plan::Helper(script)) => {
-                match miao_term_ui::install::launch(&script) {
+        match mtty_ui::install::prepare(path) {
+            Ok(mtty_ui::install::Plan::Helper(script)) => {
+                match mtty_ui::install::launch(&script) {
                     // Hosted programs keep running through the update.
                     Ok(()) => self.quit_keeping_sessions(),
                     Err(e) => self.update_install = UpdateInstall::Failed(e.to_string()),
                 }
             }
-            Ok(miao_term_ui::install::Plan::OpenDownload(reason)) => {
+            Ok(mtty_ui::install::Plan::OpenDownload(reason)) => {
                 self.show_notice(format!("{reason}: {}", path.display()));
                 open_external(&path.to_string_lossy());
             }
@@ -9388,23 +9356,23 @@ impl State {
         if self.sync.running || self.sync.due.map_or(true, |due| Instant::now() < due) {
             return;
         }
-        let Some(paths) = miao_term_config::sync::Paths::default_paths() else {
+        let Some(paths) = mtty_config::sync::Paths::default_paths() else {
             return;
         };
         self.sync.running = true;
         self.sync.due = None;
         self.spawn_job(move || {
-            JobDone::Synced(miao_term_config::sync::run(
+            JobDone::Synced(mtty_config::sync::run(
                 &dir,
                 &key,
                 &paths,
-                miao_term_config::sync::now_ms(),
+                mtty_config::sync::now_ms(),
             ))
         });
     }
 
     fn sync_window(&mut self, ctx: &egui::Context) {
-        use miao_term_ui::i18n::t;
+        use mtty_ui::i18n::t;
         let lang = self.lang;
         let Some(mut view) = self.sync_view.take() else {
             return;
@@ -9547,12 +9515,12 @@ impl State {
             });
         if new_key || join {
             let key = if join {
-                miao_term_config::sync::Key::from_pairing_code(&view.pairing)
+                mtty_config::sync::Key::from_pairing_code(&view.pairing)
             } else {
-                Ok(miao_term_config::sync::Key::generate())
+                Ok(mtty_config::sync::Key::generate())
             };
             let saved = key.and_then(|key| {
-                let path = miao_term_config::sync::Key::path().ok_or("no config directory")?;
+                let path = mtty_config::sync::Key::path().ok_or("no config directory")?;
                 key.save_to(&path)?;
                 Ok(key)
             });
@@ -9567,7 +9535,7 @@ impl State {
             }
         }
         if turn_on {
-            let dir = miao_term_config::expand_home(view.dir.trim());
+            let dir = mtty_config::expand_home(view.dir.trim());
             if !dir.is_dir() {
                 view.error = Some(format!(
                     "{}: {}",
@@ -9575,8 +9543,8 @@ impl State {
                     dir.display()
                 ));
             } else {
-                let value = miao_term_config::toml_string(&dir.to_string_lossy());
-                match miao_term_config::Config::save_settings(&[("sync-dir", value)]) {
+                let value = mtty_config::toml_string(&dir.to_string_lossy());
+                match mtty_config::Config::save_settings(&[("sync-dir", value)]) {
                     Ok(_) => {
                         self.sync.dir = Some(dir);
                         self.sync.due = Some(Instant::now());
@@ -9587,7 +9555,7 @@ impl State {
             }
         }
         if turn_off {
-            match miao_term_config::Config::save_settings(&[("sync-dir", "\"\"".to_string())]) {
+            match mtty_config::Config::save_settings(&[("sync-dir", "\"\"".to_string())]) {
                 Ok(_) => {
                     self.sync.dir = None;
                     self.sync.last = None;
@@ -9605,7 +9573,7 @@ impl State {
     }
 
     fn ftp_dialog_window(&mut self, ctx: &egui::Context) {
-        use miao_term_ui::i18n::t;
+        use mtty_ui::i18n::t;
         let lang = self.lang;
         let Some(mut d) = self.ftp_dialog.take() else {
             return;
@@ -9692,12 +9660,12 @@ impl State {
                 let scheme = ["ftp", "ftpes", "ftps"][d.security.min(2)];
                 format!("{scheme}://{typed}")
             };
-            match miao_term_ui::ftp::Remote::parse(&address) {
+            match mtty_ui::ftp::Remote::parse(&address) {
                 Ok(mut remote) => {
                     remote.password =
                         Some(std::mem::take(&mut d.password)).filter(|p| !p.is_empty());
                     remote.insecure = d.insecure && !remote.is_plaintext();
-                    self.open_files(remote.label(), miao_term_ui::sftp::Endpoint::Ftp(remote));
+                    self.open_files(remote.label(), mtty_ui::sftp::Endpoint::Ftp(remote));
                     return;
                 }
                 Err(e) => d.error = Some(e),
@@ -9708,14 +9676,14 @@ impl State {
         }
     }
 
-    fn open_sftp(&mut self, title: String, remote: miao_term_ui::sftp::Remote) {
-        self.open_files(title, miao_term_ui::sftp::Endpoint::Sftp(remote));
+    fn open_sftp(&mut self, title: String, remote: mtty_ui::sftp::Remote) {
+        self.open_files(title, mtty_ui::sftp::Endpoint::Sftp(remote));
     }
 
-    fn open_files(&mut self, title: String, remote: miao_term_ui::sftp::Endpoint) {
+    fn open_files(&mut self, title: String, remote: mtty_ui::sftp::Endpoint) {
         let local_dir = self
             .active_cwd_for_new()
-            .or_else(miao_term_config::home_dir)
+            .or_else(mtty_config::home_dir)
             .unwrap_or_else(|| std::path::PathBuf::from("/"));
         self.sftp_view = Some(SftpView {
             title,
@@ -9781,7 +9749,7 @@ impl State {
         &mut self,
         label: String,
         progress: Option<(std::path::PathBuf, u64)>,
-        work: impl FnOnce(&miao_term_ui::sftp::Endpoint) -> Result<(), String> + Send + 'static,
+        work: impl FnOnce(&mtty_ui::sftp::Endpoint) -> Result<(), String> + Send + 'static,
     ) {
         let Some(view) = self.sftp_view.as_mut() else {
             return;
@@ -9809,7 +9777,7 @@ impl State {
     }
 
     fn sftp_window(&mut self, ctx: &egui::Context) {
-        use miao_term_ui::i18n::t;
+        use mtty_ui::i18n::t;
         let lang = self.lang;
         let Some(mut view) = self.sftp_view.take() else {
             return;
@@ -9839,14 +9807,14 @@ impl State {
             ctx.request_repaint_after(Duration::from_millis(250));
         }
         let kind = match &view.remote {
-            miao_term_ui::sftp::Endpoint::Sftp(_) => "SFTP",
-            miao_term_ui::sftp::Endpoint::Ftp(r) => match r.security {
-                miao_term_ui::ftp::Security::Plain => "FTP",
+            mtty_ui::sftp::Endpoint::Sftp(_) => "SFTP",
+            mtty_ui::sftp::Endpoint::Ftp(r) => match r.security {
+                mtty_ui::ftp::Security::Plain => "FTP",
                 _ => "FTPS",
             },
         };
         let plaintext = view.remote.is_plaintext();
-        let is_ftp = matches!(view.remote, miao_term_ui::sftp::Endpoint::Ftp(_));
+        let is_ftp = matches!(view.remote, mtty_ui::sftp::Endpoint::Ftp(_));
         let response = app_window(format!("{kind} \u{00b7} {}", view.title), ctx)
             .open(&mut open)
             .default_size([860.0, 520.0])
@@ -9959,7 +9927,7 @@ impl State {
                             .clicked()
                         {
                             if let Some(d) = &view.remote_dir {
-                                remote_nav = Some(miao_term_ui::sftp::parent(d));
+                                remote_nav = Some(mtty_ui::sftp::parent(d));
                             }
                         }
                         ui.label(
@@ -9999,7 +9967,7 @@ impl State {
                                 }
                                 if r.double_clicked() && e.is_dir {
                                     if let Some(d) = &view.remote_dir {
-                                        remote_nav = Some(miao_term_ui::sftp::join(d, &e.name));
+                                        remote_nav = Some(mtty_ui::sftp::join(d, &e.name));
                                     }
                                 }
                             }
@@ -10142,14 +10110,14 @@ impl State {
                 mkdir_name,
                 self.sftp_view.as_ref().and_then(|v| v.remote_dir.clone()),
             ) {
-                let path = miao_term_ui::sftp::join(&dir, name.trim());
+                let path = mtty_ui::sftp::join(&dir, name.trim());
                 self.sftp_job(format!("mkdir {}", name.trim()), None, move |r| {
                     r.mkdir(&path)
                 });
             }
             return;
         };
-        let path = miao_term_ui::sftp::join(&dir, &entry.name);
+        let path = mtty_ui::sftp::join(&dir, &entry.name);
         if download && is_ftp && entry.is_dir {
             if let Some(v) = self.sftp_view.as_mut() {
                 v.error = Some(
@@ -10169,7 +10137,7 @@ impl State {
                 r.download(&path, &dest)
             });
         } else if let Some(new) = rename_to {
-            let to = miao_term_ui::sftp::join(&dir, new.trim());
+            let to = mtty_ui::sftp::join(&dir, new.trim());
             self.sftp_job(format!("rename {}", entry.name), None, move |r| {
                 r.rename(&path, &to)
             });
@@ -10183,7 +10151,7 @@ impl State {
                 r.remove(&path, is_dir)
             });
         } else if let Some(name) = mkdir_name {
-            let path = miao_term_ui::sftp::join(&dir, name.trim());
+            let path = mtty_ui::sftp::join(&dir, name.trim());
             self.sftp_job(format!("mkdir {}", name.trim()), None, move |r| {
                 r.mkdir(&path)
             });
@@ -10206,8 +10174,8 @@ impl State {
     }
 
     /// Connect to a saved host (B3.1).
-    fn open_host(&mut self, host: &miao_term_config::hosts::Host) {
-        use miao_term_config::hosts::HostKind;
+    fn open_host(&mut self, host: &mtty_config::hosts::Host) {
+        use mtty_config::hosts::HostKind;
         match host.kind {
             HostKind::Ssh => self.open_ssh_host(host),
             HostKind::Serial => {
@@ -10244,12 +10212,12 @@ impl State {
     /// Dial a serial, Telnet or raw TCP session on a background thread; the
     /// pane opens when the connection lands (ADR 0037).
     fn connect_transport(&mut self, target: TransportTarget, title: Option<String>) {
-        use miao_term_ui::transport as tp;
+        use mtty_ui::transport as tp;
         self.pending_transport_connects += 1;
         let label = target.label();
         let msg = format!(
             "{} {label}…",
-            miao_term_ui::i18n::t(self.lang, "Connecting", "正在连接")
+            mtty_ui::i18n::t(self.lang, "Connecting", "正在连接")
         );
         self.show_notice(msg);
         self.spawn_job(move || {
@@ -10289,12 +10257,11 @@ impl State {
         &mut self,
         target: TransportTarget,
         title: Option<String>,
-        conn: miao_term_ui::transport::Connection,
+        conn: mtty_ui::transport::Connection,
     ) {
         let Some(pane) = self.spawn_transport_pane(conn) else {
-            let msg =
-                miao_term_ui::i18n::t(self.lang, "Could not start the session", "无法启动会话")
-                    .to_string();
+            let msg = mtty_ui::i18n::t(self.lang, "Could not start the session", "无法启动会话")
+                .to_string();
             self.show_notice(msg);
             return;
         };
@@ -10322,7 +10289,7 @@ impl State {
         self.selection = None;
         self.publish_panes();
         if plaintext {
-            let msg = miao_term_ui::i18n::t(
+            let msg = mtty_ui::i18n::t(
                 self.lang,
                 "This connection is unencrypted.",
                 "此连接未加密。",
@@ -10333,7 +10300,7 @@ impl State {
     }
 
     /// A pane whose terminal runs over a byte pipe instead of a PTY.
-    fn spawn_transport_pane(&self, conn: miao_term_ui::transport::Connection) -> Option<Pane> {
+    fn spawn_transport_pane(&self, conn: mtty_ui::transport::Connection) -> Option<Pane> {
         let scale = self.window.scale_factor() as f32;
         let (cw, ch) = (self.cw * scale, self.ch * scale);
         let area = card_inner(self.grid_area());
@@ -10360,9 +10327,9 @@ impl State {
     }
 
     /// The ssh branch of [`State::open_host`]: an alias or a full command.
-    fn open_ssh_host(&mut self, host: &miao_term_config::hosts::Host) {
+    fn open_ssh_host(&mut self, host: &mtty_config::hosts::Host) {
         let destination = host.destination();
-        let mosh = host.mosh && miao_term_ui::ssh::on_path("mosh");
+        let mosh = host.mosh && mtty_ui::ssh::on_path("mosh");
         if host.mosh && !mosh {
             self.show_notice(
                 t_lang(
@@ -10373,7 +10340,7 @@ impl State {
                 .into(),
             );
         }
-        let cmd = miao_term_ui::ssh::persistent_host_command(
+        let cmd = mtty_ui::ssh::persistent_host_command(
             &destination,
             &host.ssh_options(),
             host.tmux.as_deref(),
@@ -10400,7 +10367,7 @@ impl State {
     }
 
     fn reload_hosts(&mut self) {
-        match miao_term_config::hosts::HostBook::load() {
+        match mtty_config::hosts::HostBook::load() {
             Ok(book) => {
                 self.host_book = book;
                 self.host_book_error = None;
@@ -10414,7 +10381,7 @@ impl State {
 
     /// Save the host library unless the file on disk could not be read.
     fn save_hosts(&mut self) -> bool {
-        use miao_term_ui::i18n::t;
+        use mtty_ui::i18n::t;
         if let Some(e) = self.host_book_error.clone() {
             let msg = format!("{}: {e}", t(self.lang, "Hosts not saved", "主机未保存"));
             self.show_notice(msg);
@@ -10435,7 +10402,7 @@ impl State {
 
     /// Read a PuTTY `.ppk` and write an encrypted OpenSSH key (ADR 0038).
     fn import_putty_key(&mut self) {
-        use miao_term_ui::i18n::t;
+        use mtty_ui::i18n::t;
         let lang = self.lang;
         let Some(dlg) = self.key_import.take() else {
             return;
@@ -10453,7 +10420,7 @@ impl State {
             .to_string();
             return self.keep_key_import(dlg, msg);
         }
-        let Some(home) = miao_term_config::home_dir() else {
+        let Some(home) = mtty_config::home_dir() else {
             return self.keep_key_import(dlg, "no home directory".into());
         };
         let name = if dlg.name.trim().is_empty() {
@@ -10484,7 +10451,7 @@ impl State {
 
     /// The Import PuTTY Key form (ADR 0038).
     fn key_import_window(&mut self, ctx: &egui::Context) {
-        use miao_term_ui::i18n::t;
+        use mtty_ui::i18n::t;
         let lang = self.lang;
         let Some(dlg) = self.key_import.as_mut() else {
             return;
@@ -10558,7 +10525,7 @@ impl State {
     }
 
     fn hosts_window(&mut self, ctx: &egui::Context) {
-        use miao_term_ui::i18n::t;
+        use mtty_ui::i18n::t;
         let lang = self.lang;
         let Some(mut view) = self.hosts_view.take() else {
             return;
@@ -10579,12 +10546,12 @@ impl State {
         let mut toggle_forward: Option<(usize, usize, bool)> = None;
         let mut remove_forward: Option<(usize, usize)> = None;
         let mut add_forward: Option<usize> = None;
-        let tunnel_states: HashMap<(String, String), miao_term_ui::forward::TunnelState> = self
+        let tunnel_states: HashMap<(String, String), mtty_ui::forward::TunnelState> = self
             .tunnels
             .iter_mut()
             .map(|(k, t)| (k.clone(), t.state()))
             .collect();
-        let rows: Vec<(usize, miao_term_config::hosts::Host)> = self
+        let rows: Vec<(usize, mtty_config::hosts::Host)> = self
             .host_book
             .sorted()
             .into_iter()
@@ -10609,7 +10576,7 @@ impl State {
                     }
                 });
                 ui.horizontal(|ui| {
-                    use miao_term_ui::hostkeys::Agent;
+                    use mtty_ui::hostkeys::Agent;
                     let agent = match &view.agent {
                         None => t(lang, "ssh-agent: checking…", "ssh-agent:检查中…").to_string(),
                         Some(Agent::Keys(k)) => format!(
@@ -10742,8 +10709,8 @@ impl State {
                         egui::CollapsingHeader::new(title)
                             .id_salt(("forwards", &host.name))
                             .show(ui, |ui| {
-                                use miao_term_config::hosts::ForwardKind;
-                                use miao_term_ui::forward::TunnelState;
+                                use mtty_config::hosts::ForwardKind;
+                                use mtty_ui::forward::TunnelState;
                                 for (r, fwd) in host.forwards.iter().enumerate() {
                                     let key = (host.name.clone(), fwd.spec.clone());
                                     let state = tunnel_states.get(&key);
@@ -10805,7 +10772,7 @@ impl State {
                                         "8080:localhost:80"
                                     };
                                     ui.add(egui::TextEdit::singleline(&mut form.2).hint_text(hint).desired_width(200.0));
-                                    let candidate = miao_term_config::hosts::Forward {
+                                    let candidate = mtty_config::hosts::Forward {
                                         kind: form.1,
                                         spec: form.2.trim().to_string(),
                                     };
@@ -10820,7 +10787,7 @@ impl State {
                                 });
                             });
                         if let Some(state) = view.keys.get(&host.name) {
-                            use miao_term_ui::hostkeys::HostKey;
+                            use mtty_ui::hostkeys::HostKey;
                             let red = chrome_rgb(self.theme.chrome().negative);
                             let green = chrome_rgb(self.theme.chrome().positive);
                             match state {
@@ -10935,7 +10902,7 @@ impl State {
                 if let Some(fwd) = host.forwards.get(r) {
                     let key = (host.name.clone(), fwd.spec.clone());
                     if start {
-                        match miao_term_ui::forward::Tunnel::start(
+                        match mtty_ui::forward::Tunnel::start(
                             &host.destination(),
                             &host.ssh_options(),
                             fwd,
@@ -10967,7 +10934,7 @@ impl State {
         }
         if let Some(h) = add_forward {
             if let Some((_, kind, spec)) = view.new_forward.take() {
-                let fwd = miao_term_config::hosts::Forward {
+                let fwd = mtty_config::hosts::Forward {
                     kind,
                     spec: spec.trim().to_string(),
                 };
@@ -10994,7 +10961,7 @@ impl State {
         if let Some(host) = open_files.and_then(|i| self.host_book.hosts.get(i).cloned()) {
             self.open_sftp(
                 host.name.clone(),
-                miao_term_ui::sftp::Remote {
+                mtty_ui::sftp::Remote {
                     destination: host.destination(),
                     options: host.ssh_options(),
                 },
@@ -11003,8 +10970,7 @@ impl State {
         if let Some(host) = check_key.and_then(|i| self.host_book.hosts.get(i).cloned()) {
             view.keys.insert(host.name.clone(), None);
             self.spawn_job(move || {
-                let result =
-                    miao_term_ui::hostkeys::check(&host.destination(), &host.ssh_options());
+                let result = mtty_ui::hostkeys::check(&host.destination(), &host.ssh_options());
                 JobDone::HostKeyChecked {
                     name: host.name,
                     result,
@@ -11015,8 +10981,8 @@ impl State {
             view.keys.insert(host.name.clone(), None);
             self.spawn_job(move || {
                 let (dest, opts) = (host.destination(), host.ssh_options());
-                let result = miao_term_ui::hostkeys::trust(&dest, &opts)
-                    .and_then(|()| miao_term_ui::hostkeys::check(&dest, &opts));
+                let result = mtty_ui::hostkeys::trust(&dest, &opts)
+                    .and_then(|()| mtty_ui::hostkeys::check(&dest, &opts));
                 JobDone::HostKeyChecked {
                     name: host.name,
                     result,
@@ -11024,7 +10990,7 @@ impl State {
             });
         }
         if let Some(host) = copy_key.and_then(|i| self.host_book.hosts.get(i).cloned()) {
-            let syn = miao_term_ui::ssh::Syntax::local();
+            let syn = mtty_ui::ssh::Syntax::local();
             let mut cmd = String::from("ssh-copy-id");
             for (flag, value) in host
                 .ssh_options()
@@ -11062,8 +11028,8 @@ impl State {
             view.confirm_delete = None;
         }
         if import {
-            let found = miao_term_config::hosts::read_ssh_config()
-                .map(|text| miao_term_config::hosts::parse_ssh_config(&text))
+            let found = mtty_config::hosts::read_ssh_config()
+                .map(|text| mtty_config::hosts::parse_ssh_config(&text))
                 .unwrap_or_default();
             let total = found.len();
             let before = self.host_book.clone();
@@ -11112,13 +11078,13 @@ impl State {
         view.loading = true;
         let repo = view.repo.clone();
         self.spawn_job(move || {
-            let result = miao_term_ui::tasks::list(&repo);
+            let result = mtty_ui::tasks::list(&repo);
             JobDone::TasksListed { repo, result }
         });
     }
 
     fn task_dialog_window(&mut self, ctx: &egui::Context) {
-        use miao_term_ui::i18n::t;
+        use mtty_ui::i18n::t;
         let Some((mut name, mut agent)) = self.task_dialog.take() else {
             return;
         };
@@ -11150,13 +11116,13 @@ impl State {
                 }
                 ui.horizontal(|ui| {
                     ui.radio_value(&mut agent, None, t(lang, "shell only", "仅 shell"));
-                    for (i, a) in miao_term_ui::integration::AGENTS.iter().enumerate() {
+                    for (i, a) in mtty_ui::integration::AGENTS.iter().enumerate() {
                         if detected.get(i).copied().unwrap_or(false) {
                             ui.radio_value(&mut agent, Some(i), a.name);
                         }
                     }
                 });
-                let valid = miao_term_ui::tasks::valid_name(&name);
+                let valid = mtty_ui::tasks::valid_name(&name);
                 if !name.is_empty() && !valid {
                     ui.label(
                         egui::RichText::new(t(
@@ -11186,7 +11152,7 @@ impl State {
             );
             self.show_notice(msg);
             self.spawn_job(move || {
-                let result = miao_term_ui::tasks::create(&dir, &name);
+                let result = mtty_ui::tasks::create(&dir, &name);
                 JobDone::TaskCreated { result, agent }
             });
         } else if open && !ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -11195,7 +11161,7 @@ impl State {
     }
 
     fn tasks_window(&mut self, ctx: &egui::Context) {
-        use miao_term_ui::i18n::t;
+        use mtty_ui::i18n::t;
         let lang = self.lang;
         let Some(view) = self.tasks_view.as_mut() else {
             return;
@@ -11297,7 +11263,7 @@ impl State {
                 self.publish_panes();
             }
             "diff" => self.spawn_job(move || {
-                let result = miao_term_ui::tasks::diff(&task);
+                let result = mtty_ui::tasks::diff(&task);
                 JobDone::TaskDiff {
                     name: task.name.clone(),
                     result,
@@ -11308,9 +11274,9 @@ impl State {
                 let merged = what == "merge";
                 self.spawn_job(move || {
                     let result = if merged {
-                        miao_term_ui::tasks::merge(&task)
+                        mtty_ui::tasks::merge(&task)
                     } else {
-                        miao_term_ui::tasks::discard(&task).map(|()| String::new())
+                        mtty_ui::tasks::discard(&task).map(|()| String::new())
                     };
                     JobDone::TaskDone {
                         name: task.name.clone(),
@@ -11325,8 +11291,8 @@ impl State {
 
     /// The New SSH Session form: a full host editor with a quick-connect path.
     fn ssh_dialog_window(&mut self, ctx: &egui::Context) {
-        use miao_term_config::hosts::ForwardKind;
-        use miao_term_ui::i18n::t;
+        use mtty_config::hosts::ForwardKind;
+        use mtty_ui::i18n::t;
         let lang = self.lang;
         let Some(mut form) = self.ssh_dialog.take() else {
             return;
@@ -11467,7 +11433,7 @@ impl State {
                                     .hint_text(hint)
                                     .desired_width(190.0),
                             );
-                            let candidate = miao_term_config::hosts::Forward {
+                            let candidate = mtty_config::hosts::Forward {
                                 kind: draft.0,
                                 spec: draft.1.trim().to_string(),
                             };
@@ -11566,7 +11532,7 @@ impl State {
 
     /// The New Serial/Telnet/TCP Session form (ADR 0037).
     fn transport_dialog_window(&mut self, ctx: &egui::Context) {
-        use miao_term_ui::i18n::t;
+        use mtty_ui::i18n::t;
         let lang = self.lang;
         let Some(dlg) = self.transport_dialog.as_mut() else {
             return;
@@ -11596,7 +11562,7 @@ impl State {
                             .desired_width(170.0),
                     );
                     if ui.button(t(lang, "List", "列出")).clicked() {
-                        dlg.error = Some(miao_term_ui::transport::serial_ports().join("  "));
+                        dlg.error = Some(mtty_ui::transport::serial_ports().join("  "));
                     }
                 });
                 ui.horizontal(|ui| {
@@ -11719,7 +11685,7 @@ impl State {
         };
         let mut open = true;
         let mut do_open = false;
-        egui::Window::new(miao_term_ui::i18n::t(
+        egui::Window::new(mtty_ui::i18n::t(
             self.lang,
             "Open Remote File",
             "打开远端文件",
@@ -11731,12 +11697,12 @@ impl State {
                 ui.label("SSH");
                 ui.add(
                     egui::TextEdit::singleline(dest)
-                        .hint_text(miao_term_ui::i18n::t(self.lang, "host", "主机"))
+                        .hint_text(mtty_ui::i18n::t(self.lang, "host", "主机"))
                         .desired_width(140.0),
                 );
             });
             ui.horizontal(|ui| {
-                ui.label(miao_term_ui::i18n::t(self.lang, "Path", "路径"));
+                ui.label(mtty_ui::i18n::t(self.lang, "Path", "路径"));
                 ui.add(
                     egui::TextEdit::singleline(path)
                         .hint_text("/etc/hosts")
@@ -11744,7 +11710,7 @@ impl State {
                 );
             });
             if ui
-                .button(miao_term_ui::i18n::t(self.lang, "Open", "打开"))
+                .button(mtty_ui::i18n::t(self.lang, "Open", "打开"))
                 .clicked()
             {
                 do_open = true;
@@ -11755,11 +11721,11 @@ impl State {
             self.remote_dialog = None;
             let msg = format!(
                 "{} {dest}:{path}…",
-                miao_term_ui::i18n::t(self.lang, "Opening", "正在打开")
+                mtty_ui::i18n::t(self.lang, "Opening", "正在打开")
             );
             self.show_notice(msg);
             self.spawn_job(move || {
-                let result = miao_term_ui::ssh::read_remote(&dest, &path);
+                let result = mtty_ui::ssh::read_remote(&dest, &path);
                 JobDone::RemoteRead {
                     id: None,
                     cursor: 0,
@@ -11778,7 +11744,7 @@ impl State {
         let Some(save) = self.recipe_dialog else {
             return;
         };
-        use miao_term_ui::i18n::t;
+        use mtty_ui::i18n::t;
         let lang = self.lang;
         let mut open = true;
         let mut do_save = false;
@@ -11795,7 +11761,7 @@ impl State {
                 if save {
                     let r = ui.add(
                         egui::TextEdit::singleline(&mut self.recipe_name)
-                            .hint_text(miao_term_ui::i18n::t(self.lang, "name", "名称"))
+                            .hint_text(mtty_ui::i18n::t(self.lang, "name", "名称"))
                             .desired_width(240.0),
                     );
                     r.request_focus();
@@ -11916,7 +11882,7 @@ impl State {
             return true;
         }
         self.show_notice(
-            miao_term_ui::i18n::t(
+            mtty_ui::i18n::t(
                 self.lang,
                 "This works in a file opened in an editor pane.",
                 "此操作用于在编辑器 pane 中打开的文件。",
@@ -11936,7 +11902,7 @@ impl State {
         // `MTTY_QA_DRAG=<x>,<y>[,alt]:<path>[;<path>…]` holds a file drag at
         // a window point (logical) for a capture; with `MTTY_QA_DROP=1` the
         // files are dropped there (synthetic drags cannot be posted).
-        if let Some(spec) = miao_term_config::env("QA_DRAG") {
+        if let Some(spec) = mtty_config::env("QA_DRAG") {
             if let Some((at, paths)) = spec.split_once(':') {
                 let mut parts = at.split(',');
                 let x = parts.next().and_then(|v| v.trim().parse::<f64>().ok());
@@ -11949,7 +11915,7 @@ impl State {
                     self.drag_live = true;
                     self.dropping = true;
                     self.drop_choice = None;
-                    if miao_term_config::env("QA_DROP").is_some() {
+                    if mtty_config::env("QA_DROP").is_some() {
                         for path in self.drag_paths.clone() {
                             self.drop_file(path);
                         }
@@ -11960,7 +11926,7 @@ impl State {
         // `MTTY_QA_SCROLL=<lines>` scrolls the active pane back, like the
         // wheel, so scrollback behaviour can be captured without input events.
         if let Some(lines) =
-            miao_term_config::env("QA_SCROLL").and_then(|v| v.trim().parse::<usize>().ok())
+            mtty_config::env("QA_SCROLL").and_then(|v| v.trim().parse::<usize>().ok())
         {
             if let Some(tab) = self.tabs.get_mut(self.active_tab) {
                 if let Some(pane) = tab.panes.iter_mut().find(|p| p.id == tab.active) {
@@ -11968,11 +11934,11 @@ impl State {
                 }
             }
         }
-        let Some(label) = miao_term_config::env("QA_COMMAND") else {
+        let Some(label) = mtty_config::env("QA_COMMAND") else {
             return;
         };
         let lang = self.lang;
-        self.lang = miao_term_ui::i18n::Lang::En;
+        self.lang = mtty_ui::i18n::Lang::En;
         let cmd = self
             .commands()
             .into_iter()
@@ -12005,7 +11971,7 @@ impl State {
                 return None;
             }
             let at = ed.char_under(row, col)?;
-            let word = miao_term_editor::motion::word_at(ed.doc.rope(), at);
+            let word = mtty_editor::motion::word_at(ed.doc.rope(), at);
             Some((ed.id.clone(), at, word))
         })();
         let Some((pane, at, word)) = target else {
@@ -12061,17 +12027,17 @@ impl State {
                 None => None,
             };
             match action {
-                Some(miao_term_editor::vim::Action::Find) => self.run_command(Cmd::Find),
-                Some(miao_term_editor::vim::Action::CommandLine) => {
+                Some(mtty_editor::vim::Action::Find) => self.run_command(Cmd::Find),
+                Some(mtty_editor::vim::Action::CommandLine) => {
                     self.vim_command = Some(String::new());
                 }
-                Some(miao_term_editor::vim::Action::Fold(fold)) => {
+                Some(mtty_editor::vim::Action::Fold(fold)) => {
                     let command = match fold {
-                        miao_term_editor::vim::Fold::Toggle => editor_pane::Command::ToggleFold,
-                        miao_term_editor::vim::Fold::Close => editor_pane::Command::Fold,
-                        miao_term_editor::vim::Fold::Open => editor_pane::Command::Unfold,
-                        miao_term_editor::vim::Fold::CloseAll => editor_pane::Command::FoldAll,
-                        miao_term_editor::vim::Fold::OpenAll => editor_pane::Command::UnfoldAll,
+                        mtty_editor::vim::Fold::Toggle => editor_pane::Command::ToggleFold,
+                        mtty_editor::vim::Fold::Close => editor_pane::Command::Fold,
+                        mtty_editor::vim::Fold::Open => editor_pane::Command::Unfold,
+                        mtty_editor::vim::Fold::CloseAll => editor_pane::Command::FoldAll,
+                        mtty_editor::vim::Fold::OpenAll => editor_pane::Command::UnfoldAll,
                     };
                     self.run_editor_command(command);
                 }
@@ -12220,7 +12186,7 @@ impl State {
             Ok(editor_pane::EditorPane::with_doc(
                 id.clone(),
                 path.clone(),
-                miao_term_editor::Document::from_text(""),
+                mtty_editor::Document::from_text(""),
             ))
         } else {
             editor_pane::EditorPane::open(id.clone(), &path)
@@ -12259,7 +12225,7 @@ impl State {
             Err(e) => {
                 let msg = format!(
                     "{} {}: {e}",
-                    miao_term_ui::i18n::t(self.lang, "Open failed", "打开失败"),
+                    mtty_ui::i18n::t(self.lang, "Open failed", "打开失败"),
                     path.display()
                 );
                 self.show_notice(msg);
@@ -12316,7 +12282,7 @@ impl State {
             Err(e) => {
                 let msg = format!(
                     "{} {path}: {e}",
-                    miao_term_ui::i18n::t(self.lang, "Open failed", "打开失败")
+                    mtty_ui::i18n::t(self.lang, "Open failed", "打开失败")
                 );
                 self.show_notice(msg);
                 false
@@ -12331,7 +12297,7 @@ impl State {
                 ed.remote_loaded(bytes);
                 let len = ed.doc.rope().len_chars();
                 ed.doc
-                    .set_selection(miao_term_editor::Selection::cursor(cursor.min(len)));
+                    .set_selection(mtty_editor::Selection::cursor(cursor.min(len)));
                 ed.scroll_line = scroll;
                 break;
             }
@@ -12384,7 +12350,7 @@ impl State {
             Err(e) => {
                 let msg = format!(
                     "{} {dest}:{path}: {e}",
-                    miao_term_ui::i18n::t(self.lang, "Save failed", "保存失败")
+                    mtty_ui::i18n::t(self.lang, "Save failed", "保存失败")
                 );
                 self.show_notice(msg);
             }
@@ -12418,7 +12384,7 @@ impl State {
     /// Type a one-step prompt into the agent pane and press Enter (A3).
     fn send_to_agent(&mut self, text: &str) {
         let Some(id) = self.agent_pane() else {
-            let msg = miao_term_ui::i18n::t(
+            let msg = mtty_ui::i18n::t(
                 self.lang,
                 "No agent pane in this tab.",
                 "当前标签没有 agent pane。",
@@ -12442,7 +12408,7 @@ impl State {
         &mut self,
         pane: Option<String>,
         path: Option<String>,
-        edits: Vec<miao_term_mtp::ProposedEdit>,
+        edits: Vec<mtty_mtp::ProposedEdit>,
         text: Option<String>,
         label: Option<String>,
     ) -> bool {
@@ -12479,7 +12445,7 @@ impl State {
                     for (from, to) in ranges {
                         if from < end || from > to || to > len {
                             self.show_notice(
-                                miao_term_ui::i18n::t(
+                                mtty_ui::i18n::t(
                                     self.lang,
                                     "Agent edit rejected: invalid or overlapping character ranges.",
                                     "已拒绝 Agent 修改：字符范围无效或相互重叠。",
@@ -12506,7 +12472,7 @@ impl State {
             }
         }
         if applied {
-            let msg = miao_term_ui::i18n::t(
+            let msg = mtty_ui::i18n::t(
                 self.lang,
                 "Agent edit applied — keep editing to accept, or Reject in the palette to undo.",
                 "已应用 agent 的修改——继续编辑即视为接受,或在命令面板中“拒绝”以撤销。",
@@ -12624,10 +12590,10 @@ impl State {
     }
 
     /// Launch a configured ACP agent and open its transcript (ADR 0040, A2).
-    fn start_acp(&mut self, agent: miao_term_config::AcpAgent) {
+    fn start_acp(&mut self, agent: mtty_config::AcpAgent) {
         let cwd = self
             .cwd()
-            .or_else(miao_term_config::home_dir)
+            .or_else(mtty_config::home_dir)
             .unwrap_or_default();
         let Some((program, args)) = agent.command.split_first() else {
             return;
@@ -12642,7 +12608,7 @@ impl State {
             .map(|s| s.session_id.trim().to_string())
             .filter(|s| !s.is_empty())
             .or(agent.session_id);
-        match miao_term_acp::Client::spawn(&program, &args, Some(cwd.as_path()), &env, bridge) {
+        match mtty_acp::Client::spawn(&program, &args, Some(cwd.as_path()), &env, bridge) {
             Ok(client) => {
                 client.enable_terminals(&cwd);
                 let initialize_id = client.initialize("mtty", env!("CARGO_PKG_VERSION"));
@@ -12676,7 +12642,7 @@ impl State {
 
     /// The ACP start form (ADR 0040, A2).
     fn acp_start_window(&mut self, ctx: &egui::Context) {
-        use miao_term_ui::i18n::t;
+        use mtty_ui::i18n::t;
         let lang = self.lang;
         let agents = self.acp_agents.clone();
         let Some(start) = self.acp_start.as_mut() else {
@@ -12745,7 +12711,7 @@ impl State {
                     start.error = Some(t(lang, "Enter a command.", "请输入命令。").into());
                     return;
                 }
-                miao_term_config::AcpAgent {
+                mtty_config::AcpAgent {
                     name: command[0].clone(),
                     command,
                     ..Default::default()
@@ -12761,7 +12727,7 @@ impl State {
 
     /// The ACP transcript window and its prompt (ADR 0040, A2).
     fn acp_window(&mut self, ctx: &egui::Context) {
-        use miao_term_ui::i18n::t;
+        use mtty_ui::i18n::t;
         let lang = self.lang;
         if let Some(id) = self.acp_writes.keys().next().cloned() {
             let mut choice = None;
@@ -12960,11 +12926,11 @@ impl State {
             }
             let msg = format!(
                 "{} {dest}:{path}…",
-                miao_term_ui::i18n::t(lang, "Saving", "正在保存")
+                mtty_ui::i18n::t(lang, "Saving", "正在保存")
             );
             self.show_notice(msg);
             self.spawn_job(move || {
-                let result = miao_term_ui::ssh::write_remote(&dest, &path, &bytes);
+                let result = mtty_ui::ssh::write_remote(&dest, &path, &bytes);
                 JobDone::RemoteWrite {
                     id: Some(id),
                     dest,
@@ -12989,12 +12955,12 @@ impl State {
         let msg = match saved {
             Ok(()) => format!(
                 "{} {}",
-                miao_term_ui::i18n::t(lang, "Saved", "已保存"),
+                mtty_ui::i18n::t(lang, "Saved", "已保存"),
                 ed.path.display()
             ),
             Err(e) => format!(
                 "{} {}: {e}",
-                miao_term_ui::i18n::t(lang, "Save failed", "保存失败"),
+                mtty_ui::i18n::t(lang, "Save failed", "保存失败"),
                 ed.path.display()
             ),
         };
@@ -13016,7 +12982,7 @@ impl State {
         let msg = format!(
             "{}: {}",
             ed.title(),
-            miao_term_ui::i18n::t(
+            mtty_ui::i18n::t(
                 lang,
                 "unsaved changes. Save, or close again to discard them.",
                 "有未保存的修改。请保存,或再次关闭以放弃修改。"
@@ -13046,7 +13012,7 @@ impl State {
         let msg = format!(
             "{}: {}",
             names.join(", "),
-            miao_term_ui::i18n::t(
+            mtty_ui::i18n::t(
                 self.lang,
                 "unsaved changes. Save, or close again to discard them.",
                 "有未保存的修改。请保存,或再次关闭以放弃修改。"
@@ -13072,7 +13038,7 @@ impl State {
         let msg = format!(
             "{}: {}",
             names.join(", "),
-            miao_term_ui::i18n::t(
+            mtty_ui::i18n::t(
                 self.lang,
                 "unsaved changes. Save or close these first.",
                 "有未保存的修改。请先保存或单独关闭它们。"
@@ -13132,7 +13098,7 @@ impl State {
             Err(e) => {
                 let msg = format!(
                     "{} {}: {e}",
-                    miao_term_ui::i18n::t(self.lang, "Open failed", "打开失败"),
+                    mtty_ui::i18n::t(self.lang, "Open failed", "打开失败"),
                     path.display()
                 );
                 self.show_notice(msg);
@@ -13148,7 +13114,7 @@ impl State {
         let mut open = true;
         let mut path = std::mem::take(&mut self.open_path);
         let mut do_open = false;
-        egui::Window::new(miao_term_ui::i18n::t(self.lang, "Open File", "打开文件"))
+        egui::Window::new(mtty_ui::i18n::t(self.lang, "Open File", "打开文件"))
             .collapsible(false)
             .open(&mut open)
             .show(ctx, |ui| {
@@ -13167,7 +13133,7 @@ impl State {
                     do_open = true;
                 }
                 if ui
-                    .button(miao_term_ui::i18n::t(self.lang, "Open", "打开"))
+                    .button(mtty_ui::i18n::t(self.lang, "Open", "打开"))
                     .clicked()
                 {
                     do_open = true;
@@ -13199,15 +13165,15 @@ impl State {
         };
         if self.vim_for != title {
             self.vim_for = title.clone();
-            self.vim = self.editor_vim.then(miao_term_ui::vim::VimRuntime::default);
+            self.vim = self.editor_vim.then(mtty_ui::vim::VimRuntime::default);
         }
         let modified = ed.text != ed.original;
-        let lang = miao_term_ui::syntax::detect(&match &ed.remote {
+        let lang = mtty_ui::syntax::detect(&match &ed.remote {
             Some((_, p)) => p.clone(),
             None => ed.path.to_string_lossy().to_string(),
         });
         let mut layouter =
-            miao_term_ui::syntax::layouter(lang, chrome_rgb(self.theme.chrome().text), 13.0);
+            mtty_ui::syntax::layouter(lang, chrome_rgb(self.theme.chrome().text), 13.0);
         let mut open = true;
         let mut save = false;
         let mut quit = false;
@@ -13216,27 +13182,27 @@ impl State {
             ui.horizontal(|ui| {
                 if ed.readonly {
                     ui.label(
-                        egui::RichText::new(miao_term_ui::i18n::t(self.lang, "read-only", "只读"))
+                        egui::RichText::new(mtty_ui::i18n::t(self.lang, "read-only", "只读"))
                             .color(chrome_rgb(self.theme.chrome().muted)),
                     );
                 } else if ui
-                    .button(miao_term_ui::i18n::t(self.lang, "Save", "保存"))
+                    .button(mtty_ui::i18n::t(self.lang, "Save", "保存"))
                     .clicked()
                 {
                     save = true;
                 }
                 ui.checkbox(
                     &mut ed.preview,
-                    miao_term_ui::i18n::t(self.lang, "Markdown preview", "Markdown 预览"),
+                    mtty_ui::i18n::t(self.lang, "Markdown preview", "Markdown 预览"),
                 );
                 if ed.saving {
                     ui.label(
-                        egui::RichText::new(miao_term_ui::i18n::t(self.lang, "saving…", "保存中…"))
+                        egui::RichText::new(mtty_ui::i18n::t(self.lang, "saving…", "保存中…"))
                             .color(chrome_rgb(self.theme.chrome().muted)),
                     );
                 } else if modified && !ed.readonly {
                     ui.label(
-                        egui::RichText::new(miao_term_ui::i18n::t(self.lang, "modified", "已修改"))
+                        egui::RichText::new(mtty_ui::i18n::t(self.lang, "modified", "已修改"))
                             .color(chrome_rgb(self.theme.chrome().warning)),
                     );
                 }
@@ -13245,14 +13211,14 @@ impl State {
                 if ed.remote.is_none() {
                     let resp = ui.add_enabled(
                         !modified,
-                        egui::Button::new(miao_term_ui::i18n::t(
+                        egui::Button::new(mtty_ui::i18n::t(
                             self.lang,
                             "Edit in Tab",
                             "在标签中编辑",
                         )),
                     );
                     let resp = if modified {
-                        resp.on_disabled_hover_text(miao_term_ui::i18n::t(
+                        resp.on_disabled_hover_text(mtty_ui::i18n::t(
                             self.lang,
                             "Save first: the editor opens the file on disk",
                             "请先保存:外部编辑器打开的是磁盘上的文件",
@@ -13270,8 +13236,8 @@ impl State {
             ui.separator();
             if ed.preview {
                 let ch = self.theme.chrome();
-                let fg = miao_term_ui::chrome::bg_color(ch.text);
-                let panel = miao_term_ui::chrome::bg_color(ch.card);
+                let fg = mtty_ui::chrome::bg_color(ch.text);
+                let panel = mtty_ui::chrome::bg_color(ch.card);
                 // Both ways: wide code blocks scroll instead of widening the window.
                 egui::ScrollArea::both()
                     .auto_shrink([false, false])
@@ -13288,7 +13254,7 @@ impl State {
                         );
                     });
             } else {
-                let mut vim_effect = miao_term_ui::vim::VimEffect::Nothing;
+                let mut vim_effect = mtty_ui::vim::VimEffect::Nothing;
                 egui::ScrollArea::both()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
@@ -13318,19 +13284,15 @@ impl State {
                             }
                             ui.add(edit);
                             if let Some(v) = self.vim.as_mut().filter(|_| !ed.readonly) {
-                                vim_effect = miao_term_ui::vim::vim_handle(
-                                    &mut ed.text,
-                                    v,
-                                    ui.ctx(),
-                                    text_id,
-                                );
+                                vim_effect =
+                                    mtty_ui::vim::vim_handle(&mut ed.text, v, ui.ctx(), text_id);
                             }
                         });
                     });
-                if vim_effect == miao_term_ui::vim::VimEffect::Save {
+                if vim_effect == mtty_ui::vim::VimEffect::Save {
                     save = true;
                 }
-                if vim_effect == miao_term_ui::vim::VimEffect::Quit {
+                if vim_effect == mtty_ui::vim::VimEffect::Quit {
                     quit = true;
                 }
             }
@@ -13390,7 +13352,7 @@ impl State {
                 ed.saving = true;
                 let text = ed.text.clone();
                 self.spawn_job(move || {
-                    let result = miao_term_ui::ssh::write_remote(&dest, &path, text.as_bytes());
+                    let result = mtty_ui::ssh::write_remote(&dest, &path, text.as_bytes());
                     JobDone::RemoteWrite {
                         id: None,
                         dest,
@@ -13407,7 +13369,7 @@ impl State {
             Err(e) => {
                 let msg = format!(
                     "{}: {e}",
-                    miao_term_ui::i18n::t(self.lang, "Save failed", "保存失败")
+                    mtty_ui::i18n::t(self.lang, "Save failed", "保存失败")
                 );
                 self.show_notice(msg);
                 SaveOutcome::Failed
@@ -13435,7 +13397,7 @@ impl State {
         let mtime = views_mtime();
         if mtime != self.rules_mtime {
             self.rules_mtime = mtime;
-            self.rules = miao_term_config::view::RuleSet::load();
+            self.rules = mtty_config::view::RuleSet::load();
             self.publish_panes();
             self.window.request_redraw();
         }
@@ -13491,7 +13453,7 @@ impl State {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or(path);
-            let msg = if self.lang == miao_term_ui::i18n::Lang::En {
+            let msg = if self.lang == mtty_ui::i18n::Lang::En {
                 format!("{name} was deleted on disk.")
             } else {
                 format!("{name} 已在磁盘上删除。")
@@ -13537,7 +13499,7 @@ impl State {
     }
 
     fn finish_job(&mut self, done: JobDone) {
-        use miao_term_ui::i18n::t;
+        use mtty_ui::i18n::t;
         match done {
             JobDone::DirListed { dir, entries } => self.tree_listed(dir, entries),
             JobDone::SftpListed { dir, result } => {
@@ -13624,8 +13586,8 @@ impl State {
                         tab.title = format!("task: {}", task.name);
                         tab.title_set = true;
                         let cmd = agent
-                            .and_then(|i| miao_term_ui::integration::AGENTS.get(i))
-                            .map(miao_term_ui::integration::launch_command);
+                            .and_then(|i| mtty_ui::integration::AGENTS.get(i))
+                            .map(mtty_ui::integration::launch_command);
                         let active = tab.active.clone();
                         if let (Some(cmd), Some(pane)) =
                             (cmd, tab.panes.iter_mut().find(|p| p.id == active))
@@ -13871,7 +13833,7 @@ impl State {
             self.editor = None;
             return;
         }
-        let msg = miao_term_ui::i18n::t(
+        let msg = mtty_ui::i18n::t(
             self.lang,
             "Unsaved changes. Close again to discard them.",
             "有未保存的修改。再次关闭将丢弃修改。",
@@ -13889,7 +13851,7 @@ impl State {
         let mut open = true;
         let mut buf = std::mem::take(&mut self.prefix_buf);
         let mut commit = false;
-        egui::Window::new(miao_term_ui::i18n::t(self.lang, "Tab Prefix", "标签前缀"))
+        egui::Window::new(mtty_ui::i18n::t(self.lang, "Tab Prefix", "标签前缀"))
             .collapsible(false)
             .open(&mut open)
             .show(ctx, |ui| {
@@ -13904,7 +13866,7 @@ impl State {
                     commit = true;
                 }
                 if ui
-                    .button(miao_term_ui::i18n::t(self.lang, "Set", "设置"))
+                    .button(mtty_ui::i18n::t(self.lang, "Set", "设置"))
                     .clicked()
                 {
                     commit = true;
@@ -13939,7 +13901,7 @@ impl State {
         let mut open = true;
         let mut text = std::mem::take(buf);
         let mut commit = false;
-        egui::Window::new(miao_term_ui::i18n::t(self.lang, en, zh))
+        egui::Window::new(mtty_ui::i18n::t(self.lang, en, zh))
             .collapsible(false)
             .open(&mut open)
             .show(ctx, |ui| {
@@ -13954,7 +13916,7 @@ impl State {
                     commit = true;
                 }
                 if ui
-                    .button(miao_term_ui::i18n::t(self.lang, "Set", "设置"))
+                    .button(mtty_ui::i18n::t(self.lang, "Set", "设置"))
                     .clicked()
                 {
                     commit = true;
@@ -14030,7 +13992,7 @@ fn render_dir_tree(
     dir: &std::path::Path,
     depth: usize,
     filter: &str,
-    ch: &miao_term_ui::theme::Chrome,
+    ch: &mtty_ui::theme::Chrome,
     open_file: &mut Option<std::path::PathBuf>,
     toggle: &mut Option<std::path::PathBuf>,
 ) {
@@ -14059,7 +14021,7 @@ fn render_dir_tree(
             let (ird, icon_resp) =
                 ui.allocate_exact_size(egui::Vec2::splat(14.0), egui::Sense::click());
             let icon = file_tree_icon(ch, &e.name, is_dir);
-            miao_term_ui::icons::draw_tab_icon(ui.painter(), ird, &icon, muted);
+            mtty_ui::icons::draw_tab_icon(ui.painter(), ird, &icon, muted);
             if icon_resp.clicked() {
                 if is_dir {
                     *toggle = Some(path.clone());
@@ -14120,11 +14082,11 @@ fn render_dir_tree(
 /// The tree/list icon for a file entry: a Nerd-Font type glyph, tinted from the
 /// chrome palette (directories blue, config amber, code accent, files muted).
 fn file_tree_icon(
-    ch: &miao_term_ui::theme::Chrome,
+    ch: &mtty_ui::theme::Chrome,
     name: &str,
     is_dir: bool,
-) -> miao_term_ui::icons::TabIcon {
-    use miao_term_ui::icons::{self, Icon, TabIcon};
+) -> mtty_ui::icons::TabIcon {
+    use mtty_ui::icons::{self, Icon, TabIcon};
     let rule = icons::file_type(name, is_dir);
     let color = if is_dir {
         ch.folder
@@ -14161,7 +14123,7 @@ fn human_size(n: u64) -> String {
 /// A stable texture key for an image: unique across panes.
 /// sRGB-encoded `Rgb` → a linear `wgpu::Color` (the surface is `*Srgb`, so clear
 /// and quad colours must be linear to avoid a washed-out look).
-fn linear_color(c: miao_term_ui::theme::Rgb, alpha: f32) -> wgpu::Color {
+fn linear_color(c: mtty_ui::theme::Rgb, alpha: f32) -> wgpu::Color {
     fn lin(v: u8) -> f64 {
         let s = v as f64 / 255.0;
         if s <= 0.04045 {
@@ -14330,9 +14292,7 @@ fn open_external(target: &str) {
     let cmd = ("cmd", vec!["/C", "start", "", target]);
     #[cfg(all(unix, not(target_os = "macos")))]
     let cmd = ("xdg-open", vec![target]);
-    let _ = miao_term_platform::background_command(cmd.0)
-        .args(cmd.1)
-        .spawn();
+    let _ = mtty_platform::background_command(cmd.0).args(cmd.1).spawn();
 }
 
 fn quad(ox: f32, oy: f32, row: u16, col: u16, cw: f32, ch: f32, color: (u8, u8, u8)) -> Quad {
@@ -14364,11 +14324,11 @@ fn reserve_id(id: &str) {
 /// acted on it yet (green) or when it waits for them (amber, red on error,
 /// with `!` in the title), an empty ring otherwise.
 fn agent_icon(
-    ch: &miao_term_ui::theme::Chrome,
+    ch: &mtty_ui::theme::Chrome,
     state: &str,
     attention: Option<Attention>,
-) -> (miao_term_ui::icons::Icon, Option<miao_term_ui::theme::Rgb>) {
-    use miao_term_ui::icons::Icon;
+) -> (mtty_ui::icons::Icon, Option<mtty_ui::theme::Rgb>) {
+    use mtty_ui::icons::Icon;
     match state {
         "processing" => (Icon::StateBusy, Some(ch.accent)),
         "awaiting" => (Icon::StateWait, Some(ch.warning)),
@@ -14382,16 +14342,16 @@ fn agent_icon(
 /// then the tab looks like a plain terminal. States the switches do not name
 /// still show.
 fn shown_agent_icon(
-    badges: &miao_term_config::Badges,
-    ch: &miao_term_ui::theme::Chrome,
+    badges: &mtty_config::Badges,
+    ch: &mtty_ui::theme::Chrome,
     state: &str,
     attention: Option<Attention>,
-) -> Option<(miao_term_ui::icons::Icon, Option<miao_term_ui::theme::Rgb>)> {
+) -> Option<(mtty_ui::icons::Icon, Option<mtty_ui::theme::Rgb>)> {
     (!switched_off(badges, state)).then(|| agent_icon(ch, state, attention))
 }
 
 /// `[badges]` turns this state off.
-fn switched_off(badges: &miao_term_config::Badges, state: &str) -> bool {
+fn switched_off(badges: &mtty_config::Badges, state: &str) -> bool {
     matches!(state, "processing" | "idle" | "awaiting" | "error") && !badges.enabled(state)
 }
 
@@ -14413,7 +14373,7 @@ impl ApplicationHandler<HostEvent> for Host {
         macos_url::install_quit();
         let window_state = WindowState::load();
         let (init_w, init_h) = window_state.size;
-        let opacity = miao_term_config::Config::load()
+        let opacity = mtty_config::Config::load()
             .background_opacity
             .clamp(0.1, 1.0);
         let attrs = Window::default_attributes()
@@ -14525,11 +14485,11 @@ impl ApplicationHandler<HostEvent> for Host {
         let egui_renderer = egui_wgpu::Renderer::new(&device, format, None, 1, false);
 
         // Config (ADR: read `~/.config/mtty/config.toml`).
-        let (cfg, config_problem) = miao_term_config::Config::load_checked();
+        let (cfg, config_problem) = mtty_config::Config::load_checked();
         let font_size = cfg.font_size;
         let line_ratio = cfg.line_height;
         let font_family = cfg.font_family.clone();
-        let lang = miao_term_ui::i18n::Lang::parse(cfg.language.as_deref());
+        let lang = mtty_ui::i18n::Lang::parse(cfg.language.as_deref());
         let mut theme = Theme::from_config(&cfg.theme, cfg.cursor_style);
         let theme_name = match cfg.theme_name.as_deref() {
             Some(n) => Theme::NAMES
@@ -14575,14 +14535,14 @@ impl ApplicationHandler<HostEvent> for Host {
             instance,
             adapter,
             pip: None,
-            pip_request: miao_term_config::env("PIP").is_some(),
+            pip_request: mtty_config::env("PIP").is_some(),
             graphics_enabled: cfg.graphics,
             renderers: HashMap::new(),
             mtp: self.mtp.clone(),
             tabs: Vec::new(),
             active_tab: 0,
             theme,
-            rules: miao_term_config::view::RuleSet::load(),
+            rules: mtty_config::view::RuleSet::load(),
             rules_mtime: views_mtime(),
             rules_checked: Instant::now(),
             cw,
@@ -14604,7 +14564,7 @@ impl ApplicationHandler<HostEvent> for Host {
             mouse_captured: None,
             cursor: (0.0, 0.0),
             // `MTTY_PREEDIT` seeds the IME overlay for captures/QA.
-            preedit: miao_term_config::env("PREEDIT").unwrap_or_default(),
+            preedit: mtty_config::env("PREEDIT").unwrap_or_default(),
             ime_area: None,
             show_sidebar: window_state.sidebar_open,
             show_details: window_state.details_open,
@@ -14640,8 +14600,8 @@ impl ApplicationHandler<HostEvent> for Host {
             ftp_dialog: None,
             sync: SyncState {
                 dir: cfg.sync_dir.clone(),
-                key: miao_term_config::sync::Key::path()
-                    .and_then(|p| miao_term_config::sync::Key::load_from(&p).ok().flatten()),
+                key: mtty_config::sync::Key::path()
+                    .and_then(|p| mtty_config::sync::Key::load_from(&p).ok().flatten()),
                 running: false,
                 due: Some(Instant::now()),
                 last: None,
@@ -14654,7 +14614,7 @@ impl ApplicationHandler<HostEvent> for Host {
             remote_dialog: None,
             editor_vim: cfg.editor_vim,
             editor_command: cfg.editor.clone(),
-            vim: cfg.editor_vim.then(miao_term_ui::vim::VimRuntime::default),
+            vim: cfg.editor_vim.then(mtty_ui::vim::VimRuntime::default),
             vim_for: String::new(),
             cmark: egui_commonmark::CommonMarkCache::default(),
             mmd: Mmd {
@@ -14698,7 +14658,7 @@ impl ApplicationHandler<HostEvent> for Host {
             detached_timeout: cfg.detached_timeout,
             recovered: Vec::new(),
             scrollback_saved_at: Instant::now(),
-            sleep: miao_term_ui::agentloop::SleepGuard::new(),
+            sleep: mtty_ui::agentloop::SleepGuard::new(),
             agent_states: HashMap::new(),
             composer: None,
             quick: None,
@@ -14721,7 +14681,7 @@ impl ApplicationHandler<HostEvent> for Host {
             vim_command: None,
             lsp: {
                 let proxy = self.proxy.clone();
-                let settings = miao_term_lsp::Settings {
+                let settings = mtty_lsp::Settings {
                     disabled: cfg.lsp.disabled,
                     servers: cfg
                         .lsp
@@ -14730,7 +14690,7 @@ impl ApplicationHandler<HostEvent> for Host {
                         .map(|(k, v)| {
                             (
                                 k.clone(),
-                                miao_term_lsp::ServerSettings {
+                                mtty_lsp::ServerSettings {
                                     command: v.command.clone(),
                                     root_markers: v.root_markers.clone(),
                                     disabled: v.disabled,
@@ -14739,7 +14699,7 @@ impl ApplicationHandler<HostEvent> for Host {
                         })
                         .collect(),
                 };
-                miao_term_lsp::Lsp::new(
+                mtty_lsp::Lsp::new(
                     settings,
                     Arc::new(move || {
                         let _ = proxy.send_event(HostEvent::Wake);
@@ -14764,7 +14724,7 @@ impl ApplicationHandler<HostEvent> for Host {
             update_pubkey: cfg
                 .update_pubkey
                 .clone()
-                .unwrap_or_else(|| miao_term_ui::update::RELEASE_PUBKEY.to_string()),
+                .unwrap_or_else(|| mtty_ui::update::RELEASE_PUBKEY.to_string()),
             update_result: None,
             update_notice_until: None,
             notice: None,
@@ -14783,7 +14743,7 @@ impl ApplicationHandler<HostEvent> for Host {
             saved_settings: Vec::new(),
             config_imported_from: cfg.imported_from,
             update_dialog: false,
-            details_tab: miao_term_config::env("DETAILS_TAB")
+            details_tab: mtty_config::env("DETAILS_TAB")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(window_state.details_tab),
             details_cwd: None,
@@ -14819,7 +14779,7 @@ impl ApplicationHandler<HostEvent> for Host {
             }
         }
         let args: Vec<String> = std::env::args().skip(1).collect();
-        let intent = miao_term_ui::launch::Intent::from_args(&args);
+        let intent = mtty_ui::launch::Intent::from_args(&args);
         state.apply_launch(&intent);
         state.saved_settings = state.settings_values();
         state.reload_hosts();
@@ -14828,13 +14788,13 @@ impl ApplicationHandler<HostEvent> for Host {
         // windows that only open from the palette can be captured.
         // `MTTY_QA_AFTER=<secs>` runs it that long after startup instead
         // (once a language server has started, say).
-        if miao_term_config::env("QA_AFTER").is_none() {
+        if mtty_config::env("QA_AFTER").is_none() {
             state.run_qa_command();
         }
         if let Some(problem) = config_problem {
             let msg = format!(
                 "{} {problem}",
-                miao_term_ui::i18n::t(
+                mtty_ui::i18n::t(
                     state.lang,
                     "config.toml was ignored:",
                     "config.toml 未生效:"
@@ -14844,7 +14804,7 @@ impl ApplicationHandler<HostEvent> for Host {
         }
         if let Some(spec) = cfg.quick_terminal_hotkey.clone() {
             let proxy = self.proxy.clone();
-            state.hotkeys = miao_term_ui::hotkey::Hotkeys::register(&spec, move || {
+            state.hotkeys = mtty_ui::hotkey::Hotkeys::register(&spec, move || {
                 let _ = proxy.send_event(HostEvent::Hotkey);
             });
             if state.hotkeys.is_none() {
@@ -14970,7 +14930,7 @@ impl ApplicationHandler<HostEvent> for Host {
             // Links opened from a browser or Finder (macOS Apple Events).
             #[cfg(target_os = "macos")]
             for url in macos_url::take() {
-                let intent = miao_term_ui::launch::Intent::from_args(&[url]);
+                let intent = mtty_ui::launch::Intent::from_args(&[url]);
                 state.apply_launch(&intent);
                 state.window.request_redraw();
             }
@@ -14980,8 +14940,8 @@ impl ApplicationHandler<HostEvent> for Host {
                 state.run_command(Cmd::Quit);
             }
             // Launches forwarded by later processes (ADR 0019).
-            for line in miao_term_ui::launch::drain_inbox() {
-                let intent = miao_term_ui::launch::Intent::decode(&line);
+            for line in mtty_ui::launch::drain_inbox() {
+                let intent = mtty_ui::launch::Intent::decode(&line);
                 state.apply_launch(&intent);
                 state.window.request_redraw();
             }
@@ -15018,7 +14978,7 @@ impl ApplicationHandler<HostEvent> for Host {
                     Err(std::sync::mpsc::TryRecvError::Empty) => state.update_rx = Some(rx),
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                         state.update_result = Some(UpdateResult::Failed(
-                            miao_term_ui::i18n::t(
+                            mtty_ui::i18n::t(
                                 state.lang,
                                 "Update check interrupted.",
                                 "更新检查已中断。",
@@ -15048,7 +15008,7 @@ impl ApplicationHandler<HostEvent> for Host {
             state.poll_details();
             state.ensure_details();
             if !state.shot_now {
-                if let Some(v) = miao_term_config::env("SHOT_AFTER")
+                if let Some(v) = mtty_config::env("SHOT_AFTER")
                     .or_else(|| std::env::var("MIAOTTY_NATIVE_SHOT_AFTER").ok())
                 {
                     let secs = v.parse::<f64>().unwrap_or(-1.0);
@@ -15073,9 +15033,7 @@ impl ApplicationHandler<HostEvent> for Host {
                     wake_at = wake_at.min(due);
                 }
             }
-            if let Some(secs) =
-                miao_term_config::env("QA_AFTER").and_then(|v| v.parse::<f64>().ok())
-            {
+            if let Some(secs) = mtty_config::env("QA_AFTER").and_then(|v| v.parse::<f64>().ok()) {
                 if !state.qa_done {
                     let at = state.start + Duration::from_secs_f64(secs);
                     if Instant::now() >= at {
@@ -15855,8 +15813,8 @@ struct CompletionPopup {
     start: usize,
     /// The newest request; older answers are dropped.
     ticket: u64,
-    items: Vec<miao_term_lsp::CompletionItem>,
-    encoding: miao_term_lsp::Encoding,
+    items: Vec<mtty_lsp::CompletionItem>,
+    encoding: mtty_lsp::Encoding,
     /// Indices into `items` matching what was typed, best first.
     shown: Vec<usize>,
     selected: usize,
@@ -15870,7 +15828,7 @@ fn is_word_char(c: char) -> bool {
 }
 
 /// Where the word ending at `caret` starts.
-fn word_start(rope: &miao_term_editor::Rope, caret: usize) -> usize {
+fn word_start(rope: &mtty_editor::Rope, caret: usize) -> usize {
     let mut start = caret;
     while start > 0 && is_word_char(rope.char(start - 1)) {
         start -= 1;
@@ -15881,7 +15839,7 @@ fn word_start(rope: &miao_term_editor::Rope, caret: usize) -> usize {
 /// The items matching `typed`, best first: those starting with it (case
 /// ignored), then those containing its letters in order; each group in the
 /// server's order (`sortText`).
-fn filter_completions(items: &[miao_term_lsp::CompletionItem], typed: &str) -> Vec<usize> {
+fn filter_completions(items: &[mtty_lsp::CompletionItem], typed: &str) -> Vec<usize> {
     let typed: Vec<char> = typed.chars().flat_map(char::to_lowercase).collect();
     let mut ranked: Vec<(u8, &str, usize)> = items
         .iter()
@@ -15909,14 +15867,14 @@ fn filter_completions(items: &[miao_term_lsp::CompletionItem], typed: &str) -> V
 /// the caret, plus its other edits (an import) that do not touch that; and
 /// where the caret goes after.
 fn completion_edit(
-    rope: &miao_term_editor::Rope,
+    rope: &mtty_editor::Rope,
     caret: usize,
     start: usize,
-    item: &miao_term_lsp::CompletionItem,
-    encoding: miao_term_lsp::Encoding,
-) -> (miao_term_editor::Transaction, usize) {
-    use miao_term_editor::{Assoc, Change, Transaction};
-    let to_char = |p| miao_term_lsp::pos_to_char(rope, p, encoding);
+    item: &mtty_lsp::CompletionItem,
+    encoding: mtty_lsp::Encoding,
+) -> (mtty_editor::Transaction, usize) {
+    use mtty_editor::{Assoc, Change, Transaction};
+    let to_char = |p| mtty_lsp::pos_to_char(rope, p, encoding);
     let start = item
         .range
         .map(|r| to_char(r.start))
@@ -15957,7 +15915,7 @@ fn completion_kind_letter(kind: u8) -> &'static str {
 }
 
 /// A chrome palette colour as an egui colour.
-fn chrome_rgb(c: miao_term_ui::theme::Rgb) -> egui::Color32 {
+fn chrome_rgb(c: mtty_ui::theme::Rgb) -> egui::Color32 {
     egui::Color32::from_rgb(c.0, c.1, c.2)
 }
 
@@ -15976,8 +15934,8 @@ fn severity_color32(severity: u8) -> egui::Color32 {
     egui::Color32::from_rgb(r, g, b)
 }
 
-fn no_server_notice(lang: miao_term_ui::i18n::Lang) -> String {
-    miao_term_ui::i18n::t(
+fn no_server_notice(lang: mtty_ui::i18n::Lang) -> String {
+    mtty_ui::i18n::t(
         lang,
         "No language server for this file (see [lsp] in config.toml).",
         "此文件没有可用的语言服务器(见 config.toml 中的 [lsp])。",
@@ -16097,7 +16055,7 @@ fn import_key_file(
     overwrite: bool,
 ) -> Result<String, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
-    let imported = miao_term_keys::import_ppk(&text, old, new)?;
+    let imported = mtty_keys::import_ppk(&text, old, new)?;
     let dir = dest.parent().ok_or("the destination has no folder")?;
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     if dest.exists() && !overwrite {
@@ -16130,30 +16088,27 @@ fn editor_command_for_menu_key(id: chrome::MenuId) -> Option<editor_pane::Comman
 }
 
 /// Translate a key chord into a vim key (the pane owns the vim state).
-fn vim_key_from(
-    kind: miao_term_ui::input::KeyKind,
-    ctrl: bool,
-) -> Option<miao_term_editor::vim::Key> {
-    use miao_term_editor::vim::Key;
+fn vim_key_from(kind: mtty_ui::input::KeyKind, ctrl: bool) -> Option<mtty_editor::vim::Key> {
+    use mtty_editor::vim::Key;
     Some(match kind {
-        miao_term_ui::input::KeyKind::Char(c) if ctrl => Key::Ctrl(c),
-        miao_term_ui::input::KeyKind::Char(c) => Key::Char(c),
-        miao_term_ui::input::KeyKind::Left => Key::Left,
-        miao_term_ui::input::KeyKind::Right => Key::Right,
-        miao_term_ui::input::KeyKind::Up => Key::Up,
-        miao_term_ui::input::KeyKind::Down => Key::Down,
-        miao_term_ui::input::KeyKind::Home => Key::Home,
-        miao_term_ui::input::KeyKind::End => Key::End,
-        miao_term_ui::input::KeyKind::Backspace => Key::Backspace,
-        miao_term_ui::input::KeyKind::Delete => Key::Delete,
-        miao_term_ui::input::KeyKind::Enter => Key::Enter,
-        miao_term_ui::input::KeyKind::Escape => Key::Esc,
+        mtty_ui::input::KeyKind::Char(c) if ctrl => Key::Ctrl(c),
+        mtty_ui::input::KeyKind::Char(c) => Key::Char(c),
+        mtty_ui::input::KeyKind::Left => Key::Left,
+        mtty_ui::input::KeyKind::Right => Key::Right,
+        mtty_ui::input::KeyKind::Up => Key::Up,
+        mtty_ui::input::KeyKind::Down => Key::Down,
+        mtty_ui::input::KeyKind::Home => Key::Home,
+        mtty_ui::input::KeyKind::End => Key::End,
+        mtty_ui::input::KeyKind::Backspace => Key::Backspace,
+        mtty_ui::input::KeyKind::Delete => Key::Delete,
+        mtty_ui::input::KeyKind::Enter => Key::Enter,
+        mtty_ui::input::KeyKind::Escape => Key::Esc,
         _ => return None,
     })
 }
 
-fn t_replace_failed(lang: miao_term_ui::i18n::Lang) -> &'static str {
-    miao_term_ui::i18n::t(lang, "Replace failed", "替换失败")
+fn t_replace_failed(lang: mtty_ui::i18n::Lang) -> &'static str {
+    mtty_ui::i18n::t(lang, "Replace failed", "替换失败")
 }
 
 /// Whether a key goes to the active editor pane before the app's shortcuts:
@@ -16339,8 +16294,8 @@ struct EditorFrame<'a> {
     scale: f32,
     cw: f32,
     ch: f32,
-    theme: &'a miao_term_ui::theme::Theme,
-    panel_bg: miao_term_ui::theme::Rgb,
+    theme: &'a mtty_ui::theme::Theme,
+    panel_bg: mtty_ui::theme::Rgb,
     focused: bool,
     carets_on: bool,
     /// Find matches (char ranges) and the current one's index.
@@ -16362,7 +16317,7 @@ fn draw_editor(
     ed.resize(cols, rows);
     ed.sync_syntax();
     let chrome = f.theme.chrome();
-    let rgb = |c: miao_term_ui::theme::Rgb| (c.0, c.1, c.2);
+    let rgb = |c: mtty_ui::theme::Rgb| (c.0, c.1, c.2);
     let d = ed.draw(
         editor_pane::Palette {
             fg: rgb(f.theme.fg),
@@ -16592,7 +16547,7 @@ impl Mmd {
         let (shared, dir, wake) = (self.cache.clone(), self.dir.clone(), self.wake.clone());
         let source = source.to_string();
         std::thread::spawn(move || {
-            let img = miao_term_ui::mermaid::render_external(&source, &cmd, &dir);
+            let img = mtty_ui::mermaid::render_external(&source, &cmd, &dir);
             shared
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -16616,8 +16571,7 @@ fn open_commonmark(
     if !text.trim().is_empty() {
         let mut viewer = egui_commonmark::CommonMarkViewer::new();
         if let Some(dir) = base {
-            viewer =
-                viewer.default_implicit_uri_scheme(miao_term_ui::markdown::dir_uri_scheme(dir));
+            viewer = viewer.default_implicit_uri_scheme(mtty_ui::markdown::dir_uri_scheme(dir));
         }
         viewer.show(ui, cache, text);
     }
@@ -16647,20 +16601,19 @@ fn render_markdown(
         };
         let body = &after[..j];
         if let Some(path) = mmd.image(body) {
-            if let Some(uri) = miao_term_ui::markdown::image_uri(&path.display().to_string(), None)
-            {
+            if let Some(uri) = mtty_ui::markdown::image_uri(&path.display().to_string(), None) {
                 ui.add(
                     egui::Image::new(uri)
                         .max_width(ui.available_width())
                         .max_height(400.0),
                 );
             }
-        } else if let Some(d) = miao_term_ui::mermaid::parse_diagram(body) {
-            miao_term_ui::mermaid::show_diagram(ui, &d, fg, panel);
+        } else if let Some(d) = mtty_ui::mermaid::parse_diagram(body) {
+            mtty_ui::mermaid::show_diagram(ui, &d, fg, panel);
         } else {
             ui.label(
-                egui::RichText::new(miao_term_ui::i18n::t(
-                    miao_term_ui::i18n::Lang::En,
+                egui::RichText::new(mtty_ui::i18n::t(
+                    mtty_ui::i18n::Lang::En,
                     "Mermaid diagram (not rendered)",
                     "Mermaid 图（未渲染）",
                 ))
@@ -16681,7 +16634,7 @@ fn pointer_to_terminal(ui_consumed: bool, over_terminal: bool, terminal_gesture:
 }
 
 fn git_rows(cwd: &std::path::Path) -> Vec<(String, String)> {
-    let out = miao_term_platform::background_command("git")
+    let out = mtty_platform::background_command("git")
         .arg("-C")
         .arg(cwd)
         .args(["status", "--porcelain=v1", "-b"])
@@ -16794,8 +16747,8 @@ fn list_dir(cwd: &std::path::Path, hidden: bool) -> Vec<FileEntry> {
     rows
 }
 
-fn configure_egui(ctx: &egui::Context, ch: &miao_term_ui::theme::Chrome) {
-    let col = |c: miao_term_ui::theme::Rgb| egui::Color32::from_rgb(c.0, c.1, c.2);
+fn configure_egui(ctx: &egui::Context, ch: &mtty_ui::theme::Chrome) {
+    let col = |c: mtty_ui::theme::Rgb| egui::Color32::from_rgb(c.0, c.1, c.2);
     let mut style = (*ctx.style()).clone();
     {
         let v = &mut style.visuals;
@@ -16967,7 +16920,7 @@ fn session_file() -> Option<std::path::PathBuf> {
 /// Terminal contents saved at quit, one file per pane (see
 /// `save_session_on_exit`).
 fn scrollback_dir() -> Option<std::path::PathBuf> {
-    miao_term_config::data_dir().map(|d| d.join("scrollback"))
+    mtty_config::data_dir().map(|d| d.join("scrollback"))
 }
 
 /// Rows of each terminal kept for the next launch.
@@ -17031,7 +16984,7 @@ fn queue_file() -> Option<std::path::PathBuf> {
 }
 
 /// Load the persisted prompt queue (agent Composer drafts).
-fn load_queue() -> miao_term_ui::agentloop::PromptQueue {
+fn load_queue() -> mtty_ui::agentloop::PromptQueue {
     let Some(path) = queue_file() else {
         return Default::default();
     };
@@ -17039,12 +16992,12 @@ fn load_queue() -> miao_term_ui::agentloop::PromptQueue {
     std::fs::read(&read_path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .map(|v| miao_term_ui::agentloop::PromptQueue::from_json(&v))
+        .map(|v| mtty_ui::agentloop::PromptQueue::from_json(&v))
         .unwrap_or_default()
 }
 
 fn window_file() -> Option<std::path::PathBuf> {
-    Some(miao_term_config::config_dir()?.join("window"))
+    Some(mtty_config::config_dir()?.join("window"))
 }
 
 fn legacy_state_path(path: &std::path::Path, legacy: &str) -> std::path::PathBuf {
@@ -17216,7 +17169,7 @@ impl chrome::Chrome for State {
                     notice = Some(format!(
                         "{}: {}",
                         e.title(),
-                        miao_term_ui::i18n::t(
+                        mtty_ui::i18n::t(
                             self.lang,
                             "unsaved changes. Save, or close again to discard them.",
                             "有未保存的修改。请保存,或再次关闭以放弃修改。"
@@ -17234,7 +17187,7 @@ impl chrome::Chrome for State {
         self.window.request_redraw();
     }
 
-    fn lang(&self) -> miao_term_ui::i18n::Lang {
+    fn lang(&self) -> mtty_ui::i18n::Lang {
         self.lang
     }
     fn tabs(&self) -> Vec<chrome::ChromeTab> {
@@ -17244,21 +17197,21 @@ impl chrome::Chrome for State {
                 let agent = self.agent_tab_icon(t);
                 let builtin = match agent {
                     Some((icon, _)) => icon,
-                    None if t.ssh => miao_term_ui::icons::Icon::Server,
-                    None => miao_term_ui::icons::Icon::Terminal,
+                    None if t.ssh => mtty_ui::icons::Icon::Server,
+                    None => mtty_ui::icons::Icon::Terminal,
                 };
                 let view = self.view_for(t);
-                let mut icon = miao_term_ui::icons::TabIcon::from(builtin);
+                let mut icon = mtty_ui::icons::TabIcon::from(builtin);
                 icon.color = agent.and_then(|(_, color)| color);
                 if let Some(rule) = view.as_ref().and_then(|v| v.icon.as_ref()) {
                     let color = rule.rgb();
-                    icon.glyph = miao_term_ui::icons::rule_glyph(
+                    icon.glyph = mtty_ui::icons::rule_glyph(
                         rule.name.as_deref(),
                         rule.emoji.as_deref(),
                         color.is_some(),
                     );
                     icon.color = color
-                        .map(|c| miao_term_ui::theme::Rgb(c.0, c.1, c.2))
+                        .map(|c| mtty_ui::theme::Rgb(c.0, c.1, c.2))
                         .or(icon.color);
                 }
                 let rule_badge = view.as_ref().and_then(|v| v.badge.clone());
@@ -17323,7 +17276,7 @@ impl chrome::Chrome for State {
         if let Some(ed) = self.active_editor() {
             let (line, col) = ed.caret_line_col();
             if let Some(large) = &ed.large {
-                use miao_term_ui::i18n::t;
+                use mtty_ui::i18n::t;
                 let l = self.lang;
                 let mut s = format!(
                     "{} \u{00b7} {} \u{00b7} {line}:{col}",
@@ -17341,10 +17294,10 @@ impl chrome::Chrome for State {
             }
             let lang = ed.language().unwrap_or("Plain Text");
             let mode = match ed.vim_mode() {
-                Some(miao_term_editor::vim::Mode::Normal) => "-- NORMAL -- ",
-                Some(miao_term_editor::vim::Mode::Insert) => "-- INSERT -- ",
-                Some(miao_term_editor::vim::Mode::Visual) => "-- VISUAL -- ",
-                Some(miao_term_editor::vim::Mode::VisualLine) => "-- V-LINE -- ",
+                Some(mtty_editor::vim::Mode::Normal) => "-- NORMAL -- ",
+                Some(mtty_editor::vim::Mode::Insert) => "-- INSERT -- ",
+                Some(mtty_editor::vim::Mode::Visual) => "-- VISUAL -- ",
+                Some(mtty_editor::vim::Mode::VisualLine) => "-- V-LINE -- ",
                 None => "",
             };
             let mut s = format!(
@@ -17357,13 +17310,14 @@ impl chrome::Chrome for State {
                 s.push_str(&format!(" \u{00b7} \u{2716} {errors} \u{26a0} {warnings}"));
             }
             if let Some(p) = ed.proposal() {
-                let label = p.label.clone().unwrap_or_else(|| {
-                    miao_term_ui::i18n::t(self.lang, "agent", "agent").to_string()
-                });
+                let label = p
+                    .label
+                    .clone()
+                    .unwrap_or_else(|| mtty_ui::i18n::t(self.lang, "agent", "agent").to_string());
                 s.push_str(&format!(
                     " \u{00b7} \u{270e} {label}: {} {}",
                     p.lines.len(),
-                    miao_term_ui::i18n::t(self.lang, "lines (Accept/Reject)", "行(接受/拒绝)")
+                    mtty_ui::i18n::t(self.lang, "lines (Accept/Reject)", "行(接受/拒绝)")
                 ));
             }
             return s;
@@ -17390,7 +17344,7 @@ impl chrome::Chrome for State {
     }
     fn details_list(&self) -> Option<Vec<chrome::ChromeItem>> {
         use chrome::ChromeItem;
-        use miao_term_ui::icons::Icon;
+        use mtty_ui::icons::Icon;
         let item = |icon: Icon, label: String, meta: String| ChromeItem {
             icon: icon.into(),
             label,
@@ -17454,7 +17408,7 @@ impl chrome::Chrome for State {
             _ => None,
         }
     }
-    fn details_body(&mut self, ui: &mut egui::Ui, lang: miao_term_ui::i18n::Lang) -> bool {
+    fn details_body(&mut self, ui: &mut egui::Ui, lang: mtty_ui::i18n::Lang) -> bool {
         if self.details_tab.min(6) == 4 {
             self.files_body(ui, lang);
             true
@@ -17769,7 +17723,7 @@ mod tests {
             }
         }
         let (tx, rx) = std::sync::mpsc::channel();
-        let term = miao_term_core::Terminal::from_pipe(
+        let term = mtty_core::Terminal::from_pipe(
             10,
             3,
             100,
@@ -18225,7 +18179,7 @@ mod tests {
     /// Drag a window's bottom-right corner by `d`; its rect before and after.
     fn drag_window_corner(body: fn(&mut egui::Ui), d: egui::Vec2) -> (egui::Rect, egui::Rect) {
         let ctx = egui::Context::default();
-        configure_egui(&ctx, &miao_term_ui::theme::Chrome::dark());
+        configure_egui(&ctx, &mtty_ui::theme::Chrome::dark());
         let mut rect = egui::Rect::NOTHING;
         let mut frame = |events: Vec<egui::Event>| {
             replay(&ctx, events, |ctx| {
@@ -18397,7 +18351,7 @@ mod tests {
         // column was drawn over the first. mtty's own style: its row stripes
         // are opaque.
         let ctx = egui::Context::default();
-        configure_egui(&ctx, &miao_term_ui::theme::Chrome::dark());
+        configure_egui(&ctx, &mtty_ui::theme::Chrome::dark());
         let md = "| Field | Purpose |\n|---|---|\n\
             | `model` | default model (`provider/model`) |\n\
             | `default_agent` | default agent |\n\
@@ -18586,7 +18540,7 @@ mod tests {
 
     #[test]
     fn rename_dialog_commits_on_enter_and_cancels_on_escape() {
-        use miao_term_ui::i18n::Lang;
+        use mtty_ui::i18n::Lang;
         let ctx = egui::Context::default();
         let mut buf = String::new();
         let mut outcome = DialogOutcome::Open;
@@ -18703,8 +18657,8 @@ mod tests {
         }
     }
 
-    fn item(label: &str, sort: &str) -> miao_term_lsp::CompletionItem {
-        miao_term_lsp::CompletionItem {
+    fn item(label: &str, sort: &str) -> mtty_lsp::CompletionItem {
+        mtty_lsp::CompletionItem {
             label: label.into(),
             kind: 0,
             detail: None,
@@ -18747,9 +18701,9 @@ mod tests {
 
     #[test]
     fn accepting_a_completion_writes_its_range_snippet_and_import() {
-        use miao_term_lsp::{LspRange, Pos};
+        use mtty_lsp::{LspRange, Pos};
         let text = "fn main() {\n    v.pu\n}\n";
-        let mut rope = miao_term_editor::Rope::from_str(text);
+        let mut rope = mtty_editor::Rope::from_str(text);
         let caret = text.find("pu").unwrap() + 2;
         let start = caret - 2;
         let p = |line, character| Pos { line, character };
@@ -18767,8 +18721,7 @@ mod tests {
             },
             "use std::vec::Vec;\n".into(),
         )];
-        let (tx, after) =
-            completion_edit(&rope, caret, start, &push, miao_term_lsp::Encoding::Utf16);
+        let (tx, after) = completion_edit(&rope, caret, start, &push, mtty_lsp::Encoding::Utf16);
         tx.apply(&mut rope);
         let out = rope.to_string();
         assert_eq!(
@@ -18777,21 +18730,16 @@ mod tests {
         );
         assert_eq!(&out[after..after + 5], "value", "caret on the placeholder");
         // No range: the typed word is replaced; the caret ends after it.
-        let mut rope = miao_term_editor::Rope::from_str("let x = le");
-        let (tx, after) = completion_edit(
-            &rope,
-            10,
-            8,
-            &item("len", ""),
-            miao_term_lsp::Encoding::Utf16,
-        );
+        let mut rope = mtty_editor::Rope::from_str("let x = le");
+        let (tx, after) =
+            completion_edit(&rope, 10, 8, &item("len", ""), mtty_lsp::Encoding::Utf16);
         tx.apply(&mut rope);
         assert_eq!((rope.to_string().as_str(), after), ("let x = len", 11));
     }
 
     #[test]
     fn the_word_before_the_caret() {
-        let rope = miao_term_editor::Rope::from_str("let x = foo_bar.ba");
+        let rope = mtty_editor::Rope::from_str("let x = foo_bar.ba");
         assert_eq!(word_start(&rope, 18), 16);
         assert_eq!(word_start(&rope, 15), 8);
         assert_eq!(word_start(&rope, 16), 16, "right after the dot");
@@ -18803,7 +18751,7 @@ mod tests {
         let ed = editor_pane::EditorPane::with_doc(
             "e1".into(),
             "/tmp/notes.md".into(),
-            miao_term_editor::Document::from_text("# Notes\n"),
+            mtty_editor::Document::from_text("# Notes\n"),
         );
         assert!(tab.layout.split("t1", "e1", SplitDir::Right));
         tab.editors.push(ed);
@@ -18843,7 +18791,7 @@ mod tests {
 
     #[test]
     fn details_words_are_translated_and_data_is_kept() {
-        use miao_term_ui::i18n::Lang;
+        use mtty_ui::i18n::Lang;
         assert_eq!(
             localize_detail(Lang::Zh, "not a git repository"),
             "不是 git 仓库"
@@ -18903,14 +18851,14 @@ mod tests {
 
     #[test]
     fn badges_switch_states_off_the_tabs() {
-        use miao_term_ui::icons::Icon;
-        let ch = miao_term_ui::theme::Chrome::dark();
-        let all = miao_term_config::Badges::default();
+        use mtty_ui::icons::Icon;
+        let ch = mtty_ui::theme::Chrome::dark();
+        let all = mtty_config::Badges::default();
         assert_eq!(
             super::shown_agent_icon(&all, &ch, "processing", None).map(|i| i.0),
             Some(Icon::StateBusy)
         );
-        let quiet = miao_term_config::Badges {
+        let quiet = mtty_config::Badges {
             processing: false,
             idle: false,
             ..Default::default()
@@ -18936,8 +18884,8 @@ mod tests {
 
     #[test]
     fn agent_tabs_show_their_state_by_shape() {
-        use miao_term_ui::icons::Icon;
-        let ch = miao_term_ui::theme::Chrome::dark();
+        use mtty_ui::icons::Icon;
+        let ch = mtty_ui::theme::Chrome::dark();
         let shape = |state, attention| super::agent_icon(&ch, state, attention).0;
         assert_eq!(shape("processing", None), Icon::StateBusy);
         assert_eq!(shape("processing", Some(Attention::Done)), Icon::StateBusy);
@@ -19037,7 +18985,7 @@ mod tests {
     fn snippets_run_on_hosts_through_one_quoted_ssh_command() {
         let command = "df -h | grep '/dev' && echo \"$HOME\"";
         let cmd = super::remote_run_command_with(
-            miao_term_ui::ssh::Syntax::Posix,
+            mtty_ui::ssh::Syntax::Posix,
             "deploy@203.0.113.5",
             &["-p".into(), "2222".into()],
             command,
@@ -19133,11 +19081,11 @@ mod tests {
     fn menu_shortcuts_that_are_editor_chords_reach_the_editor() {
         // The OS menu bar takes ⌘D, ⇧⌘Z and ⇧⌘L before the window sees them;
         // each must mean what the editor's keymap makes of the same chord.
-        use miao_term_ui::input::KeyKind;
+        use mtty_ui::input::KeyKind;
         let mut mapped = 0;
-        for (_, entries) in miao_term_ui::menu::menus(miao_term_ui::i18n::Lang::En) {
+        for (_, entries) in mtty_ui::menu::menus(mtty_ui::i18n::Lang::En) {
             for entry in entries {
-                let miao_term_ui::menu::Entry::Item { id, shortcut, .. } = entry else {
+                let mtty_ui::menu::Entry::Item { id, shortcut, .. } = entry else {
                     continue;
                 };
                 let Some(command) = editor_command_for_menu_key(id) else {

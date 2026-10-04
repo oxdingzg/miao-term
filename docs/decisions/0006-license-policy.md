@@ -4,7 +4,7 @@ Status: accepted.
 
 ## Context
 
-The engine (`miao-term-*`) must be embeddable by third parties, and the app
+The engine (`mtty-*`) must be embeddable by third parties, and the app
 (`miaotty-app`) is its first consumer. The Rust ecosystem we build on is
 overwhelmingly permissively licensed, but some transitive crates are
 dual-licensed with a copyleft *option* (e.g. `Apache-2.0 OR GPL-2.0-only`).
@@ -47,7 +47,7 @@ simply absent from the list above, and are added to it:
 | `Apache-2.0 WITH LLVM-exception` | `target-lexicon` | The exception is strictly more permissive than `Apache-2.0`; the expression is not the bare `Apache-2.0` already listed, which is why it was rejected. |
 
 The fourth was a genuine violation: **`serialport`, a direct dependency of
-`miao-term-ui`, is `MPL-2.0`** — weak copyleft, which this ADR excludes. It had
+`mtty-ui`, is `MPL-2.0`** — weak copyleft, which this ADR excludes. It had
 been recorded as MIT since the day it was added, and the wrong claim had been
 copied into ADR 0037 and the manifest comment without anyone checking.
 

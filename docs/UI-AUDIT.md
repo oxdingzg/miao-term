@@ -13,8 +13,8 @@
 cargo fmt --all --check
 cargo clippy --workspace --all-targets
 cargo test --workspace
-cargo test --release -p miao-term-core -p mtty-app -- --ignored
-cargo build --release -p miao-term-widget -p mtty-app -p mtty-cli
+cargo test --release -p mtty-core -p mtty-app -- --ignored
+cargo build --release -p mtty-widget -p mtty-app -p mtty-cli
 python3 scripts/smoke-hosts.py
 ```
 
@@ -30,7 +30,7 @@ For stable-machine baseline comparison, run performance tests **separately from
 builds, GPU tests and desktop smoke**:
 
 ```sh
-PERF_ENFORCE=1 cargo test --release -p miao-term-core -p mtty-app -- --ignored --nocapture --test-threads=1
+PERF_ENFORCE=1 cargo test --release -p mtty-core -p mtty-app -- --ignored --nocapture --test-threads=1
 ```
 
 ## Fixes and regression coverage

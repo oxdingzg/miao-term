@@ -8,7 +8,7 @@
     "budget": 25,
     "baseline": 73.1,
     "hard": true,
-    "run": "cargo test --release -p miao-term-core -- --ignored vt_parse_throughput",
+    "run": "cargo test --release -p mtty-core -- --ignored vt_parse_throughput",
     "regression_pct": 25
   },
   "screen_snapshot_30_rows_ms": {

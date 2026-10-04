@@ -1,6 +1,6 @@
 [package]
-name = "miao-term-render"
-description = "wgpu-based glyph-grid renderer for miao-term"
+name = "mtty-render"
+description = "wgpu-based glyph-grid renderer for mtty"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,7 +10,7 @@ homepage.workspace = true
 
 [dependencies]
 glyphon = "0.7"
-miao-term-core = { path = "../term-core" }
+mtty-core = { path = "../term-core" }
 wgpu = "23"
 
 [dev-dependencies]

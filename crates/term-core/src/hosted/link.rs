@@ -7,9 +7,9 @@ use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use miao_term_ptyhost::client;
-use miao_term_ptyhost::proto::{FromHost, ToHost};
-use miao_term_ptyhost::sys::Stream as UnixStream;
+use mtty_ptyhost::client;
+use mtty_ptyhost::proto::{FromHost, ToHost};
+use mtty_ptyhost::sys::Stream as UnixStream;
 use portable_pty::CommandBuilder;
 
 use super::Incoming;

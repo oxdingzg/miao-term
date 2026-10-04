@@ -52,7 +52,7 @@ jobs:
           cache-on-failure: true
 
       - name: Build
-        run: cargo build --release -p mtty-app -p mtty-cli -p miao-term-ptyhost
+        run: cargo build --release -p mtty-app -p mtty-cli -p mtty-ptyhost
 
       - name: Package (macOS)
         if: runner.os == 'macOS'
@@ -172,7 +172,7 @@ jobs:
           # picks it up through the WIX environment variable.
           choco install -y wixtoolset --no-progress
           cargo install cargo-wix --locked
-          cargo build --release -p mtty-cli -p miao-term-ptyhost
+          cargo build --release -p mtty-cli -p mtty-ptyhost
           # The WiX template lives in mtty-app/wix and references wix\License.rtf
           # relative to the crate, so build from there.
           cd mtty-app

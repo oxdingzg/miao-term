@@ -368,7 +368,7 @@ pub fn download_verified(
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let path = dir.join(&name);
     let curl = |args: &[&str]| {
-        miao_term_platform::background_command("curl")
+        mtty_platform::background_command("curl")
             .args(["-fsSL", "--proto", "=https,file"])
             .args(args)
             .output()
@@ -506,7 +506,7 @@ t+gWHfmlkGM5SoMqXUkBvKwxms2sV0uR79Q4Xsnk42jdyFJ1AS1RuLQKXe0dIrQgW0flxW8/q6jndgI3
             return;
         }
         let url = "https://github.com/oxdingzg/mtty/releases/latest/download/latest.json";
-        let out = miao_term_platform::background_command("curl")
+        let out = mtty_platform::background_command("curl")
             .args(["-fsSL", "--connect-timeout", "10", "--max-time", "60", url])
             .output()
             .unwrap();

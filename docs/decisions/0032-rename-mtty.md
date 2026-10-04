@@ -46,10 +46,10 @@ domain we own, and the change only gets more expensive later. The cost is that
 macOS treats it as a new application, so permissions such as notifications must
 be granted again; this ADR and the release notes say so.
 
-Migration lives in `miao-term-config` as `config_dir()` and
+Migration lives in `mtty-config` as `config_dir()` and
 `migrate_legacy_config()`; every config/state path goes through it instead of
 joining `"miaotty"` on its own. Environment reads go through
-`miao_term_config::env()` (`term-mtp` has no such dependency and keeps an
+`mtty_config::env()` (`term-mtp` has no such dependency and keeps an
 equivalent small function).
 
 The retired eframe app's `$XDG_DATA_HOME/miaotty/session.json` stays the last

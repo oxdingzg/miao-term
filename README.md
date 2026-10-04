@@ -31,14 +31,14 @@ model itself.
 
 In this repository:
 
-- a **terminal engine** — `miao-term-core` owns the hot path from the PTY to the
+- a **terminal engine** — `mtty-core` owns the hot path from the PTY to the
   screen and depends on no windowing or GPU code;
-- an **editor core** — `miao-term-editor`, equally free of UI code;
+- an **editor core** — `mtty-editor`, equally free of UI code;
 - **`mtty`** — the application built on them, with tabs, panes, side panels, a
   settings window, shell integration and a scriptable control plane.
 
 **`mtty` is the single application**, powered by the native `winit` +
-`wgpu` host in `miao-term-widget`. `mtty-app` provides the executable and
+`wgpu` host in `mtty-widget`. `mtty-app` provides the executable and
 installer metadata; the host draws the terminal directly and composites egui
 chrome in the same frame. It includes picture-in-picture, hint mode, read-only
 mode and per-pane close buttons.
@@ -309,15 +309,15 @@ The engine is layered so that dependencies point inward only
 
 | Crate | Responsibility |
 |-------|----------------|
-| [`miao-term-core`](crates/term-core) | PTY, VT parsing, grid/scrollback, selection, search, OSC, input encoding. No GPU or windowing. |
-| [`miao-term-graphics`](crates/term-graphics) | Inline-graphics stream scanner and decoders (Sixel, Kitty, iTerm2). |
-| [`miao-term-render`](crates/term-render) | `wgpu` + `glyphon` glyph-grid renderer, quad and image pipelines. |
-| [`miao-term-ui`](crates/term-ui) | Host-agnostic UI shared by mtty: theme, input encoding, selection, split layout, egui chrome, palette, hints, vim, markdown, ssh, update and agent-integration helpers. |
-| [`miao-term-editor`](crates/term-editor) | Editing core for the editor pane: rope buffer, transactions and undo, multiple selections, motions, search and replace (ADR 0034). No UI code. |
-| [`miao-term-lsp`](crates/term-lsp) | Language Server Protocol client for the editor pane: servers per workspace on background threads, document sync, diagnostics, hover, completion, definitions (ADR 0034). No UI code. |
-| [`miao-term-config`](crates/term-config) | Configuration and themes, ghostty/alacritty import, and the View-rule engine. |
-| [`miao-term-mtp`](crates/term-mtp) | MTP protocol, host/client and transport (Unix socket, Windows named pipe, TCP). |
-| [`miao-term-widget`](crates/term-widget) | The native host library for mtty: `winit` + `wgpu` render loop that draws the grid directly and composites the egui chrome. |
+| [`mtty-core`](crates/term-core) | PTY, VT parsing, grid/scrollback, selection, search, OSC, input encoding. No GPU or windowing. |
+| [`mtty-graphics`](crates/term-graphics) | Inline-graphics stream scanner and decoders (Sixel, Kitty, iTerm2). |
+| [`mtty-render`](crates/term-render) | `wgpu` + `glyphon` glyph-grid renderer, quad and image pipelines. |
+| [`mtty-ui`](crates/term-ui) | Host-agnostic UI shared by mtty: theme, input encoding, selection, split layout, egui chrome, palette, hints, vim, markdown, ssh, update and agent-integration helpers. |
+| [`mtty-editor`](crates/term-editor) | Editing core for the editor pane: rope buffer, transactions and undo, multiple selections, motions, search and replace (ADR 0034). No UI code. |
+| [`mtty-lsp`](crates/term-lsp) | Language Server Protocol client for the editor pane: servers per workspace on background threads, document sync, diagnostics, hover, completion, definitions (ADR 0034). No UI code. |
+| [`mtty-config`](crates/term-config) | Configuration and themes, ghostty/alacritty import, and the View-rule engine. |
+| [`mtty-mtp`](crates/term-mtp) | MTP protocol, host/client and transport (Unix socket, Windows named pipe, TCP). |
+| [`mtty-widget`](crates/term-widget) | The native host library for mtty: `winit` + `wgpu` render loop that draws the grid directly and composites the egui chrome. |
 | [`mtty-app`](mtty-app) | The `mtty` native executable and platform packaging metadata. |
 | [`mtty-cli`](mtty-cli) | The `mtty-cli` control client. |
 

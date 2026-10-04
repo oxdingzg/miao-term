@@ -24,7 +24,7 @@ pane 状态、排队 prompt、读取命令输出。但还做不到:(A1)把 agent
    **拒绝**(`undo`,一步恢复提案前的原文)。输入、保存、关闭或出现新提案都视为接受。
    提案按 pane 保存;pane 关闭即丢弃;在用户保存之前不写磁盘。MTP 返回撤销深度,使
    客户端能区分接受与拒绝。
-2. **A2 —— ACP 客户端。** 新增不依赖 GPU 的 `miao-term-acp` crate,实现 Agent Client
+2. **A2 —— ACP 客户端。** 新增不依赖 GPU 的 `mtty-acp` crate,实现 Agent Client
    Protocol(agent 子进程 stdio 上的 JSON-RPC 2.0,许可证遵循 ADR 0006):`initialize`、
    `authenticate`、`session/new`、`session/load`、`session/prompt`、`session/cancel`
    以及流式的 `session/update`(agent 消息分片、工具调用、计划、diff)。客户端的
@@ -46,7 +46,7 @@ pane 状态、排队 prompt、读取命令输出。但还做不到:(A1)把 agent
 |---|---|---|
 | A3 | MTP `line`/`column`;把选区/诊断/输出发给 agent | prompt 文本的单元测试;`app.edit` `line` 的 MTP 测试 |
 | A1 | `editor.propose`、单事务应用、行内 diff、接受/拒绝 | 事务与撤销的编辑器测试;回放/截图检查 |
-| A2 | `miao-term-acp`:JSON-RPC 客户端、会话、流式、fs/终端/权限映射 | 对假 ACP agent 的测试;若装有真实 agent 则对其测试 |
+| A2 | `mtty-acp`:JSON-RPC 客户端、会话、流式、fs/终端/权限映射 | 对假 ACP agent 的测试;若装有真实 agent 则对其测试 |
 
 ## 影响
 

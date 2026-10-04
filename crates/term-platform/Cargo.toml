@@ -1,5 +1,5 @@
 [package]
-name = "miao-term-platform"
+name = "mtty-platform"
 description = "Native system integration shared by the mtty hosts: notifications now, clipboard image access next (ADR 0035)"
 version.workspace = true
 edition.workspace = true

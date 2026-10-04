@@ -8,8 +8,8 @@
 
 M6(PuTTY 风格的远程)从 R1 开始:串口控制台(波特率、数据位、校验、停止位、流控)、
 Telnet 与裸 TCP,与 SSH 一起保存在主机库中。目前每个 pane 都是 PTY 上的 shell:
-`miao-term-core` 的 `Terminal` 启动 `MasterPty` 与子进程,并在后台线程读取 master
-(`crates/term-core/src/term.rs`);主机库(`miao-term-config::hosts`)只保存 SSH 目标。
+`mtty-core` 的 `Terminal` 启动 `MasterPty` 与子进程,并在后台线程读取 master
+(`crates/term-core/src/term.rs`);主机库(`mtty-config::hosts`)只保存 SSH 目标。
 
 串口控制台、Telnet 服务器与裸 TCP 对端都没有 shell、没有 PTY,也没有 OSC 133 的命令
 边界——它们只是一个进出的字节流。因此终端核心必须能直接消费和写入一条普通传输,而不能
@@ -23,7 +23,7 @@ Telnet 与裸 TCP,与 SSH 一起保存在主机库中。目前每个 pane 都是
    `Box<dyn Write + Send>`。`Terminal::new` 保留 PTY 路径,只是从 master 构造同一条管道。
    `master` 与 `child` 变为可选,因此没有进程的会话在销毁时不会去结束任何进程。仅 PTY 需要
    的钩子(shell 集成、来自 OSC 7 的工作目录、命令捕获)在没有 shell 时保持不生效。
-2. **传输后端**放在 `miao-term-ui`(不依赖 GPU,便于单元测试),每个后端一个模块:
+2. **传输后端**放在 `mtty-ui`(不依赖 GPU,便于单元测试),每个后端一个模块:
    - **裸 TCP** —— `std::net::TcpStream`,无协议。
    - **Telnet** —— `TcpStream` 之上的一个内置小型编解码器:应答 IAC 协商
      (WILL/WONT/DO/DONT,除字符集与已有回显外一律拒绝),从核心看到的字节流中剥离

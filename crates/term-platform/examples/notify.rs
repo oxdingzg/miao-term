@@ -6,7 +6,7 @@
 
 fn main() {
     for index in 1..=4 {
-        miao_term_platform::notify("mtty", &format!("native notification smoke test #{index}"));
+        mtty_platform::notify("mtty", &format!("native notification smoke test #{index}"));
         std::thread::sleep(std::time::Duration::from_secs(4));
     }
 }

@@ -1,7 +1,7 @@
 //! Byte-stream transports for serial, Telnet and raw TCP sessions (ADR 0037).
 //!
 //! The terminal core only needs a reader and a writer
-//! (`miao-term-core::Terminal::from_pipe`); these build one from a saved
+//! (`mtty-core::Terminal::from_pipe`); these build one from a saved
 //! profile, with no child process behind it. Everything here is GPU-free and
 //! unit-tested.
 

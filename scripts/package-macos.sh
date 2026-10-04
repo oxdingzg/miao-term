@@ -8,9 +8,9 @@ version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
 profile="${PROFILE:-release}"
 target="${CARGO_TARGET_DIR:-target}"
 if [ "$profile" = release ]; then
-  cargo build --release -p mtty-app -p mtty-cli -p miao-term-ptyhost
+  cargo build --release -p mtty-app -p mtty-cli -p mtty-ptyhost
 else
-  cargo build -p mtty-app -p mtty-cli -p miao-term-ptyhost
+  cargo build -p mtty-app -p mtty-cli -p mtty-ptyhost
 fi
 built="$target/$profile"
 staging="$(mktemp -d)"

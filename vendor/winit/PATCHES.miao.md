@@ -8,7 +8,7 @@ Only the macOS content view is touched (`src/platform_impl/macos/view.rs`):
    is `true`. AppKit then turns a drag in the title strip — including a drag on
    a tab chip — into a system window move, so tab reordering never ran (only the
    right-click *Move Up / Move Down* menu worked), and text selection or sliders
-   in that strip fought the window. The host (`miao-term-widget`) already moves
+   in that strip fought the window. The host (`mtty-widget`) already moves
    the window itself, per region, via `Window::drag_window` driven by
    `Chrome::on_title_drag_hover`; this patch lets those regions receive the drag.
 

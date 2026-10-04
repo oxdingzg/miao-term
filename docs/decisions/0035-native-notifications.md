@@ -17,7 +17,7 @@ that may be absent. Linux `notify-send` is fine.
 
 ## Decision
 
-Add `crates/term-platform` (`miao-term-platform`) for native system
+Add `crates/term-platform` (`mtty-platform`) for native system
 integration, starting with notifications. `crates/term-ui/src/agentloop.rs`
 re-exports `notify`/`alert` from it, so hosts keep calling `agentloop::notify`
 (ADR 0010) while the platform code leaves the host-agnostic crate.
@@ -43,7 +43,7 @@ WinRT toasts under mtty's AppUserModelID; both keep their command-line fallback.
 - macOS notifications belong to mtty, can be clicked, and no longer activate
   Script Editor.
 - `term-ui` stays host-agnostic: `objc2`, `block2` and
-  `objc2-user-notifications` are confined to `miao-term-platform`'s macOS
+  `objc2-user-notifications` are confined to `mtty-platform`'s macOS
   target.
 - The native path needs an app bundle. `scripts/package-macos.sh` already builds
   and ad-hoc signs one, so no certificate is required to test or to run a local

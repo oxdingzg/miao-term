@@ -1,5 +1,5 @@
 [package]
-name = "miao-term-ui"
+name = "mtty-ui"
 description = "Host-agnostic pieces shared by the mtty hosts: theme, input encoding, selection, row building, split layout, and egui chrome widgets"
 version.workspace = true
 edition.workspace = true
@@ -9,11 +9,11 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
-miao-term-core = { path = "../term-core" }
-miao-term-render = { path = "../term-render" }
-miao-term-config = { path = "../term-config" }
-miao-term-mtp = { path = "../term-mtp" }
-miao-term-platform = { path = "../term-platform" }
+mtty-core = { path = "../term-core" }
+mtty-render = { path = "../term-render" }
+mtty-config = { path = "../term-config" }
+mtty-mtp = { path = "../term-mtp" }
+mtty-platform = { path = "../term-platform" }
 egui = "0.30"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

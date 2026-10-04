@@ -1,5 +1,5 @@
 [package]
-name = "miao-term-mtp"
+name = "mtty-mtp"
 description = "MTP control plane: protocol + host/client + transport (Unix socket / Windows named pipe)"
 version.workspace = true
 edition.workspace = true

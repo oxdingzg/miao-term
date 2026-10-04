@@ -26,7 +26,7 @@ menu API, so this needs a platform crate: `muda` (MIT, the tauri menu library).
 
 Put the menu in the system menu bar on macOS, and keep it honest:
 
-1. One table, `miao_term_ui::menu::menus(lang)`, describes the menus. The native
+1. One table, `mtty_ui::menu::menus(lang)`, describes the menus. The native
    host builds the OS menu bar from it; `chrome::render` draws the in-window menu
    from the same table when the host says so (`Chrome::draws_menu_bar`).
 2. The OS menu bar is installed **only on macOS and only when the binary runs

@@ -62,12 +62,12 @@ pub const AGENTS: &[Agent] = &[
 
 /// Whether `bin` is an executable on `PATH`.
 pub fn detected(bin: &str) -> bool {
-    miao_term_platform::find_executable(bin).is_some()
+    mtty_platform::find_executable(bin).is_some()
 }
 
 /// `~/.config/mtty/hooks`.
 pub fn hooks_dir() -> Option<PathBuf> {
-    Some(miao_term_config::config_dir()?.join("hooks"))
+    Some(mtty_config::config_dir()?.join("hooks"))
 }
 
 pub fn script_path(agent: &str) -> Option<PathBuf> {
@@ -256,7 +256,7 @@ pub fn resume_command(agent: &Agent, session: &str) -> Option<String> {
 /// Run `hook_script` through `sh -n` to check syntax (used in tests and by the
 /// installer as a sanity check).
 pub fn syntax_ok(script: &str) -> bool {
-    let mut child = match miao_term_platform::background_command("sh")
+    let mut child = match mtty_platform::background_command("sh")
         .arg("-n")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())

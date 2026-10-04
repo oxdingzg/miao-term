@@ -1,6 +1,6 @@
 //! Agent-loop side effects: sleep prevention, the prompt queue, and the
 //! notification entry points (ADR 0010). The notification and error-dialog
-//! implementations moved to `miao-term-platform`, so macOS can post through
+//! implementations moved to `mtty-platform`, so macOS can post through
 //! the native `UserNotifications` center instead of `osascript` (ADR 0035).
 
 use std::process::Child;
@@ -8,8 +8,8 @@ use std::process::Child;
 use std::process::Command;
 
 // Re-exported so hosts keep calling `agentloop::notify` / `agentloop::alert`
-// (ADR 0010) while the platform code lives in `miao-term-platform`.
-pub use miao_term_platform::{alert, notify};
+// (ADR 0010) while the platform code lives in `mtty-platform`.
+pub use mtty_platform::{alert, notify};
 
 /// Keeps the machine awake while an agent is processing. The child process is
 /// platform-specific and is killed when no longer needed or on drop.

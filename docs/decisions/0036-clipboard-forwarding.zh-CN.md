@@ -21,7 +21,7 @@ bracketed paste,让应用自己去取图(`crates/term-widget/src/lib.rs` 的
 - 启动时 mtty 把 `MTTY_CLIPBOARD_FILE`(临时目录下、每个进程一个的路径)导出到 pane 的
   环境里,和 `MTTY_CLI`/`MTTY_SOCKET` 并列(`export_pane_environment`)。
 - 粘贴时,如果剪贴板里是图片,`paste_clipboard` 读取它
-  (`miao-term-platform::clipboard_image`,macOS 用 `NSPasteboard`),把 PNG 写进该路径,
+  (`mtty-platform::clipboard_image`,macOS 用 `NSPasteboard`),把 PNG 写进该路径,
   然后仍发送应用已经当作“去读剪贴板”信号的空 bracketed paste。
 - 文本粘贴会先删除该文件,这样之后的一次空粘贴不会读到过期图片。
 - 还没有后端平台的 `clipboard_image` 返回 `None`,宿主回退到文本粘贴。

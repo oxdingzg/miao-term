@@ -23,7 +23,7 @@
 
 ### 1.1 命名
 
-- 正式产品名:**mtty**。仓库名为 **mtty**,可嵌入引擎仍叫 **miao-term**。
+- 正式产品名:**mtty**。仓库与可嵌入引擎都叫 **mtty**。
 - 可执行文件 `mtty` / `mtty-cli`,bundle `mtty.app`(`dev.mtty.terminal`),配置目录
   `~/.config/mtty`,环境变量 `MTTY_*`,URL scheme `mtty://`。v0.0.5 及之前名为 `miaotty`,
   兼容规则见 [ADR 0032](decisions/0032-rename-mtty.zh-CN.md)。
@@ -150,7 +150,7 @@
 ### M1 品牌统一:mtty(设计见 [ADR 0032](decisions/0032-rename-mtty.zh-CN.md))
 
 - [x] **B1.1 运行时改名与兼容层** — `ee12822`:迁移/环境变量/socket 链接/scheme 单测;冒烟覆盖旧配置复制、两套 pane 变量、旧式 hook 上报、旧 socket 路径。
-  - `miao-term-config`:`config_dir()`、`migrate_legacy_config()`(复制一次、不覆盖、不删旧目录)、`env()`(`MTTY_*` 优先、回退 `MIAOTTY_*`)。
+  - `mtty-config`:`config_dir()`、`migrate_legacy_config()`(复制一次、不覆盖、不删旧目录)、`env()`(`MTTY_*` 优先、回退 `MIAOTTY_*`)。
   - 所有路径改走 `config_dir()`:config、views、hooks、launch inbox、session/queue/window/recipes。
   - MTP:默认 socket `mtty.sock` + `miaotty.sock` 兼容链接;Windows 管道 `mtty`;令牌/能力环境变量双读。
   - pane 环境:同时导出 `MTTY_*` 与 `MIAOTTY_*`,`MTTY_CLI`/`MIAOTTY_CLI` 指向同目录 CLI 的绝对路径。
@@ -241,13 +241,13 @@
 ### M6 远程(PuTTY 式,R1 见 [ADR 0037](decisions/0037-serial-telnet-tcp.md),R2 见 [ADR 0038](decisions/0038-ppk-import.md),R3 见 [ADR 0039](decisions/0039-ssh-stack.md))
 
 - [x] **R1** 串口(波特率、校验、流控)与 Telnet 会话、原始 TCP;保存在主机库中。(ADR 0037。会话以字节管道(`Terminal::from_pipe`)在 pane 中打开,在后台线程拨号:裸 TCP 与内置 Telnet 编解码不新增依赖,串口使用 MIT 的 `serialport`(`default-features = false`,不含 libudev)。Shell 菜单与命令面板中有“新建串口/Telnet/TCP 会话…”,带配置表单;`hosts.toml` 增加 `kind`(默认 `ssh`,另有 `serial`/`telnet`/`tcp`)与 `[host.serial]`,侧栏、`mtty://host/<name>` 与命令面板都能打开这些类型。Telnet 与裸 TCP 标注为未加密,串口不标。恢复会话时重连,复制标签会重新拨号,连接断开即结束 pane;不适用 shell shim、OSC 7 工作目录与命令捕获。依据:管道终端与 Telnet 编解码单元测试、主机类型往返、transport target 的 JSON 测试,以及 macOS 与 Linux 上的工作区构建。)
-- [x] **R2** 导入 `.ppk` 密钥(转为 OpenSSH 格式,不以明文保存)。(ADR 0038。不依赖 GPU 的 `miao-term-keys` 解析 PPK v2(SHA-1 派生、HMAC-SHA-1)与 v3(Argon2id、HMAC-SHA-256),支持 Ed25519、RSA、ECDSA,先校验 MAC 再接触密钥,可解密 `none`/`aes256-cbc`,并经 `ssh-key` 以 bcrypt-pbkdf + aes256-ctr 和用户设置的口令重新加密。*主机… → 导入 PuTTY 密钥…* 读取文件后写出 `~/.ssh/<name>`(0600)与 `<name>.pub`,已存在时除非勾选“覆盖”否则拒绝;新口令为空会被拒绝,不存在未加密输出的路径。`chacha20-poly1305` 以明确错误拒绝(暂无向量)。依据:`puttygen` 0.81 生成的 12 个真实夹具——Ed25519/RSA/ECDSA × v2/v3 × 明文/加密——导入后与各自 `.pub` 比对,并有口令错误、文件被篡改与空口令的测试。)
+- [x] **R2** 导入 `.ppk` 密钥(转为 OpenSSH 格式,不以明文保存)。(ADR 0038。不依赖 GPU 的 `mtty-keys` 解析 PPK v2(SHA-1 派生、HMAC-SHA-1)与 v3(Argon2id、HMAC-SHA-256),支持 Ed25519、RSA、ECDSA,先校验 MAC 再接触密钥,可解密 `none`/`aes256-cbc`,并经 `ssh-key` 以 bcrypt-pbkdf + aes256-ctr 和用户设置的口令重新加密。*主机… → 导入 PuTTY 密钥…* 读取文件后写出 `~/.ssh/<name>`(0600)与 `<name>.pub`,已存在时除非勾选“覆盖”否则拒绝;新口令为空会被拒绝,不存在未加密输出的路径。`chacha20-poly1305` 以明确错误拒绝(暂无向量)。依据:`puttygen` 0.81 生成的 12 个真实夹具——Ed25519/RSA/ECDSA × v2/v3 × 明文/加密——导入后与各自 `.pub` 比对,并有口令错误、文件被篡改与空口令的测试。)
 - [x] **R3** 以 ADR 决定 SSH 是否从系统 OpenSSH 改为 Rust 原生实现(收益:Windows 无需 OpenSSH、进程内 SFTP 与转发;代价:重新实现 `~/.ssh/config`、ProxyJump 与 agent 转发)。(决定见 [ADR 0039](decisions/0039-ssh-stack.md):目前继续使用系统 OpenSSH;macOS、Linux 与 Windows 都已自带,若情况变化,ADR 0037 的传输层就是原生后端的接入点。无 OpenSSH 的平台、进程内 SFTP/转发或安全理由会触发重新评估。)
 
 ### M7 AI 原生工作台(设计见 [ADR 0040](decisions/0040-ai-native-workspace.md))
 
 - [x] **A1** agent 的修改以编辑器事务的形式进入,行内显示为 diff,可接受或拒绝,也可撤销。(ADR 0040。MTP `editor.propose` 接受 `pane_id`/`path` 以及 `edits`(`{start,end,text}` 字符范围)或整文件 `text`;宿主把它们作为**一个事务**应用到编辑器 pane 的 `Document`(`apply_external`),把改动行标成绿色,并在状态栏显示。输入、保存或出现新修改即视为接受;*拒绝 Agent 修改* 是一步撤销回到原样。依据:编辑器 pane 的单事务应用/撤销、输入即接受与接受测试,以及该请求的 MTP 测试。)
-- [x] **A2** ACP(Agent Client Protocol)客户端,任何 ACP agent 都能与编辑器 pane 协作。(ADR 0040。不依赖 GPU 的 `miao-term-acp` crate 启动 agent,在其 stdio 上讲按行分隔的 JSON-RPC 2.0:`initialize`/`session/new`/`session/prompt`/`session/cancel`,应答 `fs/read_text_file`、`fs/write_text_file` 与 `session/request_permission`,并把 `session/update` 通知与响应交给 `Handler`。宿主可从 `config.toml` 的 `[acp]`(`[[acp.agent]]` 带 `name`/`command`)或通过 *ACP Agent…* 输入命令启动;ACP 窗口显示流式转写、发送 prompt、取消当前回合,把 agent diff 变成 A1 提案,并用“允许/拒绝”应答权限请求。依据:`term-acp` 对假 agent 的测试(initialize + 流式 update、fs 读取)、config 解析测试,以及工作区构建与测试。)
+- [x] **A2** ACP(Agent Client Protocol)客户端,任何 ACP agent 都能与编辑器 pane 协作。(ADR 0040。不依赖 GPU 的 `mtty-acp` crate 启动 agent,在其 stdio 上讲按行分隔的 JSON-RPC 2.0:`initialize`/`session/new`/`session/prompt`/`session/cancel`,应答 `fs/read_text_file`、`fs/write_text_file` 与 `session/request_permission`,并把 `session/update` 通知与响应交给 `Handler`。宿主可从 `config.toml` 的 `[acp]`(`[[acp.agent]]` 带 `name`/`command`)或通过 *ACP Agent…* 输入命令启动;ACP 窗口显示流式转写、发送 prompt、取消当前回合,把 agent diff 变成 A1 提案,并用“允许/拒绝”应答权限请求。依据:`term-acp` 对假 agent 的测试(initialize + 流式 update、fs 读取)、config 解析测试,以及工作区构建与测试。)
 - [x] **A3** 一步把选区、诊断或命令输出交给 agent;agent 经 MTP 打开文件并定位到行。(ADR 0040。MTP `app.edit`/`app.view` 增加可选的 1 基 `line` 与 `column`;宿主打开文件并把编辑器 pane 移到该处。命令面板新增 *把选区发给 Agent*、*把诊断发给 Agent*、*把上一条命令的输出发给 Agent*:各自找到本标签的 agent pane,输入一段带围栏的简短 prompt 并回车。依据:`app.edit` 携带 `line`/`column` 的 MTP 测试,以及工作区构建与测试。)
 - [x] **A4** Agent 会话恢复与配额显示([ADR 0042](decisions/0042-agent-resume-quota.zh-CN.md))。*恢复 Agent 会话…* 选择器列出 agent 经 MTP 上报的会话,并在其记录的 cwd 里重启所选会话;MTP/`mtty-cli` 新增 `agent.sessions` 与 `agent.resume`(新增 `agent.resume` 能力),hook 上报 `--cwd`,Agent 面板显示 agent 上报的配额行。依据:恢复模板的 token/转义测试、`agent.sessions` 排序与 `agent.resume` 入队的 MTP 测试、hook `--cwd` 测试,以及工作区测试与 clippy。
 

@@ -1,7 +1,7 @@
 //! Offscreen smoke test: draw quads + glyphs with the native pipelines and
 //! write a PPM, so the renderer can be verified without a window.
 
-use miao_term_render::{Quad, QuadRenderer, Span, TermRenderer};
+use mtty_render::{Quad, QuadRenderer, Span, TermRenderer};
 
 const W: u32 = 640;
 const H: u32 = 220;

@@ -1,6 +1,6 @@
 [package]
-name = "miao-term-widget"
-description = "winit + wgpu native render loop for the miao-term engine"
+name = "mtty-widget"
+description = "winit + wgpu native render loop for the mtty engine"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,17 +9,17 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
-miao-term-core = { path = "../term-core" }
-miao-term-ptyhost = { path = "../term-ptyhost" }
-miao-term-render = { path = "../term-render" }
-miao-term-ui = { path = "../term-ui" }
-miao-term-mtp = { path = "../term-mtp" }
-miao-term-platform = { path = "../term-platform" }
-miao-term-config = { path = "../term-config" }
-miao-term-editor = { path = "../term-editor" }
-miao-term-lsp = { path = "../term-lsp" }
-miao-term-keys = { path = "../term-keys" }
-miao-term-acp = { path = "../term-acp" }
+mtty-core = { path = "../term-core" }
+mtty-ptyhost = { path = "../term-ptyhost" }
+mtty-render = { path = "../term-render" }
+mtty-ui = { path = "../term-ui" }
+mtty-mtp = { path = "../term-mtp" }
+mtty-platform = { path = "../term-platform" }
+mtty-config = { path = "../term-config" }
+mtty-editor = { path = "../term-editor" }
+mtty-lsp = { path = "../term-lsp" }
+mtty-keys = { path = "../term-keys" }
+mtty-acp = { path = "../term-acp" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 winit = "0.30"

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use miao_term_core::{HostConfig, HostSnapshot, Terminal};
+use mtty_core::{HostConfig, HostSnapshot, Terminal};
 
 fn config(binary: PathBuf) -> HostConfig {
     HostConfig {

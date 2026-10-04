@@ -16,7 +16,7 @@ pub mod servers;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use miao_term_editor::Rope;
+use mtty_editor::Rope;
 use serde_json::json;
 
 pub use client::{Capabilities, Client, Incoming, Waker};

@@ -2,7 +2,7 @@
 
 mtty highlights code with two engines (ADR 0034, phase E3):
 
-- **tree-sitter grammars** — crates.io dependencies of `miao-term-editor`; each
+- **tree-sitter grammars** — crates.io dependencies of `mtty-editor`; each
   crate carries its own licence (MIT, Apache-2.0 or CC0-1.0, checked against
   ADR 0006).
 - **Sublime syntaxes through syntect** — for languages no built-in grammar

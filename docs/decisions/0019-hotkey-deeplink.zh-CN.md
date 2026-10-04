@@ -43,6 +43,6 @@ compositor 自身的绑定机制获得快速终端,而这本来也是他们绑�
 - 按 id 聚焦 pane、切换快速终端与运行命令都可从应用外部驱动,这正是编辑器/启动器集成所需。
   在已有窗口*内部*抓键(菜单加速键)与 Wayland 原生全局快捷键仍属后续。
 - Update:Wayland 原生全局快捷键已在 ADR 0026 落地(见附记);窗口内菜单加速键仍属后续。
-- Update:intent/转发 helper 已移入 `miao-term-ui::launch`,原生 host(`miaotty-native`)现在
+- Update:intent/转发 helper 已移入 `mtty-ui::launch`,原生 host(`miaotty-native`)现在
   也会解析 argv intent、通过同一 inbox 转发后续启动(经 MTP 唤醒运行中的实例),并在
   `⌘⇧T` 上实现快速终端临时标签;该 host 的"重新打开已关闭标签"改绑到 `⌘⇧Z`。

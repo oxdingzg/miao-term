@@ -1,4 +1,4 @@
-//! `miao-term-ui` — host-agnostic pieces used by mtty and embedders.
+//! `mtty-ui` — host-agnostic pieces used by mtty and embedders.
 //!
 //! Nothing here owns an event loop or a GPU: it is theme, input encoding,
 //! selection, row building for the renderer, the split layout model, and the
@@ -33,8 +33,8 @@ pub mod transport;
 pub mod update;
 pub mod vim;
 
-use miao_term_core::ATerm;
-use miao_term_render::Span;
+use mtty_core::ATerm;
+use mtty_render::Span;
 use theme::{Rgb, Theme};
 
 pub use input::{
@@ -106,7 +106,7 @@ pub fn build_rows(screen: &ATerm, theme: &Theme, cursor: Option<(u16, u16)>) -> 
 /// [`build_rows`]) and the background the text colour, so a default-coloured
 /// cell shows as light on dark turned dark on light, never as text in the
 /// background colour on the background.
-pub fn cell_background(theme: &Theme, cell: &miao_term_core::aterm::CellView) -> Rgb {
+pub fn cell_background(theme: &Theme, cell: &mtty_core::aterm::CellView) -> Rgb {
     if cell.inverse {
         cell_foreground(theme, cell)
     } else {
@@ -117,7 +117,7 @@ pub fn cell_background(theme: &Theme, cell: &miao_term_core::aterm::CellView) ->
 /// Box drawing and block elements paint TUI surfaces, including half-cell
 /// edges whose foreground intentionally matches the adjacent background.
 /// Raising their contrast turns those edges into unwanted bright borders.
-fn cell_foreground(theme: &Theme, cell: &miao_term_core::aterm::CellView) -> Rgb {
+fn cell_foreground(theme: &Theme, cell: &mtty_core::aterm::CellView) -> Rgb {
     let color = if matches!(cell.ch, '\u{2500}'..='\u{259f}') {
         theme.color(cell.fg, false)
     } else {
@@ -181,7 +181,7 @@ mod row_tests {
         // Faint sits between the text and the background, and is not lifted
         // back to full contrast.
         let bg = theme.color(
-            miao_term_core::aterm::Color::Named(miao_term_core::aterm::NamedColor::Background),
+            mtty_core::aterm::Color::Named(mtty_core::aterm::NamedColor::Background),
             false,
         );
         assert!(

@@ -15,7 +15,7 @@
 
 ## 决定
 
-把终端网格迁移到由 `term-widget`(包 `miao-term-widget`,bin `miaotty-native`)拥有的**原生
+把终端网格迁移到由 `term-widget`(包 `mtty-widget`,bin `miaotty-native`)拥有的**原生
 `winit` + `wgpu` 渲染循环**,不再经过 egui:
 
 - `term-widget` 拥有 `winit` 事件循环与 `wgpu` surface。

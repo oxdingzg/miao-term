@@ -150,7 +150,7 @@ WiX 模板已入库:[`mtty-app/wix/main.wxs`](../mtty-app/wix/main.wxs)(把 `mtt
 **Linux `.deb` 与 AppImage**(Ubuntu 24.04):
 
 ```sh
-cargo build --release -p mtty-app -p mtty-cli -p miao-term-ptyhost
+cargo build --release -p mtty-app -p mtty-cli -p mtty-ptyhost
 cargo install cargo-deb --locked && cargo deb -p mtty-app --no-build
 sudo dpkg -i target/debian/mtty_*_amd64.deb     # /usr/bin/mtty{,-cli,-ptyhost}
 mtty-cli ping                                   # 可运行;报错仅因无 host

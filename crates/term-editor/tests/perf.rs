@@ -6,7 +6,7 @@
 
 use std::time::Instant;
 
-use miao_term_editor::{Document, Motion, SearchQuery, Selection};
+use mtty_editor::{Document, Motion, SearchQuery, Selection};
 
 fn scale() -> f64 {
     std::env::var("MTTY_PERF_SCALE")
@@ -72,7 +72,7 @@ fn editing_a_100_mb_file_stays_interactive() {
     check("line down", per_move, 0.5);
 
     let t = Instant::now();
-    let hits = miao_term_editor::search::find_all(doc.rope(), &SearchQuery::literal("needle?"))
+    let hits = mtty_editor::search::find_all(doc.rope(), &SearchQuery::literal("needle?"))
         .unwrap()
         .len();
     check(
@@ -91,8 +91,8 @@ fn editing_a_100_mb_file_stays_interactive() {
 #[test]
 #[ignore = "perf gate; run `cargo test --release -- --ignored`"]
 fn highlighting_the_largest_synchronously_parsed_file_stays_interactive() {
-    use miao_term_editor::syntax::SYNC_PARSE_BYTES;
-    use miao_term_editor::Syntax;
+    use mtty_editor::syntax::SYNC_PARSE_BYTES;
+    use mtty_editor::Syntax;
     let unit = "/// Doc comment with 中文.\npub fn compute(index: usize, table: &[u8]) -> Option<u8> {\n    let value = table.get(index)?; // a comment\n    Some(value.wrapping_add(1))\n}\n\n";
     // Just under the size where parsing moves to a background thread.
     let text = unit.repeat(SYNC_PARSE_BYTES / unit.len() - 1);
@@ -150,7 +150,7 @@ fn highlighting_the_largest_synchronously_parsed_file_stays_interactive() {
 #[test]
 #[ignore = "perf gate; run `cargo test --release -- --ignored`"]
 fn an_8_mb_source_file_highlights_in_the_background() {
-    use miao_term_editor::Syntax;
+    use mtty_editor::Syntax;
     let unit = "/// Doc comment with 中文.\npub fn compute(index: usize, table: &[u8]) -> Option<u8> {\n    let value = table.get(index)?; // a comment\n    Some(value.wrapping_add(1))\n}\n\n";
     let text = unit.repeat((8 << 20) / unit.len() - 1);
     let mut doc = Document::from_text(&text);
@@ -207,7 +207,7 @@ fn an_8_mb_source_file_highlights_in_the_background() {
 #[test]
 #[ignore = "perf gate; run `cargo test --release -- --ignored`"]
 fn a_1_gb_file_opens_in_view_mode_without_loading_it() {
-    use miao_term_editor::large::LargeFile;
+    use mtty_editor::large::LargeFile;
     use std::io::Write;
     let path = std::env::temp_dir().join(format!("mtty-perf-1g-{}.log", std::process::id()));
     {

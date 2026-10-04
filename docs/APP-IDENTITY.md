@@ -5,11 +5,11 @@
 ## Name and implementation
 
 The application is **mtty** (site: `mtty.dev`), the command is `mtty`, and the
-companion CLI is `mtty-cli`. The repository is **mtty**; the embeddable engine
-keeps the name **miao-term**. Up to v0.0.5 the application was called **miaotty**; the rename
+companion CLI is `mtty-cli`. The repository and the embeddable engine are both
+**mtty**. Up to v0.0.5 the application was called **miaotty**; the rename
 and its compatibility rules are [ADR 0032](decisions/0032-rename-mtty.md).
 
-`mtty-app/src/main.rs` launches the native `miao-term-widget` library; the
+`mtty-app/src/main.rs` launches the native `mtty-widget` library; the
 former eframe application and the separate `miaotty-native` binary are retired
 (this superseded the dual-host phase of ADRs 0030/0031). `mtty --version`
 prints `mtty <version> (native)` so checks verify the actual implementation

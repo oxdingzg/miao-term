@@ -62,7 +62,7 @@ pub fn classify(known: &str, scanned: &str, fingerprints: Vec<String>) -> HostKe
 
 /// `SHA256:…` fingerprints of keyscan output (`ssh-keygen -lf -`).
 fn fingerprints(scanned: &str) -> Vec<String> {
-    let Ok(mut child) = miao_term_platform::background_command("ssh-keygen")
+    let Ok(mut child) = mtty_platform::background_command("ssh-keygen")
         .args(["-l", "-f", "-"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -92,7 +92,7 @@ pub fn resolve(
     destination: &str,
     options: &[String],
 ) -> Result<(String, u16, Option<String>), String> {
-    let out = miao_term_platform::background_command("ssh")
+    let out = mtty_platform::background_command("ssh")
         .args(options)
         .arg("-G")
         .arg(destination)
@@ -118,7 +118,7 @@ pub fn resolve(
 pub fn check(destination: &str, options: &[String]) -> Result<HostKey, String> {
     let (host, port, jump) = resolve(destination, options)?;
     let name = known_hosts_name(&host, port);
-    let known = miao_term_platform::background_command("ssh-keygen")
+    let known = mtty_platform::background_command("ssh-keygen")
         .args(["-F", &name])
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
@@ -132,7 +132,7 @@ pub fn check(destination: &str, options: &[String]) -> Result<HostKey, String> {
             HostKey::Known
         });
     }
-    let scanned = miao_term_platform::background_command("ssh-keyscan")
+    let scanned = mtty_platform::background_command("ssh-keyscan")
         .args(["-T", "5", "-p", &port.to_string(), &host])
         .output()
         .map_err(|e| format!("ssh-keyscan: {e}"))?;
@@ -148,7 +148,7 @@ pub fn check(destination: &str, options: &[String]) -> Result<HostKey, String> {
 /// append them to `~/.ssh/known_hosts`. Never used for a changed key.
 pub fn trust(destination: &str, options: &[String]) -> Result<(), String> {
     let (host, port, _) = resolve(destination, options)?;
-    let scanned = miao_term_platform::background_command("ssh-keyscan")
+    let scanned = mtty_platform::background_command("ssh-keyscan")
         .args(["-T", "5", "-p", &port.to_string(), &host])
         .output()
         .map_err(|e| format!("ssh-keyscan: {e}"))?;
@@ -156,7 +156,7 @@ pub fn trust(destination: &str, options: &[String]) -> Result<(), String> {
     if keys(&scanned).is_empty() {
         return Err("no host key received".into());
     }
-    let home = miao_term_config::home_dir().ok_or("no home directory")?;
+    let home = mtty_config::home_dir().ok_or("no home directory")?;
     let dir = home.join(".ssh");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let mut file = std::fs::OpenOptions::new()
@@ -197,7 +197,7 @@ pub fn parse_agent(code: Option<i32>, stdout: &str) -> Agent {
 }
 
 pub fn agent_status() -> Agent {
-    match miao_term_platform::background_command("ssh-add")
+    match mtty_platform::background_command("ssh-add")
         .arg("-l")
         .output()
     {

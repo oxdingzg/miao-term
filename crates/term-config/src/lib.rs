@@ -1,4 +1,4 @@
-//! `miao-term-config` — configuration and theming.
+//! `mtty-config` — configuration and theming.
 //!
 //! A small TOML config (`~/.config/mtty/config.toml`) with sensible defaults
 //! matching mtty's look (Nord), plus ghostty/alacritty import.

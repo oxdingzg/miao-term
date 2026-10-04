@@ -14,8 +14,8 @@
 
 use std::path::PathBuf;
 
-use miao_term_ui::i18n::{t, Lang};
-use miao_term_ui::Rect;
+use mtty_ui::i18n::{t, Lang};
+use mtty_ui::Rect;
 
 /// What dropping does at a point.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -9,10 +9,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use miao_term_editor::large::LargeFile;
-use miao_term_editor::{layout, motion, Document, Highlight, Motion, Range, Selection, Syntax};
-use miao_term_render::Span;
-use miao_term_ui::input::KeyKind;
+use mtty_editor::large::LargeFile;
+use mtty_editor::{layout, motion, Document, Highlight, Motion, Range, Selection, Syntax};
+use mtty_render::Span;
+use mtty_ui::input::KeyKind;
 
 /// Files larger than this open in view mode: read in place, a window of
 /// lines at a time, so memory stays small whatever the size. Switching such
@@ -265,7 +265,7 @@ pub fn keymap(key: KeyKind, shift: bool, alt: bool, cmd: bool, ctrl: bool) -> Op
 /// A file open in an editor pane.
 /// A file edited over ssh: `path` on `dest` (ADR 0034, E3). The pane's
 /// [`EditorPane::path`] holds the remote path, so syntax detection and the
-/// title work unchanged; reads and writes go through `miao_term_ui::ssh` on
+/// title work unchanged; reads and writes go through `mtty_ui::ssh` on
 /// the host, never the local filesystem.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct RemoteRef {
@@ -311,7 +311,7 @@ pub struct EditorPane {
     /// Start lines the user collapsed; folding one hides the lines after it.
     folded: std::collections::HashSet<usize>,
     /// Vim state when `editor-vim` is on (ADR 0034, E6); `None` is off.
-    pub vim: Option<miao_term_editor::vim::Vim>,
+    pub vim: Option<mtty_editor::vim::Vim>,
     /// A pending agent edit (ADR 0040, A1), tinted until accepted or rejected.
     pub proposal: Option<Proposal>,
     last_click: Option<(Instant, usize, u8)>,
@@ -643,20 +643,17 @@ impl EditorPane {
 
     /// Turn vim mode on (fresh Normal mode) or off.
     pub fn set_vim(&mut self, on: bool) {
-        self.vim = on.then(miao_term_editor::vim::Vim::default);
+        self.vim = on.then(mtty_editor::vim::Vim::default);
     }
 
     /// The vim mode in effect, if vim is on.
-    pub fn vim_mode(&self) -> Option<miao_term_editor::vim::Mode> {
+    pub fn vim_mode(&self) -> Option<mtty_editor::vim::Mode> {
         self.vim.as_ref().map(|v| v.mode())
     }
 
     /// Feed one key to vim, revealing the caret afterwards. `None` when vim
     /// is off (the caller uses the normal keymap then).
-    pub fn vim_key(
-        &mut self,
-        key: miao_term_editor::vim::Key,
-    ) -> Option<miao_term_editor::vim::Action> {
+    pub fn vim_key(&mut self, key: mtty_editor::vim::Key) -> Option<mtty_editor::vim::Action> {
         let action = self.vim.as_mut()?.handle(key, &mut self.doc);
         self.reveal_cursor();
         Some(action)
@@ -688,7 +685,7 @@ impl EditorPane {
         // Whole-file ACP writes should retain unchanged context rather than
         // displaying every line as both deleted and added.
         let old = self.doc.rope();
-        let new = miao_term_editor::Rope::from_str(&text);
+        let new = mtty_editor::Rope::from_str(&text);
         let prefix = old
             .chars()
             .zip(new.chars())
@@ -745,10 +742,10 @@ impl EditorPane {
         }
         let changes = edits
             .into_iter()
-            .map(|(s, e, t)| miao_term_editor::Change::replace(s, e, t))
+            .map(|(s, e, t)| mtty_editor::Change::replace(s, e, t))
             .collect();
         self.doc
-            .apply_external(miao_term_editor::Transaction::new(changes));
+            .apply_external(mtty_editor::Transaction::new(changes));
         let rope = self.doc.rope();
         let mut lines = Vec::new();
         let mut deleted = Vec::new();
@@ -1523,7 +1520,7 @@ impl EditorPane {
         let mut deletion_cells = Vec::new();
         for row in 0..self.rows {
             if let Some((_, Some(text))) = self.view_row(row) {
-                let old = miao_term_editor::Rope::from_str(text);
+                let old = mtty_editor::Rope::from_str(text);
                 let mut spans = vec![Span::new(0, "−", (0xbf, 0x61, 0x6a))];
                 for g in layout::glyphs(old.slice(..), tab, self.scroll_col + self.cols) {
                     if g.col + g.width <= self.scroll_col || g.ch.is_control() {
@@ -1783,8 +1780,8 @@ impl EditorPane {
     /// `LF` or `CRLF`.
     pub fn line_ending_name(&self) -> &'static str {
         match self.doc.line_ending() {
-            miao_term_editor::LineEnding::Lf => "LF",
-            miao_term_editor::LineEnding::CrLf => "CRLF",
+            mtty_editor::LineEnding::Lf => "LF",
+            mtty_editor::LineEnding::CrLf => "CRLF",
         }
     }
 
@@ -2260,11 +2257,9 @@ mod tests {
     #[test]
     fn find_matches_draw_on_screen_only() {
         let mut p = pane(&"ab ab\n".repeat(20));
-        let hits = miao_term_editor::search::find_all(
-            p.doc.rope(),
-            &miao_term_editor::SearchQuery::literal("ab"),
-        )
-        .unwrap();
+        let hits =
+            mtty_editor::search::find_all(p.doc.rope(), &mtty_editor::SearchQuery::literal("ab"))
+                .unwrap();
         assert_eq!(hits.len(), 40);
         p.scroll_by(3);
         let cells = p.match_cells(&hits, 7);
@@ -2514,14 +2509,14 @@ mod tests {
     fn vim_mode_drives_normal_and_insert() {
         let mut p = pane("abc\n");
         p.set_vim(true);
-        assert_eq!(p.vim_mode(), Some(miao_term_editor::vim::Mode::Normal));
+        assert_eq!(p.vim_mode(), Some(mtty_editor::vim::Mode::Normal));
         // `x` deletes the char under the caret.
-        p.vim_key(miao_term_editor::vim::Key::Char('x'));
+        p.vim_key(mtty_editor::vim::Key::Char('x'));
         assert_eq!(p.doc.rope().to_string(), "bc\n");
         // `i` enters insert; a char is typed.
-        p.vim_key(miao_term_editor::vim::Key::Char('i'));
-        assert_eq!(p.vim_mode(), Some(miao_term_editor::vim::Mode::Insert));
-        p.vim_key(miao_term_editor::vim::Key::Char('Z'));
+        p.vim_key(mtty_editor::vim::Key::Char('i'));
+        assert_eq!(p.vim_mode(), Some(mtty_editor::vim::Mode::Insert));
+        p.vim_key(mtty_editor::vim::Key::Char('Z'));
         assert_eq!(p.doc.rope().to_string(), "Zbc\n");
     }
 

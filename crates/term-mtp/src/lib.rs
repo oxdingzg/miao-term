@@ -1,4 +1,4 @@
-//! `miao-term-mtp` — the MTP control plane.
+//! `mtty-mtp` — the MTP control plane.
 //!
 //! A newline-delimited JSON server over a Unix socket (Windows named pipe is a
 //! later transport). The envelope matches the existing MTP contract so

@@ -14,7 +14,7 @@ Details 面板与 Open Quickly(U3)共同的数据源,因此要先于它们落地
 ## 决定
 
 单一 **规则集** 从 `~/.config/miaotty/views.json` 加载(JSON,便于用户编辑与往返
-读写)。它位于 `miao-term-config::view`(纯数据 + 匹配,不依赖终端内核):
+读写)。它位于 `mtty-config::view`(纯数据 + 匹配,不依赖终端内核):
 
 ```jsonc
 {

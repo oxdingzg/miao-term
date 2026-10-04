@@ -79,7 +79,7 @@ everyone to re-sync, and rotate any credentials involved.
 - `cargo fmt --all --check`
 - `cargo clippy --workspace --all-targets`
 - `cargo test --workspace`
-- Performance gate (release): `cargo test --release -p miao-term-core -p miao-term-editor -p miao-term-widget -p miao-term-ptyhost -p mtty-app -- --ignored`
+- Performance gate (release): `cargo test --release -p mtty-core -p mtty-editor -p mtty-widget -p mtty-ptyhost -p mtty-app -- --ignored`
 - Windows real-host checks: `docs/WINDOWS-DEV.md` (IME needs an interactive desktop).
 - Packaging/release: `.github/workflows/release.yml` (four runner builds and AppImage/MSI are required; manual dispatch rehearses without publishing).
 

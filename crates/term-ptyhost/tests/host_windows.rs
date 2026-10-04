@@ -5,12 +5,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use miao_term_core::{HostConfig, HostSnapshot, Terminal};
-use miao_term_ptyhost::client;
-use miao_term_ptyhost::host::HostArgs;
-use miao_term_ptyhost::launch;
-use miao_term_ptyhost::proto::{FromHost, ToHost};
-use miao_term_ptyhost::sys::{self, Stream};
+use mtty_core::{HostConfig, HostSnapshot, Terminal};
+use mtty_ptyhost::client;
+use mtty_ptyhost::host::HostArgs;
+use mtty_ptyhost::launch;
+use mtty_ptyhost::proto::{FromHost, ToHost};
+use mtty_ptyhost::sys::{self, Stream};
 
 struct Host {
     dir: PathBuf,
@@ -89,7 +89,7 @@ fn printed(frames: &[FromHost], marker: &str) -> bool {
     // ConPTY can position the following prompt with CSI H rather than a
     // newline. Decode the actual screen, so the prompt does not appear joined
     // to the marker and an echoed command cannot satisfy the assertion.
-    let mut screen = miao_term_core::aterm::ATerm::new(80, 24, 100);
+    let mut screen = mtty_core::aterm::ATerm::new(80, 24, 100);
     for frame in frames {
         if let FromHost::Output { bytes, .. } = frame {
             screen.process(bytes);

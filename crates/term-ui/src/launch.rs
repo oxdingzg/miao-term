@@ -144,14 +144,14 @@ pub fn command_for(arg: &str) -> Option<String> {
 
 /// The inbox directory for cross-instance launches.
 pub fn inbox_dir() -> Option<std::path::PathBuf> {
-    Some(miao_term_config::data_dir()?.join("inbox"))
+    Some(mtty_config::data_dir()?.join("inbox"))
 }
 
 /// Hand a launch to an already-running instance (single-instance deep link) and
 /// wake it, so it drains the inbox promptly. Returns true when one was reached.
 pub fn forward_to_running(request: &str) -> bool {
-    let socket = miao_term_mtp::default_socket();
-    let Ok(mut client) = miao_term_mtp::client::connect(&socket) else {
+    let socket = mtty_mtp::default_socket();
+    let Ok(mut client) = mtty_mtp::client::connect(&socket) else {
         return false;
     };
     if let Some(dir) = inbox_dir() {

@@ -70,7 +70,7 @@ impl Client {
         env: &[(String, String)],
         handler: Arc<dyn Handler>,
     ) -> std::io::Result<Client> {
-        let mut cmd = miao_term_platform::background_command(command);
+        let mut cmd = mtty_platform::background_command(command);
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -219,7 +219,7 @@ impl Drop for Client {
             }
             #[cfg(windows)]
             if child.try_wait().ok().flatten().is_none() {
-                let _ = miao_term_platform::background_command("taskkill")
+                let _ = mtty_platform::background_command("taskkill")
                     .args(["/PID", &child.id().to_string(), "/T", "/F"])
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())

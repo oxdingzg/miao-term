@@ -8,10 +8,10 @@ Status: accepted.
 
 M6 (PuTTY-style remote) starts with R1: serial consoles (baud, data bits,
 parity, stop bits, flow control), Telnet and raw TCP, saved in the host
-library beside SSH. Today every pane is a shell on a PTY: `miao-term-core`'s
+library beside SSH. Today every pane is a shell on a PTY: `mtty-core`'s
 `Terminal` spawns a `MasterPty` plus a child process and reads the master on a
 thread (`crates/term-core/src/term.rs`), and the host library
-(`miao-term-config::hosts`) stores SSH targets only.
+(`mtty-config::hosts`) stores SSH targets only.
 
 A serial console, a Telnet server and a raw TCP peer have no shell, no PTY and
 no OSC 133 command boundaries — they are just a byte stream in and out. The
@@ -28,7 +28,7 @@ without pretending there is a process behind it.
    options, so a session with no process tears down without killing anything.
    The PTY-only hooks (shell integration, the OSC 7 working directory, command
    capture) stay inert when there is no shell.
-2. **Transport backends** live in `miao-term-ui` (GPU-free, so unit-tested),
+2. **Transport backends** live in `mtty-ui` (GPU-free, so unit-tested),
    one module each:
    - **raw TCP** — `std::net::TcpStream`, no protocol.
    - **Telnet** — a small in-tree codec over `TcpStream`. It answers IAC

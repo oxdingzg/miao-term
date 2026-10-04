@@ -32,7 +32,7 @@ per command (B2.3).
    discarded if the pane is closed; nothing is written to disk until the user
    saves. MTP returns the undo depth so a client can tell accepted from
    rejected.
-2. **A2 — an ACP client.** A GPU-free crate, `miao-term-acp`, speaks the Agent
+2. **A2 — an ACP client.** A GPU-free crate, `mtty-acp`, speaks the Agent
    Client Protocol (JSON-RPC 2.0 over the agent subprocess's stdio, ADR 0006
    licenses). It implements `initialize`, `authenticate`, `session/new`,
    `session/load`, `session/prompt`, `session/cancel` and the streamed
@@ -59,7 +59,7 @@ per command (B2.3).
 |---|---|---|
 | A3 | MTP `line`/`column`; send selection/diagnostics/output to an agent | unit tests for the prompt text; an MTP test for `app.edit` `line` |
 | A1 | `editor.propose`, one-transaction apply, inline diff, accept/reject | editor tests for the transaction and undo; a replay/screenshot check |
-| A2 | `miao-term-acp`: JSON-RPC client, sessions, streaming, fs/terminal/permission mapping | tests against a fake ACP agent; a real agent if installed |
+| A2 | `mtty-acp`: JSON-RPC client, sessions, streaming, fs/terminal/permission mapping | tests against a fake ACP agent; a real agent if installed |
 
 ## Consequences
 

@@ -23,7 +23,7 @@
 
 macOS 上把菜单放进系统菜单栏,并保持诚实:
 
-1. 用一张表 `miao_term_ui::menu::menus(lang)` 描述菜单。原生宿主据此构建系统菜单栏;
+1. 用一张表 `mtty_ui::menu::menus(lang)` 描述菜单。原生宿主据此构建系统菜单栏;
    `chrome::render` 在宿主允许时(`Chrome::draws_menu_bar`)用同一张表绘制窗口内菜单。
 2. 系统菜单栏**仅在 macOS 且二进制位于 `.app` bundle 内**时安装(`menu_in_os()`)。图标就在
    bundle 里,而 AppKit 的 About 面板需要它;同时让裸跑的 `target/release/miaotty-native`

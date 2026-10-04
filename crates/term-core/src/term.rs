@@ -53,7 +53,7 @@ pub struct Terminal {
     cwd_checked: std::time::Instant,
     cwd_reported: bool,
     title: Option<String>,
-    scanner: miao_term_graphics::Scanner,
+    scanner: mtty_graphics::Scanner,
     graphics: crate::graphics::GraphicsLayer,
     graphics_enabled: bool,
     scrollback: usize,
@@ -129,7 +129,7 @@ impl Drop for Terminal {
         }
         // A hosted program ends with its pane, unless it was detached.
         if let Some(host) = &self.host {
-            use miao_term_ptyhost::proto::ToHost;
+            use mtty_ptyhost::proto::ToHost;
             host.send(if host.end_on_drop {
                 ToHost::Kill
             } else {
@@ -193,12 +193,12 @@ impl Terminal {
         extra_env: &[(String, String)],
         waker: std::sync::Arc<dyn Fn() + Send + Sync>,
     ) -> Fallible<Self> {
-        use miao_term_ptyhost::launch;
+        use mtty_ptyhost::launch;
         let (cmd, cwd) = shell_command(shell, cwd, extra_env);
         let dir = launch::hosts_dir()?;
         let id = launch::new_id()?;
         let socket = launch::socket_path(&dir, &id);
-        let args = miao_term_ptyhost::host::HostArgs {
+        let args = mtty_ptyhost::host::HostArgs {
             socket: socket.clone(),
             meta: Some(launch::meta_path(&dir, &id)),
             cols,
@@ -239,7 +239,7 @@ impl Terminal {
         scrollback: usize,
         waker: std::sync::Arc<dyn Fn() + Send + Sync>,
     ) -> Fallible<Self> {
-        if !miao_term_ptyhost::launch::valid_id(id) {
+        if !mtty_ptyhost::launch::valid_id(id) {
             return Err("not a host id".into());
         }
         let (stream, child_pid) = crate::hosted::connect_existing(socket)?;
@@ -440,7 +440,7 @@ impl Terminal {
     pub fn detach_host(&mut self) {
         if let Some(host) = self.host.as_mut() {
             host.end_on_drop = false;
-            host.send(miao_term_ptyhost::proto::ToHost::Detach);
+            host.send(mtty_ptyhost::proto::ToHost::Detach);
         }
     }
 
@@ -448,13 +448,13 @@ impl Terminal {
     /// `process::exit` would skip `Drop`).
     pub fn end_host(&mut self) {
         if let Some(host) = &self.host {
-            host.send(miao_term_ptyhost::proto::ToHost::Kill);
+            host.send(mtty_ptyhost::proto::ToHost::Kill);
         }
     }
 
     /// Output was lost while detached: take on the modes the host saw.
     fn apply_host_modes(&mut self, modes: &[u8]) {
-        let Some(modes) = miao_term_ptyhost::scanner::Modes::decode(modes) else {
+        let Some(modes) = mtty_ptyhost::scanner::Modes::decode(modes) else {
             return;
         };
         if modes.alt_screen() != self.screen.alternate_screen() {
@@ -485,7 +485,7 @@ impl Terminal {
         }
         if reattached {
             if let Some(host) = &self.host {
-                use miao_term_ptyhost::proto::ToHost;
+                use mtty_ptyhost::proto::ToHost;
                 let (rows, cols) = (self.rows, self.cols);
                 for rows in [rows.saturating_sub(1).max(1), rows] {
                     host.send(ToHost::Resize {
@@ -510,7 +510,7 @@ impl Terminal {
         match spawn_local(cmd, self.cols, self.rows) {
             Ok((master, child, reader, writer)) => {
                 if let Some(host) = &self.host {
-                    host.send(miao_term_ptyhost::proto::ToHost::Kill);
+                    host.send(mtty_ptyhost::proto::ToHost::Kill);
                 }
                 self.host = None;
                 if let Some(stop) = self.reader_stop.take() {
@@ -616,7 +616,7 @@ impl Terminal {
             cwd_checked: std::time::Instant::now(),
             cwd_reported: false,
             title: None,
-            scanner: miao_term_graphics::Scanner::new(),
+            scanner: mtty_graphics::Scanner::new(),
             graphics: crate::graphics::GraphicsLayer::new(),
             graphics_enabled: true,
             scrollback,
@@ -735,7 +735,7 @@ impl Terminal {
         let mut scanner = std::mem::take(&mut self.scanner);
         scanner.feed_with(bytes, |event| {
             match event {
-                miao_term_graphics::StreamEvent::Text(text) => {
+                mtty_graphics::StreamEvent::Text(text) => {
                     if !text.is_empty() {
                         // Image-anchor accounting has no purpose in text-only
                         // panes. Avoid an additional full-byte scan in that case.
@@ -751,13 +751,13 @@ impl Terminal {
                         changed = true;
                     }
                 }
-                miao_term_graphics::StreamEvent::Graphics(graphic) => {
+                mtty_graphics::StreamEvent::Graphics(graphic) => {
                     if self.graphics_enabled {
                         changed |= self.handle_graphic(graphic);
                     }
                 }
-                miao_term_graphics::StreamEvent::Osc(payload) => self.observe_osc(payload),
-                miao_term_graphics::StreamEvent::CursorReport => {
+                mtty_graphics::StreamEvent::Osc(payload) => self.observe_osc(payload),
+                mtty_graphics::StreamEvent::CursorReport => {
                     // Respond at the query's position in the stream, after any
                     // preceding text has updated the cursor (including ConPTY).
                     self.screen.flush_synchronized_output();
@@ -800,8 +800,8 @@ impl Terminal {
         self.write(bytes);
     }
 
-    fn handle_graphic(&mut self, g: miao_term_graphics::Graphic) -> bool {
-        use miao_term_graphics as gfx;
+    fn handle_graphic(&mut self, g: mtty_graphics::Graphic) -> bool {
+        use mtty_graphics as gfx;
         // Align existing anchors before adding to the layer.
         self.graphics.sync_total(self.screen.total_lines());
         let (line, col) = {
@@ -938,7 +938,7 @@ impl Terminal {
             })
         });
         if let Some(host) = &self.host {
-            host.send(miao_term_ptyhost::proto::ToHost::Resize {
+            host.send(mtty_ptyhost::proto::ToHost::Resize {
                 cols,
                 rows,
                 px_w: pw,

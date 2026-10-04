@@ -14,7 +14,7 @@ pub(crate) use link::{connect_existing, start, HostLink};
 /// How hosted panes are started.
 #[derive(Clone, Debug)]
 pub struct HostConfig {
-    /// The installed host binary (see `miao_term_ptyhost::launch::install`).
+    /// The installed host binary (see `mtty_ptyhost::launch::install`).
     pub binary: PathBuf,
     /// Output kept per pane for reattaching (ADR 0041: 8 MiB).
     pub ring: usize,

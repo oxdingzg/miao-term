@@ -1,6 +1,6 @@
 //! Release performance gates for the shared paths used by mtty.
-use miao_term_core::ATerm;
-use miao_term_ui::{build_rows, UiTheme as Theme};
+use mtty_core::ATerm;
+use mtty_ui::{build_rows, UiTheme as Theme};
 use std::time::Instant;
 
 /// Record a measured metric for the CI baseline comparison (ADR 0028).
@@ -60,7 +60,7 @@ fn build_rows_frame_budget() {
         per_ms <= 4.0 * scale(),
         "row build {per_ms:.3} ms exceeds the 4 ms/frame budget"
     );
-    miao_term_core::perfgate::baseline_gate("build_rows_frame_ms", per_ms / scale(), false);
+    mtty_core::perfgate::baseline_gate("build_rows_frame_ms", per_ms / scale(), false);
     record_metric("build_rows_frame_ms", per_ms / scale());
 }
 
@@ -81,7 +81,7 @@ fn palette_ranking_budget() {
         per_ms <= 100.0 * scale(),
         "palette ranking {per_ms:.3} ms exceeds the 100 ms budget"
     );
-    miao_term_core::perfgate::baseline_gate("palette_rank_10k_ms", per_ms / scale(), false);
+    mtty_core::perfgate::baseline_gate("palette_rank_10k_ms", per_ms / scale(), false);
     record_metric("palette_rank_10k_ms", per_ms / scale());
 }
 
@@ -90,7 +90,7 @@ fn rank_entries(entries: &[(String, String)], query: &str) -> Vec<(usize, usize)
         .iter()
         .enumerate()
         .filter_map(|(i, (label, kind))| {
-            miao_term_ui::palette::score(label, kind, query).map(|s| (s, i))
+            mtty_ui::palette::score(label, kind, query).map(|s| (s, i))
         })
         .collect();
     ranked.sort_by_key(|&(s, i)| (s, i));

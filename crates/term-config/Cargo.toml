@@ -1,5 +1,5 @@
 [package]
-name = "miao-term-config"
+name = "mtty-config"
 description = "Config and themes, with ghostty/alacritty import"
 version.workspace = true
 edition.workspace = true

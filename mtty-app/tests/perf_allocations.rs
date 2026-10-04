@@ -53,14 +53,14 @@ fn measure(f: impl FnOnce()) -> (usize, usize) {
 #[test]
 #[ignore = "release allocation gate"]
 fn ui_allocation_budgets() {
-    let mut screen = miao_term_core::ATerm::new(100, 30, 10_000);
+    let mut screen = mtty_core::ATerm::new(100, 30, 10_000);
     for _ in 0..40 {
         screen.process(b"\x1b[31mred\x1b[0m \x1b[32mgreen\x1b[0m text 1234567890\r\n");
     }
-    let theme = miao_term_ui::UiTheme::nord();
+    let theme = mtty_ui::UiTheme::nord();
     let cursor = Some(screen.cursor());
     let (allocs, bytes) = measure(|| {
-        std::hint::black_box(miao_term_ui::build_rows(&screen, &theme, cursor));
+        std::hint::black_box(mtty_ui::build_rows(&screen, &theme, cursor));
     });
     println!(
         "build_rows 100x30: {allocs} allocations/reallocations, {bytes} requested bytes/frame"
@@ -73,7 +73,7 @@ fn ui_allocation_budgets() {
     let entries: Vec<_> = (0..10_000).map(|i| format!("file-{i}.rs")).collect();
     let (allocs, bytes) = measure(|| {
         for label in &entries {
-            std::hint::black_box(miao_term_ui::palette::score(label, "file", "file-9"));
+            std::hint::black_box(mtty_ui::palette::score(label, "file", "file-9"));
         }
     });
     println!("ASCII palette score 10k: {allocs} allocations, {bytes} requested bytes");

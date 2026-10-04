@@ -1,4 +1,4 @@
-//! `miao-term-core` — the terminal core.
+//! `mtty-core` — the terminal core.
 //!
 //! Owns the hot path `pty → vte → grid → term` and nothing else: no GPU, no
 //! windowing, no mtty business logic.

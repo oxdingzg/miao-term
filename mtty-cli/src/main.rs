@@ -52,9 +52,9 @@ fn main() {
 
     // `MTTY_SOCKET` (or the former `MIAOTTY_SOCKET`), else the default path —
     // or an older host's socket when only that one exists (ADR 0032).
-    let mut socket = miao_term_mtp::env("SOCKET")
+    let mut socket = mtty_mtp::env("SOCKET")
         .map(PathBuf::from)
-        .unwrap_or_else(miao_term_mtp::client_socket);
+        .unwrap_or_else(mtty_mtp::client_socket);
     if let Some(i) = args.iter().position(|a| a == "--socket") {
         if i + 1 < args.len() {
             socket = PathBuf::from(args.remove(i + 1));
@@ -65,7 +65,7 @@ fn main() {
     // `--wait SECS`: keep trying while mtty restarts (an update keeps the
     // pane's programs running, ADR 0041). Inside a pane the default is 5 s,
     // so agent hooks reach the relaunched app; outside, failing is immediate.
-    let mut wait = std::time::Duration::from_secs(if miao_term_mtp::env("PANE_ID").is_some() {
+    let mut wait = std::time::Duration::from_secs(if mtty_mtp::env("PANE_ID").is_some() {
         5
     } else {
         0
@@ -78,7 +78,7 @@ fn main() {
         args.remove(i);
     }
 
-    let pane_default = || miao_term_mtp::env("PANE_ID");
+    let pane_default = || mtty_mtp::env("PANE_ID");
     let cmd = args.first().map(String::as_str).unwrap_or("");
     if cmd == "--help" || cmd == "-h" {
         println!("{}", usage_text());
@@ -87,7 +87,7 @@ fn main() {
 
     let deadline = std::time::Instant::now() + wait;
     let mut client = loop {
-        match miao_term_mtp::client::connect_any(&socket.to_string_lossy()) {
+        match mtty_mtp::client::connect_any(&socket.to_string_lossy()) {
             Ok(c) => break c,
             Err(e)
                 if matches!(

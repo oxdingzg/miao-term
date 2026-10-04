@@ -1,13 +1,13 @@
 //! Against real servers (ADR 0034, E5 acceptance): rust-analyzer and
 //! typescript-language-server. Ignored by default, as CI has neither; run
-//! with `cargo test -p miao-term-lsp -- --ignored` where they are installed.
+//! with `cargo test -p mtty-lsp -- --ignored` where they are installed.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use miao_term_editor::Rope;
-use miao_term_lsp::{pos_to_char, Event, Lsp, Settings};
+use mtty_editor::Rope;
+use mtty_lsp::{pos_to_char, Event, Lsp, Settings};
 
 fn project(name: &str, files: &[(&str, &str)]) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("mtty-lsp-{name}-{}", std::process::id()));
@@ -43,7 +43,7 @@ fn wait<T>(
 }
 
 fn installed(program: &str) -> bool {
-    miao_term_lsp::env::which(program, &miao_term_lsp::env::search_path()).is_some()
+    mtty_lsp::env::which(program, &mtty_lsp::env::search_path()).is_some()
 }
 
 /// The char just after the first `needle` (or at its start).

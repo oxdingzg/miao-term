@@ -7,7 +7,7 @@ deterministically in CI. Machine-readable values and measured baselines are in
 ## The gate
 
 ```sh
-cargo test --release -p miao-term-core -p miao-term-graphics -p miao-term-ptyhost -p mtty-app -- --ignored
+cargo test --release -p mtty-core -p mtty-graphics -p mtty-ptyhost -p mtty-app -- --ignored
 ```
 
 Perf tests are `#[ignore]`d so the normal test run stays fast; the `perf` CI job
@@ -167,7 +167,7 @@ memory, so buffer capacity and RSS are reported separately.
 ### Reproduce
 
 ```sh
-cargo test --release -p miao-term-core -p miao-term-graphics -p miao-term-ptyhost -p mtty-app -- --ignored --nocapture
+cargo test --release -p mtty-core -p mtty-graphics -p mtty-ptyhost -p mtty-app -- --ignored --nocapture
 cargo build --release -p mtty-app -p mtty-cli
 python3 scripts/profile-input.py --mode fragments
 python3 scripts/profile-input.py --mode images

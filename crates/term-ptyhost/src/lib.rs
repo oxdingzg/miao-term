@@ -1,4 +1,4 @@
-//! `miao-term-ptyhost` — the per-pane PTY host (ADR 0041).
+//! `mtty-ptyhost` — the per-pane PTY host (ADR 0041).
 //!
 //! A host owns one pane's PTY and program and outlives the app, so updating
 //! or restarting mtty does not end what runs in its panes. The app is a

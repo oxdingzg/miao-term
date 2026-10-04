@@ -17,7 +17,7 @@ event loop (see ARCHITECTURE §3, D3).
 ## Decision
 
 Move the terminal grid onto a **native `winit` + `wgpu` render loop** owned by
-`term-widget` (the `miao-term-widget` package, bin `miaotty-native`), and stop
+`term-widget` (the `mtty-widget` package, bin `miaotty-native`), and stop
 routing it through egui:
 
 - `term-widget` owns the `winit` event loop and the `wgpu` surface.

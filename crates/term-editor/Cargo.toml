@@ -1,5 +1,5 @@
 [package]
-name = "miao-term-editor"
+name = "mtty-editor"
 description = "Text editing core for mtty's editor pane: rope, transactions, undo, selections, search"
 version.workspace = true
 edition.workspace = true

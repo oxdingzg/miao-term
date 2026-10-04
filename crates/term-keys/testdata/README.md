@@ -1,4 +1,4 @@
-# Test fixtures for `miao-term-keys`
+# Test fixtures for `mtty-keys`
 
 These `.ppk` files were generated for the tests only, with `puttygen` 0.81,
 from throwaway keys. They are not used to reach anything and must never be.

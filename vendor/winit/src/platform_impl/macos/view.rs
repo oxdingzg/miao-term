@@ -805,7 +805,7 @@ declare_class!(
             self.ivars().accepts_first_mouse
         }
 
-        // miao-term: never let the content view start a system window drag.
+        // mtty: never let the content view start a system window drag.
         // With a transparent, full-size title bar the view is non-opaque, so
         // AppKit's default `mouseDownCanMoveWindow` is true and AppKit turns a
         // drag in the title strip into a window move — swallowing tab-chip

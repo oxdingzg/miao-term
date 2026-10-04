@@ -1,4 +1,4 @@
-# miao-term 架构规格
+# mtty 架构规格
 
 > English (default): [`ARCHITECTURE.md`](ARCHITECTURE.md)
 
@@ -7,7 +7,7 @@
 
 ## 0. 范围与一句话
 
-一句话:**`portable-pty` + `alacritty_terminal` + `vte` 做内核,`winit` + `wgpu` 做窗口与绘制,终端网格自绘、周边 UI 用 egui;引擎(`miao-term-*`)与应用(`mtty-app`)分离,控制面(MTP)与引擎解耦。**
+一句话:**`portable-pty` + `alacritty_terminal` + `vte` 做内核,`winit` + `wgpu` 做窗口与绘制,终端网格自绘、周边 UI 用 egui;引擎(`mtty-*`)与应用(`mtty-app`)分离,控制面(MTP)与引擎解耦。**
 
 ## 1. 目标 · 非目标 · 约束
 
@@ -41,7 +41,7 @@
 | D7 | 控制面 `term-mtp` 与引擎解耦(Unix socket / Windows named pipe) | 引擎崩不拖垮 CLI;复用现有协议 |
 | D8 | 先做 app、后抽库;扩展点分阶段 | 由真实需求驱动 API |
 | D9 | 引擎 crate 采用 `Apache-2.0` | 宽松、便于被嵌 |
-| D10 | 单一原生 `mtty` 主程序调用 `miao-term-widget`（winit + wgpu），旧 eframe 宿主退役 | 统一产品身份与直接绘制；见 APP-IDENTITY.zh-CN.md |
+| D10 | 单一原生 `mtty` 主程序调用 `mtty-widget`（winit + wgpu），旧 eframe 宿主退役 | 统一产品身份与直接绘制；见 APP-IDENTITY.zh-CN.md |
 
 ## 3. 依赖分层(DAG)与规则
 
@@ -209,7 +209,7 @@
 
 - **一致性**:尚未接入 `vttest`/`esctest`/`cargo-fuzz`;解析行为由各 crate 自身的单元测试覆盖。
 - **集成**:真起 shell,喂字节序列,断言网格/事件。
-- **性能门(仅 ubuntu-latest)**:`cargo test --release -p miao-term-core -p mtty-app -- --ignored`
+- **性能门(仅 ubuntu-latest)**:`cargo test --release -p mtty-core -p mtty-app -- --ignored`
   加 `scripts/check-perf-baseline.py`。预算:输入延迟 P95 ≤ 16ms、首帧 ≤ 100ms、
   `cat` 大文件不丢帧、空闲 CPU ≈ 0。
 - **CI**(`.github/workflows/ci.yml`):jobs 为 `changes`、`privacy`、`lint`、`check-linux`(`cargo check --workspace`)、

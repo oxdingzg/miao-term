@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use miao_term_graphics as gfx;
+use mtty_graphics as gfx;
 
 /// Decoded-pixel cap per image (also bounds total memory per image).
 pub const DEFAULT_MAX_PIXELS: usize = 16_000_000;

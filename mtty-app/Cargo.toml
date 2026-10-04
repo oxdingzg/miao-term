@@ -1,6 +1,6 @@
 [package]
 name = "mtty-app"
-description = "The mtty native terminal application, built on the miao-term engine"
+description = "The mtty native terminal application, built on the mtty engine"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -37,7 +37,7 @@ assets = [
 ]
 
 [dependencies]
-miao-term-widget = { path = "../crates/term-widget" }
+mtty-widget = { path = "../crates/term-widget" }
 serde_json = "1.0.151"
 
 [target.'cfg(unix)'.dependencies]
@@ -52,6 +52,6 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_
 find-msvc-tools = "0.1"
 
 [dev-dependencies]
-miao-term-core = { path = "../crates/term-core" }
-miao-term-ui = { path = "../crates/term-ui" }
+mtty-core = { path = "../crates/term-core" }
+mtty-ui = { path = "../crates/term-ui" }
 serde_json = "1.0.151"

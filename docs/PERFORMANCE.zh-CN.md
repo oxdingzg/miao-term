@@ -7,7 +7,7 @@
 ## 门
 
 ```sh
-cargo test --release -p miao-term-core -p miao-term-graphics -p miao-term-ptyhost -p mtty-app -- --ignored
+cargo test --release -p mtty-core -p mtty-graphics -p mtty-ptyhost -p mtty-app -- --ignored
 ```
 
 性能测试标记为 `#[ignore]`,故常规测试保持快速;`perf` CI 作业在 `ubuntu-latest` 上以
@@ -149,7 +149,7 @@ CPU 场景工作时间约减少 95%；大量图片的 RSS 增量减少约 32 MiB
 ### 复现与门禁
 
 ```sh
-cargo test --release -p miao-term-core -p miao-term-graphics -p miao-term-ptyhost -p mtty-app -- --ignored --nocapture
+cargo test --release -p mtty-core -p mtty-graphics -p mtty-ptyhost -p mtty-app -- --ignored --nocapture
 cargo build --release -p mtty-app -p mtty-cli
 python3 scripts/profile-input.py --mode fragments
 python3 scripts/profile-input.py --mode images

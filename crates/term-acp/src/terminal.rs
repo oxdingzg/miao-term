@@ -53,7 +53,7 @@ impl Terminal {
         }
         #[cfg(windows)]
         if child.try_wait().map_err(|e| e.to_string())?.is_none() {
-            let _ = miao_term_platform::background_command("taskkill")
+            let _ = mtty_platform::background_command("taskkill")
                 .args(["/PID", &child.id().to_string(), "/T", "/F"])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -250,7 +250,7 @@ impl Terminals {
         if limit > MAX_OUTPUT_BYTES {
             return Err("outputByteLimit exceeds the 16 MiB client limit".into());
         }
-        let mut process = miao_term_platform::background_command(command);
+        let mut process = mtty_platform::background_command(command);
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;

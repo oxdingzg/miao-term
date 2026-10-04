@@ -16,7 +16,7 @@ HMAC-SHA-256。密钥通常是 RSA 或 Ed25519,也有 ECDSA。
 
 ## 决定
 
-1. **新增不依赖 GPU 的 `miao-term-keys` crate。** 它解析 PPK v2 与 v3,在使用任何
+1. **新增不依赖 GPU 的 `mtty-keys` crate。** 它解析 PPK v2 与 v3,在使用任何
    密钥材料之前先校验 `Private-MAC`,解密私钥数据,并以 `ssh-key` 的 `PrivateKey`
    返回。它有单元测试,不含窗口代码,便于单独审计与模糊测试。
 2. **支持的密钥类型**:Ed25519、RSA 与 ECDSA(NIST P-256/P-384/P-521)。DSA 直接

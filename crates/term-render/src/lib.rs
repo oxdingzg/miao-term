@@ -1,4 +1,4 @@
-//! `miao-term-render` — GPU glyph-grid renderer (wgpu + glyphon).
+//! `mtty-render` — GPU glyph-grid renderer (wgpu + glyphon).
 //!
 //! The app builds row runs from the terminal screen and hands them here; this
 //! crate owns the font system, glyph atlas, and the glyphon text pipeline. It

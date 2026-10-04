@@ -311,7 +311,7 @@ pub fn persistent_host_command(
 /// values when `ssh -G` is unavailable. Runs a process: keep it off the UI
 /// thread, and connect with the typed target (see [`session_command`]).
 pub fn resolve(target: &Target) -> Target {
-    let output = miao_term_platform::background_command("ssh")
+    let output = mtty_platform::background_command("ssh")
         .args(["-G", &target.destination()])
         .output();
     let Ok(output) = output else {
@@ -370,7 +370,7 @@ pub fn bootstrap(term: &str) -> String {
     let b64 = match cache.iter().find(|(t, _)| t == term) {
         Some((_, b64)) => b64.clone(),
         None => {
-            let entry = miao_term_platform::background_command("infocmp")
+            let entry = mtty_platform::background_command("infocmp")
                 .args(["-x", term])
                 .output()
                 .ok();
@@ -439,7 +439,7 @@ fn base_args() -> Vec<String> {
 
 /// Read a remote file over ssh (bounded). Errors carry the ssh stderr.
 pub fn read_remote(dest: &str, path: &str) -> std::io::Result<Vec<u8>> {
-    let out = miao_term_platform::background_command("ssh")
+    let out = mtty_platform::background_command("ssh")
         .args(read_args(dest, path))
         .output()?;
     if !out.status.success() {
@@ -455,7 +455,7 @@ pub fn read_remote(dest: &str, path: &str) -> std::io::Result<Vec<u8>> {
 /// Write a remote file over ssh (`cat >`), feeding `data` on stdin.
 pub fn write_remote(dest: &str, path: &str, data: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
-    let mut child = miao_term_platform::background_command("ssh")
+    let mut child = mtty_platform::background_command("ssh")
         .args(write_args(dest, path))
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
@@ -566,7 +566,7 @@ mod tests {
             .strip_suffix('\'')
             .unwrap();
         let run = |path: &str| {
-            let out = miao_term_platform::background_command("/bin/sh")
+            let out = mtty_platform::background_command("/bin/sh")
                 .args(["-c", script])
                 .env("PATH", path)
                 .env("SHELL", "/bin/echo")

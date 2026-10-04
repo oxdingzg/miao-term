@@ -6,7 +6,7 @@
 
 ## 背景
 
-引擎(`miao-term-*`)要能被第三方嵌入,应用(`miaotty-app`)是它的第一个消费者。
+引擎(`mtty-*`)要能被第三方嵌入,应用(`miaotty-app`)是它的第一个消费者。
 我们依赖的 Rust 生态绝大多数是宽松许可,但有少数间接依赖带"二选一"的 copyleft
 *选项*(例如 `Apache-2.0 OR GPL-2.0-only`)。因此需要明确一个对外许可,以及依赖准入规则。
 
@@ -41,7 +41,7 @@
 | `LicenseRef-UFL-1.0` | `epaint_default_fonts` | egui 内置的 Ubuntu 字体。宽松,且该 crate 另有 `OFL-1.1` 与 `MIT OR Apache-2.0` 覆盖。 |
 | `Apache-2.0 WITH LLVM-exception` | `target-lexicon` | 该例外严格比 `Apache-2.0` 更宽松;它被拒是因为表达式不是清单里已有的裸 `Apache-2.0`。 |
 
-第四个是**真实的违规**:**`serialport`(miao-term-ui 的直接依赖)是 `MPL-2.0`** —— 弱 copyleft,
+第四个是**真实的违规**:**`serialport`(mtty-ui 的直接依赖)是 `MPL-2.0`** —— 弱 copyleft,
 本 ADR 明确排除。它从被引入那天起就被记录为 MIT,而这条错误声明被一路抄进 ADR 0037 与 manifest 注释,
 无人核对。
 

@@ -57,7 +57,7 @@ fn record(dir: PathBuf) {
                 / 10_000.0
         });
         previous = cpu.map(|cpu| (sampled, cpu));
-        let (frames, render_us) = miao_term_widget::resource_metrics::snapshot();
+        let (frames, render_us) = mtty_widget::resource_metrics::snapshot();
         sample["type"] = json!("sample");
         sample["t"] = json!(now_ms());
         sample["pid"] = json!(std::process::id());

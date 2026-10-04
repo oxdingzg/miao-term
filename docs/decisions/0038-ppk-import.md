@@ -17,7 +17,7 @@ OpenSSH private key. The OpenSSH key must **never** be stored unencrypted.
 
 ## Decision
 
-1. **A new GPU-free crate, `miao-term-keys`.** It parses PPK v2 and v3,
+1. **A new GPU-free crate, `mtty-keys`.** It parses PPK v2 and v3,
    verifies the `Private-MAC` before using any key material, decrypts the
    private blob, and returns the key as `ssh-key`'s `PrivateKey`. It has unit
    tests and no windowing code, so it can be fuzzed and audited separately.

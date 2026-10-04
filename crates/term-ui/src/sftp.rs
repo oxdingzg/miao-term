@@ -75,7 +75,7 @@ impl Remote {
     /// Run a batch script; stdout without the echoed `sftp>` lines, or the
     /// first error sftp reported.
     pub fn run(&self, script: &str) -> Result<String, String> {
-        let mut child = miao_term_platform::background_command("sftp")
+        let mut child = mtty_platform::background_command("sftp")
             .args(self.args())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

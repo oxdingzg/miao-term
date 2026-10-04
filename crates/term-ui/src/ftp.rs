@@ -190,7 +190,7 @@ impl Remote {
     }
 
     fn curl(&self, extra: &[String]) -> Result<Vec<u8>, String> {
-        let mut child = miao_term_platform::background_command("curl")
+        let mut child = mtty_platform::background_command("curl")
             .args(self.args())
             .args(extra)
             .stdin(Stdio::piped())

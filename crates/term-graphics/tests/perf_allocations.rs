@@ -54,7 +54,7 @@ fn measure(f: impl FnOnce()) -> (usize, usize) {
 #[ignore = "release stream/decoder allocation gate"]
 fn streaming_and_rgba_allocation_budgets() {
     use base64::Engine;
-    use miao_term_graphics::{kitty, Scanner, StreamEvent};
+    use mtty_graphics::{kitty, Scanner, StreamEvent};
     let mut scanner = Scanner::new();
     let text = b"normal \x1b[32mcolored\x1b[0m output\r\n";
     let (allocs, bytes) = measure(|| {

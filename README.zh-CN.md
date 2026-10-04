@@ -28,11 +28,11 @@
 
 本仓库包含:
 
-- **终端引擎** —— `miao-term-core` 负责从 PTY 到屏幕的热路径,不依赖任何窗口或 GPU 代码;
-- **编辑器内核** —— `miao-term-editor`,同样不含任何界面代码;
+- **终端引擎** —— `mtty-core` 负责从 PTY 到屏幕的热路径,不依赖任何窗口或 GPU 代码;
+- **编辑器内核** —— `mtty-editor`,同样不含任何界面代码;
 - **`mtty`** —— 构建在它们之上的应用,具备标签、分屏、侧边面板、设置窗口、shell 集成以及可脚本化的控制面。
 
-**应用统一为一个 `mtty`**，使用 `miao-term-widget` 中的原生 `winit` + `wgpu`
+**应用统一为一个 `mtty`**，使用 `mtty-widget` 中的原生 `winit` + `wgpu`
 窗口与渲染循环，在同一帧合成 egui 界面。`mtty-app` 提供主程序及安装包元数据。
 包含画中画、Hint、只读模式和每个 pane 的关闭按钮。
 
@@ -222,15 +222,15 @@ mtty 与 miao 是两个独立项目,任意一个都可以单独使用。在 mtty
 
 | Crate | 职责 |
 |-------|------|
-| [`miao-term-core`](crates/term-core) | PTY、VT 解析、网格/回滚、选区、查找、OSC、输入编码。不含 GPU 与窗口。 |
-| [`miao-term-graphics`](crates/term-graphics) | 内联图片流扫描器与解码器(Sixel、Kitty、iTerm2)。 |
-| [`miao-term-render`](crates/term-render) | `wgpu` + `glyphon` 字形网格渲染器,含 quad 与图像管线。 |
-| [`miao-term-ui`](crates/term-ui) | 与 host 无关的 UI:主题、输入编码、选区、分屏布局、egui 外壳、命令面板、hint、vim、markdown、ssh、更新与 agent 集成等 helper。 |
-| [`miao-term-editor`](crates/term-editor) | 编辑器 pane 的编辑内核:rope 缓冲区、事务与撤销、多选区、光标移动、查找替换(ADR 0034)。不含界面代码。 |
-| [`miao-term-lsp`](crates/term-lsp) | 编辑器 pane 的语言服务器(LSP)客户端:按工作区在后台线程运行服务器,同步文档,提供诊断、悬停、补全与跳转定义(ADR 0034)。不含界面代码。 |
-| [`miao-term-config`](crates/term-config) | 配置与主题,ghostty/alacritty 导入,以及 View 规则引擎。 |
-| [`miao-term-mtp`](crates/term-mtp) | MTP 协议、host/client 与传输(Unix socket、Windows 命名管道、TCP)。 |
-| [`miao-term-widget`](crates/term-widget) | mtty 原生 host 库:`winit` + `wgpu` 渲染循环,直接绘制网格并合成 egui 外壳。 |
+| [`mtty-core`](crates/term-core) | PTY、VT 解析、网格/回滚、选区、查找、OSC、输入编码。不含 GPU 与窗口。 |
+| [`mtty-graphics`](crates/term-graphics) | 内联图片流扫描器与解码器(Sixel、Kitty、iTerm2)。 |
+| [`mtty-render`](crates/term-render) | `wgpu` + `glyphon` 字形网格渲染器,含 quad 与图像管线。 |
+| [`mtty-ui`](crates/term-ui) | 与 host 无关的 UI:主题、输入编码、选区、分屏布局、egui 外壳、命令面板、hint、vim、markdown、ssh、更新与 agent 集成等 helper。 |
+| [`mtty-editor`](crates/term-editor) | 编辑器 pane 的编辑内核:rope 缓冲区、事务与撤销、多选区、光标移动、查找替换(ADR 0034)。不含界面代码。 |
+| [`mtty-lsp`](crates/term-lsp) | 编辑器 pane 的语言服务器(LSP)客户端:按工作区在后台线程运行服务器,同步文档,提供诊断、悬停、补全与跳转定义(ADR 0034)。不含界面代码。 |
+| [`mtty-config`](crates/term-config) | 配置与主题,ghostty/alacritty 导入,以及 View 规则引擎。 |
+| [`mtty-mtp`](crates/term-mtp) | MTP 协议、host/client 与传输(Unix socket、Windows 命名管道、TCP)。 |
+| [`mtty-widget`](crates/term-widget) | mtty 原生 host 库:`winit` + `wgpu` 渲染循环,直接绘制网格并合成 egui 外壳。 |
 | [`mtty-app`](mtty-app) | `mtty` 原生主程序及平台安装包元数据。 |
 | [`mtty-cli`](mtty-cli) | `mtty-cli` 控制客户端。 |
 
