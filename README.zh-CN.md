@@ -76,7 +76,7 @@
 
 更多可暂停的短演示：**[mtty.dev 上的 mtty](https://mtty.dev/zh/mtty#screens)**。
 
-> **项目状态 —— 预发布。** 当前版本为 `0.1.5`,API 尚未稳定。macOS 是主要平台;
+> **项目状态 —— 预发布。** 当前版本为 `0.1.6`,API 尚未稳定。macOS 是主要平台;
 > Windows 已在真实硬件上构建、测试并经 MTP 驱动(见 [`docs/WINDOWS-DEV.zh-CN.md`](docs/WINDOWS-DEV.zh-CN.md));
 > Linux 在 CI 中构建并通过测试,并已在真实的 GNOME/Wayland 桌面上验收(输入法、菜单、文件拖放、剪贴板、快捷键)。
 
