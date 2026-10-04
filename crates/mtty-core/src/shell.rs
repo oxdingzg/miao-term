@@ -11,7 +11,8 @@
 //! - fish: a `vendor_conf.d` script found through `XDG_DATA_DIRS`, which it
 //!   restores (Kitty's approach).
 //! - PowerShell: `-NoExit -Command` dot-sources a script after the profile; it
-//!   wraps `prompt` and PSReadLine's `PSConsoleHostReadLine`.
+//!   wraps `prompt` and PSReadLine's `PSConsoleHostReadLine`, and records
+//!   history through `mtty-cli` on PowerShell 7+ and Windows PowerShell 5.1.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -139,6 +140,55 @@ if (Test-Path variable:global:__mttyLoaded) { return }
 $global:__mttyLoaded = $true
 $global:__mttyRan = $false
 $global:__mttyOrigPrompt = $function:prompt
+# Quote one argument for a native command line. Windows PowerShell 5.1 runs on
+# .NET Framework, whose ProcessStartInfo has no ArgumentList, so the command
+# line is built by hand with CommandLineToArgvW's rules: double the backslashes
+# that precede a quote or end the argument, then wrap it in quotes.
+function global:__mttyQuoteArg([string]$a) {
+    if ($a.Length -gt 0 -and $a -notmatch '[\s"]') { return $a }
+    $sb = [System.Text.StringBuilder]::new()
+    [void]$sb.Append('"')
+    $slashes = 0
+    foreach ($c in $a.ToCharArray()) {
+        if ($c -eq '\') { $slashes++; continue }
+        if ($c -eq '"') {
+            [void]$sb.Append('\', ($slashes * 2 + 1))
+            [void]$sb.Append('"')
+            $slashes = 0
+        } else {
+            if ($slashes -gt 0) { [void]$sb.Append('\', $slashes); $slashes = 0 }
+            [void]$sb.Append($c)
+        }
+    }
+    if ($slashes -gt 0) { [void]$sb.Append('\', ($slashes * 2)) }
+    [void]$sb.Append('"')
+    $sb.ToString()
+}
+# Record the typed line in mtty's history through `mtty-cli`, detached so the
+# next prompt is not delayed. PowerShell 7 and later pass the arguments through
+# ProcessStartInfo.ArgumentList; Windows PowerShell 5.1 falls back to a quoted
+# command line.
+function global:__mttyRecord([string]$line) {
+    $cli = if ($env:MTTY_CLI) { $env:MTTY_CLI } else { 'mtty-cli' }
+    $cmd = Get-Command $cli -CommandType Application -ErrorAction SilentlyContinue
+    if (-not $cmd) { return }
+    $exe = $cmd.Path
+    if (-not $exe) { $exe = $cmd.Source }
+    try {
+        $psi = [System.Diagnostics.ProcessStartInfo]::new()
+        $psi.FileName = $exe
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $argv = @('history', 'add', '--command', $line, '--cwd', $PWD.ProviderPath)
+        if ($psi.PSObject.Properties['ArgumentList']) {
+            foreach ($a in $argv) { $psi.ArgumentList.Add($a) }
+        } else {
+            $psi.Arguments = (($argv | ForEach-Object { __mttyQuoteArg $_ }) -join ' ')
+        }
+        [void][System.Diagnostics.Process]::Start($psi)
+    } catch {}
+}
 function global:__mttyWrapReadLine {
     if ($global:__mttyOrigReadLine) { return }
     $rl = Get-Command PSConsoleHostReadLine -CommandType Function -ErrorAction SilentlyContinue
@@ -149,17 +199,7 @@ function global:__mttyWrapReadLine {
         if ($line -and $line.Trim()) {
             [Console]::Write("$([char]27)]133;C$([char]7)")
             $global:__mttyRan = $true
-            $cli = if ($env:MTTY_CLI) { $env:MTTY_CLI } else { 'mtty-cli' }
-            if ($PSVersionTable.PSVersion.Major -ge 7 -and (Get-Command $cli -ErrorAction SilentlyContinue)) {
-                try {
-                    $psi = [System.Diagnostics.ProcessStartInfo]::new((Get-Command $cli).Source)
-                    foreach ($a in @('history', 'add', '--command', $line, '--cwd', $PWD.ProviderPath)) { $psi.ArgumentList.Add($a) }
-                    $psi.UseShellExecute = $false
-                    $psi.RedirectStandardOutput = $true
-                    $psi.RedirectStandardError = $true
-                    [void][System.Diagnostics.Process]::Start($psi)
-                } catch {}
-            }
+            __mttyRecord $line
         }
         $line
     }
@@ -441,5 +481,46 @@ mod tests {
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert!(ensure_private_dir(&dir).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// Checks on the generated shim that need no shell installed, so they run on
+/// every platform, Windows included.
+#[cfg(test)]
+mod script_tests {
+    use super::*;
+
+    #[test]
+    fn powershell_records_history_without_a_version_gate() {
+        // PowerShell 7+ has `ProcessStartInfo.ArgumentList`; Windows PowerShell
+        // 5.1 runs on .NET Framework, which does not. Both paths must exist and
+        // the history call must not be gated on the PowerShell version.
+        assert!(PWSH_SCRIPT.contains("$psi.ArgumentList.Add($a)"));
+        assert!(PWSH_SCRIPT.contains("$psi.Arguments"));
+        assert!(PWSH_SCRIPT.contains("__mttyQuoteArg"));
+        assert!(PWSH_SCRIPT.contains("'history', 'add', '--command', $line"));
+        assert!(!PWSH_SCRIPT.contains("PSVersionTable.PSVersion.Major -ge 7"));
+    }
+
+    #[test]
+    fn powershell_quotes_native_args_with_command_line_to_argv_rules() {
+        // Backslashes before a quote and at the end are doubled, so a typed
+        // command containing quotes survives Windows' command-line parsing.
+        assert!(PWSH_SCRIPT.contains("$slashes * 2 + 1"));
+        assert!(PWSH_SCRIPT.contains("$slashes * 2))"));
+        assert!(PWSH_SCRIPT.contains("__mttyQuoteArg $_"));
+    }
+
+    #[test]
+    fn powershell_keeps_the_semantic_prompt_marks() {
+        assert!(PWSH_SCRIPT.contains("]133;C"));
+        assert!(PWSH_SCRIPT.contains("]133;D;"));
+    }
+
+    #[test]
+    fn ps_quote_escapes_single_quotes() {
+        assert_eq!(ps_quote(Path::new("/tmp/plain")), "'/tmp/plain'");
+        assert_eq!(ps_quote(Path::new("/tmp/a b")), "'/tmp/a b'");
+        assert_eq!(ps_quote(Path::new("/tmp/it's")), "'/tmp/it''s'");
     }
 }

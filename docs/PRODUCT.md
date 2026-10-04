@@ -326,7 +326,12 @@ verified on its own:
   Linux AppImage signed download/replace/relaunch, bad hashes/signatures and a missing-download fallback were verified on 2026-10-04; Windows results are in ACCEPTANCE.)
 - [x] **B4.4** Shell integration for bash / fish / PowerShell. (End-to-end PTY tests
   for zsh, bash 3.2/5.3 on macOS, bash 5.2, fish 3.7 and PowerShell 7.5 on Linux;
-  Windows PowerShell runs in CI. Windows PowerShell 5.1 records no history.)
+  Windows PowerShell runs in CI. Windows PowerShell 5.1 records history too: it
+  has no `ProcessStartInfo.ArgumentList`, so the shim quotes the command line
+  with `CommandLineToArgvW`'s rules. That path was checked on a real 5.1 host
+  (the shim parses, the quoting round-trips through `CommandLineToArgvW`, the
+  fallback is selected and spawns); a full in-app capture on 5.1 is still a
+  hand check.)
 - [x] **B4.5** Optional end-to-end-encrypted sync, off by default. (ADR 0033:
   hosts and snippets through a folder the user already syncs, XChaCha20-Poly1305
   with a key that never enters the folder, one file per device, per-entry merge
