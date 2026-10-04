@@ -1,6 +1,6 @@
 # Screenshot provenance
 
-Refreshed 2026-10-04 from the current mtty v0.1.3 development build.
+Refreshed 2026-10-04 from the mtty v0.1.3 development build.
 
 The captures use the actual application's GPU rendering, with an isolated
 example Git project, Markdown/Mermaid source and Rust code. Agent-state events

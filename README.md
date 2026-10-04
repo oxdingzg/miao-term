@@ -60,7 +60,7 @@ Mermaid preview and terminal share the same tabs and recursive split layout:
 
 ![Current mtty workspace: session sidebar, Markdown editor, Mermaid preview and split terminal](docs/images/mtty.png?v=20261004)
 
-Captured on 2026-10-04 from the current v0.1.3 development build in an isolated
+Captured on 2026-10-04 from the v0.1.3 development build in an isolated
 example project. Agent-state events and edit proposals use the real MTP control
 plane; the host addresses and queued prompts are examples.
 
@@ -86,7 +86,7 @@ Recursive splits keep Git changes and an actual local HTTP server side by side:
 
 More short, controllable demos: **[mtty on mtty.dev](https://mtty.dev/mtty#screens)**.
 
-> **Project status — pre-release.** The version is `0.1.3` and the API is not yet
+> **Project status — pre-release.** The version is `0.1.5` and the API is not yet
 > stable. macOS is the primary platform. Windows is built, tested and driven over
 > MTP on real hardware (see [`docs/WINDOWS-DEV.md`](docs/WINDOWS-DEV.md)); Linux
 > builds and passes tests in CI and has been checked on a real GNOME/Wayland
