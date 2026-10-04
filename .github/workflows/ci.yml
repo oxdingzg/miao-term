@@ -200,3 +200,7 @@ jobs:
         env:
           PRIVACY_DENYLIST: ${{ secrets.PRIVACY_DENYLIST }}
         run: sh scripts/check-privacy.sh
+      # Release bodies are English and link to the docs/releases/<tag>.zh-CN.md
+      # mirror; keep docs/releases/ and scripts/release-notes.py consistent.
+      - name: Release-notes language rule
+        run: python3 scripts/test-release-notes.py

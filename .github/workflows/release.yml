@@ -354,4 +354,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh release create "${GITHUB_REF_NAME}" artifacts/* --generate-notes
+          python3 scripts/test-release-notes.py
+          # Release bodies are English, with a 简体中文 link to the mirrored
+          # docs/releases/<tag>.zh-CN.md. Prefer the authored notes; a tag with
+          # no file falls back to GitHub's generated notes.
+          if body=$(python3 scripts/release-notes.py "${GITHUB_REF_NAME}"); then
+            printf '%s' "$body" > release-body.md
+            gh release create "${GITHUB_REF_NAME}" artifacts/* --notes-file release-body.md
+          else
+            gh release create "${GITHUB_REF_NAME}" artifacts/* --generate-notes
+          fi

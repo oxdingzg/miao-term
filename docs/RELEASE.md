@@ -30,6 +30,22 @@ Manual runs execute the same packaging, signing, and manifest checks, and upload
 the combined `release-assembled` artifact. The manifest uses the supplied tag;
 its download URLs become live only after a release with that tag is published.
 
+## Release notes
+
+**Release bodies are English, and always link to the Simplified Chinese
+version.** The same rule applies to every miao project, including `miao`.
+
+- The English notes are `docs/releases/<tag>.md`; the Chinese mirror is
+  `docs/releases/<tag>.zh-CN.md`. Write both before tagging.
+- `docs/releases/<tag>.md` starts with `[简体中文](<tag>.zh-CN.md)` right under
+  the `# mtty <tag>` heading, and may link to other docs relatively.
+- `scripts/release-notes.py` turns the file into the release body: it makes
+  every relative link absolute at the tag and forces the `[简体中文]` link to
+  point at the mirrored file. The release job prefers it and falls back to
+  `--generate-notes` only when a tag has no notes file.
+- Do not paste the Chinese notes into the release body; the body is English and
+  links across. `scripts/test-release-notes.py` covers the transformation.
+
 ## Artifacts
 
 | Platform | Artifact | Notes |
