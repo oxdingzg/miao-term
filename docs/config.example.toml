@@ -58,7 +58,7 @@ font-size = 13                   # default
 # name = "gemini"
 # command = ["gemini", "--experimental-acp"]
 
-# Built-in named theme: nord | dracula | gruvbox | solarized | tokyo-night.
+# Built-in named theme: nord | dracula | gruvbox | mtty | solarized | tokyo-night.
 # theme = "dracula"   # overridden by explicit [colors] below
 
 [colors]

@@ -26,7 +26,7 @@ See [identity and migration](APP-IDENTITY.md).
 ```toml
 font-size   = 13                 # default 13
 font-family = "JetBrains Mono"   # default; falls back to the system monospace
-theme       = "nord"             # nord | dracula | gruvbox | solarized | tokyo-night
+theme       = "nord"             # nord | dracula | gruvbox | mtty | solarized | tokyo-night
 
 [colors]                          # explicit colors override the named theme
 background = "#2e3440"
@@ -65,6 +65,21 @@ If no mtty configuration exists, ghostty's `config` and alacritty's
 | `update-pubkey` | — | minisign public key; enables signature checks |
 | `update-check-url` | the project's own manifest | Where an update check looks; see below |
 | `theme` | — | A built-in named theme, overridden by an explicit `[colors]` |
+
+### Themes
+
+`theme` names a built-in palette, case-insensitively. **Nord** remains the
+default.
+
+```toml
+theme = "mtty"   # nord | dracula | gruvbox | mtty
+```
+
+The presets are Nord, Dracula, Gruvbox and mtty. mtty is a navy
+workspace palette; unlike the other three, its surrounding chrome — the window,
+cards and sidebars — follows the preset instead of the neutral dark chrome. The
+named themes `solarized`/`solarized-dark` and `tokyo-night`/`tokyonight` are
+accepted too, and an explicit `[colors]` block overrides any named theme.
 
 ### Badges
 

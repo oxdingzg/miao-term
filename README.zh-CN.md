@@ -144,7 +144,9 @@ mtty 与 miao 是两个独立项目,任意一个都可以单独使用。在 mtty
   (含未提交内容)、合并回基线分支或丢弃(二者均需确认)。git 操作在后台执行,不改动仓库中被跟踪的文件。
 - **Recipes**:保存并回放整个工作区。
 - 设置窗口(`⌘,`):字号/字体族、透明度、行高、光标样式、主题、内联图片、通知、防休眠与
-  agent 钩子安装。关闭窗口时把改动过的值写回 `config.toml`,保留注释与其他键;无法解析的
+  agent 钩子安装。主题选择器提供 Nord(默认)、Dracula、Gruvbox 与 mtty;mtty 是
+  航海蓝(navy)工作区配色,其窗口、卡片与侧栏会跟随该预设,其余预设保持中性的深色外壳。
+  关闭窗口时把改动过的值写回 `config.toml`,保留注释与其他键;无法解析的
   `config.toml` 会在状态栏提示,且不会被覆盖。
 
 **配置与集成**
@@ -177,8 +179,12 @@ mtty 与 miao 是两个独立项目,任意一个都可以单独使用。在 mtty
   启动器直接连接。不保存密码或密钥。*主机…* 还显示 ssh-agent 中的密钥,检查主机密钥是否与 `known_hosts`
   一致(未知密钥显示指纹供核对后信任;已变化的密钥会被拒绝),并在终端标签中运行 `ssh-keygen` / `ssh-copy-id`。每台主机可保存端口转发(`-L`、`-R`、`-D` SOCKS),
   在窗口中启停,显示运行状态或 ssh 放弃的原因;状态栏显示数量。
-- **SSH 会话与远端 view/edit**:*新建 SSH 会话…* 遵循 `~/.ssh/config`,复用 ControlMaster 连接,
-  远端零安装引导 terminfo;*查看/编辑远端文件…* 经该连接读写(自动带入当前 SSH 标签的主机)。
+- **SSH 会话与远端 view/edit**:*新建 SSH 会话…* 是一个完整的主机编辑器。快速连接接收
+  `[user@]host[:port]` 并直接连接,不保存;保存主机字段包括名称、可选的 `~/.ssh/config` 别名、
+  主机、用户、端口、分组与标签,高级区还可设置跳板机、持久 tmux 会话、mosh 与端口转发。
+  *连接* 直接打开目标而不保存,*保存并连接* 会先保存主机。它遵循 `~/.ssh/config`,复用
+  ControlMaster 连接,远端零安装引导 terminfo;*查看/编辑远端文件…* 经该连接读写(自动带入
+  当前 SSH 标签的主机)。
 - **串口、Telnet 与裸 TCP**:*新建串口/Telnet/TCP 会话…* 把串口控制台(设备、波特率、数据位、校验、停止位、流控)、
   Telnet 连接或裸 TCP socket 作为 pane 打开。已保存主机带 `kind`,也按同样方式打开;Telnet 与裸 TCP 标注为未加密(ADR 0037)。
 - **PuTTY 密钥**:*主机… → 导入 PuTTY 密钥…* 读取 `.ppk`(v2 或 v3,Ed25519/RSA/ECDSA),
@@ -302,7 +308,7 @@ mtty 读取 `~/.config/mtty/config.toml`(或
 
 ```toml
 font-size = 13
-theme     = "nord"
+theme     = "nord"   # nord | dracula | gruvbox | mtty
 ```
 
 [`docs/CONFIG.zh-CN.md`](docs/CONFIG.zh-CN.md) 里有各配置项、编辑器与 ACP 部分，以及 shell 集成;

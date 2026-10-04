@@ -23,7 +23,7 @@ v0.0.5 及之前应用名为 `miaotty`。首次启动时，若 `$XDG_CONFIG_HOME
 ```toml
 font-size   = 13                 # 默认 13
 font-family = "JetBrains Mono"   # 默认;回退到系统等宽字体
-theme       = "nord"             # nord | dracula | gruvbox | solarized | tokyo-night
+theme       = "nord"             # nord | dracula | gruvbox | mtty | solarized | tokyo-night
 
 [colors]                          # 显式配色会覆盖命名主题
 background = "#2e3440"
@@ -61,6 +61,19 @@ palette    = ["#3b4252", "#bf616a", "#a3be8c", "#ebcb8b",
 | `update-pubkey` | — | minisign 公钥;启用签名校验 |
 | `update-check-url` | 项目自己的清单 | 更新检查去哪里取；见下文 |
 | `theme` | — | 内置命名主题，会被显式的 `[colors]` 覆盖 |
+
+### 主题
+
+`theme` 按名称选择内置调色板，不区分大小写。**Nord** 仍为默认值。
+
+```toml
+theme = "mtty"   # nord | dracula | gruvbox | mtty
+```
+
+预设为 Nord、Dracula、Gruvbox 与 mtty。mtty 是航海蓝(navy)工作区配色;
+与前三个不同，它会连带周围的界面外壳——窗口、卡片与侧栏——一并跟随该预设，
+而非保持中性的深色外壳。此外也接受命名主题 `solarized`/`solarized-dark` 与
+`tokyo-night`/`tokyonight`，显式的 `[colors]` 块会覆盖所选主题。
 
 ### 标签徽章
 
