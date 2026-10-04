@@ -21,11 +21,11 @@ pub fn bg_color(c: Rgb) -> egui::Color32 {
     egui::Color32::from_rgb(c.0, c.1, c.2)
 }
 
-pub fn section(text: &str) -> egui::RichText {
+pub fn section(ch: &ChromeColors, text: &str) -> egui::RichText {
     egui::RichText::new(text.to_uppercase())
         .size(10.0)
         .strong()
-        .color(egui::Color32::from_gray(140))
+        .color(bg_color(ch.muted))
 }
 
 /// What the user did in the tab bar.
@@ -170,11 +170,10 @@ pub fn host_list(
 ) -> Option<usize> {
     let mut picked = None;
     ui.add_space(10.0);
-    ui.label(section(&format!(
-        "{} ({})",
-        t(lang, "Hosts", "主机"),
-        hosts.len()
-    )));
+    ui.label(section(
+        ch,
+        &format!("{} ({})", t(lang, "Hosts", "主机"), hosts.len()),
+    ));
     ui.separator();
     egui::ScrollArea::vertical()
         .id_salt("host_list")
@@ -187,7 +186,7 @@ pub fn host_list(
                         ui.label(
                             egui::RichText::new(name)
                                 .size(10.5)
-                                .color(bg_color(ch.text).gamma_multiply(0.6)),
+                                .color(bg_color(ch.muted)),
                         );
                     }
                     last_group = Some(group);
@@ -239,7 +238,7 @@ pub fn tab_bar(
                     divider.center_top() + egui::vec2(0.0, 3.0),
                     divider.center_bottom() - egui::vec2(0.0, 3.0),
                 ],
-                egui::Stroke::new(1.0_f32, bg_color(ch.text).gamma_multiply(0.5)),
+                egui::Stroke::new(1.0_f32, bg_color(ch.border)),
             );
         }
         let icon = icons
@@ -278,7 +277,7 @@ pub fn tab_bar(
             let ccol = if x_resp.hovered() {
                 text_color
             } else {
-                egui::Color32::from_gray(150)
+                bg_color(ch.muted)
             };
             let (a, b) = (xr.shrink(4.0), xr.shrink(4.0));
             let stroke = egui::Stroke::new(1.4_f32, ccol);
@@ -362,7 +361,7 @@ pub fn sidebar(
     let mut ev = TabBarEvents::default();
     ui.visuals_mut().selection.bg_fill = bg_color(ch.active);
     ui.visuals_mut().override_text_color = Some(bg_color(ch.text));
-    ui.label(section(&format!("{heading} ({})", titles.len())));
+    ui.label(section(ch, &format!("{heading} ({})", titles.len())));
     ui.separator();
     let text_color = bg_color(ch.text);
     let font = egui::FontId::proportional(13.0);
@@ -376,7 +375,7 @@ pub fn sidebar(
             ui.painter().hline(
                 r.x_range().shrink(4.0),
                 r.center().y,
-                egui::Stroke::new(1.0_f32, text_color.gamma_multiply(0.5)),
+                egui::Stroke::new(1.0_f32, bg_color(ch.border)),
             );
         }
         // One painted row (icon, badge, title, shortcut) so the whole row can
@@ -416,11 +415,8 @@ pub fn sidebar(
             .get(i)
             .filter(|m| !m.is_empty() && !show_close)
             .map(|m| {
-                ui.painter().layout_no_wrap(
-                    m.clone(),
-                    meta_font.clone(),
-                    egui::Color32::from_gray(120),
-                )
+                ui.painter()
+                    .layout_no_wrap(m.clone(), meta_font.clone(), bg_color(ch.muted))
             });
         let meta_w = if show_close {
             24.0
@@ -469,7 +465,7 @@ pub fn sidebar(
             let color = if x_resp.hovered() {
                 text_color
             } else {
-                text_color.gamma_multiply(0.6)
+                bg_color(ch.muted)
             };
             let x = xr.shrink(5.0);
             let stroke = egui::Stroke::new(1.4_f32, color);
@@ -584,11 +580,10 @@ pub fn queue(
 ) -> QueueEvents {
     let mut ev = QueueEvents::default();
     ui.visuals_mut().override_text_color = Some(bg_color(ch.text));
-    ui.label(section(&format!(
-        "{} ({})",
-        t(lang, "Queue", "队列"),
-        items.len()
-    )));
+    ui.label(section(
+        ch,
+        &format!("{} ({})", t(lang, "Queue", "队列"), items.len()),
+    ));
     ui.horizontal(|ui| {
         ui.add(
             egui::TextEdit::singleline(input)
@@ -627,14 +622,10 @@ pub fn queue(
 /// A two-column label/value info list (details panel).
 pub fn info(ui: &mut egui::Ui, ch: &ChromeColors, title: &str, rows: &[(String, String)]) {
     ui.visuals_mut().override_text_color = Some(bg_color(ch.text));
-    ui.label(section(title));
+    ui.label(section(ch, title));
     ui.add_space(4.0);
     for (k, v) in rows {
-        ui.label(
-            egui::RichText::new(k)
-                .color(egui::Color32::from_gray(140))
-                .size(11.0),
-        );
+        ui.label(egui::RichText::new(k).color(bg_color(ch.muted)).size(11.0));
         ui.label(egui::RichText::new(v).monospace().size(12.0));
         ui.add_space(2.0);
     }
@@ -674,7 +665,7 @@ pub struct ChromeItem {
 /// Render `items` as a compact one-line-per-row list.
 pub fn list(ui: &mut egui::Ui, ch: &ChromeColors, items: &[ChromeItem]) {
     ui.visuals_mut().override_text_color = Some(bg_color(ch.text));
-    let muted = egui::Color32::from_gray(132);
+    let muted = bg_color(ch.muted);
     for it in items {
         ui.horizontal(|ui| {
             let (irect, _) = ui.allocate_exact_size(egui::Vec2::splat(14.0), egui::Sense::hover());
@@ -1346,13 +1337,13 @@ pub fn render(ctx: &egui::Context, host: &mut impl Chrome) {
                         t(lang, "commands", "命令")
                     ))
                     .size(11.0)
-                    .color(egui::Color32::from_gray(130)),
+                    .color(bg_color(ch.muted)),
                 );
                 if !status_right.is_empty() {
                     ui.label(
                         egui::RichText::new(format!("\u{25cf} {status_right}"))
                             .size(11.0)
-                            .color(egui::Color32::from_rgb(0xa3, 0xbe, 0x8c)),
+                            .color(bg_color(ch.positive)),
                     );
                     ui.add_space(10.0);
                 }

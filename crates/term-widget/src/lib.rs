@@ -2658,7 +2658,7 @@ impl State {
             ui.label(
                 egui::RichText::new(t(lang, "Loading…", "加载中…"))
                     .size(12.0)
-                    .color(egui::Color32::from_gray(132)),
+                    .color(chrome_rgb(self.theme.chrome().muted)),
             );
             return;
         }
@@ -4001,7 +4001,7 @@ impl State {
                                     UpdateInstall::Failed(e) => {
                                         ui.label(
                                             egui::RichText::new(e)
-                                                .color(egui::Color32::from_rgb(0xbf, 0x61, 0x6a)),
+                                                .color(chrome_rgb(self.theme.chrome().negative)),
                                         );
                                     }
                                     UpdateInstall::Idle => {}
@@ -4097,7 +4097,7 @@ impl State {
                     painter.rect_filled(
                         rect,
                         egui::Rounding::same(3.0),
-                        egui::Color32::from_rgb(0xeb, 0xcb, 0x8b),
+                        chrome_rgb(self.theme.chrome().warning),
                     );
                     painter.text(
                         rect.center(),
@@ -4865,7 +4865,7 @@ impl State {
     ) -> Option<(miao_term_ui::icons::Icon, Option<miao_term_ui::theme::Rgb>)> {
         let a = self.mtp.agent_for(&tab.active)?;
         let state = a.get("state").and_then(|v| v.as_str())?;
-        shown_agent_icon(&self.badges, state, tab.attention)
+        shown_agent_icon(&self.badges, &self.theme.chrome(), state, tab.attention)
     }
 
     fn details_rows(&self) -> Vec<(String, String)> {
@@ -8213,7 +8213,7 @@ impl State {
                             "Type a line number, or line:column.",
                             "请输入行号,或 行:列。",
                         ))
-                        .color(egui::Color32::from_rgb(0xbf, 0x61, 0x6a)),
+                        .color(chrome_rgb(self.theme.chrome().negative)),
                     );
                 }
                 close = ui.input(|i| i.key_pressed(egui::Key::Escape));
@@ -8607,7 +8607,7 @@ impl State {
                 if let Some(why) = &error {
                     ui.label(
                         egui::RichText::new(why.lines().last().unwrap_or(why))
-                            .color(egui::Color32::from_rgb(0xbf, 0x61, 0x6a)),
+                            .color(chrome_rgb(self.theme.chrome().negative)),
                     );
                 }
                 if let (Some(replace), true) = (opts.replace.as_mut(), can_replace) {
@@ -8763,7 +8763,7 @@ impl State {
                 ui.label(
                     egui::RichText::new(format!("to {target}"))
                         .small()
-                        .color(egui::Color32::from_gray(140)),
+                        .color(chrome_rgb(self.theme.chrome().muted)),
                 );
                 ui.add(
                     egui::TextEdit::multiline(text)
@@ -9372,7 +9372,7 @@ impl State {
         let mut sync_now = false;
         let have_key = self.sync.key.is_some();
         let on = self.sync.dir.is_some() && have_key;
-        let red = egui::Color32::from_rgb(0xbf, 0x61, 0x6a);
+        let red = chrome_rgb(self.theme.chrome().negative);
         let code = self.sync.key.as_ref().map(|k| k.pairing_code());
         let status = if self.sync.running {
             t(lang, "Syncing…", "正在同步…").to_string()
@@ -9496,7 +9496,7 @@ impl State {
                     ui.label(
                         egui::RichText::new(&status)
                             .size(11.0)
-                            .color(egui::Color32::from_gray(140)),
+                            .color(chrome_rgb(self.theme.chrome().muted)),
                     );
                 });
             });
@@ -9630,7 +9630,7 @@ impl State {
                     }
                     if let Some(e) = &d.error {
                         ui.label(
-                            egui::RichText::new(e).color(egui::Color32::from_rgb(0xbf, 0x61, 0x6a)),
+                            egui::RichText::new(e).color(chrome_rgb(self.theme.chrome().negative)),
                         );
                     }
                     if ui.button(t(lang, "Connect", "连接")).clicked() {
@@ -9813,7 +9813,7 @@ impl State {
                             "Plain FTP: the password and the files cross the network unencrypted.",
                             "明文 FTP:口令与文件均以未加密方式在网络上传输。",
                         ))
-                        .color(egui::Color32::from_rgb(0xbf, 0x61, 0x6a)),
+                        .color(chrome_rgb(self.theme.chrome().negative)),
                     );
                 }
                 ui.horizontal(|ui| {
@@ -9822,7 +9822,7 @@ impl State {
                         ui.label(text);
                     } else if let Some(e) = &view.error {
                         ui.label(
-                            egui::RichText::new(e).color(egui::Color32::from_rgb(0xbf, 0x61, 0x6a)),
+                            egui::RichText::new(e).color(chrome_rgb(self.theme.chrome().negative)),
                         );
                     } else {
                         ui.label(
@@ -9832,7 +9832,7 @@ impl State {
                                 "把文件拖到这里即上传到右侧目录。",
                             ))
                             .size(11.0)
-                            .color(egui::Color32::from_gray(140)),
+                            .color(chrome_rgb(self.theme.chrome().muted)),
                         );
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -10032,7 +10032,7 @@ impl State {
                                 if ui
                                     .button(
                                         egui::RichText::new(t(lang, "Confirm delete", "确认删除"))
-                                            .color(egui::Color32::from_rgb(0xbf, 0x61, 0x6a)),
+                                            .color(chrome_rgb(self.theme.chrome().negative)),
                                     )
                                     .clicked()
                                 {
@@ -10496,10 +10496,10 @@ impl State {
                         "密钥以加密形式写入;新口令为空会被拒绝。",
                     ))
                     .size(11.0)
-                    .color(egui::Color32::from_gray(150)),
+                    .color(chrome_rgb(self.theme.chrome().muted)),
                 );
                 if let Some(err) = &dlg.error {
-                    ui.colored_label(egui::Color32::from_rgb(0xbf, 0x61, 0x6a), err);
+                    ui.colored_label(chrome_rgb(self.theme.chrome().negative), err);
                 }
                 if ui.button(t(lang, "Import", "导入")).clicked() {
                     go = true;
@@ -10632,7 +10632,7 @@ impl State {
                             ui.label(
                                 egui::RichText::new(host.summary())
                                     .size(11.0)
-                                    .color(egui::Color32::from_gray(150)),
+                                    .color(chrome_rgb(self.theme.chrome().muted)),
                             );
                             if let Some(group) = &host.group {
                                 ui.label(egui::RichText::new(format!("[{group}]")).size(11.0));
@@ -10715,7 +10715,7 @@ impl State {
                                             Some(TunnelState::Running) => {
                                                 ui.label(
                                                     egui::RichText::new(t(lang, "\u{25cf} running", "\u{25cf} 运行中"))
-                                                        .color(egui::Color32::from_rgb(0xa3, 0xbe, 0x8c)),
+                                                        .color(chrome_rgb(self.theme.chrome().positive)),
                                                 );
                                                 if ui.small_button(t(lang, "Stop", "停止")).clicked() {
                                                     toggle_forward = Some((*i, r, false));
@@ -10726,7 +10726,7 @@ impl State {
                                                     ui.label(
                                                         egui::RichText::new(msg)
                                                             .size(11.0)
-                                                            .color(egui::Color32::from_rgb(0xbf, 0x61, 0x6a)),
+                                                            .color(chrome_rgb(self.theme.chrome().negative)),
                                                     );
                                                 }
                                                 if ui.small_button(t(lang, "Start", "启动")).clicked() {
@@ -10776,8 +10776,8 @@ impl State {
                             });
                         if let Some(state) = view.keys.get(&host.name) {
                             use miao_term_ui::hostkeys::HostKey;
-                            let red = egui::Color32::from_rgb(0xbf, 0x61, 0x6a);
-                            let green = egui::Color32::from_rgb(0xa3, 0xbe, 0x8c);
+                            let red = chrome_rgb(self.theme.chrome().negative);
+                            let green = chrome_rgb(self.theme.chrome().positive);
                             match state {
                                 None => {
                                     ui.label(t(lang, "Checking the host key…", "正在检查主机密钥…"));
@@ -10877,7 +10877,7 @@ impl State {
                         "不保存密码和密钥;使用 ssh-agent 与 ~/.ssh/config。",
                     ))
                     .size(11.0)
-                    .color(egui::Color32::from_gray(140)),
+                    .color(chrome_rgb(self.theme.chrome().muted)),
                 );
             });
         if let Some(i) = connect {
@@ -11119,7 +11119,7 @@ impl State {
                             "Use letters, digits, '-', '_' or '.'.",
                             "只能使用字母、数字、'-'、'_' 或 '.'。",
                         ))
-                        .color(egui::Color32::from_rgb(0xbf, 0x61, 0x6a)),
+                        .color(chrome_rgb(self.theme.chrome().negative)),
                     );
                 }
                 if ui
@@ -11166,7 +11166,7 @@ impl State {
                     ui.label(
                         egui::RichText::new(view.repo.display().to_string())
                             .size(11.0)
-                            .color(egui::Color32::from_gray(150)),
+                            .color(chrome_rgb(self.theme.chrome().muted)),
                     );
                     if view.loading {
                         ui.label(t(lang, "Loading…", "加载中…"));
@@ -11183,7 +11183,7 @@ impl State {
                         ui.label(
                             egui::RichText::new(format!("{} \u{2190} {}", task.branch, task.base))
                                 .size(11.0)
-                                .color(egui::Color32::from_gray(150)),
+                                .color(chrome_rgb(self.theme.chrome().muted)),
                         );
                         ui.horizontal(|ui| {
                             if ui.button(t(lang, "Open", "打开")).clicked() {
@@ -11206,7 +11206,7 @@ impl State {
                                     if ui
                                         .button(
                                             egui::RichText::new(label)
-                                                .color(egui::Color32::from_rgb(0xeb, 0xcb, 0x8b)),
+                                                .color(chrome_rgb(self.theme.chrome().warning)),
                                         )
                                         .clicked()
                                     {
@@ -11438,7 +11438,7 @@ impl State {
                     });
                 }
                 if let Some(e) = &form.error {
-                    ui.colored_label(egui::Color32::from_rgb(0xef, 0x6b, 0x6b), e.as_str());
+                    ui.colored_label(chrome_rgb(self.theme.chrome().negative), e.as_str());
                 }
                 ui.horizontal(|ui| {
                     if ui.button(t(lang, "Cancel", "取消")).clicked() {
@@ -11613,7 +11613,7 @@ impl State {
                 });
             }
             if let Some(err) = &dlg.error {
-                ui.colored_label(egui::Color32::from_rgb(0xbf, 0x61, 0x6a), err);
+                ui.colored_label(chrome_rgb(self.theme.chrome().negative), err);
             }
             if ui.button(t(lang, "Connect", "连接")).clicked() {
                 connect = true;
@@ -12683,7 +12683,7 @@ impl State {
                         .desired_width(260.0),
                 );
                 if let Some(err) = &start.error {
-                    ui.colored_label(egui::Color32::from_rgb(0xbf, 0x61, 0x6a), err);
+                    ui.colored_label(chrome_rgb(self.theme.chrome().negative), err);
                 }
                 if ui.button(t(lang, "Start", "启动")).clicked() {
                     go = true;
@@ -13162,7 +13162,7 @@ impl State {
             None => ed.path.to_string_lossy().to_string(),
         });
         let mut layouter =
-            miao_term_ui::syntax::layouter(lang, egui::Color32::from_rgb(0xe5, 0xe5, 0xe5), 13.0);
+            miao_term_ui::syntax::layouter(lang, chrome_rgb(self.theme.chrome().text), 13.0);
         let mut open = true;
         let mut save = false;
         let mut quit = false;
@@ -13172,7 +13172,7 @@ impl State {
                 if ed.readonly {
                     ui.label(
                         egui::RichText::new(miao_term_ui::i18n::t(self.lang, "read-only", "只读"))
-                            .color(egui::Color32::from_gray(140)),
+                            .color(chrome_rgb(self.theme.chrome().muted)),
                     );
                 } else if ui
                     .button(miao_term_ui::i18n::t(self.lang, "Save", "保存"))
@@ -13187,12 +13187,12 @@ impl State {
                 if ed.saving {
                     ui.label(
                         egui::RichText::new(miao_term_ui::i18n::t(self.lang, "saving…", "保存中…"))
-                            .color(egui::Color32::from_gray(150)),
+                            .color(chrome_rgb(self.theme.chrome().muted)),
                     );
                 } else if modified && !ed.readonly {
                     ui.label(
                         egui::RichText::new(miao_term_ui::i18n::t(self.lang, "modified", "已修改"))
-                            .color(egui::Color32::from_rgb(0xeb, 0xcb, 0x8b)),
+                            .color(chrome_rgb(self.theme.chrome().warning)),
                     );
                 }
                 // A local file only: the external editor reads it from disk,
@@ -13258,7 +13258,7 @@ impl State {
                                     egui::RichText::new(nums)
                                         .monospace()
                                         .size(13.0)
-                                        .color(egui::Color32::from_gray(110)),
+                                        .color(chrome_rgb(self.theme.chrome().muted)),
                                 )
                                 .selectable(false),
                             );
@@ -13992,7 +13992,7 @@ fn render_dir_tree(
     let Some(entries) = children.get(dir) else {
         return;
     };
-    let muted = egui::Color32::from_gray(132);
+    let muted = chrome_rgb(ch.muted);
     for e in entries {
         let is_dir = e.is_dir;
         if !is_dir && !filter.is_empty() && !e.name.to_lowercase().contains(filter) {
@@ -14313,16 +14313,16 @@ fn reserve_id(id: &str) {
 /// acted on it yet (green) or when it waits for them (amber, red on error,
 /// with `!` in the title), an empty ring otherwise.
 fn agent_icon(
+    ch: &miao_term_ui::theme::Chrome,
     state: &str,
     attention: Option<Attention>,
 ) -> (miao_term_ui::icons::Icon, Option<miao_term_ui::theme::Rgb>) {
     use miao_term_ui::icons::Icon;
-    use miao_term_ui::theme::Rgb;
     match state {
-        "processing" => (Icon::StateHalf, Some(Rgb(0x81, 0xa1, 0xc1))),
-        "awaiting" => (Icon::StateFull, Some(Rgb(0xeb, 0xcb, 0x8b))),
-        "error" => (Icon::StateFull, Some(Rgb(0xbf, 0x61, 0x6a))),
-        _ if attention == Some(Attention::Done) => (Icon::StateFull, Some(Rgb(0xa3, 0xbe, 0x8c))),
+        "processing" => (Icon::StateHalf, Some(ch.accent)),
+        "awaiting" => (Icon::StateFull, Some(ch.warning)),
+        "error" => (Icon::StateFull, Some(ch.negative)),
+        _ if attention == Some(Attention::Done) => (Icon::StateFull, Some(ch.positive)),
         _ => (Icon::StateEmpty, None),
     }
 }
@@ -14332,10 +14332,11 @@ fn agent_icon(
 /// still show.
 fn shown_agent_icon(
     badges: &miao_term_config::Badges,
+    ch: &miao_term_ui::theme::Chrome,
     state: &str,
     attention: Option<Attention>,
 ) -> Option<(miao_term_ui::icons::Icon, Option<miao_term_ui::theme::Rgb>)> {
-    (!switched_off(badges, state)).then(|| agent_icon(state, attention))
+    (!switched_off(badges, state)).then(|| agent_icon(ch, state, attention))
 }
 
 /// `[badges]` turns this state off.
@@ -15897,6 +15898,11 @@ fn completion_kind_letter(kind: u8) -> &'static str {
     }
 }
 
+/// A chrome palette colour as an egui colour.
+fn chrome_rgb(c: miao_term_ui::theme::Rgb) -> egui::Color32 {
+    egui::Color32::from_rgb(c.0, c.1, c.2)
+}
+
 /// A diagnostic's colour: error, warning, information, hint.
 fn severity_rgb(severity: u8) -> (u8, u8, u8) {
     match severity {
@@ -16342,24 +16348,27 @@ fn draw_editor(
     }
     // A jump-to-line highlight, over the current-line band.
     if let Some(row) = d.flash_line {
+        let w = chrome.warning;
         quads.push(cell(
             row,
             d.gutter,
             cols.saturating_sub(d.gutter),
-            (0x8a, 0x6d, 0x1f, 120),
+            (w.0, w.1, w.2, 120),
         ));
     }
     // A pending agent proposal: its changed lines tinted green.
+    let pos = chrome.positive;
     for c in &d.proposal {
-        quads.push(cell(c.row, c.col, c.width, (0x2f, 0x5d, 0x3a, 90)));
+        quads.push(cell(c.row, c.col, c.width, (pos.0, pos.1, pos.2, 90)));
     }
     for c in &d.deletions {
-        quads.push(cell(c.row, c.col, c.width, (0x6b, 0x2f, 0x3a, 90)));
+        let neg = chrome.negative;
+        quads.push(cell(c.row, c.col, c.width, (neg.0, neg.1, neg.2, 90)));
         let y = oy + (c.row as f32 + 0.5) * ch;
         quads.push(Quad::new(
             (ox + c.col as f32 * cw, y),
             (ox + (c.col + c.width) as f32 * cw, y + f.scale.max(1.0)),
-            (0xbf, 0x61, 0x6a, 200),
+            (neg.0, neg.1, neg.2, 200),
         ));
     }
     // Find matches under the selection, in the terminal's match colours.
@@ -16598,7 +16607,7 @@ fn render_markdown(
                     "Mermaid 图（未渲染）",
                 ))
                 .size(12.0)
-                .color(egui::Color32::from_gray(150)),
+                .color(fg.gamma_multiply(0.6)),
             );
         }
         rest = &after[j + 3..];
@@ -18837,9 +18846,10 @@ mod tests {
     #[test]
     fn badges_switch_states_off_the_tabs() {
         use miao_term_ui::icons::Icon;
+        let ch = miao_term_ui::theme::Chrome::dark();
         let all = miao_term_config::Badges::default();
         assert_eq!(
-            super::shown_agent_icon(&all, "processing", None).map(|i| i.0),
+            super::shown_agent_icon(&all, &ch, "processing", None).map(|i| i.0),
             Some(Icon::StateHalf)
         );
         let quiet = miao_term_config::Badges {
@@ -18847,18 +18857,21 @@ mod tests {
             idle: false,
             ..Default::default()
         };
-        assert_eq!(super::shown_agent_icon(&quiet, "processing", None), None);
         assert_eq!(
-            super::shown_agent_icon(&quiet, "idle", Some(Attention::Done)),
+            super::shown_agent_icon(&quiet, &ch, "processing", None),
             None
         );
         assert_eq!(
-            super::shown_agent_icon(&quiet, "awaiting", None).map(|i| i.0),
+            super::shown_agent_icon(&quiet, &ch, "idle", Some(Attention::Done)),
+            None
+        );
+        assert_eq!(
+            super::shown_agent_icon(&quiet, &ch, "awaiting", None).map(|i| i.0),
             Some(Icon::StateFull)
         );
         // A state the switches do not name still shows.
         assert_eq!(
-            super::shown_agent_icon(&quiet, "busy", None).map(|i| i.0),
+            super::shown_agent_icon(&quiet, &ch, "busy", None).map(|i| i.0),
             Some(Icon::StateEmpty)
         );
     }
@@ -18866,7 +18879,8 @@ mod tests {
     #[test]
     fn agent_tabs_show_their_state_by_shape() {
         use miao_term_ui::icons::Icon;
-        let shape = |state, attention| super::agent_icon(state, attention).0;
+        let ch = miao_term_ui::theme::Chrome::dark();
+        let shape = |state, attention| super::agent_icon(&ch, state, attention).0;
         assert_eq!(shape("processing", None), Icon::StateHalf);
         assert_eq!(shape("processing", Some(Attention::Done)), Icon::StateHalf);
         assert_eq!(shape("idle", Some(Attention::Done)), Icon::StateFull);
@@ -18875,8 +18889,8 @@ mod tests {
         assert_eq!(shape("error", None), Icon::StateFull);
         // Finished and waiting share the shape, not the colour.
         assert_ne!(
-            super::agent_icon("idle", Some(Attention::Done)).1,
-            super::agent_icon("awaiting", None).1
+            super::agent_icon(&ch, "idle", Some(Attention::Done)).1,
+            super::agent_icon(&ch, "awaiting", None).1
         );
     }
 
