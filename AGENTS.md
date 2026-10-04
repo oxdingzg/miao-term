@@ -1,5 +1,24 @@
 # AGENTS.md — working agreement for this repo
 
+## Highest-priority project rule: every change lands through a pull request
+
+`main` is protected: it must stay releasable, and every change reaches it
+through a pull request with an approving review. Direct pushes to `main` are
+rejected, including for maintainers. This mirrors the workflow used across the
+miao projects.
+
+- Work on a short-lived branch, open a pull request, and let CI pass before
+  merging. Never commit or push directly to `main`.
+- Branch names use a conventional-commit type prefix — `feat/`, `fix/`,
+  `docs/`, `chore/`, `refactor/`, or `test/` — plus a few hyphen-separated
+  words, e.g. `fix/pty-resize`. Keep the branch short-lived and delete it after
+  merge.
+- Open one pull request per concern, with a conventional title
+  (`type(scope): summary`) and a linked issue.
+- Merge by squash, so one pull request becomes one commit on `main`.
+- A branch's cost grows faster than its age; land it within a day or two, or
+  split it into pieces that are each safe on their own.
+
 ## Mandatory: never compile Rust on the local development machine
 
 **This is a mandatory execution constraint, not a recommendation. Before running
