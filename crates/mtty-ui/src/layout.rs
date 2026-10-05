@@ -3,12 +3,58 @@
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SplitDir {
     Right,
+    Left,
     Down,
+    Up,
+}
+
+impl SplitDir {
+    /// The tree direction: left/right split horizontally, up/down vertically.
+    pub fn axis(self) -> SplitDir {
+        match self {
+            SplitDir::Left => SplitDir::Right,
+            SplitDir::Up => SplitDir::Down,
+            other => other,
+        }
+    }
+
+    /// Whether the new pane is the *first* child (left/up) rather than second.
+    pub fn new_pane_first(self) -> bool {
+        matches!(self, SplitDir::Left | SplitDir::Up)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn split_left_and_up_place_the_new_pane_first() {
+        let area = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 100.0,
+            h: 100.0,
+        };
+        // Right puts the new pane second (to the right).
+        let mut right = Layout::leaf("a");
+        assert!(right.split("a", "b", SplitDir::Right));
+        let rects = right.rects(area);
+        assert_eq!(rects[0].0, "a");
+        assert_eq!(rects[1].0, "b");
+        // Left puts the new pane first, so "b" is on the left.
+        let mut left = Layout::leaf("a");
+        assert!(left.split("a", "b", SplitDir::Left));
+        let rects = left.rects(area);
+        assert_eq!(rects[0].0, "b");
+        assert_eq!(rects[1].0, "a");
+        // Up puts the new pane first, on top.
+        let mut up = Layout::leaf("a");
+        assert!(up.split("a", "b", SplitDir::Up));
+        let rects = up.rects(area);
+        assert_eq!(rects[0].0, "b");
+        assert_eq!(rects[1].0, "a");
+    }
 
     #[test]
     fn split_resize_and_close_preserve_the_remaining_panes() {
@@ -118,7 +164,7 @@ impl Layout {
             Layout::Leaf(id) => out.push((id.clone(), area)),
             Layout::Split { dir, ratio, a, b } => {
                 let r = ratio.clamp(0.1, 0.9);
-                match dir {
+                match dir.axis() {
                     SplitDir::Right => {
                         let w = area.w * r;
                         a.rects_into(Rect { w, ..area }, out);
@@ -143,6 +189,8 @@ impl Layout {
                             out,
                         );
                     }
+                    // `axis()` never yields Left/Up.
+                    SplitDir::Left | SplitDir::Up => {}
                 }
             }
         }
@@ -159,7 +207,7 @@ impl Layout {
     fn handles_into(&self, area: Rect, path: &mut Vec<bool>, out: &mut Vec<Handle>) {
         if let Layout::Split { dir, ratio, a, b } = self {
             let r = ratio.clamp(0.1, 0.9);
-            match dir {
+            match dir.axis() {
                 SplitDir::Right => {
                     let w = area.w * r;
                     let x = area.x + w;
@@ -216,6 +264,8 @@ impl Layout {
                     );
                     path.pop();
                 }
+                // `axis()` never yields Left/Up.
+                SplitDir::Left | SplitDir::Up => {}
             }
         }
     }
@@ -238,11 +288,18 @@ impl Layout {
         match self {
             Layout::Leaf(id) if id == target => {
                 let old = Layout::Leaf(id.clone());
+                let new = Layout::leaf(new_id);
+                // Left/Up put the new pane first, so it lands on the near side.
+                let (a, b) = if dir.new_pane_first() {
+                    (Box::new(new), Box::new(old))
+                } else {
+                    (Box::new(old), Box::new(new))
+                };
                 *self = Layout::Split {
-                    dir,
+                    dir: dir.axis(),
                     ratio: 0.5,
-                    a: Box::new(old),
-                    b: Box::new(Layout::leaf(new_id)),
+                    a,
+                    b,
                 };
                 true
             }
