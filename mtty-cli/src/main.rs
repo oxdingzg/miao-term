@@ -18,11 +18,11 @@ fn usage_text() -> &'static str {
     "usage: mtty-cli [--socket PATH|tcp://host:port] [--wait SECS] <command>\n\
      commands: ping | health | wait [--since N] | events [--topic T[,T]] | \
      pane list|run|send|focus|close|output | \
-     state <agent> --state S [--session ID] [--cwd DIR] [--quota FILE|-] | state list | \
+     state <agent> --state S [--session ID] [--cwd DIR] [--quota FILE|-] [--runtime-context FILE|-] | state list | \
      agent sessions | agent resume [--pane ID | --session ID] | history add|list |\n     view|edit <path> |\n     file read --path P [--offset N] [--length N] [--base64] |\n     file write --path P [--data D | --data-b64 B]"
 }
 
-/// Read a JSON value from `FILE` or `-` (stdin), for `state --quota`.
+/// Read a JSON value from `FILE` or `-` (stdin) for state metadata.
 fn read_json_arg(spec: &str) -> Option<Value> {
     let text = if spec == "-" {
         let mut buf = String::new();
@@ -196,6 +196,9 @@ fn main() {
             });
             if let Some(cwd) = cwd {
                 params["cwd"] = json!(cwd);
+            }
+            if let Some(context) = flag(&args, "--runtime-context").and_then(read_json_arg) {
+                params["runtime_context"] = context;
             }
             if let Some(quota) = quota {
                 params["quota"] = quota;
