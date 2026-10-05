@@ -47,7 +47,7 @@ fn pump_until(term: &mut Terminal, what: &str, done: impl Fn(&str) -> bool) {
 
 fn hosted_shell() -> Terminal {
     let env = [("PS1".to_string(), "$ ".to_string())];
-    Terminal::new_hosted(
+    let mut term = Terminal::new_hosted(
         &config(host_binary()),
         Some("/bin/sh".into()),
         60,
@@ -57,7 +57,13 @@ fn hosted_shell() -> Terminal {
         &env,
         waker(),
     )
-    .expect("host started")
+    .expect("host started");
+    // Wait for the shell's initial prompt before typing. Otherwise startup
+    // output can place the prompt before the first command's result.
+    pump_until(&mut term, "shell prompt", |text| {
+        text.lines().any(|line| line.trim_end() == "$")
+    });
+    term
 }
 
 #[test]
