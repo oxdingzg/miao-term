@@ -572,6 +572,10 @@ struct Tab {
     /// The title was chosen (Rename Tab, an ssh target, Quick) rather than a
     /// default: it wins over view rules, the program title and the folder.
     title_set: bool,
+    /// The title shown when the session was saved. On restore it is preferred
+    /// over the automatic title (the pane's OSC name or cwd) for a tab the user
+    /// did not rename, so a restart shows the same title it had before.
+    shown: Option<String>,
     /// Opened as an ssh session (shows a server icon).
     ssh: bool,
     /// The ssh target as the user typed it, to reconnect after a restore.
@@ -1002,6 +1006,17 @@ fn rename_dialog(
 }
 
 /// The automatic title new tabs get (`shell 3`), as opposed to a chosen one.
+/// The tab title that wins over the automatic ones: a name the user chose
+/// (Rename Tab, an ssh target, Quick), or the title restored from the last
+/// session so a restart shows the same title. `None` means fall through to the
+/// automatic title (view rules, program title, cwd, `shell N`).
+fn fixed_tab_title(title_set: bool, title: &str, shown: Option<&str>) -> Option<String> {
+    if title_set && !title.is_empty() {
+        return Some(title.to_string());
+    }
+    shown.filter(|s| !s.is_empty()).map(str::to_string)
+}
+
 fn is_default_title(title: &str) -> bool {
     title
         .strip_prefix("shell ")
@@ -2557,6 +2572,7 @@ impl State {
             active: id,
             title: format!("shell {n}"),
             title_set: false,
+            shown: None,
             ssh: false,
             ssh_target: None,
             ssh_cmd: None,
@@ -2626,6 +2642,7 @@ impl State {
             active: id,
             title: format!("shell {n}"),
             title_set: false,
+            shown: None,
             ssh: false,
             ssh_target: None,
             ssh_cmd: None,
@@ -3503,8 +3520,8 @@ impl State {
 
     /// The displayed title, given the tab's evaluated view rules.
     fn title_with(&self, tab: &Tab, view: Option<mtty_config::view::Resolved>) -> String {
-        if tab.title_set && !tab.title.is_empty() {
-            return tab.title.clone();
+        if let Some(fixed) = fixed_tab_title(tab.title_set, &tab.title, tab.shown.as_deref()) {
+            return fixed;
         }
         if let Some(ed) = tab.editors.iter().find(|e| e.id == tab.active) {
             return ed.title();
@@ -4487,7 +4504,23 @@ impl State {
 
     /// Persist tabs/panes/cwd/layout so the next launch restores the session.
     fn session_value(&self) -> serde_json::Value {
-        let tabs: Vec<_> = self.tabs.iter().map(Tab::session_value).collect();
+        let tabs: Vec<_> = self
+            .tabs
+            .iter()
+            .map(|t| {
+                let mut value = Tab::session_value(t);
+                // Record the title the tab is showing now, so a restart shows
+                // the same title even for a tab the user never renamed (its
+                // live title comes from the pane's OSC name or cwd).
+                if let Some(obj) = value.as_object_mut() {
+                    obj.insert(
+                        "shown".into(),
+                        serde_json::json!(self.title_with(t, self.view_for(t))),
+                    );
+                }
+                value
+            })
+            .collect();
         serde_json::json!({
             "active_tab": self.active_tab,
             "tabs": tabs,
@@ -4926,6 +4959,11 @@ impl State {
                 active,
                 title,
                 title_set,
+                shown: t
+                    .get("shown")
+                    .and_then(|x| x.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
                 ssh,
                 ssh_target: ssh_target.filter(|_| ssh),
                 ssh_cmd: ssh_cmd.filter(|_| ssh),
@@ -10880,6 +10918,7 @@ impl State {
             active: id,
             title,
             title_set: true,
+            shown: None,
             ssh: false,
             ssh_target: None,
             ssh_cmd: None,
@@ -12834,6 +12873,7 @@ impl State {
                     active: id,
                     title,
                     title_set: false,
+                    shown: None,
                     ssh: false,
                     ssh_target: None,
                     ssh_cmd: None,
@@ -12896,6 +12936,7 @@ impl State {
                     active: id,
                     title,
                     title_set: false,
+                    shown: None,
                     ssh: false,
                     ssh_target: None,
                     ssh_cmd: None,
@@ -19610,6 +19651,7 @@ mod tests {
             active: title.into(),
             title: title.into(),
             title_set: false,
+            shown: None,
             ssh: false,
             ssh_target: None,
             ssh_cmd: None,
@@ -19733,6 +19775,32 @@ mod tests {
         assert!(tab.previews.is_empty());
         let _ = tab.layout.remove("e1");
         assert_eq!(tab.layout.ids(), vec!["t1".to_string()]);
+    }
+
+    #[test]
+    fn restored_shown_title_wins_over_the_live_one() {
+        // A renamed tab keeps its chosen name.
+        assert_eq!(fixed_tab_title(true, "work", None).as_deref(), Some("work"));
+        // A restored tab shows the title it had before the restart, not the
+        // new program's name.
+        assert_eq!(
+            fixed_tab_title(false, "shell 5", Some("shell 5")).as_deref(),
+            Some("shell 5")
+        );
+        assert_eq!(
+            fixed_tab_title(false, "shell 5", Some("miao")).as_deref(),
+            Some("miao")
+        );
+        // A chosen name beats a stale restored one.
+        assert_eq!(
+            fixed_tab_title(true, "work", Some("miao")).as_deref(),
+            Some("work")
+        );
+        // Nothing fixed: fall through to the automatic title.
+        assert_eq!(fixed_tab_title(false, "shell 5", None), None);
+        assert_eq!(fixed_tab_title(false, "shell 5", Some("")), None);
+        // An empty chosen title is not a choice.
+        assert_eq!(fixed_tab_title(true, "", None), None);
     }
 
     #[test]
