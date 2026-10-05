@@ -54,7 +54,7 @@ pub const AGENTS: &[Agent] = &[
         name: "miao",
         bin: "miao",
         launch: "miao",
-        resume: "miao --resume {session}",
+        resume: "miao --session {session}",
         hook_via: "the built-in miao integration",
         auto: true,
     },
@@ -432,6 +432,16 @@ mod tests {
         assert!(miao.auto);
         let text = snippet(miao, Path::new("/tmp/miao.sh"));
         assert!(text.contains("no hook wiring needed"));
+    }
+
+    #[test]
+    fn miao_resumes_with_its_supported_session_option() {
+        let miao = AGENTS.iter().find(|a| a.name == "miao").unwrap();
+        assert_eq!(
+            resume_command(miao, "ses_abc123").as_deref(),
+            Some("miao --session ses_abc123")
+        );
+        assert_eq!(resume_command(miao, "ses_abc123; exit"), None);
     }
 
     #[test]
