@@ -76,13 +76,14 @@ check and already works.
 ## v0.1.6 GUI acceptance — 2026-10-05
 
 Three items that need a real desktop were re-checked on the released v0.1.6
-packages. Two are done; one stays blocked on a desktop-level permission.
+packages. PowerShell 5.1 history and image restore passed end to end; the IME
+candidate window still needs a visual check with macOS desktop permissions.
 
 | Item | Result | Evidence | Limit |
 |---|---|---|---|
 | IME candidate placement past CJK | Verified at the anchor | mtty places the candidate window at the cursor cell (`active_cursor` -> `cursor_position`). A new test fixes the cursor's *column* after wide characters: `目录:` ends at column 5 and `中` advances two columns. | The candidate window's on-screen box still needs one interactive desktop look; keystroke automation is blocked by the macOS Accessibility/Automation permission (below) |
 | Inline image session restore | Verified end to end | On a real macOS desktop: a Kitty image drawn live in a pane (15,500 red pixels in an app self-capture), saved with the scrollback to `pane0.images.json`, and re-placed after a relaunch at the same width — the restored capture again shows 15,500 red pixels. A Sixel restores the same way (43,200 red pixels). | Only at the same pane width; a changed width drops the placement. Animations restore as a still frame (asserted in `graphics::tests`) |
-| Windows PowerShell 5.1 history | Blocked | The 5.1 shim is present and its argument quoting round-trips (see the earlier Windows helper row). | A full in-app capture needs a logged-on interactive desktop; an ssh session lands in session 0 and a scheduled task with an interactive-only logon cannot start there |
+| Windows PowerShell 5.1 history | Verified end to end | On a logged-on Windows desktop, `scripts/ps51-history-acceptance.ps1` returned PASS with Windows PowerShell 5.1.22621.6133 and the released v0.1.6 Windows x86_64 ZIP (SHA-256 matched the release asset). `history.json` contains the second typed marker in `pane0`; `output.txt` was also captured. | One PowerShell 5.1 patch level; other input methods are not covered |
 
 ### Why the two desktop checks cannot run over ssh
 
