@@ -86,7 +86,7 @@ Recursive splits keep Git changes and an actual local HTTP server side by side:
 
 More short, controllable demos: **[mtty on mtty.dev](https://mtty.dev/mtty#screens)**.
 
-> **Project status — pre-release.** The version is `0.1.6` and the API is not yet
+> **Project status — pre-release.** The version is `0.1.7` and the API is not yet
 > stable. macOS is the primary platform. Windows is built, tested and driven over
 > MTP on real hardware (see [`docs/WINDOWS-DEV.md`](docs/WINDOWS-DEV.md)); Linux
 > builds and passes tests in CI and has been checked on a real GNOME/Wayland
