@@ -638,6 +638,19 @@ mod tests {
     }
 
     #[test]
+    fn cursor_column_lands_after_cjk_wide_characters() {
+        // The IME candidate window is placed at the cursor cell, so its column
+        // must be the grid column past wide characters, not a character count.
+        let mut term = ATerm::new(20, 3, 100);
+        term.process("目录:".as_bytes());
+        // Two wide characters (4 columns) plus the ASCII ':' == column 5.
+        assert_eq!(term.cursor_position(), (0, 5));
+        term.process("中".as_bytes());
+        // The wide character advances two columns.
+        assert_eq!(term.cursor_position(), (0, 7));
+    }
+
+    #[test]
     fn snapshots_read_the_shell_output_under_a_full_screen_program() {
         let mut term = ATerm::new(20, 3, 100);
         term.process(b"$ vim notes\r\n\x1b[?1049h\x1b[H\x1b[2Jvim screen");

@@ -72,3 +72,24 @@ owner credentials. The repository currently has the minisign release secret;
 no Apple or Windows signing secret is configured, and the Windows test host has
 no usable code-signing certificate. Detached minisign verification is a separate
 check and already works.
+
+## v0.1.6 GUI acceptance — 2026-10-05
+
+Three items that need a real desktop were re-checked on the released v0.1.6
+packages. Two are done; one stays blocked on a desktop-level permission.
+
+| Item | Result | Evidence | Limit |
+|---|---|---|---|
+| IME candidate placement past CJK | Verified at the anchor | mtty places the candidate window at the cursor cell (`active_cursor` -> `cursor_position`). A new test fixes the cursor's *column* after wide characters: `目录:` ends at column 5 and `中` advances two columns. | The candidate window's on-screen box still needs one interactive desktop look; keystroke automation is blocked by the macOS Accessibility/Automation permission (below) |
+| Inline image session restore | Verified end to end | On a real macOS desktop: a Kitty image drawn live in a pane (15,500 red pixels in an app self-capture), saved with the scrollback to `pane0.images.json`, and re-placed after a relaunch at the same width — the restored capture again shows 15,500 red pixels. A Sixel restores the same way (43,200 red pixels). | Only at the same pane width; a changed width drops the placement. Animations restore as a still frame (asserted in `graphics::tests`) |
+| Windows PowerShell 5.1 history | Blocked | The 5.1 shim is present and its argument quoting round-trips (see the earlier Windows helper row). | A full in-app capture needs a logged-on interactive desktop; an ssh session lands in session 0 and a scheduled task with an interactive-only logon cannot start there |
+
+### Why the two desktop checks cannot run over ssh
+
+- **macOS keystrokes**: driving pinyin through the IME needs `System Events`
+  keystroke injection, which requires the Accessibility/Automation grant; an ssh
+  session cannot grant it and the call is silently blocked.
+- **Windows PowerShell 5.1**: the app must run in the logged-on console session
+  to hook `PSConsoleHostReadLine`; `schtasks /run` with an interactive-only task
+  fails from session 0. Use RDP or the physical console.
+
