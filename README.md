@@ -150,8 +150,10 @@ mtty instead.
 - Both side panels can be resized by dragging their edge; the widths are kept
   with the window size.
 - A recursive split tree: `⌘D` splits right and `⇧⌘D` splits down, with
-  draggable dividers and a close button on every pane. `⌘⇧T` toggles a scratch
-  Quick Terminal.
+  draggable dividers and a close button on every pane. Right-click a pane for a
+  context menu (Copy, Paste, Copy/Paste as ANSI or shell-escaped, Composer, Send
+  to Agent, Select All, Search, About This Line, Split Right/Left/Down/Up, Clear
+  Scrollback). `⌘⇧T` toggles a scratch Quick Terminal.
 - A **file list** in the details panel's Files tab (a click opens the reader)
   and **View rules** that map a pane's directory, foreground command, agent or
   ssh host to an alias, icon, tab title and badge, reloaded when `views.json`

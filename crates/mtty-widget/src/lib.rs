@@ -873,6 +873,16 @@ fn ssh_host(target: &str) -> String {
 /// larger than it. Pair it with [`window_body`] so wide content (long lines,
 /// code blocks, full-width fields) scrolls instead of stretching the window
 /// to a size it can then no longer be dragged below.
+/// The cell under a logical point inside a pane's inner rect, clamped to it.
+fn pane_cell_at(inner: Rect, cw: f32, ch: f32, at: (f32, f32)) -> Option<(u16, u16)> {
+    if cw <= 0.0 || ch <= 0.0 || !inner.contains(at.0, at.1) {
+        return None;
+    }
+    let col = ((at.0 - inner.x) / cw).floor().max(0.0) as u16;
+    let row = ((at.1 - inner.y) / ch).floor().max(0.0) as u16;
+    Some((row, col))
+}
+
 fn app_window<'a>(title: impl Into<egui::WidgetText>, ctx: &egui::Context) -> egui::Window<'a> {
     let screen = ctx.screen_rect();
     egui::Window::new(title)
@@ -936,9 +946,10 @@ fn divider_at(
 /// The split ratio while dragging a divider of `dir` across `area` (logical
 /// points) to a pointer in physical pixels. `Layout::set_ratio` clamps it.
 fn divider_ratio(dir: SplitDir, area: Rect, px: f32, py: f32, scale: f32) -> f32 {
-    match dir {
+    match dir.axis() {
         SplitDir::Right => (px / scale - area.x) / area.w.max(1.0),
         SplitDir::Down => (py / scale - area.y) / area.h.max(1.0),
+        SplitDir::Left | SplitDir::Up => unreachable!("axis() yields only Right/Down"),
     }
 }
 
@@ -1708,6 +1719,45 @@ struct PaneDraw {
     rows: Vec<Vec<Span>>,
 }
 
+/// An open pane context menu: where it is, which pane it targets, and the line
+/// under it (for "About This Line").
+#[derive(Clone)]
+struct PaneMenu {
+    pane: String,
+    /// The screen point (logical) the menu opens at.
+    at: (f32, f32),
+    /// The row/column the click landed on, if any.
+    cell: Option<(u16, u16)>,
+}
+
+/// One item of the pane context menu, mapped to a command when run.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PaneMenuAction {
+    Copy,
+    Paste,
+    CopyAnsi,
+    PasteEscaped,
+    Composer,
+    SendToAgent,
+    SelectAll,
+    Search,
+    SplitRight,
+    SplitLeft,
+    SplitDown,
+    SplitUp,
+    ClearScrollback,
+}
+
+/// Keep a context menu on screen: shift it left/up when it would run past the
+/// bottom-right, leaving a small margin.
+fn clamp_menu_pos(ctx: &egui::Context, at: (f32, f32)) -> (f32, f32) {
+    let screen = ctx.screen_rect();
+    let (w, h) = (220.0, 320.0);
+    let x = at.0.min(screen.max.x - w).max(screen.min.x);
+    let y = at.1.min(screen.max.y - h).max(screen.min.y);
+    (x, y)
+}
+
 struct State {
     window: Arc<Window>,
     proxy: EventLoopProxy<HostEvent>,
@@ -1741,6 +1791,8 @@ struct State {
     lang: mtty_ui::i18n::Lang,
     mods: ModifiersState,
     selection: Option<(String, Selection)>,
+    /// A pane context menu open at a screen point, for a specific pane.
+    pane_menu: Option<PaneMenu>,
     dragging: bool,
     /// A file drag is hovering the window. The drop target is painted so the
     /// destination is visible before the file is released.
@@ -3868,7 +3920,7 @@ impl State {
             let border = theme.chrome().hover;
             let mut divider_quads = Vec::new();
             for h in tab.layout.handles(self.grid_area()) {
-                let (x0, y0, x1, y1) = match h.dir {
+                let (x0, y0, x1, y1) = match h.dir.axis() {
                     SplitDir::Right => {
                         let cx = h.rect.x + h.rect.w / 2.0;
                         (cx - 0.5, h.rect.y, cx + 0.5, h.rect.y + h.rect.h)
@@ -3877,6 +3929,7 @@ impl State {
                         let cy = h.rect.y + h.rect.h / 2.0;
                         (h.rect.x, cy - 0.5, h.rect.x + h.rect.w, cy + 0.5)
                     }
+                    SplitDir::Left | SplitDir::Up => unreachable!("axis() yields only Right/Down"),
                 };
                 divider_quads.push(Quad::new(
                     (x0 * scale, y0 * scale),
@@ -4113,6 +4166,7 @@ impl State {
     fn chrome(&mut self, ctx: &egui::Context) {
         // Shared, host-agnostic chrome (menu/tabs/sidebar/details/status).
         chrome::render(ctx, self);
+        self.pane_context_menu(ctx);
         self.preview_panes(ctx);
         self.lsp_popups(ctx);
         if self.update_dialog {
@@ -5232,7 +5286,9 @@ enum Cmd {
     Copy,
     Paste,
     SplitRight,
+    SplitLeft,
     SplitDown,
+    SplitUp,
     ClosePane,
     ToggleSidebar,
     ToggleDetails,
@@ -5394,7 +5450,9 @@ impl State {
             (Cmd::Copy, t(l, "Copy", "复制")),
             (Cmd::Paste, t(l, "Paste", "粘贴")),
             (Cmd::SplitRight, t(l, "Split Right", "向右分屏")),
+            (Cmd::SplitLeft, t(l, "Split Left", "向左分屏")),
             (Cmd::SplitDown, t(l, "Split Down", "向下分屏")),
+            (Cmd::SplitUp, t(l, "Split Up", "向上分屏")),
             (Cmd::ClosePane, t(l, "Close Pane / Tab", "关闭 Pane/标签")),
             (Cmd::ToggleSidebar, t(l, "Toggle Sidebar", "开关侧栏")),
             (Cmd::ToggleDetails, t(l, "Toggle Details", "开关详情")),
@@ -5955,7 +6013,9 @@ impl State {
             Cmd::NewTab => self.new_tab_in(self.active_cwd_for_new()),
             Cmd::QuickTerminal => self.toggle_quick_terminal(),
             Cmd::SplitRight => self.split(SplitDir::Right),
+            Cmd::SplitLeft => self.split(SplitDir::Left),
             Cmd::SplitDown => self.split(SplitDir::Down),
+            Cmd::SplitUp => self.split(SplitDir::Up),
             Cmd::ClosePane => self.close_pane(),
             Cmd::ToggleSidebar => self.toggle_sidebar(),
             Cmd::ToggleDetails => self.toggle_details(),
@@ -7906,6 +7966,173 @@ impl State {
             }
         }
         self.window.request_redraw();
+    }
+
+    /// A right-click pane context menu, drawn as an egui popup. It reuses the
+    /// same commands as the palette so behaviour stays identical.
+    fn pane_context_menu(&mut self, ctx: &egui::Context) {
+        let Some(menu) = self.pane_menu.clone() else {
+            return;
+        };
+        use mtty_ui::i18n::t;
+        let lang = self.lang;
+        let has_selection = self
+            .selection
+            .as_ref()
+            .is_some_and(|(id, _)| id == &menu.pane);
+        let clamped = clamp_menu_pos(ctx, menu.at);
+        let chosen: std::cell::Cell<Option<PaneMenuAction>> = std::cell::Cell::new(None);
+        let line_info = menu
+            .cell
+            .and_then(|(r, _)| self.active_line_info(&menu.pane, r));
+        let mut open = true;
+        egui::Area::new(egui::Id::new("pane-context-menu"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(egui::pos2(clamped.0, clamped.1))
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_min_width(190.0);
+                    let item = |ui: &mut egui::Ui, label: &str, action: PaneMenuAction| {
+                        if ui.button(label).clicked() {
+                            chosen.set(Some(action));
+                        }
+                    };
+                    if has_selection {
+                        item(ui, t(lang, "Copy", "复制"), PaneMenuAction::Copy);
+                    }
+                    item(ui, t(lang, "Paste", "粘贴"), PaneMenuAction::Paste);
+                    ui.menu_button(t(lang, "Copy / Paste as", "复制 / 粘贴为"), |ui| {
+                        if ui
+                            .add_enabled(
+                                has_selection,
+                                egui::Button::new(t(lang, "Copy as ANSI", "复制为 ANSI")),
+                            )
+                            .clicked()
+                        {
+                            chosen.set(Some(PaneMenuAction::CopyAnsi));
+                            ui.close_menu();
+                        }
+                        if ui
+                            .button(t(lang, "Paste as Shell-Escaped", "粘贴为 Shell 转义"))
+                            .clicked()
+                        {
+                            chosen.set(Some(PaneMenuAction::PasteEscaped));
+                            ui.close_menu();
+                        }
+                    });
+                    ui.separator();
+                    item(ui, t(lang, "Composer", "撰写"), PaneMenuAction::Composer);
+                    item(
+                        ui,
+                        t(lang, "Send to Agent…", "发送给 Agent…"),
+                        PaneMenuAction::SendToAgent,
+                    );
+                    ui.separator();
+                    item(ui, t(lang, "Select All", "全选"), PaneMenuAction::SelectAll);
+                    item(ui, t(lang, "Search…", "搜索…"), PaneMenuAction::Search);
+                    ui.separator();
+                    ui.menu_button(
+                        t(lang, "About This Line", "关于本行"),
+                        |ui| match &line_info {
+                            Some(info) => {
+                                for (k, v) in info {
+                                    ui.label(format!("{k}: {v}"));
+                                }
+                            }
+                            None => {
+                                ui.label(t(lang, "No line under the cursor.", "光标下没有行。"));
+                            }
+                        },
+                    );
+                    ui.separator();
+                    ui.menu_button(t(lang, "Split Pane", "分屏"), |ui| {
+                        for (en, zh, action) in [
+                            ("Split Right", "向右分屏", PaneMenuAction::SplitRight),
+                            ("Split Left", "向左分屏", PaneMenuAction::SplitLeft),
+                            ("Split Down", "向下分屏", PaneMenuAction::SplitDown),
+                            ("Split Up", "向上分屏", PaneMenuAction::SplitUp),
+                        ] {
+                            if ui.button(t(lang, en, zh)).clicked() {
+                                chosen.set(Some(action));
+                                ui.close_menu();
+                            }
+                        }
+                    });
+                    ui.separator();
+                    item(
+                        ui,
+                        t(lang, "Clear Scrollback", "清除回滚"),
+                        PaneMenuAction::ClearScrollback,
+                    );
+                });
+            });
+        // Escape closes the menu; a click outside is handled by egui (no item
+        // was chosen, and the area loses its popup).
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            open = false;
+        }
+        let action = chosen.get();
+        if action.is_some() {
+            open = false;
+        }
+        if !open {
+            self.pane_menu = None;
+        }
+        if let Some(action) = action {
+            // The menu targets `menu.pane`; focus it before running.
+            if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                if tab.active != menu.pane && tab.panes.iter().any(|p| p.id == menu.pane) {
+                    tab.active = menu.pane.clone();
+                    self.selection = None;
+                }
+            }
+            self.run_pane_menu_action(action);
+        }
+    }
+
+    /// The lines under a pane's cursor row, for "About This Line".
+    fn active_line_info(&self, pane: &str, row: u16) -> Option<Vec<(String, String)>> {
+        let tab = self.tabs.get(self.active_tab)?;
+        let p = tab.panes.iter().find(|p| p.id == pane)?;
+        let text = p.term.screen().line_text(row);
+        if text.trim().is_empty() {
+            return None;
+        }
+        let (_, col) = p.term.screen().cursor_position();
+        let cell = p.term.screen().cell(row, col);
+        let mut info = vec![
+            ("Row".to_string(), (row + 1).to_string()),
+            ("Column".to_string(), (col + 1).to_string()),
+        ];
+        if let Some(c) = cell {
+            info.push(("Char".to_string(), format!("{:?}", c.ch)));
+            if c.wide_spacer {
+                info.push(("Wide".to_string(), "yes".to_string()));
+            }
+        }
+        info.push(("Line".to_string(), text.trim_end().to_string()));
+        Some(info)
+    }
+
+    /// Run a menu action by reusing an existing command where one exists.
+    fn run_pane_menu_action(&mut self, action: PaneMenuAction) {
+        use PaneMenuAction::*;
+        let cmd = match action {
+            Copy => Cmd::Copy,
+            Paste => Cmd::Paste,
+            CopyAnsi => Cmd::CopyAnsi,
+            PasteEscaped => Cmd::PasteEscaped,
+            Composer => Cmd::Composer,
+            SendToAgent => Cmd::SendSelectionToAgent,
+            SelectAll => Cmd::SelectAll,
+            Search => Cmd::Find,
+            SplitRight => Cmd::SplitRight,
+            SplitLeft => Cmd::SplitLeft,
+            SplitDown => Cmd::SplitDown,
+            SplitUp => Cmd::SplitUp,
+            ClearScrollback => Cmd::ClearScrollback,
+        };
+        self.run_command(cmd);
     }
 
     fn preview_panes(&mut self, ctx: &egui::Context) {
@@ -12318,6 +12545,28 @@ impl State {
                 }
             }
         }
+        // `MTTY_QA_MENU=<x>,<y>` opens the pane context menu at that logical
+        // point, so the menu can be captured without a pointer event.
+        if let Some(spec) = mtty_config::env("QA_MENU") {
+            let mut parts = spec.split(',');
+            let x = parts.next().and_then(|v| v.trim().parse::<f32>().ok());
+            let y = parts.next().and_then(|v| v.trim().parse::<f32>().ok());
+            if let (Some(x), Some(y)) = (x, y) {
+                if let Some((id, outer)) = self
+                    .pane_rects()
+                    .into_iter()
+                    .find(|(_, r)| r.contains(x, y))
+                {
+                    let inner = card_inner(outer);
+                    let cell = pane_cell_at(inner, self.cw, self.ch, (x, y));
+                    self.pane_menu = Some(PaneMenu {
+                        pane: id,
+                        at: (x, y),
+                        cell,
+                    });
+                }
+            }
+        }
         let Some(label) = mtty_config::env("QA_COMMAND") else {
             return;
         };
@@ -15040,6 +15289,7 @@ impl ApplicationHandler<HostEvent> for Host {
             lang,
             mods: ModifiersState::empty(),
             selection: None,
+            pane_menu: None,
             dragging: false,
             dropping: false,
             drag_paths: Vec::new(),
@@ -15979,13 +16229,26 @@ impl ApplicationHandler<HostEvent> for Host {
                     if es == ElementState::Pressed {
                         if state.forward_mouse(px, py, 2, true, false) {
                             state.mouse_captured = Some(2);
-                        } else if state.selection.is_some() {
-                            let ctx = state.egui_ctx.clone();
-                            state.copy_selection(&ctx);
-                            state.selection = None;
                         } else {
-                            // Paste.
-                            state.paste_clipboard();
+                            // Open the pane context menu at the click. A later
+                            // release with no capture does nothing.
+                            let scale = state.window.scale_factor() as f32;
+                            let logical = (px / scale, py / scale);
+                            if let Some((id, outer)) = state
+                                .pane_rects()
+                                .into_iter()
+                                .find(|(_, r)| r.contains(logical.0, logical.1))
+                            {
+                                let inner = card_inner(outer);
+                                let cell = pane_cell_at(inner, state.cw, state.ch, logical);
+                                state.pane_menu = Some(PaneMenu {
+                                    pane: id,
+                                    at: logical,
+                                    cell,
+                                });
+                            } else {
+                                state.pane_menu = None;
+                            }
                         }
                     } else if state.mouse_captured.take() == Some(2) {
                         state.forward_mouse(px, py, 2, false, false);
@@ -16935,9 +17198,10 @@ fn layout_to_json(l: &Layout) -> serde_json::Value {
     match l {
         Layout::Leaf(id) => serde_json::json!({ "leaf": id }),
         Layout::Split { dir, ratio, a, b } => serde_json::json!({
-            "dir": match dir {
+            "dir": match dir.axis() {
                 SplitDir::Right => "right",
                 SplitDir::Down => "down",
+                SplitDir::Left | SplitDir::Up => unreachable!("axis() yields only Right/Down"),
             },
             "ratio": ratio,
             "a": layout_to_json(a),
