@@ -927,6 +927,20 @@ mod symbol_tests {
     use super::*;
 
     #[test]
+    fn default_grid_metrics_use_the_renderers_primary_face() {
+        let probe = MetricsProbe::new();
+        let query = |family| {
+            probe.font_system.db().query(&fontdb::Query {
+                families: &[family],
+                ..Default::default()
+            })
+        };
+        let bundled = query(Family::Name("JetBrains Mono"));
+        assert!(bundled.is_some(), "bundled grid font is missing");
+        assert_eq!(query(Family::Monospace), bundled);
+    }
+
+    #[test]
     fn bundled_font_draws_text_symbols_itself() {
         let mut font_system =
             FontSystem::new_with_locale_and_db("en-US".into(), Default::default());
