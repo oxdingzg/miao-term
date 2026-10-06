@@ -35,6 +35,8 @@ pub struct CellView {
     pub bold: bool,
     /// SGR 2: faint text (Claude Code's suggested prompt, hints).
     pub dim: bool,
+    /// Width recorded by the VT grid, rather than guessed from Unicode ranges.
+    pub wide: bool,
     pub wide_spacer: bool,
 }
 
@@ -224,6 +226,7 @@ impl ATerm {
             inverse: cell.flags.contains(Flags::INVERSE),
             bold: cell.flags.contains(Flags::BOLD),
             dim: cell.flags.contains(Flags::DIM),
+            wide: cell.flags.contains(Flags::WIDE_CHAR),
             wide_spacer: cell
                 .flags
                 .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER),
