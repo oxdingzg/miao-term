@@ -153,9 +153,11 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true' && github.event_name != 'push'
     runs-on: ubuntu-latest
-    # The nightly/manual run on main commits the refreshed baseline.
+    # The nightly/manual run refreshes the baseline through a pull request,
+    # since main only accepts changes that way.
     permissions:
       contents: write
+      pull-requests: write
     env:
       # Looser than the local 25% so shared-runner noise does not flake.
       PERF_REGRESSION_PCT: "40"
@@ -172,6 +174,8 @@ jobs:
         if: >-
           github.ref == 'refs/heads/main' &&
           (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
           if [ ! -f target/perf-measured.json ]; then
@@ -183,11 +187,28 @@ jobs:
             echo "baseline unchanged"
             exit 0
           fi
+          # main is protected: a direct push is rejected ("Changes must be made
+          # through a pull request"), so land the refresh through a PR instead.
+          branch="chore/perf-baseline-${GITHUB_RUN_ID}"
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
           git add benches/perf-baseline.json
           git commit -m "chore(perf): refresh the CI baseline from the ${{ github.event_name }} run"
-          git push
+          git push origin "HEAD:refs/heads/$branch"
+          gh pr create --base main --head "$branch" \
+            --title "chore(perf): refresh the CI baseline" \
+            --body "Automated baseline refresh from the ${{ github.event_name }} run (${GITHUB_RUN_ID})."
+          # The PR is created with GITHUB_TOKEN, so no checks run for it and it
+          # merges immediately; retry briefly to absorb mergeability lag.
+          for attempt in 1 2 3 4 5; do
+            if gh pr merge "$branch" --squash --delete-branch; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::could not merge the baseline refresh pull request"
+          exit 1
 
   privacy:
     runs-on: ubuntu-latest
