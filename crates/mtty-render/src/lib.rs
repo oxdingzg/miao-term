@@ -310,6 +310,8 @@ impl MetricsProbe {
         let mut font_system = FontSystem::new();
         load_bundled(&mut font_system);
         load_system_cjk(&mut font_system);
+        // Grid columns and drawn text must use the same primary face.
+        font_system.db_mut().set_monospace_family("JetBrains Mono");
         let buffer = Buffer::new(&mut font_system, Metrics::new(14.0, 18.0));
         Self {
             font_system,

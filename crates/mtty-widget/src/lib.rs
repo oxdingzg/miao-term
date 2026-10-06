@@ -15702,6 +15702,11 @@ impl ApplicationHandler<HostEvent> for Host {
             state.save_scrollback_periodically();
             let drawable = window_drawable(&state.window, state.occluded);
             let mut wake_at = Instant::now() + Duration::from_millis(500);
+            for pane in state.tabs.iter().flat_map(|tab| &tab.panes) {
+                if let Some(deadline) = pane.term.output_deadline() {
+                    wake_at = wake_at.min(deadline);
+                }
+            }
             // A file drag sends no pointer motion or key events: follow the
             // pointer and Alt from the system so the drop targets track them.
             if drawable && state.dropping && state.qa_drag.is_none() {
