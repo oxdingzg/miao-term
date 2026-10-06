@@ -310,6 +310,8 @@ impl MetricsProbe {
         let mut font_system = FontSystem::new();
         load_bundled(&mut font_system);
         load_system_cjk(&mut font_system);
+        // Grid columns and drawn text must use the same primary face.
+        font_system.db_mut().set_monospace_family("JetBrains Mono");
         let buffer = Buffer::new(&mut font_system, Metrics::new(14.0, 18.0));
         Self {
             font_system,
@@ -923,6 +925,20 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[cfg(test)]
 mod symbol_tests {
     use super::*;
+
+    #[test]
+    fn default_grid_metrics_use_the_renderers_primary_face() {
+        let probe = MetricsProbe::new();
+        let query = |family| {
+            probe.font_system.db().query(&fontdb::Query {
+                families: &[family],
+                ..Default::default()
+            })
+        };
+        let bundled = query(Family::Name("JetBrains Mono"));
+        assert!(bundled.is_some(), "bundled grid font is missing");
+        assert_eq!(query(Family::Monospace), bundled);
+    }
 
     #[test]
     fn bundled_font_draws_text_symbols_itself() {

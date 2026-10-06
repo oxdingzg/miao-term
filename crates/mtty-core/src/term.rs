@@ -653,7 +653,12 @@ impl Terminal {
 
     /// Drain pending PTY output into the screen. Returns true if anything changed.
     pub fn process_pending(&mut self) -> bool {
-        let mut changed = false;
+        let mut changed = self
+            .screen
+            .expire_synchronized_output(std::time::Instant::now());
+        if changed {
+            self.send_screen_responses();
+        }
         // Shell hooks may be absent or replaced by user startup files. Query
         // the local shell itself at a bounded cadence, without spawning tools.
         if !self.cwd_reported && self.cwd_checked.elapsed() >= std::time::Duration::from_millis(500)
@@ -723,6 +728,11 @@ impl Terminal {
         }
         self.graphics.sync_total(self.screen.total_lines());
         changed
+    }
+
+    /// Wake even if an application starts a synchronized update then stalls.
+    pub fn output_deadline(&self) -> Option<std::time::Instant> {
+        self.screen.synchronized_output_deadline()
     }
 
     /// Feed one chunk through the shared control scanner: borrowed text to VT,

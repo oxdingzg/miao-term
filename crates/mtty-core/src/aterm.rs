@@ -35,6 +35,8 @@ pub struct CellView {
     pub bold: bool,
     /// SGR 2: faint text (Claude Code's suggested prompt, hints).
     pub dim: bool,
+    /// Width recorded by the VT grid, rather than guessed from Unicode ranges.
+    pub wide: bool,
     pub wide_spacer: bool,
 }
 
@@ -85,7 +87,25 @@ impl ATerm {
     }
 
     pub fn process(&mut self, bytes: &[u8]) {
+        self.expire_synchronized_output(std::time::Instant::now());
         self.processor.advance(&mut self.term, bytes);
+    }
+
+    /// The VT parser buffers a synchronized frame until ESU or this deadline.
+    /// The host must wake at the deadline even when the producer goes idle.
+    pub(crate) fn synchronized_output_deadline(&self) -> Option<std::time::Instant> {
+        self.processor.sync_timeout().sync_timeout()
+    }
+
+    pub(crate) fn expire_synchronized_output(&mut self, now: std::time::Instant) -> bool {
+        if !self
+            .synchronized_output_deadline()
+            .is_some_and(|deadline| deadline <= now)
+        {
+            return false;
+        }
+        self.processor.stop_sync(&mut self.term);
+        true
     }
 
     /// A cursor query must observe writes buffered by a synchronized update.
@@ -206,6 +226,7 @@ impl ATerm {
             inverse: cell.flags.contains(Flags::INVERSE),
             bold: cell.flags.contains(Flags::BOLD),
             dim: cell.flags.contains(Flags::DIM),
+            wide: cell.flags.contains(Flags::WIDE_CHAR),
             wide_spacer: cell
                 .flags
                 .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER),
@@ -602,6 +623,35 @@ fn sgr(c: Color, bg: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unfinished_synchronized_frame_is_flushed_at_its_deadline() {
+        let mut term = ATerm::new(40, 5, 100);
+        term.process(b"old\x1b[?2026h\rnew");
+        assert_eq!(term.line_text(0), "old");
+        let deadline = term.synchronized_output_deadline().unwrap();
+        assert!(!term.expire_synchronized_output(deadline - std::time::Duration::from_nanos(1)));
+        assert_eq!(term.line_text(0), "old");
+        assert!(term.expire_synchronized_output(deadline));
+        assert_eq!(term.line_text(0), "new");
+        assert_eq!(term.synchronized_output_deadline(), None);
+        assert!(!term.expire_synchronized_output(deadline));
+        term.process(b"\x1b[?2026l\r\nnext");
+        assert_eq!(term.line_text(1), "next");
+    }
+
+    #[test]
+    fn a_completed_synchronized_frame_has_no_stale_deadline() {
+        let mut term = ATerm::new(40, 5, 100);
+        term.process(b"\x1b[?2026hfirst\x1b[?2026l");
+        assert_eq!(term.line_text(0), "first");
+        assert_eq!(term.synchronized_output_deadline(), None);
+        term.process(b"\x1b[?2026h\rsecond");
+        assert_eq!(term.line_text(0), "first");
+        term.process(b"\x1b[?2026l");
+        assert_eq!(term.line_text(0), "second");
+        assert_eq!(term.synchronized_output_deadline(), None);
+    }
 
     fn replay(snapshot: &str, cols: u16) -> ATerm {
         let mut term = ATerm::new(cols, 10, 100);

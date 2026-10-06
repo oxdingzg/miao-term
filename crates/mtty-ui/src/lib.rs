@@ -62,7 +62,11 @@ pub fn build_rows(screen: &ATerm, theme: &Theme, cursor: Option<(u16, u16)>) -> 
                 col += 1;
                 continue;
             };
-            let width = width_of(cell.ch);
+            if cell.wide_spacer {
+                col += 1;
+                continue;
+            }
+            let width = if cell.wide { 2 } else { 1 };
             let color = if cursor == Some((row, col)) {
                 rgb(theme.bg)
             } else if cell.inverse {
@@ -166,6 +170,21 @@ pub fn width_of(c: char) -> u16 {
 #[cfg(test)]
 mod row_tests {
     use super::*;
+
+    #[test]
+    fn unicode_symbols_do_not_skip_the_following_grid_cell() {
+        for symbol in ['\u{1f5a5}', '\u{1f5d2}', '\u{303f}', '中'] {
+            let mut screen = ATerm::new(10, 2, 100);
+            screen.process(format!("{symbol}\x1b[31mX\x1b[0mY").as_bytes());
+            let rows = build_rows(&screen, &Theme::nord(), None);
+            let x_col = (0..10)
+                .find(|&col| screen.cell(0, col).unwrap().ch == 'X')
+                .unwrap();
+            let x = rows[0].iter().find(|span| span.text == "X");
+            assert!(x.is_some(), "{symbol:?} swallowed the following X");
+            assert_eq!(x.unwrap().col, x_col);
+        }
+    }
 
     #[test]
     fn faint_text_reads_dimmer_than_normal_text() {
