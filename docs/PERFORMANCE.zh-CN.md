@@ -7,14 +7,14 @@
 ## 门
 
 ```sh
-cargo test --release -p mtty-core -p mtty-graphics -p mtty-ptyhost -p mtty-app -- --ignored
+cargo test --release -p mtty-core -p mtty-graphics -p mtty-editor -p mtty-widget -p mtty-ptyhost -p mtty-app -- --ignored
 ```
 
 性能测试标记为 `#[ignore]`,故常规测试保持快速;`perf` CI 作业在 `ubuntu-latest` 上以
 release 运行它们。预算是绝对值且留出宽裕余量(数量级退化会失败,runner 抖动不会)。
 `MTTY_PERF_SCALE`(默认 `1.0`)可在慢机器上按倍数放宽所有预算。每个指标还会与
-`budgets.json` 里记录的**基线**按 `regression_pct` 比较(ADR 0023),故漂移也会失败,而不只是断崖。`perf` 作业还会与仓库内持久的 **CI 基线** [`benches/perf-baseline.json`](../benches/perf-baseline.json)
-比较(ADR 0028):`main` 上的 nightly/手动运行会用本次测量重写该文件并提交,因此不受缓存淘汰
+`budgets.json` 里记录的**基线**按 `regression_pct` 比较(ADR 0023),默认只报告退化；在稳定运行器上设置 `PERF_ENFORCE=1` 才会使这项比较失败。`perf` 作业还会与仓库内持久的 **CI 基线** [`benches/perf-baseline.json`](../benches/perf-baseline.json)
+比较(ADR 0028):`main` 上的 nightly/手动运行会用本次测量通过 PR 更新该文件,因此不受缓存淘汰
 与 runner 镜像变更影响。比较仅**报告**,因为 runner 抖动(同一份代码 1.8x)远大于信号——
 真正的门是绝对预算。
 
@@ -149,7 +149,7 @@ CPU 场景工作时间约减少 95%；大量图片的 RSS 增量减少约 32 MiB
 ### 复现与门禁
 
 ```sh
-cargo test --release -p mtty-core -p mtty-graphics -p mtty-ptyhost -p mtty-app -- --ignored --nocapture
+cargo test --release -p mtty-core -p mtty-graphics -p mtty-editor -p mtty-widget -p mtty-ptyhost -p mtty-app -- --ignored --nocapture
 cargo build --release -p mtty-app -p mtty-cli
 python3 scripts/profile-input.py --mode fragments
 python3 scripts/profile-input.py --mode images

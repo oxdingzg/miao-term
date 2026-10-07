@@ -74,7 +74,7 @@ gh secret set MINISIGN_SECRET_KEY < minisign.key   # 密钥文件内容
 ```
 
 仓库根目录保留 `minisign.pub`,release 作业也会把它作为附件上传,因此
-`…/releases/download/<tag>/minisign.pub` 始终可用。告知用户把其单行内容写入配置:
+`…/releases/download/<tag>/minisign.pub` 随产物发布。更新器内置官方公钥；自定义渠道可覆盖它：
 
 ```toml
 update-pubkey = "RWQ…"
@@ -87,7 +87,7 @@ GitHub Secrets 是**只写**的:设了 `MINISIGN_SECRET_KEY` 之后,UI/API 都�
 
 - 公钥在仓库(`minisign.pub`)并随每次 release 附加。
 - 私钥请另存到可靠处(密码管理器 / 加密副本 / macOS 钥匙串)。若要轮换:生成新密钥对 →
-  `gh secret set MINISIGN_SECRET_KEY` → 替换 `minisign.pub` → 告知用户更新 `update-pubkey`。
+  `gh secret set MINISIGN_SECRET_KEY` → 替换 `minisign.pub` → 同步内置公钥并说明自定义 `update-pubkey` 的迁移。
   旧 release 仍可用归档的旧公钥校验。
 
 ## 更新清单
@@ -116,7 +116,7 @@ update-check-url = "https://github.com/oxdingzg/mtty/releases/latest/download/la
 ```
 
 此后 *设置 → 检查更新* 会报告版本,*下载更新* 会获取当前平台产物并校验其 SHA-256
-(设置了 `update-pubkey` 时另校验 minisign 签名);macOS 上 *安装并重启* 会带回滚 helper 替换
+与必需的 minisign 签名（默认使用内置发布公钥，可用 `update-pubkey` 覆盖）;macOS 上 *安装并重启* 会带回滚 helper 替换
 应用包(ADR 0025)。
 
 平台键与应用 `platform_key()` 一致:`macos-aarch64`、`macos-x86_64`、`linux-x86_64`、
@@ -182,7 +182,7 @@ minisign -Vm mtty-macos-arm64.zip -p minisign.pub      # -> "Signature and comme
 shasum -a 256 mtty-macos-arm64.zip   # 与清单里的 "sha256" 比对
 ```
 
-未配置 `MINISIGN_SECRET_KEY` 时不会签名，因此未签名的发布没有 `.sig` —— 校验是可选的，安装并不要求。
+更新器要求分离签名与受信公钥，未签名的演练产物不能通过更新器安装。手动下载后的验签是独立操作。
 
 ## 验收覆盖与剩余工作
 

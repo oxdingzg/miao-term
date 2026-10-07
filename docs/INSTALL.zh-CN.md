@@ -5,6 +5,28 @@
 mtty(原名 miaotty)是原生 winit/wgpu 应用，只提供一个 GUI 主程序和一个 CLI。
 命名与迁移见 [APP-IDENTITY.zh-CN.md](APP-IDENTITY.zh-CN.md)。
 
+## 安装发布版
+
+从 [GitHub Releases](https://github.com/oxdingzg/mtty/releases/latest) 选择最新安装包。
+
+| 平台 | 安装与首次启动 |
+|---|---|
+| macOS | Apple 芯片选 arm64 zip，Intel 选 x86_64 zip；解压后把 `mtty.app` 拖进 Applications，再打开 |
+| Linux | Debian/Ubuntu 可安装 `.deb`；AppImage 添加执行权限后运行；tar 压缩包也提供可执行文件 |
+| Windows | 运行 MSI 安装器，或解压 zip 后打开 `mtty.exe`；MSI 还会将 `mtty-cli` 加入 PATH |
+
+当前签名状态与下载提示见发布说明和 [Windows 下载指引](https://mtty.dev/zh/docs/about/windows-downloads/)。
+`.sig` 与 `minisign.pub` 用于手动验签，不是要打开的应用。
+
+## 第一个工作区
+
+1. 启动后使用默认本地终端，或通过 **New SSH Session…** 打开远程 shell。
+2. 用 `⌘K`（其他平台 `Ctrl+Shift+K`）打开命令面板；快速打开是 `⌘⇧O` / `Ctrl+Shift+Alt+O`。
+3. 在窗格里运行已安装的代理 CLI，例如 `miao`。miao 自动上报状态；其他受支持代理有状态 hook 设置入口。
+4. 在终端旁打开文件，用详情面板（`⌘⇧R` / `Ctrl+Shift+Alt+R`）查看文件、Git、代理状态与后续提示队列。
+
+后续操作见[快捷键](SHORTCUTS.zh-CN.md)、[配置](CONFIG.zh-CN.md)、[编辑器](EDITOR.zh-CN.md)与[远程连接](REMOTE.zh-CN.md)。
+
 ## 从源码运行
 
 ```sh

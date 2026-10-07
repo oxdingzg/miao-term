@@ -17,11 +17,11 @@
 
 **mtty** 把终端、文件、远程主机与 AI 编程 agent 放进同一个快速的原生窗口。它有三根支柱:
 
-| 支柱 | 现在 | 接下来 |
-|---|---|---|
-| **终端与远程** —— 吸收 Termius 与 PuTTY | GPU 渲染的终端、标签与分屏、会话恢复;主机库、密钥、SFTP/FTP、端口转发、跳板机、片段、广播输入(经系统 OpenSSH) | 串口、Telnet 与原始 TCP 连接,`.ppk` 密钥;正在评估 Rust 原生的 SSH 实现(需另立 ADR) |
-| **编辑器** —— 一流的文本编辑器,而非附属功能 | 与终端并列的编辑器 pane:80 种语言的 tree-sitter 高亮,任意大小的文件(超过 64 MB 以只读查看模式打开),多光标,支持正则的查找替换,跳转到行,实时 Markdown 与 Mermaid 预览 pane;LSP 诊断、悬停、补全与跳转定义 | pane 中的 vim 模式、折叠与大纲([ADR 0034](docs/decisions/0034-editor-pane.zh-CN.md)) |
-| **Agent 工作台** —— AI 原生 | Claude Code、Codex、OpenCode 与 miao 的状态 hook;需要关注时的徽章与通知;提示队列;每个任务一个 git worktree 并审阅 diff;MTP 控制面 | agent 的修改以可撤销的 diff 在行内审阅;ACP 客户端;选区、诊断与终端输出一键作为 agent 上下文 |
+| 方向 | 当前可用 |
+|---|---|
+| **终端与远程** | GPU 渲染的标签与分屏、会话恢复、主机库、SSH 密钥、SFTP/FTP、端口转发、跳板机、片段与广播输入；串口、Telnet、原始 TCP 与加密 `.ppk` 密钥导入 |
+| **编辑器** | 原生编辑器窗格、tree-sitter 高亮、大文件查看模式、多光标、正则查找替换、Markdown 与 Mermaid 预览、LSP、可选 vim、折叠与大纲 |
+| **代理工作台** | 代理状态徽章与通知、提示队列、逐任务 git worktree、可撤销的行内编辑提案、ACP 代理、上下文发送与 MTP 控制面 |
 
 把它们连在一起的是:Rust 与 GPU 渲染,并由性能门把关;终端、编辑器、远程主机与 agent 位于同一套标签与分屏;不需要账号,
 不强制上云——mtty 托管你选择的 agent,自己从不调用模型。
@@ -76,7 +76,7 @@
 
 更多可暂停的短演示：**[mtty.dev 上的 mtty](https://mtty.dev/zh/mtty#screens)**。
 
-> **项目状态 —— 预发布。** 当前版本为 `0.1.8`,API 尚未稳定。macOS 是主要平台;
+> **项目状态 —— 预发布。** API 尚未稳定，最新版本见[发布页](https://github.com/oxdingzg/mtty/releases/latest)。macOS 是主要平台;
 > Windows 已在真实硬件上构建、测试并经 MTP 驱动(见 [`docs/WINDOWS-DEV.zh-CN.md`](docs/WINDOWS-DEV.zh-CN.md));
 > Linux 在 CI 中构建并通过测试,并已在真实的 GNOME/Wayland 桌面上验收(输入法、菜单、文件拖放、剪贴板、快捷键)。
 
@@ -190,7 +190,7 @@ mtty 与 miao 是两个独立项目,任意一个都可以单独使用。在 mtty
   当前 SSH 标签的主机)。
 - **串口、Telnet 与裸 TCP**:*新建串口/Telnet/TCP 会话…* 把串口控制台(设备、波特率、数据位、校验、停止位、流控)、
   Telnet 连接或裸 TCP socket 作为 pane 打开。已保存主机带 `kind`,也按同样方式打开;Telnet 与裸 TCP 标注为未加密(ADR 0037)。
-- **PuTTY 密钥**:*主机… → 导入 PuTTY 密钥…* 读取 `.ppk`(v2 或 v3,Ed25519/RSA/ECDSA),
+- **.ppk 密钥**:主机窗口中的 .ppk 密钥导入操作 读取 `.ppk`(v2 或 v3,Ed25519/RSA/ECDSA),
   写出加密的 OpenSSH 密钥到 `~/.ssh`,绝不明文保存(ADR 0038)。
 - **ACP agent**:任何支持 Agent Client Protocol 的 agent(Codex、Gemini CLI 等)都可从
   *ACP Agent…* 运行:转写窗口流式显示回复、发送 prompt、把其 diff 变成可审阅的编辑器
@@ -236,7 +236,7 @@ mtty 与 miao 是两个独立项目,任意一个都可以单独使用。在 mtty
 | [`mtty-app`](mtty-app) | `mtty` 原生主程序及平台安装包元数据。 |
 | [`mtty-cli`](mtty-cli) | `mtty-cli` 控制客户端。 |
 
-热路径 —— `pty → vt → grid → renderer` —— 不跨锁,且每帧不做分配。平台差异只出现在负责
+终端路径 —— `pty → vt → grid → renderer` —— 使用有界输出队列与损伤驱动重绘。行构建仍分配 span 缓冲区，吞吐与分配预算见[性能文档](docs/PERFORMANCE.md)。平台差异只出现在负责
 相应关注点的 crate 中少量 `#[cfg]` 守卫的代码块里:`mtty-core` 的 PTY 派生
 (`src/term.rs`)、`mtty-widget` 的窗口/事件循环(`src/lib.rs`),以及 `mtty-mtp` 的
 socket/命名管道传输(`src/lib.rs`)。
@@ -244,7 +244,7 @@ socket/命名管道传输(`src/lib.rs`)。
 ### 原则
 
 1. 引擎与 host 分离;hosts 是引擎的第一批消费者。
-2. 热路径不跨锁、不做分配。
+2. 输出队列与保留图像有界，减少复制和重绘，并通过实测预算验证性能。
 3. 先做应用、后抽库,API 由真实需求驱动。
 4. 平台差异只出现在 `mtty-core`、`mtty-widget` 与 `mtty-mtp` 中 `#[cfg]` 守卫的代码块里。
 5. 控制面(MTP / CLI)与引擎解耦。
@@ -347,6 +347,8 @@ mtty-cli state claude --state processing --pane ID
 
 ## 文档
 
+- [安装与首次上手](docs/INSTALL.zh-CN.md) · [编辑器](docs/EDITOR.zh-CN.md) · [远程连接](docs/REMOTE.zh-CN.md)
+
 文档默认英文,并配套同步维护的简体中文版(`*.zh-CN.md`)。
 
 | 文档 | English | 简体中文 |
@@ -376,7 +378,7 @@ mtty-cli state claude --state processing --pane ID
 已完成的里程碑:
 
 - **M5 编辑器 pane**：rope 文档、tree-sitter 高亮、多光标、查找替换、LSP、vim、折叠与 Markdown 预览。
-- **M6 远程(PuTTY 式)**：串口、Telnet、原始 TCP 与加密 `.ppk` 导入；SSH 按 ADR 0039 继续使用系统 OpenSSH。
+- **M6 远程(连接)**：串口、Telnet、原始 TCP 与加密 `.ppk` 导入；SSH 按 ADR 0039 继续使用系统 OpenSSH。
 - **M7 Agent 工作台**：可撤销的修改提案、ACP 会话和上下文交接。ACP 支持认证、加载会话及终端请求；
   文件写入在用户审阅并保存后才报告成功。
 

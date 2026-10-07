@@ -18,11 +18,11 @@
 **mtty** puts your terminals, your files, your remote hosts and your AI coding
 agents in one fast, native window. It is built on three pillars:
 
-| Pillar | Today | Next |
-|---|---|---|
-| **Terminal and remote** — absorbs Termius and PuTTY | GPU-rendered terminal, tabs and splits, session restore; host library, keys, SFTP/FTP, port forwarding, jump hosts, snippets, broadcast input (over the system OpenSSH) | Serial, Telnet and raw TCP connections, `.ppk` keys; a Rust-native SSH stack is under consideration (needs an ADR) |
-| **Editor** — a first-class text editor, not a side feature | Editor pane beside terminals: tree-sitter highlighting in 80 languages, files of any size (view mode above 64 MB), multiple cursors, find and replace with regex, go to line, a live Markdown and Mermaid preview pane; LSP diagnostics, hover, completion and go to definition | vim mode in the pane, folding and outline ([ADR 0034](docs/decisions/0034-editor-pane.md)) |
-| **Agent workspace** — AI-native | State hooks for Claude Code, Codex, OpenCode and miao; attention badges and notifications; prompt queue; a git worktree per task with diff review; the MTP control plane | Agents' edits reviewed inline as undoable diffs; an ACP client; selections, diagnostics and terminal output as one-click agent context |
+| Area | Available now |
+|---|---|
+| **Terminal and remote** | GPU-rendered tabs and splits, session restore, host library, SSH keys, SFTP/FTP, port forwarding, jump hosts, snippets and broadcast input; serial, Telnet, raw TCP and encrypted `.ppk` key import |
+| **Editor** | Native panes, tree-sitter syntax highlighting, large-file view mode, multiple cursors, regex find/replace, Markdown and Mermaid preview, LSP, opt-in vim, folding and outline |
+| **Agent workspace** | Agent-state badges and notifications, prompt queue, per-task git worktrees, undoable inline edit proposals, ACP agents, context sharing and the MTP control plane |
 
 What ties them together: Rust and GPU rendering held to a performance gate;
 terminal, editor, remote hosts and agents in the same tabs and splits; no
@@ -86,8 +86,7 @@ Recursive splits keep Git changes and an actual local HTTP server side by side:
 
 More short, controllable demos: **[mtty on mtty.dev](https://mtty.dev/mtty#screens)**.
 
-> **Project status — pre-release.** The version is `0.1.8` and the API is not yet
-> stable. macOS is the primary platform. Windows is built, tested and driven over
+> **Project status — pre-release.** The API is not yet stable; see [Releases](https://github.com/oxdingzg/mtty/releases/latest) for the latest version. macOS is the primary platform. Windows is built, tested and driven over
 > MTP on real hardware (see [`docs/WINDOWS-DEV.md`](docs/WINDOWS-DEV.md)); Linux
 > builds and passes tests in CI and has been checked on a real GNOME/Wayland
 > desktop (input method, menus, file drops, clipboard, shortcuts).
@@ -266,7 +265,7 @@ mtty instead.
   console (device, baud, data bits, parity, stop bits, flow), a Telnet connection
   or a raw TCP socket as a pane. Saved hosts carry a `kind` and open the same way;
   Telnet and raw TCP are marked unencrypted (ADR 0037).
-- **PuTTY keys**: *Hosts… → Import PuTTY Key…* reads a `.ppk` (v2 or v3,
+- **.ppk keys**: the key-import action in *Hosts…* reads a `.ppk` (v2 or v3,
   Ed25519/RSA/ECDSA) and writes an encrypted OpenSSH key to `~/.ssh`, never
   storing it unencrypted (ADR 0038).
 - **ACP agents**: any agent that speaks the Agent Client Protocol (Codex,
@@ -328,8 +327,9 @@ The engine is layered so that dependencies point inward only
 | [`mtty-app`](mtty-app) | The `mtty` native executable and platform packaging metadata. |
 | [`mtty-cli`](mtty-cli) | The `mtty-cli` control client. |
 
-The hot path — `pty → vt → grid → renderer` — takes no locks and allocates
-nothing per frame. Platform differences are confined to small `#[cfg]`-guarded
+The terminal path — `pty → vt → grid → renderer` — uses bounded output queues
+and damage-driven redraws. Row building still allocates span buffers; measured
+allocation and throughput budgets are documented in [Performance](docs/PERFORMANCE.md). Platform differences are confined to small `#[cfg]`-guarded
 blocks in the crate that owns the concern: PTY spawning in `mtty-core`
 (`src/term.rs`), the window/event loop in `mtty-widget` (`src/lib.rs`), and the
 socket/named-pipe transport in `mtty-mtp` (`src/lib.rs`).
@@ -337,7 +337,7 @@ socket/named-pipe transport in `mtty-mtp` (`src/lib.rs`).
 ### Principles
 
 1. Engine and hosts are separate; the hosts are the engine's first consumers.
-2. The hot path takes no locks and allocates nothing.
+2. Bound queued output and retained images; avoid unnecessary copies and redraws, and verify performance with measured budgets.
 3. Build the application first, extract the library later — APIs are driven by real needs.
 4. OS differences are confined to `#[cfg]`-guarded blocks in `mtty-core`, `mtty-widget` and `mtty-mtp`.
 5. The control plane (MTP / CLI) is decoupled from the engine.
@@ -449,6 +449,8 @@ editor pane's own bindings.
 
 ## Documentation
 
+- [Install and first workspace](docs/INSTALL.md) · [Editor](docs/EDITOR.md) · [Remote connections](docs/REMOTE.md)
+
 Documentation is written in English by default, with a Simplified Chinese
 version kept in sync as `*.zh-CN.md`.
 
@@ -481,7 +483,7 @@ Completed milestones:
 
 - **M5 Editor pane**: rope documents, tree-sitter highlighting, multi-cursor,
   find/replace, LSP, vim, folds and Markdown previews.
-- **M6 Remote, PuTTY-style**: serial, Telnet, raw TCP and encrypted `.ppk`
+- **M6 Remote, connections**: serial, Telnet, raw TCP and encrypted `.ppk`
   import. System OpenSSH remains the selected SSH backend (ADR 0039).
 - **M7 Agent workspace**: undoable edit proposals, ACP sessions and context
   handoff. ACP supports authentication, loading sessions and terminal requests;

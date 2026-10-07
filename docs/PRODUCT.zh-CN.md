@@ -12,12 +12,12 @@
 工作台——把它们连在一起的是受性能门约束的 Rust 与 GPU 渲染,以及不需要账号、不强制上云:mtty 托管你选择的 agent,自己从不
 调用模型。
 
-| 来源 | 吸收什么 | 不吸收什么 |
-|---|---|---|
-| [Termius](https://termius.com/) | 远程运维:主机库与分组、SSH 密钥/身份、SFTP、端口转发与跳板机、Snippets | 账号体系、强制云同步、订阅墙 |
-| [PuTTY](https://www.chiark.greenend.org.uk/~sgtatham/putty/) | 串口、Telnet 与原始 TCP 会话;`.ppk` 密钥(M6) | 过时的界面、保存在注册表里的逐会话设置 |
-| [Zed](https://zed.dev/) / VS Code | 编辑器内核:rope 缓冲区、多光标、tree-sitter、LSP、大文件也快(M5);agent 的修改在行内审阅(M7) | 扩展市场、内置的 AI 账号 |
-| miao | 原生集成:无需 hook 的状态上报、会话恢复、经 MTP 双向控制 | — |
+| 方向 | 用户价值 |
+|---|---|
+| 终端与远程 | 本地 shell 与已保存主机共用标签和分屏；SSH、文件传输、端口转发、串口、Telnet、TCP 都在同一工作台 |
+| 编辑器 | 在 shell 旁打开代码，使用高亮与语言服务器，处理大文件、多光标及实时预览 |
+| 代理工作台 | 看见代理何时需要输入，准备后续提示，发送上下文并审阅拟议改动 |
+| miao 集成 | 无需额外 hook 的状态上报、会话恢复与 MTP 控制 |
 
 一句话:**终端要快而稳,编辑器要好用到不想离开,agent 要看得见、管得住、改动可审阅,远程主机要像本地目录一样好用。**
 
@@ -199,7 +199,7 @@
 - [x] **B2.5 注意力与 miao**(osascript 通知不支持点击回调,改为:通知后两分钟内激活 mtty 即跳到对应 pane;后台标签 `!`/✓/• 标记经真实窗口截图核对;miao 插件读取 `MTTY_*`,miao 仓库 `f596c592a`):通知点击跳转 pane、后台标签未读/完成标记;miao 插件读取 `MTTY_*`
   (miao 仓库,单独提交)。验收:状态转换单测;miao 插件测试。
 
-### M3 远程运维(吸收 Termius)
+### M3 远程运维
 
 - [x] **B3.1 主机库**(一台真实 Linux 主机端到端:导入的别名经 `~/.ssh/config` 的 ProxyJump 连接,经 `mtty://host/<名称>` 打开并在远端执行命令核对;侧栏 HOSTS 截图核对):`hosts.toml`(名称、地址、用户、端口、分组、标签、跳板机)、从 `~/.ssh/config`
   导入、侧栏主机列表、命令面板搜索、双击连接。验收:解析/导入单测,冒烟连接本机 sshd 或容器 **[需测试主机]**。
@@ -239,10 +239,10 @@
 - [x] **E5** LSP:诊断、悬停、补全、跳转定义。(`crates/mtty-lsp`:JSON-RPC 分帧;在后台线程启动、初始化并读取服务器的客户端;UTF-8/UTF-16 位置与文件 URI;根目录探测;片段转文本。每个语言组与工作区根目录一个服务器,在登录 shell 的 PATH 中查找;全文同步,最大 2 MB。编辑器中:诊断下划线与状态栏中的 ✖/⚠ 计数,指针停留后显示悬停信息,补全在触发字符、输入单词与 Ctrl+Space 时打开、在客户端过滤、支持片段与 import 附加编辑,F12 或 ⌘ 单击跳转到定义,F8 跳到下一个问题;`config.toml` 中的 `[lsp]`。证据:`mtty-lsp` 中 15 项单元测试,以及对 rust-analyzer 1.94 与 typescript-language-server 5.3 的验收测试(诊断、悬停、跳转定义、补全、编辑后重新检查;rust-analyzer 冷启动后 10.4 s 给出首批诊断,TypeScript 0.4 s),补全排序与写入的单元测试,以及 Mac mini 上诊断下划线、悬停、补全与跳转定义的真实窗口截图。注意:rust-analyzer 需要 `rust-src` 组件才能补全标准库成员。)
 - [x] **E6** pane 中的 vim 模式、折叠与大纲、外部修改重新加载。(已完成。外部修改重新加载:打开的 pane 记住文件长度与修改时间,约每秒重新检查一次;没有未保存修改时原地重载为一个可撤销事务,只替换有差异的片段并把光标映射过去,面板恢复为“未修改”;有未保存修改时询问是从磁盘重载还是保留本地版本;文件在面板下被删除时提示一次;超过 64 MB 的只读查看 pane 跳过。折叠:依据语法树(任何跨行的命名节点,按起始行取最外层),没有语法树时退回按缩进;行号栏显示 ▸/▾,折叠后的首行末尾显示 ⋯,上下移动跳过被隐藏的行,⌥⌘[ / ⌥⌘] 折叠/展开,命令面板提供“全部折叠/全部展开/切换折叠”。大纲:列出定义型节点(函数、类、结构体、枚举、trait/接口、impl、模块、常量、类型、变量、宏),取节点的 `name` 字段并按层级缩进;⌘R 打开可过滤的选择器。vim:作用于 `mtty-editor` 文档的状态机——NORMAL/INSERT/VISUAL/VISUAL LINE,计数,`h j k l w b e 0 ^ $ gg G`,`i a I A o O`,`x`,`d`/`c`/`y` 配合动作(`dd`/`cc`/`yy`、`dw`、`d$`),`p`/`P` 配内部寄存器,`u` 与 Ctrl-r,`J`;`/` 打开查找,`:` 运行 `w`/`q`/`wq`/行号;`za` 系列操作折叠;状态栏显示模式;由 `editor-vim` 开启。证据:内核中语法树/缩进折叠、大纲提取与 vim 命令的测试;编辑器 pane 的折叠、vim 普通/插入模式与外部重载测试;Mac mini 上的 `cargo test`/clippy。已在打包的 Linux 构建(Xvfb)上人工核对:vim 的 NORMAL/INSERT/VISUAL 与“全部折叠”生效,折叠后函数体收起、隐藏行被跳过。)
 
-### M6 远程(PuTTY 式,R1 见 [ADR 0037](decisions/0037-serial-telnet-tcp.md),R2 见 [ADR 0038](decisions/0038-ppk-import.md),R3 见 [ADR 0039](decisions/0039-ssh-stack.md))
+### M6 远程(连接,R1 见 [ADR 0037](decisions/0037-serial-telnet-tcp.md),R2 见 [ADR 0038](decisions/0038-ppk-import.md),R3 见 [ADR 0039](decisions/0039-ssh-stack.md))
 
 - [x] **R1** 串口(波特率、校验、流控)与 Telnet 会话、原始 TCP;保存在主机库中。(ADR 0037。会话以字节管道(`Terminal::from_pipe`)在 pane 中打开,在后台线程拨号:裸 TCP 与内置 Telnet 编解码不新增依赖,串口使用 MIT 的 `serialport`(`default-features = false`,不含 libudev)。Shell 菜单与命令面板中有“新建串口/Telnet/TCP 会话…”,带配置表单;`hosts.toml` 增加 `kind`(默认 `ssh`,另有 `serial`/`telnet`/`tcp`)与 `[host.serial]`,侧栏、`mtty://host/<name>` 与命令面板都能打开这些类型。Telnet 与裸 TCP 标注为未加密,串口不标。恢复会话时重连,复制标签会重新拨号,连接断开即结束 pane;不适用 shell shim、OSC 7 工作目录与命令捕获。依据:管道终端与 Telnet 编解码单元测试、主机类型往返、transport target 的 JSON 测试,以及 macOS 与 Linux 上的工作区构建。)
-- [x] **R2** 导入 `.ppk` 密钥(转为 OpenSSH 格式,不以明文保存)。(ADR 0038。不依赖 GPU 的 `mtty-keys` 解析 PPK v2(SHA-1 派生、HMAC-SHA-1)与 v3(Argon2id、HMAC-SHA-256),支持 Ed25519、RSA、ECDSA,先校验 MAC 再接触密钥,可解密 `none`/`aes256-cbc`,并经 `ssh-key` 以 bcrypt-pbkdf + aes256-ctr 和用户设置的口令重新加密。*主机… → 导入 PuTTY 密钥…* 读取文件后写出 `~/.ssh/<name>`(0600)与 `<name>.pub`,已存在时除非勾选“覆盖”否则拒绝;新口令为空会被拒绝,不存在未加密输出的路径。`chacha20-poly1305` 以明确错误拒绝(暂无向量)。依据:`puttygen` 0.81 生成的 12 个真实夹具——Ed25519/RSA/ECDSA × v2/v3 × 明文/加密——导入后与各自 `.pub` 比对,并有口令错误、文件被篡改与空口令的测试。)
+- [x] **R2** 导入 `.ppk` 密钥(转为 OpenSSH 格式,不以明文保存)。(ADR 0038。不依赖 GPU 的 `mtty-keys` 解析 PPK v2(SHA-1 派生、HMAC-SHA-1)与 v3(Argon2id、HMAC-SHA-256),支持 Ed25519、RSA、ECDSA,先校验 MAC 再接触密钥,可解密 `none`/`aes256-cbc`,并经 `ssh-key` 以 bcrypt-pbkdf + aes256-ctr 和用户设置的口令重新加密。主机窗口中的 .ppk 密钥导入操作 读取文件后写出 `~/.ssh/<name>`(0600)与 `<name>.pub`,已存在时除非勾选“覆盖”否则拒绝;新口令为空会被拒绝,不存在未加密输出的路径。`chacha20-poly1305` 以明确错误拒绝(暂无向量)。依据:`puttygen` 0.81 生成的 12 个真实夹具——Ed25519/RSA/ECDSA × v2/v3 × 明文/加密——导入后与各自 `.pub` 比对,并有口令错误、文件被篡改与空口令的测试。)
 - [x] **R3** 以 ADR 决定 SSH 是否从系统 OpenSSH 改为 Rust 原生实现(收益:Windows 无需 OpenSSH、进程内 SFTP 与转发;代价:重新实现 `~/.ssh/config`、ProxyJump 与 agent 转发)。(决定见 [ADR 0039](decisions/0039-ssh-stack.md):目前继续使用系统 OpenSSH;macOS、Linux 与 Windows 都已自带,若情况变化,ADR 0037 的传输层就是原生后端的接入点。无 OpenSSH 的平台、进程内 SFTP/转发或安全理由会触发重新评估。)
 
 ### M7 AI 原生工作台(设计见 [ADR 0040](decisions/0040-ai-native-workspace.md))

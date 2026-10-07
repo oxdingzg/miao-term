@@ -5,6 +5,30 @@
 mtty (formerly miaotty) is the native winit/wgpu application.
 There is one GUI executable and one CLI. See [identity and migration](APP-IDENTITY.md).
 
+## Install a release
+
+Choose the latest package from [GitHub Releases](https://github.com/oxdingzg/mtty/releases/latest).
+
+| Platform | Package and first launch |
+|---|---|
+| macOS | Choose the arm64 zip for Apple silicon or x86_64 for Intel. Unzip, move `mtty.app` to Applications, then open it |
+| Linux | Install the `.deb` on Debian/Ubuntu, or make the AppImage executable and run it. The tar archive also contains the binaries |
+| Windows | Run the MSI installer, or extract the zip and open `mtty.exe`. The MSI also installs `mtty-cli` on PATH |
+
+For current platform signing status and download prompts, see the release notes
+and [Windows download guidance](https://mtty.dev/docs/about/windows-downloads/).
+The `.sig` files and `minisign.pub` are for optional manual verification, not applications to open.
+
+## Your first workspace
+
+1. Open mtty and use the initial local terminal, or **New SSH Session…** for a remote shell.
+2. Open the command palette (`⌘K` on macOS, `Ctrl+Shift+K` elsewhere). **Open Quickly** is `⌘⇧O` / `Ctrl+Shift+Alt+O`.
+3. Run an installed agent CLI such as `miao` in a pane. miao reports state automatically; other supported agents expose setup actions for their state hooks.
+4. Open a file beside the terminal, then use the details panel (`⌘⇧R` / `Ctrl+Shift+Alt+R`) for files, Git, agent state and queued prompts.
+
+See [shortcuts](SHORTCUTS.md), [configuration](CONFIG.md), [editor](EDITOR.md)
+and [remote connections](REMOTE.md) for the next steps.
+
 ## From source
 
 ```sh

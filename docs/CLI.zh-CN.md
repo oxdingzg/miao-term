@@ -42,6 +42,10 @@ mtty-cli pane focus --pane ID
 mtty-cli pane output --pane ID           # 上一条命令的输出与退出码
 mtty-cli state claude --state processing --pane ID
 mtty-cli state list
+mtty-cli agent sessions                 # 列出可恢复的代理会话
+mtty-cli agent resume --pane ID         # 恢复所选窗格的代理
+mtty-cli agent resume --session ID      # 恢复发现的会话
+mtty-cli state miao --state processing --pane ID --runtime-context context.json
 mtty-cli history add --command "cargo test" --cwd "$PWD"
 mtty-cli history list --pane ID
 mtty-cli view /path/to/file            # 在应用中以只读方式打开
@@ -57,7 +61,8 @@ mtty-cli file write --path /tmp/x --data-b64 "AAECAw=="   # 二进制
 | `ping` | 存活探测，以及宿主允许哪些能力 |
 | `wait`、`events` | 阻塞等待或订阅状态变化 |
 | `pane` | 列出窗格、在其中执行命令、聚焦窗格、读取上一条命令的输出与退出码 |
-| `state` | 上报某个窗格的 agent 状态，或列出会上报状态的窗格 |
+| `state` | 上报窗格状态；`--runtime-context FILE`（或 `-` 从 stdin 读取）提供结构化 miao Runtime 上下文 |
+| `agent` | 发现可恢复的代理会话，或在窗格中恢复 |
 | `history` | 写入或读取窗格的命令历史 |
 | `view`、`edit` | 在应用中打开文件，只读或在编辑器中 |
 | `file` | 经由宿主读写文件，单次上限 2 MB |
