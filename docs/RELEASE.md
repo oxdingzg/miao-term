@@ -81,8 +81,8 @@ gh secret set MINISIGN_SECRET_KEY < minisign.key   # raw contents of the secret 
 ```
 
 The repository keeps `minisign.pub` at its root, and the release job attaches it,
-so `…/releases/download/<tag>/minisign.pub` always resolves. Tell users to put
-its single line into their config:
+so `…/releases/download/<tag>/minisign.pub` is published with release artifacts.
+The updater embeds the official public key; a custom channel can override it:
 
 ```toml
 update-pubkey = "RWQ…"
@@ -127,8 +127,8 @@ update-check-url = "https://github.com/oxdingzg/mtty/releases/latest/download/la
 ```
 
 Then *Settings → Check for Updates* reports the version, *Download Update* fetches
-the artifact for the running platform, verifies its SHA-256 (and the minisign
-signature when `update-pubkey` is set), and on macOS *Install and Relaunch*
+the artifact for the running platform, verifies its SHA-256 and required minisign
+signature using the built-in public key (or `update-pubkey` override), and on macOS *Install and Relaunch*
 swaps the bundle with a rollback helper (ADR 0025).
 
 Platform keys match the app's `platform_key()`: `macos-aarch64`,
@@ -204,8 +204,9 @@ The manifest ([`latest.json`](#update-manifest)) carries both a `sha256` and a
 shasum -a 256 mtty-macos-arm64.zip   # compare with the manifest's "sha256"
 ```
 
-Nothing is signed until `MINISIGN_SECRET_KEY` is configured, so unsigned releases
-simply have no `.sig` — verification is optional, not required to install.
+The updater requires a detached signature and the trusted public key. An unsigned
+rehearsal artifact cannot be installed through the updater. Manual verification
+of a downloaded package is separate from updater verification.
 
 ## Acceptance coverage and remaining work
 

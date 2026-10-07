@@ -7,19 +7,19 @@ deterministically in CI. Machine-readable values and measured baselines are in
 ## The gate
 
 ```sh
-cargo test --release -p mtty-core -p mtty-graphics -p mtty-ptyhost -p mtty-app -- --ignored
+cargo test --release -p mtty-core -p mtty-graphics -p mtty-editor -p mtty-widget -p mtty-ptyhost -p mtty-app -- --ignored
 ```
 
 Perf tests are `#[ignore]`d so the normal test run stays fast; the `perf` CI job
 runs them in release on `ubuntu-latest`. Budgets are absolute with generous
 headroom (an order-of-magnitude regression fails, runner jitter does not).
 `MTTY_PERF_SCALE` (default `1.0`) relaxes every budget by a factor on slow
-machines. Each metric is also checked against the recorded **baseline** in
-`budgets.json` with a `regression_pct` (ADR 0023), so drift fails, not just
-cliffs. The `perf` job additionally compares against a **durable CI baseline** tracked at
+machines. Each metric is also compared with the recorded **baseline** in
+`budgets.json` and its `regression_pct` (ADR 0023). These comparisons report
+regressions by default; set `PERF_ENFORCE=1` on a stable runner to make them fail. The `perf` job additionally compares against a **durable CI baseline** tracked at
 [`benches/perf-baseline.json`](../benches/perf-baseline.json) (ADR 0028): the
-nightly/manual run on `main` rewrites it from the measurements and commits the
-change, so it survives cache eviction and runner-image changes. The comparison is
+nightly/manual run on `main` refreshes it from the measurements through a pull
+request, so it survives cache eviction and runner-image changes. The comparison is
 **reported only**, since runner variance (1.8x on the same code) dwarfs the
 signal — the absolute budgets are the gate.
 
@@ -167,7 +167,7 @@ memory, so buffer capacity and RSS are reported separately.
 ### Reproduce
 
 ```sh
-cargo test --release -p mtty-core -p mtty-graphics -p mtty-ptyhost -p mtty-app -- --ignored --nocapture
+cargo test --release -p mtty-core -p mtty-graphics -p mtty-editor -p mtty-widget -p mtty-ptyhost -p mtty-app -- --ignored --nocapture
 cargo build --release -p mtty-app -p mtty-cli
 python3 scripts/profile-input.py --mode fragments
 python3 scripts/profile-input.py --mode images

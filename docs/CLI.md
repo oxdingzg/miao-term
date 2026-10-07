@@ -46,6 +46,10 @@ mtty-cli pane focus --pane ID
 mtty-cli pane output --pane ID           # last command's output and exit status
 mtty-cli state claude --state processing --pane ID
 mtty-cli state list
+mtty-cli agent sessions                 # discover resumable agent sessions
+mtty-cli agent resume --pane ID         # resume the selected pane's agent
+mtty-cli agent resume --session ID      # resume a discovered session
+mtty-cli state miao --state processing --pane ID --runtime-context context.json
 mtty-cli history add --command "cargo test" --cwd "$PWD"
 mtty-cli history list --pane ID
 mtty-cli view /path/to/file            # open it read-only in the app
@@ -61,7 +65,8 @@ mtty-cli file write --path /tmp/x --data-b64 "AAECAw=="   # binary
 | `ping` | Liveness, and which capabilities the host allows |
 | `wait`, `events` | Blocking on, or subscribing to, state changes |
 | `pane` | List panes, run a command in one, focus one, read the last command's output and exit status |
-| `state` | Report an agent's state for a pane, or list the panes that report one |
+| `state` | Report pane state; `--runtime-context FILE` (or `-` for stdin) supplies structured miao Runtime context |
+| `agent` | Discover resumable sessions or resume one in a pane |
 | `history` | Add to, or read, a pane's command history |
 | `view`, `edit` | Open a file in the app, read-only or in the editor |
 | `file` | Read and write files through the host, bounded to 2 MB per call |
