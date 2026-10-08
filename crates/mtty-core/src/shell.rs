@@ -329,6 +329,39 @@ fn shim_dir() -> Option<PathBuf> {
     Some(dir)
 }
 
+/// A shell can source the shim while another pane is starting. Publishing a
+/// complete replacement avoids truncating the shared file underneath a reader.
+fn publish_shim(path: &Path, text: &str) -> io::Result<()> {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    if std::fs::read(path).is_ok_and(|bytes| bytes == text.as_bytes()) {
+        return Ok(());
+    }
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let temp = path.with_extension(format!(
+        "tmp-{}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos(),
+        NEXT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)?;
+        file.write_all(text.as_bytes())?;
+        drop(file);
+        std::fs::rename(&temp, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result
+}
+
 /// Arguments and environment that turn on the integration for `shell`.
 /// Unknown shells, or a shim that cannot be written safely, get nothing.
 /// `env` is the environment the shell will see (for values to restore).
@@ -344,7 +377,7 @@ pub fn integration(shell: &str, env: &dyn Fn(&str) -> Option<String>) -> Integra
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).ok()?;
         }
-        std::fs::write(&path, text).ok()?;
+        publish_shim(&path, text).ok()?;
         Some(path)
     };
     let some = |name: &str| env(name).filter(|v| !v.is_empty());
@@ -458,6 +491,47 @@ mod tests {
         );
         // A non-cmd shell keeps an empty argument line on every platform.
         assert!(startup_args("/bin/fish").is_empty());
+    }
+
+    #[test]
+    fn concurrent_shim_publication_never_exposes_partial_scripts() {
+        use std::sync::{Arc, Barrier};
+        let dir = temp_path();
+        ensure_private_dir(&dir).unwrap();
+        let path = dir.join("script.sh");
+        let first = Arc::new(format!("# first\n{}\n# end\n", "x".repeat(16_384)));
+        let second = Arc::new(format!("# second\n{}\n# end\n", "y".repeat(16_384)));
+        publish_shim(&path, &first).unwrap();
+        let barrier = Arc::new(Barrier::new(5));
+        let mut writers = Vec::new();
+        for i in 0..4 {
+            let path = path.clone();
+            let text = if i % 2 == 0 {
+                first.clone()
+            } else {
+                second.clone()
+            };
+            let barrier = barrier.clone();
+            writers.push(std::thread::spawn(move || {
+                barrier.wait();
+                for _ in 0..128 {
+                    publish_shim(&path, &text).unwrap();
+                }
+            }));
+        }
+        barrier.wait();
+        for _ in 0..1024 {
+            let actual = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                actual == *first || actual == *second,
+                "reader saw an incomplete shim"
+            );
+        }
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
