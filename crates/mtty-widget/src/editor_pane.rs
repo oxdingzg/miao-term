@@ -312,6 +312,8 @@ pub struct RemoteRef {
 
 pub struct EditorPane {
     pub id: String,
+    /// Single-surface Markdown writing UI (source remains in `doc`).
+    pub markdown: Option<crate::live_markdown::LiveMarkdown>,
     pub doc: Document,
     pub path: PathBuf,
     /// `Some` when this pane edits a file over ssh.
@@ -388,6 +390,7 @@ impl EditorPane {
         let (text, _) = file.read_lines(0, WINDOW_LINES, WINDOW_BYTES);
         let mut pane = Self::with_doc(id, path.to_path_buf(), Document::from_text(&text));
         pane.syntax = None;
+        pane.markdown = None;
         pane.large = Some(LargeWindow {
             file,
             base: 0,
@@ -582,10 +585,15 @@ impl EditorPane {
     }
 
     pub fn with_doc(id: String, path: PathBuf, mut doc: Document) -> Self {
+        let markdown = path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
+            .then(crate::live_markdown::LiveMarkdown::default);
         let syntax = Syntax::for_file(&path, doc.rope());
         let disk = disk_stamp(&path);
         doc.take_edits();
         EditorPane {
+            markdown,
             large: None,
             diagnostics: Vec::new(),
             disk,

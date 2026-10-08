@@ -46,9 +46,13 @@ mtty 把真正的编辑器放在终端旁边，共用同一批标签页和分屏
 
 折叠来自语法树（任何跨多行的具名节点），没有语法时按缩进。装订线显示 `▸`/`▾`，折叠的标题以 `⋯` 结尾，上下移动会跳过隐藏行。`⌥⌘[` / `⌥⌘]` 折叠与展开；*Fold All*、*Unfold All*、*Toggle Fold* 在命令面板里。`⌘R` 打开可过滤的**大纲**，按深度嵌套显示文件中的定义。
 
-## Markdown 预览
+## Markdown 编辑
 
-本地 Markdown 文件会在右侧打开一个跟随输入的预览窗格。渲染器覆盖标题、列表、引用、表格、代码和链接，相对图片按文档所在目录解析，并渲染 Mermaid 的 `graph`/`flowchart`、`sequenceDiagram`、`stateDiagram`、`classDiagram`、`erDiagram` 和 `pie`。设 `mermaid-command` 可调用 `mermaid-cli` 获得完整 Mermaid。用命令面板和 View 菜单里的 *Toggle Markdown Preview* 开关预览；预览随编辑器一起关闭，并保留在保存的会话中。
+Markdown 文件默认在一个写作窗格中打开。内容块原地渲染，点击某块即可在原位置编辑它的 Markdown 源码；**Source / 源码** 在同一窗格显示完整源码。**撤销**、**重做**及 `⌘S`/`Ctrl+S` 使用原来的 rope 文档、保存和历史链路，也能接收外部重载。
+
+渲染器覆盖标题、列表、引用、表格、代码和链接，相对图片按文档所在目录解析，并渲染 Mermaid 的 `graph`/`flowchart`、`sequenceDiagram`、`stateDiagram`、`classDiagram`、`erDiagram` 和 `pie`。设 `mermaid-command` 可调用 `mermaid-cli` 获得完整 Mermaid。*Toggle Markdown Preview* 仍可额外打开独立预览窗格；预览随编辑器关闭，并保留在保存的会话中。
+
+本次实现的是块级原地编辑。逐 token 显示源码、高级表格交互及其他写作功能继续由 [Markdown 路线图](https://github.com/oxdingzg/mtty/issues/94) 跟踪。
 
 ## 语言服务器
 
