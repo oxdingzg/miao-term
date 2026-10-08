@@ -251,7 +251,25 @@ pub fn encode_key_full(
     alt: KittyAlternates,
     text: Option<&str>,
 ) -> Vec<u8> {
-    // Cmd/Super is reserved for host shortcuts; never sent to the shell.
+    // macOS Command+arrows are text-boundary navigation. Encode them as
+    // Home/End so both legacy shells and keyboard-protocol TUIs can use them.
+    if cfg!(target_os = "macos") && mods.sup && !mods.ctrl && !mods.alt {
+        let boundary = match kind {
+            KeyKind::Left => Some(KeyKind::Home),
+            KeyKind::Right => Some(KeyKind::End),
+            _ => None,
+        };
+        if let Some(boundary) = boundary {
+            return encode_key_full(
+                boundary,
+                Modifiers { sup: false, ..mods },
+                opts,
+                KittyAlternates::default(),
+                None,
+            );
+        }
+    }
+    // Other Cmd/Super combinations remain reserved for host shortcuts.
     if mods.sup {
         return Vec::new();
     }
@@ -414,6 +432,58 @@ mod tests {
             ..Default::default()
         };
         assert!(encode_key(KeyKind::Char('a'), m, EncodeOpts::default()).is_empty());
+    }
+
+    #[test]
+    fn command_arrows_navigate_boundaries_on_macos() {
+        for (kind, end) in [(KeyKind::Left, 'H'), (KeyKind::Right, 'F')] {
+            for shift in [false, true] {
+                for kitty in [0, KITTY_DISAMBIGUATE | KITTY_REPORT_EVENTS] {
+                    for event in [1, 2, 3] {
+                        let bytes = encode_key(
+                            kind,
+                            Modifiers {
+                                sup: true,
+                                shift,
+                                ..Default::default()
+                            },
+                            EncodeOpts {
+                                kitty,
+                                event,
+                                ..Default::default()
+                            },
+                        );
+                        if !cfg!(target_os = "macos") {
+                            assert!(bytes.is_empty());
+                            continue;
+                        }
+                        let modifier = if shift { 2 } else { 1 };
+                        let expected = if kitty != 0 {
+                            format!("\x1b[1;{modifier}:{event}{end}")
+                        } else if shift {
+                            format!("\x1b[1;2{end}")
+                        } else {
+                            format!("\x1b[{end}")
+                        };
+                        assert_eq!(bytes, expected.as_bytes());
+                    }
+                }
+            }
+            for mods in [
+                Modifiers {
+                    sup: true,
+                    ctrl: true,
+                    ..Default::default()
+                },
+                Modifiers {
+                    sup: true,
+                    alt: true,
+                    ..Default::default()
+                },
+            ] {
+                assert!(encode_key(kind, mods, EncodeOpts::default()).is_empty());
+            }
+        }
     }
 
     #[test]
