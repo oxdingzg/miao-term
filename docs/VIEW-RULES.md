@@ -4,7 +4,8 @@ A pane's tab title, icon and badge are derived from its context by the *view
 rule engine* (design: [ADR 0007](./decisions/0007-view-rule-engine.md)). Rules
 live in `~/.config/mtty/views.json` (JSON). mtty reloads the file when it
 changes, so an edit shows within a couple of seconds of the next activity; an
-in-app rule editor is not available yet.
+in-app rule editor is not available yet. A fresh install seeds this file with
+an empty rule set on first start, so there is always something to edit.
 
 ```jsonc
 {
