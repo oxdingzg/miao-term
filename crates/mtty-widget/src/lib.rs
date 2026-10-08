@@ -572,9 +572,10 @@ struct Tab {
     /// The title was chosen (Rename Tab, an ssh target, Quick) rather than a
     /// default: it wins over view rules, the program title and the folder.
     title_set: bool,
-    /// The title shown when the session was saved. On restore it is preferred
-    /// over the automatic title (the pane's OSC name or cwd) for a tab the user
-    /// did not rename, so a restart shows the same title it had before.
+    /// The title shown when the session was saved. On restore it holds the
+    /// tab's place only while the pane has no live context (no cwd and no
+    /// program title yet), so a restart shows the same title at first and the
+    /// automatic one takes over as soon as the pane reports.
     shown: Option<String>,
     /// Opened as an ssh session (shows a server icon).
     ssh: bool,
@@ -1013,6 +1014,22 @@ fn rename_dialog(
 fn fixed_tab_title(title_set: bool, title: &str, shown: Option<&str>) -> Option<String> {
     if title_set && !title.is_empty() {
         return Some(title.to_string());
+    }
+    shown.filter(|s| !s.is_empty()).map(str::to_string)
+}
+
+/// The title a restored tab shows before its pane reports anything: the one
+/// saved last session, so the restart does not flash `shell N`. Once the pane
+/// has live context — its cwd or a program title — the saved value must yield,
+/// or a stale saved title would freeze the tab for good and cd, agents and
+/// program titles would never show.
+fn restored_title(
+    shown: Option<&str>,
+    cwd: Option<&str>,
+    osc_title: Option<&str>,
+) -> Option<String> {
+    if cwd.is_some() || osc_title.is_some() {
+        return None;
     }
     shown.filter(|s| !s.is_empty()).map(str::to_string)
 }
@@ -3520,7 +3537,12 @@ impl State {
 
     /// The displayed title, given the tab's evaluated view rules.
     fn title_with(&self, tab: &Tab, view: Option<mtty_config::view::Resolved>) -> String {
-        if let Some(fixed) = fixed_tab_title(tab.title_set, &tab.title, tab.shown.as_deref()) {
+        let restored = tab
+            .panes
+            .iter()
+            .find(|p| p.id == tab.active)
+            .and_then(|p| restored_title(tab.shown.as_deref(), p.term.cwd(), p.term.title()));
+        if let Some(fixed) = fixed_tab_title(tab.title_set, &tab.title, restored.as_deref()) {
             return fixed;
         }
         if let Some(ed) = tab.editors.iter().find(|e| e.id == tab.active) {
@@ -19783,11 +19805,11 @@ mod tests {
     }
 
     #[test]
-    fn restored_shown_title_wins_over_the_live_one() {
+    fn restored_title_holds_until_the_pane_reports() {
         // A renamed tab keeps its chosen name.
         assert_eq!(fixed_tab_title(true, "work", None).as_deref(), Some("work"));
-        // A restored tab shows the title it had before the restart, not the
-        // new program's name.
+        // Before the pane reports, a restored tab shows the title it had
+        // before the restart, not `shell N`.
         assert_eq!(
             fixed_tab_title(false, "shell 5", Some("shell 5")).as_deref(),
             Some("shell 5")
@@ -19806,6 +19828,16 @@ mod tests {
         assert_eq!(fixed_tab_title(false, "shell 5", Some("")), None);
         // An empty chosen title is not a choice.
         assert_eq!(fixed_tab_title(true, "", None), None);
+        // Once the pane reports live context the saved title yields, so a
+        // stale one cannot freeze the tab over a cd or a new program.
+        assert_eq!(restored_title(Some("home"), Some("/x/miao"), None), None);
+        assert_eq!(restored_title(Some("home"), None, Some("vim")), None);
+        assert_eq!(
+            restored_title(Some("home"), None, None).as_deref(),
+            Some("home")
+        );
+        assert_eq!(restored_title(None, None, None), None);
+        assert_eq!(restored_title(Some(""), None, None), None);
     }
 
     #[test]
