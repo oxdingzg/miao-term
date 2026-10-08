@@ -482,11 +482,20 @@ impl Pane {
     /// reader back to the bottom; input, paste and clears still return there.
     /// Every drain goes through here so the grown offset is never overwritten
     /// by a stale `scroll`.
-    fn drain_output(&mut self) -> bool {
+    fn drain_output(&mut self, selection: &mut Option<(String, Selection)>) -> bool {
+        let alternate = self.term.screen().alternate_screen();
         self.term.screen_mut().set_scrollback(self.scroll);
         let output = self.term.process_pending();
         if output {
             self.scroll = self.term.screen().scroll_offset();
+        }
+        // Selection coordinates belong to one screen, not to the pane across
+        // main/alternate screen switches. Never paint shell highlights over
+        // a full-screen program (or restore its highlights over the shell).
+        if alternate != self.term.screen().alternate_screen()
+            && selection.as_ref().is_some_and(|(id, _)| id == &self.id)
+        {
+            *selection = None;
         }
         output
     }
@@ -15688,7 +15697,11 @@ impl ApplicationHandler<HostEvent> for Host {
             let focused = state.focused;
             for (ti, tab) in state.tabs.iter_mut().enumerate() {
                 for pane in &mut tab.panes {
-                    let output = pane.drain_output();
+                    let had_selection = state.selection.is_some();
+                    let output = pane.drain_output(&mut state.selection);
+                    if had_selection && state.selection.is_none() {
+                        state.dragging = false;
+                    }
                     changed |= output;
                     // An agent's pane redraws its spinner all the time: its tab
                     // is marked by the agent's state instead.
@@ -18777,12 +18790,42 @@ mod tests {
 
     /// Drain until the reader thread has delivered `bytes`.
     fn feed(pane: &mut super::Pane, tx: &std::sync::mpsc::Sender<Vec<u8>>, bytes: &[u8]) {
+        feed_with_selection(pane, tx, bytes, &mut None);
+    }
+
+    fn feed_with_selection(
+        pane: &mut super::Pane,
+        tx: &std::sync::mpsc::Sender<Vec<u8>>,
+        bytes: &[u8],
+        selection: &mut Option<(String, super::Selection)>,
+    ) {
         tx.send(bytes.to_vec()).unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !pane.drain_output() {
+        while !pane.drain_output(selection) {
             assert!(std::time::Instant::now() < deadline, "output never arrived");
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+    }
+
+    #[test]
+    fn screen_switch_clears_only_its_panes_selection() {
+        let (mut pane, tx) = piped_pane();
+        for bytes in [b"\x1b[?1049h".as_slice(), b"\x1b[?1049l".as_slice()] {
+            let mut selection = Some((pane.id.clone(), super::Selection::cell((1, 2))));
+            feed_with_selection(&mut pane, &tx, bytes, &mut selection);
+            assert!(selection.is_none(), "a selection must not cross screens");
+        }
+        let mut selection = Some(("other".into(), super::Selection::cell((1, 2))));
+        feed_with_selection(&mut pane, &tx, b"\x1b[?1049h", &mut selection);
+        assert_eq!(selection.as_ref().unwrap().0, "other");
+    }
+
+    #[test]
+    fn ordinary_output_preserves_terminal_selection() {
+        let (mut pane, tx) = piped_pane();
+        let mut selection = Some((pane.id.clone(), super::Selection::cell((1, 2))));
+        feed_with_selection(&mut pane, &tx, b"output", &mut selection);
+        assert!(selection.is_some());
     }
 
     #[test]
