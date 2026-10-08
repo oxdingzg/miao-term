@@ -58,6 +58,6 @@ names:
 `user`, `home`, `bell`, `layers`, `claude`.
 
 ## Fallback
-With no matching rule and no project, the tab shows the working-directory
-folder name, then the program's OSC title. A missing or malformed
+With no matching rule and no project, the tab shows the program's OSC title,
+then the working-directory folder name. A missing or malformed
 `views.json` degrades to that same fallback rather than failing startup.
