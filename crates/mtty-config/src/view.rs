@@ -493,7 +493,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("mtty-view-seed-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let path = root.join("mtty/views.json");
-        assert_eq!(RuleSet::write_default(&path).unwrap(), true);
+        assert!(RuleSet::write_default(&path).unwrap());
         let set = RuleSet::from_json(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert!(set.rules.is_empty());
         assert!(set.projects.is_empty());
@@ -504,7 +504,7 @@ mod tests {
             r#"{"projects":[],"rules":[],"worktree_suffix":false}"#,
         )
         .unwrap();
-        assert_eq!(RuleSet::write_default(&path).unwrap(), false);
+        assert!(!RuleSet::write_default(&path).unwrap());
         let set = RuleSet::from_json(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert!(!set.worktree_suffix);
         std::fs::remove_dir_all(&root).unwrap();
