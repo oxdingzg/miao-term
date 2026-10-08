@@ -259,8 +259,11 @@ mod tests {
 
     #[test]
     fn empty_document_is_an_editable_block() {
-        assert_eq!(blocks(""), [0..0]);
-        assert_eq!(blocks("\n\n"), [0..2]);
+        for (text, end) in [("", 0), ("\n\n", 2)] {
+            let ranges = blocks(text);
+            assert_eq!(ranges.len(), 1);
+            assert_eq!(ranges[0], 0..end);
+        }
     }
 
     #[test]
