@@ -2784,8 +2784,82 @@ dependencies = [
 ]
 
 [[package]]
+name = "mime"
+version = "0.3.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
+
+[[package]]
+name = "mime_guess2"
+version = "2.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1706dc14a2e140dec0a7a07109d9a3d5890b81e85bd6c60b906b249a77adf0ca"
+dependencies = [
+ "mime",
+ "phf",
+ "phf_shared",
+ "unicase",
+]
+
+[[package]]
+name = "minisign-verify"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "871285dc19d8d0ebe0eef3d0e99a205f2a71363b122632cbbfa4a6c370a960ce"
+
+[[package]]
+name = "miniz_oxide"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
+dependencies = [
+ "adler2",
+ "simd-adler32",
+]
+
+[[package]]
+name = "miniz_oxide"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
+dependencies = [
+ "adler2",
+ "simd-adler32",
+]
+
+[[package]]
+name = "mio"
+version = "1.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b18443e9c262bfe8fa82f51666e2642c53393f7e5c27b3e1aeab922cff5b9d8"
+dependencies = [
+ "libc",
+ "wasi",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "miow"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "536bfad37a309d62069485248eeaba1e8d9853aaf951caaeaed0585a95346f08"
+dependencies = [
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "moxcms"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb85c154ba489f01b25c0d36ae69a87e4a1c73a72631fc6c0eb6dde34a73e44b"
+dependencies = [
+ "num-traits",
+ "pxfm",
+]
+
+[[package]]
 name = "mtty-acp"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "libc",
  "mtty-platform",
@@ -2794,8 +2868,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "mtty-app"
+version = "0.1.11"
+dependencies = [
+ "find-msvc-tools",
+ "libc",
+ "mtty-config",
+ "mtty-core",
+ "mtty-ui",
+ "mtty-widget",
+ "serde_json",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "mtty-cli"
+version = "0.1.11"
+dependencies = [
+ "mtty-mtp",
+ "serde_json",
+]
+
+[[package]]
 name = "mtty-config"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "chacha20poly1305",
  "serde",
@@ -2805,7 +2901,7 @@ dependencies = [
 
 [[package]]
 name = "mtty-core"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "alacritty_terminal",
  "libc",
@@ -2819,7 +2915,7 @@ dependencies = [
 
 [[package]]
 name = "mtty-editor"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "arborium-ada",
  "arborium-asciidoc",
@@ -2911,7 +3007,7 @@ dependencies = [
 
 [[package]]
 name = "mtty-graphics"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "base64",
  "flate2",
@@ -2921,7 +3017,7 @@ dependencies = [
 
 [[package]]
 name = "mtty-keys"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "aes",
  "argon2",
@@ -2936,7 +3032,7 @@ dependencies = [
 
 [[package]]
 name = "mtty-lsp"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "mtty-editor",
  "mtty-platform",
@@ -2945,7 +3041,7 @@ dependencies = [
 
 [[package]]
 name = "mtty-mtp"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "interprocess",
  "serde",
@@ -2954,7 +3050,7 @@ dependencies = [
 
 [[package]]
 name = "mtty-platform"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "arboard",
  "block2 0.6.2",
@@ -2968,7 +3064,7 @@ dependencies = [
 
 [[package]]
 name = "mtty-ptyhost"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "libc",
  "mtty-core",
@@ -2980,7 +3076,7 @@ dependencies = [
 
 [[package]]
 name = "mtty-render"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "glyphon",
  "mtty-core",
@@ -2990,17 +3086,17 @@ dependencies = [
 
 [[package]]
 name = "mtty-ui"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "ashpd",
  "egui",
  "global-hotkey",
+ "minisign-verify",
  "mtty-config",
  "mtty-core",
  "mtty-mtp",
  "mtty-platform",
  "mtty-render",
- "minisign-verify",
  "serde",
  "serde_json",
  "serial2",
@@ -3009,7 +3105,7 @@ dependencies = [
 
 [[package]]
 name = "mtty-widget"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "egui",
  "egui-wgpu",
@@ -3039,101 +3135,6 @@ dependencies = [
  "wgpu",
  "windows-sys 0.59.0",
  "winit",
-]
-
-[[package]]
-name = "mime"
-version = "0.3.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
-
-[[package]]
-name = "mime_guess2"
-version = "2.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1706dc14a2e140dec0a7a07109d9a3d5890b81e85bd6c60b906b249a77adf0ca"
-dependencies = [
- "mime",
- "phf",
- "phf_shared",
- "unicase",
-]
-
-[[package]]
-name = "minisign-verify"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "871285dc19d8d0ebe0eef3d0e99a205f2a71363b122632cbbfa4a6c370a960ce"
-
-[[package]]
-name = "miniz_oxide"
-version = "0.8.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
-dependencies = [
- "adler2",
- "simd-adler32",
-]
-
-[[package]]
-name = "miniz_oxide"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
-dependencies = [
- "adler2",
- "simd-adler32",
-]
-
-[[package]]
-name = "mio"
-version = "1.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b18443e9c262bfe8fa82f51666e2642c53393f7e5c27b3e1aeab922cff5b9d8"
-dependencies = [
- "libc",
- "wasi",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "miow"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "536bfad37a309d62069485248eeaba1e8d9853aaf951caaeaed0585a95346f08"
-dependencies = [
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "moxcms"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb85c154ba489f01b25c0d36ae69a87e4a1c73a72631fc6c0eb6dde34a73e44b"
-dependencies = [
- "num-traits",
- "pxfm",
-]
-
-[[package]]
-name = "mtty-app"
-version = "0.1.10"
-dependencies = [
- "find-msvc-tools",
- "libc",
- "mtty-core",
- "mtty-ui",
- "mtty-widget",
- "serde_json",
- "windows-sys 0.59.0",
-]
-
-[[package]]
-name = "mtty-cli"
-version = "0.1.10"
-dependencies = [
- "mtty-mtp",
- "serde_json",
 ]
 
 [[package]]
