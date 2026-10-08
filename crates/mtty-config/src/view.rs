@@ -4,11 +4,22 @@
 //! file — to an alias, icon, tab title and badge. The rule set is plain JSON at
 //! `~/.config/mtty/views.json`, so it is user-editable and round-trippable.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::Rgb;
+
+/// The rule set a fresh install starts from: no rules, no projects, and the
+/// worktree suffix the docs recommend. It evaluates exactly like the empty
+/// rule set a missing file already yields, but leaves a file users can edit
+/// instead of a silent fallback.
+const DEFAULT_VIEWS_JSON: &str = r#"{
+  "rules": [],
+  "projects": [],
+  "worktree_suffix": true
+}
+"#;
 
 /// The context a rule is evaluated against. All fields are optional; a matcher
 /// only fires when the context supplies the value it tests.
@@ -136,6 +147,29 @@ impl RuleSet {
             .and_then(|p| std::fs::read_to_string(p).ok())
             .and_then(|t| Self::from_json(&t))
             .unwrap_or_default()
+    }
+
+    /// Write the default rule set to `path` unless a file is already there.
+    /// `true` means the file was created. An existing file — even a malformed
+    /// one — is never overwritten, and errors are returned for the caller to
+    /// weigh: startup must not depend on this succeeding.
+    pub fn write_default(path: &Path) -> std::io::Result<bool> {
+        if path.exists() {
+            return Ok(false);
+        }
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(path, DEFAULT_VIEWS_JSON)?;
+        Ok(true)
+    }
+
+    /// Best-effort first-run seed at the default path, so a fresh install has
+    /// a `views.json` to edit instead of an invisible fallback.
+    pub fn seed_default() {
+        if let Some(path) = Self::path() {
+            let _ = Self::write_default(&path);
+        }
     }
 
     pub fn from_json(text: &str) -> Option<Self> {
@@ -452,6 +486,28 @@ mod tests {
         assert!(glob_match("~/work/**", "~/work/a/repo"));
         assert!(glob_match("/x/?.rs", "/x/a.rs"));
         assert!(!glob_match("/x/?.rs", "/x/ab.rs"));
+    }
+
+    #[test]
+    fn default_seed_writes_once_and_parses() {
+        let root = std::env::temp_dir().join(format!("mtty-view-seed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("mtty/views.json");
+        assert!(RuleSet::write_default(&path).unwrap());
+        let set = RuleSet::from_json(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(set.rules.is_empty());
+        assert!(set.projects.is_empty());
+        assert!(set.worktree_suffix);
+        // An existing file is never overwritten, not even by the default.
+        std::fs::write(
+            &path,
+            r#"{"projects":[],"rules":[],"worktree_suffix":false}"#,
+        )
+        .unwrap();
+        assert!(!RuleSet::write_default(&path).unwrap());
+        let set = RuleSet::from_json(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(!set.worktree_suffix);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

@@ -42,6 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
         _ => {
             resource_monitor::start();
+            mtty_config::view::RuleSet::seed_default();
             mtty_widget::run("mtty")
         }
     }

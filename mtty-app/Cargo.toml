@@ -37,6 +37,7 @@ assets = [
 ]
 
 [dependencies]
+mtty-config = { path = "../crates/mtty-config" }
 mtty-widget = { path = "../crates/mtty-widget" }
 serde_json = "1.0.151"
 
