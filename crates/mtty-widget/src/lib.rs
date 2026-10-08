@@ -41,6 +41,7 @@ use winit::window::{Window, WindowId};
 
 mod drag;
 mod editor_pane;
+mod live_markdown;
 #[cfg(target_os = "macos")]
 mod macos_url;
 mod quick_content;
@@ -4206,6 +4207,7 @@ impl State {
         // Shared, host-agnostic chrome (menu/tabs/sidebar/details/status).
         chrome::render(ctx, self);
         self.pane_context_menu(ctx);
+        self.live_markdown_panes(ctx);
         self.preview_panes(ctx);
         self.lsp_popups(ctx);
         if self.update_dialog {
@@ -8193,6 +8195,70 @@ impl State {
             ClearScrollback => Cmd::ClearScrollback,
         };
         self.run_command(cmd);
+    }
+
+    /// Markdown is one variable-height writing surface, not a second leaf in
+    /// the pane layout. Editing uses the same document as save/LSP/session APIs.
+    fn live_markdown_panes(&mut self, ctx: &egui::Context) {
+        let rects = self.pane_rects();
+        let Some(tab) = self.tabs.get_mut(self.active_tab) else {
+            return;
+        };
+        let read_only = self.read_only;
+        let save = !read_only
+            && tab
+                .editors
+                .iter()
+                .any(|e| e.id == tab.active && e.markdown.is_some())
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S));
+        let ch = self.theme.chrome();
+        let fg = mtty_ui::chrome::bg_color(ch.text);
+        let panel = mtty_ui::chrome::bg_color(ch.card);
+        for ed in &mut tab.editors {
+            let Some(live) = ed.markdown.as_mut() else {
+                continue;
+            };
+            let Some((_, r)) = rects.iter().find(|(id, _)| *id == ed.id) else {
+                continue;
+            };
+            let r = card_inner(*r);
+            let rect = egui::Rect::from_min_size(egui::pos2(r.x, r.y), egui::vec2(r.w, r.h));
+            let base = ed.path.parent();
+            let area = egui::Area::new(egui::Id::new(("mtty-live-markdown", &ed.id)))
+                .order(egui::Order::Background)
+                .fixed_pos(rect.min)
+                .show(ctx, |ui| {
+                    ui.set_clip_rect(rect);
+                    ui.set_width(rect.width());
+                    ui.set_height(rect.height());
+                    ui.add_enabled_ui(!read_only, |ui| {
+                        live.show(ui, &mut ed.doc, |ui, text| {
+                            render_markdown(
+                                ui,
+                                text,
+                                base,
+                                &mut self.cmark,
+                                &mut self.mmd,
+                                fg,
+                                panel,
+                            );
+                        });
+                    });
+                });
+            if ctx.input(|i| {
+                i.pointer.any_pressed()
+                    && i.pointer.interact_pos().is_some_and(|p| rect.contains(p))
+            }) && ctx
+                .layer_id_at(rect.center())
+                .is_some_and(|l| l == area.response.layer_id)
+            {
+                tab.active = ed.id.clone();
+                self.selection = None;
+            }
+        }
+        if save {
+            self.save_active_editor();
+        }
     }
 
     fn preview_panes(&mut self, ctx: &egui::Context) {
@@ -12536,6 +12602,9 @@ impl State {
                 .find(|(_, r)| r.contains(x, y))?
         };
         let ed = tab.editors.iter().find(|e| e.id == id)?;
+        if ed.markdown.is_some() {
+            return None;
+        }
         let inner = card_inner(r);
         let col = ((x - inner.x) / self.cw).floor();
         let row = ((y - inner.y) / self.ch).floor();
@@ -12699,6 +12768,11 @@ impl State {
     /// A key for the focused editor pane. False when it is the app's (⌘S,
     /// ⌘W, ⌘T…), so the shortcut path gets it.
     fn editor_key(&mut self, event: &KeyEvent) -> bool {
+        // The live Markdown surface owns text input through egui. When no
+        // block has focus, do not invisibly edit the underlying source grid.
+        if self.active_editor().is_some_and(|ed| ed.markdown.is_some()) {
+            return shortcut(event, self.mods).is_none();
+        }
         let (shift, alt) = (self.mods.shift_key(), self.mods.alt_key());
         let (sup, ctrl) = (self.mods.super_key(), self.mods.control_key());
         // Chords match the key without modifiers: ⌥ turns ⇧⌥I into a dead
@@ -13822,20 +13896,13 @@ impl State {
 
     /// Open a file in the built-in editor; `readonly` is used by MTP `app.view`.
     fn open_editor_ro(&mut self, path: std::path::PathBuf, readonly: bool) -> bool {
-        let markdown = path
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"));
         let large = std::fs::metadata(&path).is_ok_and(|m| m.len() > editor_pane::MAX_PANE_BYTES);
         // A large file opens in view mode whatever its kind: the floating
         // editor would read all of it into one text field. Markdown opens
-        // in an editor pane with its preview beside it (ADR 0034, E4); the
+        // in a single live editor pane; the
         // floating editor is left for read-only views (`app.view`).
         if large || !readonly {
-            let opened = self.open_editor_pane(&path);
-            if opened && markdown && !large {
-                self.add_markdown_preview();
-            }
-            return opened;
+            return self.open_editor_pane(&path);
         }
         match std::fs::read_to_string(&path) {
             Ok(text) => {
@@ -16163,7 +16230,9 @@ impl ApplicationHandler<HostEvent> for Host {
                     if state.read_only {
                         // Read-only blocks typing into any pane.
                     } else if let Some(ed) = state.active_editor_mut() {
-                        if ed.is_view_only() {
+                        if ed.markdown.is_some() {
+                            // egui owns IME commits in the live writing surface.
+                        } else if ed.is_view_only() {
                             state.large_edit_offer = Some(ed.id.clone());
                         } else if ed.vim.is_none() || ed.vim.as_ref().is_some_and(|v| v.is_insert())
                         {
@@ -17329,6 +17398,21 @@ fn draw_editor(
     let rows = ((inner.h * f.scale) / f.ch).floor().max(1.0) as usize;
     ed.resize(cols, rows);
     ed.sync_syntax();
+    if ed.markdown.is_some() {
+        let card = card_rect(r);
+        let bg = f.panel_bg;
+        return PaneDraw {
+            id: id.to_string(),
+            rect: inner,
+            rows: Vec::new(),
+            quads: vec![Quad::rounded(
+                (card.x * f.scale, card.y * f.scale),
+                ((card.x + card.w) * f.scale, (card.y + card.h) * f.scale),
+                (bg.0, bg.1, bg.2, 255),
+                CARD_RADIUS * f.scale,
+            )],
+        };
+    }
     let chrome = f.theme.chrome();
     let rgb = |c: mtty_ui::theme::Rgb| (c.0, c.1, c.2);
     let d = ed.draw(
