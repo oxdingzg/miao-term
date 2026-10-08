@@ -8,59 +8,48 @@ on:
   schedule:
     - cron: "17 4 * * *"
   workflow_dispatch:
+    inputs:
+      full:
+        description: "Run all code checks regardless of changed paths"
+        type: boolean
+        default: true
 
 # Rapid pushes to the same branch cancel the previous run instead of queueing.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Decide whether anything but docs changed, so docs-only pushes stay fast
   # (they still run `privacy`).
   changes:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     outputs:
       code: ${{ steps.diff.outputs.code }}
+      dependencies: ${{ steps.diff.outputs.dependencies }}
+      render: ${{ steps.diff.outputs.render }}
+      perf: ${{ steps.diff.outputs.perf }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Check change classification
+        run: python3 scripts/test-ci-changes.py
       - id: diff
-        run: |
-          set -e
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
-            range="origin/${{ github.base_ref }}...HEAD"
-          elif [ -n "${{ github.event.before }}" ] && \
-               [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
-            range="${{ github.event.before }}...${{ github.sha }}"
-          else
-            range=""
-          fi
-          if [ -z "$range" ]; then
-            echo "code=true" >> "$GITHUB_OUTPUT"
-          elif git diff --name-only "$range" | grep -qvE '\.(md|txt)$|^docs/'; then
-            echo "code=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "code=false" >> "$GITHUB_OUTPUT"
-          fi
-
-  # Fast compile check on every push (Linux). Catches broken builds in seconds.
-  check-linux:
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo check --workspace
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          FULL: ${{ inputs.full }}
+        run: python3 scripts/ci-changes.py >> "$GITHUB_OUTPUT"
 
   # Formatting and clippy. AGENTS.md makes these gates, so CI enforces them.
   lint:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.perf == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -75,8 +64,9 @@ jobs:
   # Cargo.lock and registry metadata, so it compiles nothing and takes seconds.
   deny:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.dependencies == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       # -W unmaintained is a flag of the `check` subcommand, hence
@@ -89,11 +79,12 @@ jobs:
           arguments: ""
           command-arguments: "-W unmaintained"
 
-  # Full Linux test suite: PRs, the nightly run and manual dispatch (not pushes).
+  # Test the merged main tree as well as each PR.
   test-linux:
     needs: changes
-    if: needs.changes.outputs.code == 'true' && github.event_name != 'push'
+    if: needs.changes.outputs.perf == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -103,8 +94,9 @@ jobs:
   # macOS: compile-check on pushes, full tests on PRs/nightly/manual.
   macos:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.perf == 'true'
     runs-on: macos-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -119,8 +111,9 @@ jobs:
   # Windows is the slow runner (link/IO), so it is kept off the push path.
   windows:
     needs: changes
-    if: needs.changes.outputs.code == 'true' && github.event_name != 'push'
+    if: needs.changes.outputs.perf == 'true' && github.event_name != 'push'
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -129,8 +122,9 @@ jobs:
 
   render-linux:
     needs: changes
-    if: needs.changes.outputs.code == 'true' && github.event_name != 'push'
+    if: needs.changes.outputs.render == 'true' && github.event_name != 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -151,13 +145,15 @@ jobs:
   # Release + LTO build; run it on PRs/nightly/manual, not on every push.
   perf:
     needs: changes
-    if: needs.changes.outputs.code == 'true' && github.event_name != 'push'
+    if: needs.changes.outputs.perf == 'true' && github.event_name != 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # The nightly/manual run refreshes the baseline through a pull request,
     # since main only accepts changes that way.
     permissions:
       contents: write
       pull-requests: write
+      actions: write
     env:
       # Looser than the local 25% so shared-runner noise does not flake.
       PERF_REGRESSION_PCT: "40"
@@ -199,19 +195,13 @@ jobs:
           gh pr create --base main --head "$branch" \
             --title "chore(perf): refresh the CI baseline" \
             --body "Automated baseline refresh from the ${{ github.event_name }} run (${GITHUB_RUN_ID})."
-          # The PR is created with GITHUB_TOKEN, so no checks run for it and it
-          # merges immediately; retry briefly to absorb mergeability lag.
-          for attempt in 1 2 3 4 5; do
-            if gh pr merge "$branch" --squash --delete-branch; then
-              exit 0
-            fi
-            sleep 5
-          done
-          echo "::error::could not merge the baseline refresh pull request"
-          exit 1
+          # GITHUB_TOKEN-created PRs do not trigger pull_request workflows.
+          # Explicit dispatch does, and the required gate prevents an unchecked merge.
+          gh workflow run ci.yml --ref "$branch"
 
   privacy:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       # Fail if the tree leaks machine-specific details or secrets (AGENTS.md).
@@ -225,3 +215,35 @@ jobs:
       # mirror; keep docs/releases/ and scripts/release-notes.py consistent.
       - name: Release-notes language rule
         run: python3 scripts/test-release-notes.py
+
+  ci-gate:
+    name: ci-gate
+    if: always()
+    needs: [changes, lint, deny, test-linux, macos, windows, render-linux, perf, privacy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Enforce required checks and explicit skips
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          needs = json.loads(os.environ["NEEDS"])
+          flags = needs["changes"]["outputs"]
+          required = {"changes", "privacy"}
+          if flags.get("code") == "true":
+              required.update(("lint", "test-linux", "macos"))
+              if os.environ["EVENT_NAME"] != "push":
+                  required.add("windows")
+          if flags.get("dependencies") == "true":
+              required.add("deny")
+          if os.environ["EVENT_NAME"] != "push":
+              if flags.get("render") == "true": required.add("render-linux")
+              if flags.get("perf") == "true": required.add("perf")
+          for job, info in needs.items():
+              expected = "success" if job in required else "skipped"
+              if info["result"] != expected:
+                  raise SystemExit(f"{job}: expected {expected}, got {info['result']}")
+          PY
