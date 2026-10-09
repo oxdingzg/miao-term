@@ -21,7 +21,9 @@ def main():
         entry = struct.unpack_from("<BBBBHHII", icon, 6 + index * 16)
         width, height, colors, reserved, planes, depth, size, offset = entry
         expected.append(((width, height, colors, reserved, planes, depth, size), icon[offset:offset + size]))
-    assert {(entry[0] or 256) for entry, data in expected} == {16, 24, 32, 48, 64, 128, 256}
+    sizes = {(entry[0] or 256) for entry, data in expected}
+    missing = {16, 24, 32, 48, 64, 128, 256} - sizes
+    assert not missing, f"shared icon is missing required Windows sizes: {sorted(missing)}"
 
     if binary.read_bytes()[:6] == icon[:6]:
         assert binary.read_bytes() == icon, "registered icon differs from shared artwork"
