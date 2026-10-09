@@ -244,7 +244,9 @@ impl RuleSet {
         let title = rule
             .and_then(|r| r.title.clone())
             .map(|t| render_title(&t, alias.as_deref(), ctx))
-            .unwrap_or_else(|| default_title(alias.as_deref(), ctx));
+            .unwrap_or_else(|| {
+                default_title(rule.and_then(|r| r.alias.as_deref()), alias.as_deref(), ctx)
+            });
         Some(Resolved {
             alias,
             icon: rule.and_then(|r| r.icon.clone()),
@@ -254,11 +256,17 @@ impl RuleSet {
     }
 }
 
-fn default_title(alias: Option<&str>, ctx: &Context) -> String {
-    if let Some(alias) = alias {
+/// The title when no rule template pins one: an explicit rule alias names the
+/// pane; then a live program title is more specific than a project alias, so
+/// it wins over one; the project alias is the last resort.
+fn default_title(rule_alias: Option<&str>, alias: Option<&str>, ctx: &Context) -> String {
+    if let Some(alias) = rule_alias {
         return alias.to_string();
     }
-    ctx.osc_title.clone().unwrap_or_default()
+    if let Some(title) = ctx.osc_title.as_deref().filter(|t| !t.is_empty()) {
+        return title.to_string();
+    }
+    alias.unwrap_or_default().to_string()
 }
 
 /// Expand the `{...}` variables in a title template.
@@ -548,6 +556,41 @@ mod tests {
         c.user = Some("me".into());
         c.osc_title = Some("vim".into());
         assert_eq!(set.evaluate(&c).unwrap().title, "demo · me · vim");
+    }
+
+    #[test]
+    fn live_title_beats_project_alias() {
+        let set = RuleSet::from_json(
+            r#"{"projects":[{"path":"/x/work","alias":"work"}],"worktree_suffix":true}"#,
+        )
+        .unwrap();
+        let mut c = ctx("/x/work/repo");
+        c.osc_title = Some("miao | session".into());
+        let view = set.evaluate(&c).unwrap();
+        assert_eq!(view.title, "miao | session");
+        // The project alias stays: `{alias}` templates and grouping keep it.
+        assert_eq!(view.alias.as_deref(), Some("work"));
+    }
+
+    #[test]
+    fn rule_alias_beats_live_title() {
+        let set =
+            RuleSet::from_json(r#"{"rules":[{"match":{"path":"/x/work/**"},"alias":"work"}]}"#)
+                .unwrap();
+        let mut c = ctx("/x/work/repo");
+        c.osc_title = Some("vim".into());
+        assert_eq!(set.evaluate(&c).unwrap().title, "work");
+    }
+
+    #[test]
+    fn empty_live_title_falls_back_to_project_alias() {
+        let set = RuleSet::from_json(
+            r#"{"projects":[{"path":"/x/work","alias":"work"}],"worktree_suffix":true}"#,
+        )
+        .unwrap();
+        let mut c = ctx("/x/work/repo");
+        c.osc_title = Some("".into());
+        assert_eq!(set.evaluate(&c).unwrap().title, "work");
     }
 
     #[test]
