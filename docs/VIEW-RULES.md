@@ -58,6 +58,8 @@ names:
 `user`, `home`, `bell`, `layers`, `claude`.
 
 ## Fallback
-With no matching rule and no project, the tab shows the program's OSC title,
-then the working-directory folder name. A missing or malformed
-`views.json` degrades to that same fallback rather than failing startup.
+When no rule template or rule alias pins the title, the tab shows the
+program's live OSC title; a project alias is only the fallback for panes whose
+program reports none, then the working-directory folder name. A missing or
+malformed `views.json` degrades to that same fallback rather than failing
+startup.
