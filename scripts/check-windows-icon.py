@@ -24,6 +24,16 @@ def main():
     sizes = {(entry[0] or 256) for entry, data in expected}
     missing = {16, 24, 32, 48, 64, 128, 256} - sizes
     assert not missing, f"shared icon is missing required Windows sizes: {sorted(missing)}"
+    for header, image in expected:
+        width = header[0] or 256
+        assert header[4] == 1, f"{width}px icon entry must declare one color plane"
+        if width < 256:
+            # Windows only keeps PNG for the 256px entry; it re-encodes smaller
+            # PNG entries as DIBs, which breaks the byte-for-byte comparison
+            # against the built resources below.
+            assert image[:4] == b"\x28\x00\x00\x00", (
+                f"{width}px icon entry must be a DIB, not PNG"
+            )
 
     if binary.read_bytes()[:6] == icon[:6]:
         assert binary.read_bytes() == icon, "registered icon differs from shared artwork"

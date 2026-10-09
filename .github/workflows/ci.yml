@@ -215,6 +215,10 @@ jobs:
       # mirror; keep docs/releases/ and scripts/release-notes.py consistent.
       - name: Release-notes language rule
         run: python3 scripts/test-release-notes.py
+      # The Windows icon resource check only runs on the packaging runner, so
+      # its platform-independent format checks run here on every pull request.
+      - name: Windows icon resource format
+        run: python3 scripts/check-windows-icon.py assets/icons/mtty.ico
 
   ci-gate:
     name: ci-gate
