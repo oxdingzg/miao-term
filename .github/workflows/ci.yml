@@ -233,7 +233,10 @@ jobs:
           needs = json.loads(os.environ["NEEDS"])
           flags = needs["changes"]["outputs"]
           required = {"changes", "privacy"}
-          if flags.get("code") == "true":
+          # Gate the code jobs on the same flag that runs them. `code` is true
+          # for any non-doc change, including paths (assets/, scripts/) that
+          # compile nothing, so it cannot decide which jobs must have run.
+          if flags.get("perf") == "true":
               required.update(("lint", "test-linux", "macos"))
               if os.environ["EVENT_NAME"] != "push":
                   required.add("windows")

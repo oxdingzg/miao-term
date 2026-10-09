@@ -25,6 +25,11 @@ class ChangesTest(unittest.TestCase):
     def test_release_script_avoids_unrelated_expensive_checks(self):
         self.assertEqual(changes.classify(["scripts/release-notes.py"]), {"code": True, "dependencies": False, "render": False, "perf": False})
 
+    def test_asset_changes_run_render_only(self):
+        # Assets compile nothing: `code` is true, but the perf-gated jobs must
+        # not be required, so an icon-only PR is checked by render-linux alone.
+        self.assertEqual(changes.classify(["assets/icons/mtty.ico"]), {"code": True, "dependencies": False, "render": True, "perf": False})
+
 
 if __name__ == "__main__":
     unittest.main()
