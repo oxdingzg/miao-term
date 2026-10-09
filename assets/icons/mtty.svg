@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="19 4 965 965" fill="none" stroke="#000" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Transparent line-art cat, redrawn from the supplied reference. -->
+  <path d="M 328 620 L 32 297 L 414 389 M 707 402 L 971 136 L 806 678"/>
+  <path d="M 422 363 L 408 241 C 489 215 594 172 675 175 L 668 183 C 678 226 684 268 683 316 M 376 382 C 501 344 633 320 762 298"/>
+  <path d="M 814 605 C 815 757 716 839 574 831 C 428 832 317 732 324 587 C 325 439 425 347 567 342 C 696 338 804 446 814 605 Z"/>
+  <path d="M 154 535 L 409 604 M 54 771 L 380 616 Q 401 608 405 621 M 610 584 C 635 551 787 491 899 443 M 668 588 C 760 584 839 619 932 614"/>
+  <path d="M 522 523 C 508 487 478 480 464 508 C 450 538 470 577 497 579 C 526 581 539 555 522 523 Z M 592 466 C 578 425 556 453 550 489 C 538 528 549 548 568 533 C 585 519 597 494 592 466 Z"/>
+  <path d="M 517 581 L 506 588 L 513 615 L 535 602 Z" fill="#000" stroke-width="5"/>
+  <ellipse cx="516" cy="540" rx="11" ry="15" fill="#000" stroke="none"/>
+  <ellipse cx="562" cy="515" rx="13" ry="18" fill="#000" stroke="none" transform="rotate(-12 562 515)"/>
+  <path d="M 429 649 Q 440 622 468 619 M 440 632 C 473 704 504 703 551 701 C 586 701 618 672 636 652 M 632 636 Q 650 637 657 673"/>
+</svg>
