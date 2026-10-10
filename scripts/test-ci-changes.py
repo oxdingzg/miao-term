@@ -22,6 +22,22 @@ class ChangesTest(unittest.TestCase):
     def test_render_changes_require_render_and_performance(self):
         self.assertEqual(changes.classify(["crates/mtty-render/src/lib.rs"]), {"code": True, "dependencies": False, "render": True, "perf": True})
 
+    def test_cli_and_build_configuration_require_compilation(self):
+        for path in ["mtty-cli/src/main.rs", ".cargo/config.toml"]:
+            self.assertTrue(changes.classify([path])["perf"])
+
+    def test_patched_dependencies_require_tests_render_and_performance(self):
+        for path in ["vendor/winit/src/event_loop.rs", "vendor/muda/src/lib.rs", "vendor/egui_commonmark/src/lib.rs"]:
+            self.assertEqual(changes.classify([path]), {"code": True, "dependencies": False, "render": True, "perf": True})
+
+    def test_every_workspace_member_runs_compilation(self):
+        # Discover members from the real tree so a newly added workspace cannot
+        # silently inherit a successful gate with all compilation jobs skipped.
+        root = Path(__file__).resolve().parent.parent
+        for manifest in [*root.glob("crates/*/Cargo.toml"), root / "mtty-app/Cargo.toml", root / "mtty-cli/Cargo.toml"]:
+            source = str(manifest.parent.relative_to(root) / "src/lib.rs")
+            self.assertTrue(changes.classify([source])["perf"], source)
+
     def test_release_script_avoids_unrelated_expensive_checks(self):
         self.assertEqual(changes.classify(["scripts/release-notes.py"]), {"code": True, "dependencies": False, "render": False, "perf": False})
 

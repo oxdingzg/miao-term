@@ -6,8 +6,8 @@ import subprocess
 def classify(paths):
     code = any(not (path.startswith("docs/") or ("/" not in path and path.endswith((".md", ".txt")))) for path in paths)
     dependencies = any(path.endswith(("Cargo.toml", "Cargo.lock")) or path in ("deny.toml", ".github/workflows/ci.yml", "scripts/ci-changes.py") for path in paths)
-    render = dependencies or any(path.startswith(("crates/mtty-render/", "crates/mtty-core/", "crates/mtty-graphics/", "crates/mtty-widget/", "crates/mtty-ui/", "crates/mtty-platform/", "mtty-app/", "assets/")) for path in paths)
-    perf = dependencies or any(path.startswith(("crates/", "mtty-app/", "benches/")) or path == "scripts/check-perf-baseline.py" for path in paths)
+    render = dependencies or any(path.startswith(("crates/mtty-render/", "crates/mtty-core/", "crates/mtty-graphics/", "crates/mtty-widget/", "crates/mtty-ui/", "crates/mtty-platform/", "mtty-app/", "vendor/", "assets/")) for path in paths)
+    perf = dependencies or any(path.startswith(("crates/", "mtty-app/", "mtty-cli/", "vendor/", "benches/", ".cargo/")) or path == "scripts/check-perf-baseline.py" for path in paths)
     return {"code": code, "dependencies": dependencies, "render": render, "perf": perf}
 
 
