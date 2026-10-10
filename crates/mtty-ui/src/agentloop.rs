@@ -104,16 +104,17 @@ impl PromptQueue {
         }
     }
 
-    /// An agent state change in `pane`. On a transition into `idle` the
-    /// oldest prompt queued for that pane is taken for delivery. Repeated
-    /// `idle` reports are not transitions, so nothing is delivered twice.
+    /// Deliver on entering a ready state, not while an agent awaits a background
+    /// wakeup or user decision. Moving between ready states is not a new turn.
     pub fn on_state(
         &mut self,
         pane: &str,
         previous: Option<&str>,
         now: &str,
     ) -> Option<QueuedPrompt> {
-        if now != "idle" || previous == Some("idle") {
+        if !matches!(now, "idle" | "completed" | "incomplete")
+            || previous.is_some_and(|state| matches!(state, "idle" | "completed" | "incomplete"))
+        {
             return None;
         }
         let i = self
@@ -169,6 +170,24 @@ mod queue_tests {
             queue.push(text.to_string(), pane.map(str::to_string));
         }
         queue
+    }
+
+    #[test]
+    fn explicit_task_states_only_deliver_when_ready() {
+        let mut queue = PromptQueue::default();
+        queue.push("next".into(), Some("p1".into()));
+        assert!(queue
+            .on_state("p1", Some("processing"), "waiting")
+            .is_none());
+        assert!(queue.on_state("p1", Some("waiting"), "unknown").is_none());
+        assert!(queue.on_state("p1", Some("waiting"), "completed").is_some());
+        queue.push("later".into(), Some("p1".into()));
+        assert!(queue
+            .on_state("p1", Some("completed"), "incomplete")
+            .is_none());
+        assert!(queue
+            .on_state("p1", Some("processing"), "incomplete")
+            .is_some());
     }
 
     #[test]
