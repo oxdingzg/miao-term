@@ -30,6 +30,7 @@ jobs:
       dependencies: ${{ steps.diff.outputs.dependencies }}
       render: ${{ steps.diff.outputs.render }}
       perf: ${{ steps.diff.outputs.perf }}
+      packaging: ${{ steps.diff.outputs.packaging }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -199,6 +200,15 @@ jobs:
           # Explicit dispatch does, and the required gate prevents an unchecked merge.
           gh workflow run ci.yml --ref "$branch"
 
+  packaging:
+    needs: changes
+    if: needs.changes.outputs.packaging == 'true' && github.event_name != 'push'
+    uses: ./.github/workflows/release.yml
+    permissions:
+      contents: write
+      actions: read
+    secrets: inherit
+
   privacy:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -215,6 +225,16 @@ jobs:
       # mirror; keep docs/releases/ and scripts/release-notes.py consistent.
       - name: Release-notes language rule
         run: python3 scripts/test-release-notes.py
+      - name: Gate policy regression checks
+        run: python3 scripts/test-ci-gate.py
+      - name: Release CI policy
+        run: python3 scripts/test_release_ci.py
+      - name: Validate workflow syntax
+        run: |
+          curl -fsSL https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz -o "$RUNNER_TEMP/actionlint.tar.gz"
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -shellcheck=''
       # The Windows icon resource check only runs on the packaging runner, so
       # its platform-independent format checks run here on every pull request.
       - name: Windows icon resource format
@@ -223,34 +243,13 @@ jobs:
   ci-gate:
     name: ci-gate
     if: always()
-    needs: [changes, lint, deny, test-linux, macos, windows, render-linux, perf, privacy]
+    needs: [changes, lint, deny, test-linux, macos, windows, render-linux, perf, privacy, packaging]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
+      - uses: actions/checkout@v4
       - name: Enforce required checks and explicit skips
         env:
           NEEDS: ${{ toJSON(needs) }}
           EVENT_NAME: ${{ github.event_name }}
-        run: |
-          python3 - <<'PY'
-          import json, os
-          needs = json.loads(os.environ["NEEDS"])
-          flags = needs["changes"]["outputs"]
-          required = {"changes", "privacy"}
-          # Gate the code jobs on the same flag that runs them. `code` is true
-          # for any non-doc change, including paths (assets/, scripts/) that
-          # compile nothing, so it cannot decide which jobs must have run.
-          if flags.get("perf") == "true":
-              required.update(("lint", "test-linux", "macos"))
-              if os.environ["EVENT_NAME"] != "push":
-                  required.add("windows")
-          if flags.get("dependencies") == "true":
-              required.add("deny")
-          if os.environ["EVENT_NAME"] != "push":
-              if flags.get("render") == "true": required.add("render-linux")
-              if flags.get("perf") == "true": required.add("perf")
-          for job, info in needs.items():
-              expected = "success" if job in required else "skipped"
-              if info["result"] != expected:
-                  raise SystemExit(f"{job}: expected {expected}, got {info['result']}")
-          PY
+        run: python3 scripts/ci-gate.py
