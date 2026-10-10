@@ -243,32 +243,61 @@ fn hosted_output_throughput() {
     }
     let file = std::env::temp_dir().join(format!("mtty-perf-{}.txt", std::process::id()));
     std::fs::write(&file, &data).unwrap();
-    // Wait for the go, so the whole run is streamed live, not replayed.
+    // Each timed transfer begins only after the shell confirms it is ready.
+    // The first transfer warms file caches, PTY buffers and the host path.
     let script = format!(
-        "stty -echo; read go; cat '{}'; echo END-OF-RUN; exec cat >/dev/null",
+        "stty -echo; while read prepare; do echo READY; read go; cat '{}'; echo END-OF-RUN; done",
         file.display()
     );
     let (_host, mut conn) = start(&script);
-    let mut seen = Vec::new();
-    let t = Instant::now();
-    ToHost::Input(b"go\n".to_vec())
-        .write(&mut conn.writer)
-        .unwrap();
-    let bytes = read_until(&mut conn.reader, &mut seen, b"END-OF-RUN");
-    let hosted = bytes as f64 / 1e6 / t.elapsed().as_secs_f64();
-
     let (mut reader, mut writer, _keep) = direct(&script);
-    let mut seen = Vec::new();
-    // `stty -echo` has run once the shell waits in `read`; give it a moment.
-    std::thread::sleep(Duration::from_millis(200));
-    let t = Instant::now();
-    writer.write_all(b"go\n").unwrap();
-    writer.flush().unwrap();
-    let bytes = read_direct_until(&mut *reader, &mut seen, b"END-OF-RUN");
-    let plain = bytes as f64 / 1e6 / t.elapsed().as_secs_f64();
+    let mut hosted_seen = Vec::new();
+    let mut direct_seen = Vec::new();
+    let mut hosted_samples = Vec::with_capacity(3);
+    let mut direct_samples = Vec::with_capacity(3);
+    for round in 0..4 {
+        ToHost::Input(b"prepare\n".to_vec())
+            .write(&mut conn.writer)
+            .unwrap();
+        read_until(&mut conn.reader, &mut hosted_seen, b"READY");
+        let t = Instant::now();
+        ToHost::Input(b"go\n".to_vec())
+            .write(&mut conn.writer)
+            .unwrap();
+        let bytes = read_until(&mut conn.reader, &mut hosted_seen, b"END-OF-RUN");
+        let hosted = bytes as f64 / 1e6 / t.elapsed().as_secs_f64();
+
+        writer.write_all(b"prepare\n").unwrap();
+        writer.flush().unwrap();
+        read_direct_until(&mut *reader, &mut direct_seen, b"READY");
+        let t = Instant::now();
+        writer.write_all(b"go\n").unwrap();
+        writer.flush().unwrap();
+        let bytes = read_direct_until(&mut *reader, &mut direct_seen, b"END-OF-RUN");
+        let plain = bytes as f64 / 1e6 / t.elapsed().as_secs_f64();
+        if round > 0 {
+            hosted_samples.push(hosted);
+            direct_samples.push(plain);
+        }
+    }
     let _ = std::fs::remove_file(&file);
+    let samples =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/perf-hosted-output-samples.json");
+    std::fs::create_dir_all(samples.parent().unwrap()).unwrap();
+    std::fs::write(
+        samples,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "hosted_mbps": hosted_samples,
+            "direct_mbps": direct_samples,
+            "warmup_rounds": 1,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let hosted = percentile(&mut hosted_samples, 0.5);
+    let plain = percentile(&mut direct_samples, 0.5);
     println!(
-        "output: hosted {hosted:.1} MB/s, direct {plain:.1} MB/s ({:.0}%)",
+        "output median: hosted {hosted:.1} MB/s, direct {plain:.1} MB/s ({:.0}%)",
         hosted / plain * 100.0
     );
     // The screen parses at ≥ 25 MB/s (vt_parse_mbps): the host must not be
