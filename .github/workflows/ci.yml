@@ -167,6 +167,14 @@ jobs:
       - run: cargo test --release -p mtty-core -p mtty-graphics -p mtty-editor -p mtty-widget -p mtty-ptyhost -p mtty-app -- --ignored
       - name: Compare against the committed baseline
         run: python3 scripts/check-perf-baseline.py
+      - name: Preserve performance measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-measurements
+          path: |
+            target/perf-measured.json
+            target/perf-hosted-output-samples.json
       - name: Refresh the baseline (main, nightly / manual)
         if: >-
           github.ref == 'refs/heads/main' &&
