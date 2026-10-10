@@ -670,6 +670,7 @@ impl Attention {
     fn for_transition(previous: Option<&str>, now: &str) -> Option<Self> {
         match now {
             "awaiting" | "error" => Some(Attention::Needs),
+            "completed" => Some(Attention::Done),
             "idle" if previous == Some("processing") => Some(Attention::Done),
             _ => None,
         }
@@ -813,6 +814,10 @@ fn agent_state_label(lang: mtty_ui::i18n::Lang, state: &str) -> &str {
         "idle" => "空闲",
         "awaiting" => "等待你",
         "error" => "出错",
+        "completed" => "已完成",
+        "incomplete" => "暂停 · 未完成",
+        "waiting" => "等待后台任务",
+        "unknown" => "状态未知",
         _ => state,
     }
 }
@@ -7118,10 +7123,20 @@ impl State {
             {
                 deliveries.push(item);
             }
-            if change.state == "processing" {
+            if matches!(
+                change.state.as_str(),
+                "processing" | "waiting" | "incomplete" | "unknown"
+            ) || (change.agent == "miao" && change.state == "idle")
+            {
                 self.clear_done(&change.pane);
             }
-            if let Some(level) = Attention::for_transition(prev.as_deref(), &change.state) {
+            // miao reports task completion explicitly; idle only means no execution.
+            let attention = if change.agent == "miao" && change.state == "idle" {
+                None
+            } else {
+                Attention::for_transition(prev.as_deref(), &change.state)
+            };
+            if let Some(level) = attention {
                 // A state switched off in `[badges]` marks nothing.
                 if !switched_off(&self.badges, &change.state) {
                     self.raise_attention(&change.pane, level);
@@ -15206,6 +15221,9 @@ fn agent_icon(
     match state {
         "processing" => (Icon::StateBusy, Some(ch.accent)),
         "awaiting" => (Icon::StateWait, Some(ch.warning)),
+        "waiting" => (Icon::StateWait, Some(ch.accent)),
+        "incomplete" | "unknown" => (Icon::StateEmpty, Some(ch.warning)),
+        "completed" => (Icon::StateFull, Some(ch.positive)),
         "error" => (Icon::StateFull, Some(ch.negative)),
         _ if attention == Some(Attention::Done) => (Icon::StateFull, Some(ch.positive)),
         _ => (Icon::StateEmpty, None),
@@ -15226,7 +15244,13 @@ fn shown_agent_icon(
 
 /// `[badges]` turns this state off.
 fn switched_off(badges: &mtty_config::Badges, state: &str) -> bool {
-    matches!(state, "processing" | "idle" | "awaiting" | "error") && !badges.enabled(state)
+    let group = match state {
+        "completed" | "incomplete" => "idle",
+        "waiting" => "processing",
+        "unknown" => "error",
+        other => other,
+    };
+    matches!(group, "processing" | "idle" | "awaiting" | "error") && !badges.enabled(group)
 }
 
 /// A hosted pane's host, as the session records it.
@@ -20085,6 +20109,10 @@ mod tests {
         use mtty_ui::icons::Icon;
         let ch = mtty_ui::theme::Chrome::dark();
         let shape = |state, attention| super::agent_icon(&ch, state, attention).0;
+        assert_eq!(shape("completed", None), Icon::StateFull);
+        assert_eq!(shape("waiting", Some(Attention::Done)), Icon::StateWait);
+        assert_eq!(shape("incomplete", Some(Attention::Done)), Icon::StateEmpty);
+        assert_eq!(shape("unknown", Some(Attention::Done)), Icon::StateEmpty);
         assert_eq!(shape("processing", None), Icon::StateBusy);
         assert_eq!(shape("processing", Some(Attention::Done)), Icon::StateBusy);
         assert_eq!(shape("idle", Some(Attention::Done)), Icon::StateFull);
