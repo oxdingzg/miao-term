@@ -41,6 +41,11 @@ class ChangesTest(unittest.TestCase):
     def test_release_script_avoids_unrelated_expensive_checks(self):
         self.assertEqual(changes.classify(["scripts/release-notes.py"]), {"code": True, "dependencies": False, "render": False, "perf": False})
 
+    def test_packaging_sources_require_release_rehearsal(self):
+        for path in ["assets/icons/mtty.ico", "mtty-app/build.rs", "mtty-app/wix/main.wxs", "scripts/package-macos.sh", ".github/workflows/release.yml", "Cargo.lock", "mtty-app/Cargo.toml"]:
+            self.assertTrue(changes.packaging([path]), path)
+        self.assertFalse(changes.packaging(["docs/guide.md"]))
+
     def test_asset_changes_run_render_only(self):
         # Assets compile nothing: `code` is true, but the perf-gated jobs must
         # not be required, so an icon-only PR is checked by render-linux alone.

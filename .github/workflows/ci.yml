@@ -30,6 +30,7 @@ jobs:
       dependencies: ${{ steps.diff.outputs.dependencies }}
       render: ${{ steps.diff.outputs.render }}
       perf: ${{ steps.diff.outputs.perf }}
+      packaging: ${{ steps.diff.outputs.packaging }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -199,6 +200,15 @@ jobs:
           # Explicit dispatch does, and the required gate prevents an unchecked merge.
           gh workflow run ci.yml --ref "$branch"
 
+  packaging:
+    needs: changes
+    if: needs.changes.outputs.packaging == 'true' && github.event_name != 'push'
+    uses: ./.github/workflows/release.yml
+    permissions:
+      contents: write
+      actions: read
+    secrets: inherit
+
   privacy:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -215,6 +225,8 @@ jobs:
       # mirror; keep docs/releases/ and scripts/release-notes.py consistent.
       - name: Release-notes language rule
         run: python3 scripts/test-release-notes.py
+      - name: Release CI policy
+        run: python3 scripts/test_release_ci.py
       # The Windows icon resource check only runs on the packaging runner, so
       # its platform-independent format checks run here on every pull request.
       - name: Windows icon resource format
@@ -223,7 +235,7 @@ jobs:
   ci-gate:
     name: ci-gate
     if: always()
-    needs: [changes, lint, deny, test-linux, macos, windows, render-linux, perf, privacy]
+    needs: [changes, lint, deny, test-linux, macos, windows, render-linux, perf, privacy, packaging]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
